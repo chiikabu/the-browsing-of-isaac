@@ -1,0 +1,40 @@
+# Dependencies, caches, and local state
+/node_modules/
+/.scratch/
+/re/ghidra_project/
+/third_party/Boxedwine/project/emscripten/Build/
+**/__pycache__/
+*.py[cod]
+*.log
+/ResourceExtractor_log.txt
+.DS_Store
+Thumbs.db
+
+# Proprietary/local game inputs and generated packages
+/extracted_resources/
+/extracted_work/
+/tools/
+/output/
+/output/*standalone*.html
+/web/emu/*.zip*
+
+# Generated runtime/build products (source-only repository)
+/web/isaac-host.js
+/web/isaac-host.wasm
+/web/emu/boxedwine.js*
+/web/emu/boxedwine.wasm*
+/web/emu/*.dll
+/native/**/*.dll
+
+# Direct game-binary-derived inventories
+/docs/strings-interesting.txt
+/docs/pe-imports.json
+/docs/phase1-binary-recovery.json
+
+# Local legacy probes and upstream page copies outside the curated source snapshot
+/scripts/_*.py
+/scripts/run-*.mjs
+!/scripts/run-wgl-menu.mjs
+/web/emu/boxedwine.html
+/web/emu/boxedwine.css
+/docs/phase0-baseline.md

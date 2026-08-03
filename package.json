@@ -1,0 +1,28 @@
+{
+  "name": "isaac-repentance-wasm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "serve": "node scripts/serve.mjs",
+    "phase0": "node scripts/phase0-check.mjs",
+    "browser:check": "node scripts/browser-launch.mjs",
+    "pack:isaac": "node scripts/pack-isaac-app.mjs",
+    "pack:isaac:full": "node scripts/pack-isaac-app.mjs --full",
+    "build:boxedwine": "node scripts/rebuild-boxedwine.mjs",
+    "build:standalone": "node scripts/build-standalone-html.mjs",
+    "build:offline-pwa": "node scripts/build-offline-pwa.mjs",
+    "build:benchmark-overlay": "python scripts/make-benchmark-overlay.py",
+    "pack:phase5": "python scripts/make-phase5-playable.py",
+    "serve:standalone": "node scripts/serve-standalone.mjs",
+    "repo:check": "node scripts/check-repo-safety.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>The Binding of Isaac: Repentance</title>
+  <style>
+    html, body, #app, #dropzone, .emscripten_border {
+      width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000;
+    }
+    #controls, #console { display: none !important; }
+    .emscripten_border { position: relative; }
+    #canvas, #present-canvas {
+      display: block; width: 100vw; height: 100vh; margin: 0 auto;
+      object-fit: contain; background: #000; outline: none;
+    }
+    #canvas { position: absolute; inset: 0; opacity: 0; pointer-events: none; }
+    #present-canvas { position: relative; z-index: 1; }
+    html.boxedwine-direct-canvas #canvas { opacity: 1; }
+    html.boxedwine-direct-canvas #present-canvas { opacity: 0; }
+    #loading {
+      position: fixed; inset: 0; z-index: 2; display: grid; place-content: center;
+      gap: 12px; color: #ddd; background: #000; font: 14px system-ui, sans-serif;
+      text-align: center;
+    }
+    #progress { display: none; }
+  </style>
+  <script>
+    // Merge defaults individually so diagnostic flags do not accidentally
+    // suppress the game/app mounts. The bundled cache predates this runtime,
+    // so keep it opt-in until a cache is regenerated from the accepted build.
+    {
+      const supplied = new URLSearchParams(location.search);
+      const defaults = [
+        ["overlay", "debian10;isaac-savedir"],
+        ["app", "isaac-phase6-full"],
+        ["p", "isaac-ng.exe"],
+        ["resolution", "960x540"],
+        ["sound", "true"],
+        ["storage", "memory"],
+        ["env", "%22WINEDEBUG:-all,+debugstr%22"],
+        ["jit-cache", "false"],
+      ];
+      let query = location.search.slice(1);
+      for (const [key, value] of defaults) {
+        if (supplied.has(key)) continue;
+        query += (query ? "&" : "") + key + "=" + value;
+      }
+      if (query !== location.search.slice(1)) {
+        history.replaceState(null, "", location.pathname + "?" + query + location.hash);
+      }
+    }
+
+    // Isaac presents through offscreen FBOs. A non-multisampled opaque canvas
+    // keeps WebGL2 blits legal and avoids transparent compositor frames.
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, attributes) {
+      if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+        attributes = Object.assign({}, attributes || {}, {
+          antialias: false,
+          alpha: false,
+          premultipliedAlpha: false,
+          preserveDrawingBuffer: true,
+        });
+      }
+      return originalGetContext.call(this, type, attributes);
+    };
+  </script>
+</head>
+<body>
+  <div id="loading">
+    <div id="spinner"></div>
+    <div id="status">Loading…</div>
+    <progress id="progress" value="0" max="100"></progress>
+  </div>
+  <div id="app">
+    <div id="controls" aria-hidden="true">
+      <button id="startbtn" onclick="start()">Start</button>
+      <button id="uploadbtn" onclick="document.getElementById('upload').click()">Add files</button>
+      <input id="upload" type="file" multiple onchange="startWithFiles(event.target.files)">
+      <button id="downloadbtn" onclick="buildGetFilesModal()">Get files</button>
+      <span id="sound-checkbox"><input id="soundToggle" type="checkbox" onclick="toggleSound()"></span>
+      <input id="pointerLock" type="checkbox">
+      <input id="showConsole" type="checkbox">
+    </div>
+    <div id="dropzone">
+      <div class="emscripten_border">
+        <canvas class="emscripten" id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+        <canvas id="present-canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script src="boxedwine-shell.js"></script>
+  <script>
+    (() => {
+      const scanCodes = {
+        Enter: 40, Escape: 41, Space: 44,
+        ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82,
+        a: 4, d: 7, s: 22, w: 26,
+      };
+      const canvas = document.getElementById("canvas");
+      const presentCanvas = document.getElementById("present-canvas");
+
+      function forwardPointer(event, down) {
+        const rect = presentCanvas.getBoundingClientRect();
+        const x = Math.max(0, Math.min(canvas.width - 1,
+          Math.round((event.clientX - rect.left) * canvas.width / rect.width)));
+        const y = Math.max(0, Math.min(canvas.height - 1,
+          Math.round((event.clientY - rect.top) * canvas.height / rect.height)));
+        if (typeof Module !== "undefined" && typeof Module._boxedwine_inject_mouse === "function") {
+          Module._boxedwine_inject_mouse(x, y, down ? 1 : 0);
+        }
+      }
+
+      presentCanvas.addEventListener("pointerdown", event => {
+        presentCanvas.focus();
+        forwardPointer(event, true);
+        if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        }
+      });
+      presentCanvas.addEventListener("pointerup", event => forwardPointer(event, false));
+
+      function forwardKey(event, down) {
+        if (document.activeElement !== presentCanvas || (down && event.repeat)) return;
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+        const scanCode = scanCodes[key];
+        if (!scanCode || typeof Module === "undefined") return;
+
+        let delivered = 0;
+        if (typeof Module._boxedwine_inject_key === "function") {
+          delivered = Module._boxedwine_inject_key(scanCode, down ? 1 : 0);
+        } else if (typeof Module.ccall === "function") {
+          delivered = Module.ccall("boxedwine_inject_key", "number",
+            ["number", "number"], [scanCode, down ? 1 : 0]);
+        }
+        if (delivered) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      }
+
+      window.addEventListener("keydown", event => forwardKey(event, true), true);
+      window.addEventListener("keyup", event => forwardKey(event, false), true);
+    })();
+  </script>
+  <script src="boxedwine.js" async></script>
+</body>
+</html>
