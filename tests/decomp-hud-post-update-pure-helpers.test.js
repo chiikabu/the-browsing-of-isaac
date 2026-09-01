@@ -6626,8 +6626,12 @@ test("HUD post-update pure-complete idle is wired into safe Update sites (ABI v3
   const sliceH = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
   const sliceCpp = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
   const json = readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8");
-  /* Wired at ABI v36; current Update checkpoint is v37+. */
-  assert.match(sliceH, /ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 3[7-9]|ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = [4-9]\d/);
+  /* Wired at ABI v36; current Update checkpoint is v37+ (>= 37, any digit
+     count — the old two-digit-only regex broke at v100). */
+  const sliceAbi = Number(
+    sliceH.match(/ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = (\d+)/)?.[1] ?? "0",
+  );
+  assert.ok(sliceAbi >= 37, `slice ABI ${sliceAbi} must be >= 37 (HUD idle wired at v36)`);
   assert.match(sliceCpp, /hud_post_update_pure_helpers\.h/);
   assert.match(sliceCpp, /isaac_hud_post_update_try_pure/);
   assert.match(sliceCpp, /maybe_emit_hud_post_update/);
@@ -6637,7 +6641,8 @@ test("HUD post-update pure-complete idle is wired into safe Update sites (ABI v3
   /* Gate 1ba78 hosts 0x0092f1c0 then recaptures for try_pure (ABI v39+). */
   assert.match(sliceCpp, /RESUME_AFTER_92F1C0|resume_92f1c0/);
   assert.match(sliceCpp, /isaac_game_update_slice_resume_92f1c0/);
-  assert.match(json, /"abiVersion":\s*3[7-9]|"abiVersion":\s*[4-9]\d/);
+  const jsonAbi = Number(json.match(/"abiVersion":\s*(\d+)/)?.[1] ?? "0");
+  assert.ok(jsonAbi >= 37, `JSON abiVersion ${jsonAbi} must be >= 37`);
   assert.match(json, /playerHudOccupiedMask|hudPostUpdateTryPure|isaac_hud_post_update_try_pure/);
   /* v2/v3/v4 residual peels are freestanding only — not Update-wired. */
   assert.doesNotMatch(sliceCpp, /isaac_history_hud_recompute_try_pure/);
