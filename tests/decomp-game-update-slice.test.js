@@ -955,6 +955,20 @@ import {
 } from "../scripts/decomp/player-manager-update-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pins (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum and the cpp static_asserts are the deliberate pins;
+   the model constants must AGREE with them — that is the assertion. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8")
+    .match(/ISAAC_GAME_UPDATE_SLICE_ABI_VERSION\s*=\s*(\d+)/)[1]);
+const CPP_RUNTIME_INPUTS_SIZE = (() => {
+  const src = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
+  const sizes = [...src.matchAll(/sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == (\d+)/g)]
+    .map((m) => Number(m[1]));
+  assert.ok(sizes.length > 0 && sizes.every((n) => n === sizes[0]),
+    `cpp runtime-input size pins disagree: ${sizes.join(",")}`);
+  return sizes[0];
+})();
 
 const stateDefaults = {
     "shortTimer": 0,
@@ -1279,7 +1293,7 @@ function walkSlotExpectation(slot, target, flag) {
 }
 
 test("recovered ABI is pinned at v96 (record idx 48 0x008607a0 set-arm arg-prep) with explicit struct sizes", () => {
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
   /* v79: record 2 (VA 0x006fb414..0x006fb474 + advance 0x00414a80) moved to
      resolvedBoundaries; state 520 -> 524 (globalTree4aba0Result byte at
      Game+0x4aba0), runtime 3748 -> 4532 (blob gate/count/begin/end + 32 x
@@ -1355,7 +1369,7 @@ test("recovered ABI is pinned at v96 (record idx 48 0x008607a0 set-arm arg-prep)
      P=[engine+0x10], host-time); 0xfff0b9d8 is REGISTRYINDEX, not the
      fn key. ready==0 (monolith) and the v57-dropped clear arm leave the
      prep words 0. No runtime input change. */
-  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: 23696, events: 1260 });
+  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: CPP_RUNTIME_INPUTS_SIZE, events: 1260 });
   assert.equal(GAME_OBJECT_MIN_SIZE, 0x68d70);
   /* PE 0x00705f09 reads the third guard at Game+0x68d70, i.e. exactly ONE PAST
      the captured buffer. That coincidence is why the three guards are runtime
@@ -3754,6 +3768,7 @@ test("runtime inputs layout stays pinned", () => {
         "frameOpaque98dba0956110GeneralResult": 6868,
         "opaque0092f1c0Limit": 6872,
         "opaque0092f1c0Field14": 6876,
+        "opaque0092f1c0GameType0": 23696,
         "frameOpaque4212c0AbPackReady": 7656,
         "frameOpaque4212c0AFloat10": 7660,
         "frameOpaque4212c0BFloat10": 7664,
@@ -6190,7 +6205,7 @@ test("ABI v107 (wave-29 merge): mid-restock typed drop + the 36 rebound lanes la
      pack at 7656..7688 and the tcsStats vector at 7960..7984 (was stale
      7108..7176 / 6872..6904 / 8356..8380). */
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
   const source = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
   /* Typed drop event: JSON row + layout + cpp field + module write. */
@@ -6458,11 +6473,11 @@ test("C++ ABI and translation specification remain explicit", () => {
   const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
   assert.equal(spec.rootSymbol, "Game::Update");
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(spec.fields.length, 130);
-  assert.match(header, /ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 100/);
+  assert.match(header, new RegExp("ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = " + ABI_VERSION + "(?![0-9])"));
   assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceState\) == 524/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceState, global_tree_4aba0_result\) == 520/);
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceState, hud_history_latch_5c7c\) == 521/);
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_history_slot_flag0\) == 4532/);
@@ -6473,7 +6488,7 @@ test("C++ ABI and translation specification remain explicit", () => {
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_stat_player_list_begin\) == 4540/);
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_stat_player_list_end\) == 4544/);
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_stat_countdown\) == 4548/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /ISAAC_HUD_STAT_COUNTDOWN_COUNT == 20/);
   /* The spec must record every countdown-lane runtime input. */
   for (const name of [
@@ -6507,7 +6522,7 @@ test("C++ ABI and translation specification remain explicit", () => {
      at 4988, player 7 at 4988 + 7*64 = 5436, last field at 5496 -> 5500. */
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_stat_players\[0\]\) == 4988/);
   assert.match(source, /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, hud_stat_players\[7\]\) == 5436/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /ISAAC_HUD_STAT_WALK_MAX_PLAYERS == 8/);
   assert.match(source, /ISAAC_HUD_STAT_WALK_SLOT_COUNT == 20|HUD_STAT_WALK_SLOT_COUNT == 20/);
   assert.match(header, /hud_stat_slots\[2\]\[10\]/);
@@ -6556,7 +6571,7 @@ test("C++ ABI and translation specification remain explicit", () => {
   assert.match(header, /isaac_game_update_slice_global_tree_4aba0_pure/);
   assert.match(header, /item_overlay_counter_11d1d0/);
   assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceState\) == 524/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   /* ABI v70: timer-interior wire captures + plan carriers. */
   assert.match(header, /frame_opaque_98dba0_timer_pure_ready/);
   assert.match(header, /frame_opaque_98dba0_timer_sin_bits_hi/);
@@ -7844,7 +7859,7 @@ test("ABI v88: over-cap voices=33 / groups>8 keep host", () => {
 
 test("ABI v88: JSON record 0x0092e300 names the walk split and rides resolvedBoundaries (REMOVED at ABI v100)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x0092e300");
   assert.ok(rec, "record found by targetVa in resolvedBoundaries (never index-match)");
   assert.match(rec.evidence || rec.operation || "", /walk|sound-group/i);
@@ -8151,7 +8166,7 @@ test("ABI v95: 92e300 walk_exact — host gate shape (walk_ready=0 keeps v88 loc
 
 test("ABI v95: JSON records the 92e300 walk_exact helper + record-1 rides resolvedBoundaries (REMOVED at ABI v100)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x0092e300");
   assert.ok(rec, "record found by targetVa in resolvedBoundaries (never index-match)");
   assert.match(rec.operation, /REMOVED at ABI v100/);
@@ -8322,7 +8337,7 @@ test("ABI v86: try_pure tail stores Game+0x22ed4/0x22edc when recaptured mode is
 
 test("ABI v86: JSON record 0x0092f1c0 names HUD try_pure and stays", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x0092f1c0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV86 || "", /try_pure|HUD v5/);
@@ -8372,7 +8387,7 @@ test("ABI v87: modes 1..4 still host 8318a0 (case 0 always E8 0x4186c0)", () => 
 
 test("ABI v87: JSON record 0x008318a0 names HUD try_pure and stays", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV87 || "", /try_pure|HUD v5/);
@@ -8717,7 +8732,7 @@ test("ABI v118: 8318a0 leftover laws are in source/build/JSON (ABI 99, idx 4 STA
     assert.ok(spec.translatedHelpers.some((t) => t.name === `isaac_game_update_slice_${name}`),
       `json helper ${name}`);
   }
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "idx 4 stays");
   assert.match(rec.abiV118 || "", /pickup_latch|0x3c5/i);
@@ -8756,7 +8771,7 @@ test("ABI v118: shipped Wasm exposes 8318a0 leftover laws (skip if stale)", (t) 
 
 test("ABI v96: JSON record 0x008318a0 carries the v96 decision-law evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV96 || "", /mode1_manager_block_gate|0x831c64/i);
@@ -8968,7 +8983,7 @@ test("ABI v96 (wave-23): store-plan seam source pins (cpp + model + JSON abiV97)
   assert.match(model, /opaque008318a0SfxManagerStores = \(events\.opaque008318a0SfxManagerStores \| 0\) \+ 1/);
   assert.match(model, /packCount8318a0 <= ENGINE_PLAYER_MAX/);
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV97 || "", /sfx_manager_store_plan emission LIVE/i);
@@ -9109,7 +9124,7 @@ test("ABI v99 (fold): store-plan row corrections + source pins (JSON delta stage
   /* JSON: current tree keeps abiV97 (the wave-23 evidence); the abiV98
      record key + 3 helper rows land at the wave-24 merge (§json-delta). */
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV97 || "", /sfx_manager_store_plan emission LIVE/i);
@@ -9543,7 +9558,7 @@ test("ABI v95: mode-4 SFX gate fires only type==3 && counter==8 (host stays)", (
 
 test("ABI v95: JSON record 0x008318a0 carries the v95 decision-layer evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008318a0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV95 || "", /mode3_advance_signed|0x8320cc|advance/i);
@@ -9693,7 +9708,7 @@ test("ABI v92: frame-aux walk emit applies the SAME gate", () => {
 
 test("ABI v92: JSON record names the empty-arm gate and stays counted", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.name === "opaqueCall0098dba0PlayerWalk");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV92 || "", /pure skip|pure-skip|pure_skip/i);
@@ -9892,7 +9907,7 @@ test("ABI v95: 9b6840 emit sites mirror the mode-latch store law", () => {
 
 test("ABI v95: JSON record idx 2 names the body census and stays counted HOST", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x009b6840");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.equal(rec.operation, "HOST", "menu body stays host (count 48 after v98)");
@@ -10099,7 +10114,7 @@ test("ABI v93: ready=0 keeps the pre-v93 always-host JOIN with no proof event", 
 
 test("ABI v93: JSON record names the JOIN seam and stays counted", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.name === "opaqueState24eccUpdate");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV93 || "", /8efc92|JOIN/);
@@ -10297,7 +10312,7 @@ test("ABI v96 (record 9 TAIL-A): taila_sfx_id rolls 0x12d iff roll % 20 == 0", (
 
 test("ABI v96 (record 9 TAIL-A): JSON record 0x008ef990 carries the TAIL-A law evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x008ef990");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV96 || "", /taila_slot_empty|8efcf4/i);
@@ -10619,7 +10634,7 @@ test("ABI v91: probeResolved=0 with a non-empty list stays host (presence guard)
 
 test("ABI v91: JSON record 0x004212c0 names the false-probe arm and stays", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x004212c0");
   assert.ok(rec, "record rides resolvedBoundaries (REMOVED at ABI v99)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.targetVa === "0x004212c0"),
@@ -10752,7 +10767,7 @@ test("ABI v94: probeReady=0 publishes NO log event (pre-v91 always-host)", () =>
 
 test("ABI v94: JSON event + record 0x004212c0 abiV94 land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(EVENTS_LAYOUT.frameOpaque4212c0Add0LogNeeded.offset, 508);
   const ev = spec.events.find((e) => e.name === "frameOpaque4212c0Add0LogNeeded");
   assert.ok(ev, "spec records the typed log event");
@@ -10774,7 +10789,7 @@ test("ABI v94: JSON event + record 0x004212c0 abiV94 land", () => {
 
 test("ABI v95: JSON events + record idx 48 (0x008607a0) abiV95 arg-prep land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const evNames = [
     "opaqueCall008607a0ArgsRegistryIndex",
     "opaqueCall008607a0ArgsNargs",
@@ -10967,7 +10982,7 @@ test("ABI v95: blob=0 keeps the monolithic summary (no loop laws, no typed plans
 
 test("ABI v95: JSON + record idx 34 evidence + helper records land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const ev = spec.events.find((e) => e.name === "ambient824a70CreateTyped");
   assert.ok(ev, "spec records the typed create event");
   assert.equal(ev.bytes, 4);
@@ -11193,7 +11208,7 @@ test("ABI v95: field4==0 log arm + equal flags present -> log event host, flags 
 
 test("ABI v95: JSON evidence — record 0x004212c0 abiV95 + translatedHelper land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x004212c0");
   assert.ok(rec, "record rides resolvedBoundaries (REMOVED at ABI v99)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.targetVa === "0x004212c0"),
@@ -11590,12 +11605,12 @@ test("ABI v96 (v98): the interior seam is declared/defined/exported and the layo
   assert.match(source, /opaque_008318a0_ready,\s*\n\s*runtime_inputs->opaque_008318a0_mode/,
     "the drop arm consumes the LIVE record-4 gate lanes");
   assert.equal(ABI_SIZES.events, 1260, "events layout frozen (v119 tail @992)");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime layout frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime layout frozen");
 });
 
 test("ABI v99: JSON evidence — name-matched opaqueCall004212c0 REMOVED (count 48 -> 47; abiV99 rides resolvedBoundaries)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.name === "opaqueCall004212c0");
   assert.ok(rec, "record found by NAME in resolvedBoundaries (never index-match)");
   assert.equal(rec.targetVa, "0x004212c0");
@@ -11624,7 +11639,7 @@ test("ABI v99: JSON evidence — name-matched opaqueCall004212c0 REMOVED (count 
 
 test("ABI v100: JSON evidence — name-matched opaqueCall0092e300 REMOVED (count 47 -> 46; abiV100 rides resolvedBoundaries)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.name === "opaqueCall0092e300");
   assert.ok(rec, "record found by NAME in resolvedBoundaries (never index-match)");
   assert.equal(rec.targetVa, "0x0092e300");
@@ -11756,7 +11771,7 @@ test("ABI v96 (v98): prefix_plan_address — the EXPORTED interior-plan scratch 
 
 test("ABI v96: JSON — record 0x004212c0 abiV96 + the three translatedHelper rows land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x004212c0");
   assert.ok(rec, "record rides resolvedBoundaries (REMOVED at ABI v99)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.targetVa === "0x004212c0"),
@@ -11775,7 +11790,7 @@ test("ABI v96: JSON — record 0x004212c0 abiV96 + the three translatedHelper ro
      merge. (The record-12 unit's 6fd7c0-ready lanes landed @11592..13736
      mid-wave — W22-S3-record12wire; the ABI-96 merge then appended the
      record-4/10/9 + record-22 lanes, so the tail is now 14276.) */
-  assert.equal(ABI_SIZES.runtimeInputs, 23696);
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE);
   assert.equal(ABI_SIZES.events, 1260);
 });
 
@@ -12167,7 +12182,7 @@ test("ABI v95 TCS wire: count-law arg + record byte lanes through the wire", () 
 
 test("ABI v95: JSON records the TCS captures + record idx 25 abiV95 evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   for (const name of [
     "tcsStatsVecReady", "tcsStatsVecBegin", "tcsStatsVecEnd", "tcsStatsVecCap",
     "tcsStatsDesc10_48", "tcsStatsLookupBits", "tcsStatsGameByte8",
@@ -12227,7 +12242,7 @@ test("ABI v125: record idx 25 rides resolvedBoundaries — JSON rows, coarse slo
     "tcsStatsVecReady lane stays committed");
   /* ABI sizes frozen: events 1000 / runtime 14684 / state 524, ABI 99. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 /* Update-slice v126: record idx 40 REMOVED — the boundary row moved to
@@ -12268,7 +12283,7 @@ test("ABI v126: record idx 40 rides resolvedBoundaries — JSON rows, event slot
   assert.equal(EVENTS_LAYOUT.tailMid7230SpawnArmed.offset, 996, "layout armed carrier @996");
   /* ABI sizes: events 996 -> 1000 (v126); runtime/state frozen. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size 1000 (v126 armed carrier @996)");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 test("ABI v126: the armed carrier drives the wire on BOTH mirrors", () => {
@@ -12338,7 +12353,7 @@ test("ABI v127: record idx 38 rides resolvedBoundaries — JSON rows, coarse slo
   assert.equal(rt.get("shopRestockReady"), 14684, "voucher lane @14684");
   assert.equal(rt.get("shopHashIn"), 14704, "hash-in lane @14704");
   assert.equal(rt.get("shopGenrandRet"), 15356, "genrand passthrough lane @15356");
-  assert.ok(!spec.opaqueBoundaries.length || spec.runtimeInputs.every((r) => r.offset < 23696),
+  assert.ok(!spec.opaqueBoundaries.length || spec.runtimeInputs.every((r) => r.offset < ABI_SIZES.runtimeInputs),
     "no runtime rows past the new tail (v141 0xb-block probe pack ends AT 23696)");
 });
 
@@ -12685,7 +12700,7 @@ test("ABI v95 STOP fold: two live voices with stops publish stopCalls=2 and mask
 
 test("ABI v121: JSON records the STOP fold captures + record idx 47 REMOVED (rides resolvedBoundaries)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   for (const name of [
     "sfxStopFoldReady", "sfxStopVoiceCount", "sfxStopVoice0ChannelNull",
     "sfxStopVoice31VoicesReloaded",
@@ -12867,7 +12882,7 @@ test("ABI v95: PLAY lane ready=0 keeps the monolithic residual (pre-v68 fallback
 
 test("ABI v95: JSON + header record the PLAY typed leaves + record idx 46 abiV95 evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   for (const name of [
     "playerManagerUpdateHeartbeatSfxPlayNoSamples",
     "playerManagerUpdateHeartbeatSfxPlayPreload",
@@ -12889,7 +12904,7 @@ test("ABI v95: JSON + header record the PLAY typed leaves + record idx 46 abiV95
 
 test("ABI v95: JSON records the PM3 arm laws + record idx 44 abiV95 evidence", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   for (const name of [
     "isaac_game_update_slice_pm3_quiet_gate",
     "isaac_game_update_slice_pm3_empty_pure_skip",
@@ -13208,7 +13223,7 @@ test("ABI v95: record idx 30 lands the 6 greedy-arm helpers + boundary evidence 
   assert.ok(rec, "record idx 30 rides resolvedBoundaries (REMOVED at ABI v131)");
   assert.match(rec.operation, /REMOVED at ABI v131/);
   assert.match(rec.evidence || "", /greed|Greed/, "record idx 30 evidence mentions the greed arm");
-  assert.equal(spec.abiVersion, 100, "ABI 98 (wave-27 merge freeze-lift)");
+  assert.equal(spec.abiVersion, ABI_VERSION, "ABI 98 (wave-27 merge freeze-lift)");
 });
 
 /* ABI v131 (update-v131-greed-probe-pack): drive the TriggerClear fragment
@@ -13330,7 +13345,7 @@ test("ABI v95: outer gate closed (owner 0) is NONE — no typed drop", () => {
 
 test("ABI v95: JSON records the seed-zero helper + record-39 abiV95 evidence rides resolvedBoundaries", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.name === "opaqueRoomUpdateTailMidRestock");
   assert.ok(rec, "record idx 39 rides resolvedBoundaries (REMOVED at ABI v108, wave-30)");
   assert.match(rec.evidence || "", /seed|RandomInt|7e9028|a112c0|typed|v95/i);
@@ -13364,7 +13379,7 @@ test("ABI v95: the shipped Wasm agrees with the oracle on midRestockSeedZero", (
 
 test("ABI v90: JSON record 0x004212c0 names the pair gate and stays", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x004212c0");
   assert.ok(rec, "record rides resolvedBoundaries (REMOVED at ABI v99)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.targetVa === "0x004212c0"),
@@ -14267,7 +14282,7 @@ test("ABI v96 (record-0 tail): the tail decision laws are declared, defined, and
   assert.match(rec.abiV96 || "", /aef15c/);
   assert.match(rec.abiV96 || "", /REFUTED|refuted/i);
   /* ABI stays 95: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("ABI v96 (record-0 tail): the shipped Wasm agrees with the oracle on the three tail laws", (t) => {
@@ -14518,7 +14533,7 @@ test("ABI v96 (record-0 tween): the seam laws are declared, defined, and in the 
   assert.match(rec.abiV97 || "", /84cc40|tween walker/i);
   assert.match(rec.abiV97 || "", /hudStatWalkProbe1|probe1/i);
   /* ABI stays 95: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("ABI v96 (record-0 tween): the shipped Wasm agrees with the oracle on the four seam laws", (t) => {
@@ -14702,7 +14717,7 @@ test("ABI v96 (record-0 walker): the walker laws are declared, defined, in the b
   assert.match(rec.abiV99 || "", /k8|k7|probe_leaf|owner/i);
   assert.match(rec.abiV99 || "", /0x84cbf0|0x84d1cc|0x84d18e/i);
   /* ABI stays 96: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("ABI v100 (record-0 walker body): walker_probe1_clamped mirrors the 0x84d199..0x84d1c2 probe chain", () => {
@@ -14800,7 +14815,7 @@ test("ABI v100 (record-0 walker body): the two laws are declared, defined, in th
   assert.match(notes, /hud_stat_walker_e8_call_order/);
   assert.match(notes, /hud_stat_walker_player_a/);
   /* ABI stays 96: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("ABI v101 (record-0 walker islands): walker_row_arm mirrors the 0x84cc9d/0x84d659 swap-gate row-arm", () => {
@@ -14916,7 +14931,7 @@ test("ABI v101 (record-0 walker islands): four laws declared, defined, in the bu
   assert.match(source, /0x84d666/);
   assert.match(source, /0x84d188/);
   /* ABI stays 96: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
   /* The §json-delta abiV101 draft + the finalized §lane-requests live in
      the unit NOTES (JSON itself FROZEN — S1 sole writer). */
   assert.match(notes, /abiV101/);
@@ -14951,7 +14966,7 @@ test("ABI v102 (record-0 walker wire): the lanes are committed at the PLAN offse
   assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe1.offset, 956);
   assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe2.offset, 960);
   assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe3.offset, 964);
-  assert.equal(ABI_SIZES.runtimeInputs, 23696);
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE);
   assert.equal(ABI_SIZES.events, 1260);
   const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
   const source = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
@@ -14966,15 +14981,15 @@ test("ABI v102 (record-0 walker wire): the lanes are committed at the PLAN offse
     assert.ok(header.includes(`uint32_t ${name};`), `${name} in the header struct`);
     assert.ok(source.includes(`offsetof(IsaacGameUpdateSliceEvents, ${name}) == `), `${name} offset pin in cpp`);
   }
-  assert.match(source, /sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
   /* ABI v97: the wave-26 merge commits the layout (PLAN update-v102-
      abi97-plan). */
-  assert.equal(ABI_VERSION, 100);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
   /* JSON LANDED: the 7 new rows exist in the spec, and nothing sits at or
      beyond the new tails (14328 / 980). */
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walker_player_a" && r.offset === 14276),
     "walker player_a row landed @14276");
   assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walker_player_b" && r.offset === 14280),
@@ -14989,7 +15004,7 @@ test("ABI v102 (record-0 walker wire): the lanes are committed at the PLAN offse
     "walker probe2 event landed @960");
   assert.ok(spec.events.some((e) => e.name === "hud_stat_walker_probe3" && e.offset === 964),
     "walker probe3 event landed @964");
-  assert.ok(!spec.runtimeInputs.some((r) => r.offset >= 23696), "no runtime rows at/after the tail in the spec (v141 0xb-block probe pack @22572..23695 ends AT 23696)");
+  assert.ok(!spec.runtimeInputs.some((r) => r.offset >= ABI_SIZES.runtimeInputs), "no runtime rows at/after the tail in the spec (v141 0xb-block probe pack @22572..23695 ends AT 23696)");
   assert.ok(!spec.events.some((e) => e.offset > 1260), "no event rows after the tail in the spec (v142 rt_band_pop composite carrier @1244..1256 ends AT 1260)");
   const notes = readFileSync(join(root, "output", "decomp", "5129df723e64", "section-notes",
     "update-v102-record0-wire", "NOTES.md"), "utf8");
@@ -15200,7 +15215,7 @@ test("ABI v66: the timer gate is declared, exported and specified", () => {
     source,
     /static_assert\(offsetof\(IsaacGameUpdateSliceRuntimeInputs, frame_opaque_98dba0_timer_264e8\) == 2152/,
   );
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.ok(
     spec.runtimeInputs.some((i) => i.name.includes("frameOpaque98dba0TimerReady")),
     "spec records the new runtime input",
@@ -16516,7 +16531,7 @@ test("ABI v95/v122: the mode-4 wire fires the typed Play event ONLY (coarse RETI
 
 test("ABI v95: record idx 19 pins the composed arg-prep in JSON/header/cpp, no uint8_t", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 19);
   assert.ok(rec, "record idx 19 rides resolvedBoundaries (REMOVED at ABI v122)");
   assert.equal(rec.name, "opaqueCall006fd7c0Mode4Sfx");
@@ -17040,7 +17055,7 @@ test("ABI v73: the shipped Wasm agrees with the walker on BOTH new exports", (t)
   const pick = (n) => wasm[n] ?? wasm[`_${n}`];
   const abi = pick("isaac_game_update_slice_abi_version");
   assert.equal(abi(), ABI_VERSION, "the probed module is the current module");
-  assert.equal(ABI_VERSION, 100, "and the model agrees");
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION, "and the model agrees");
   const noop = pick("isaac_game_update_slice_blue_room_74d4a0_noop");
   const probed = pick("isaac_game_update_slice_frame_effect_shell_drop_probed");
   const drop = pick("isaac_game_update_slice_frame_effect_shell_drop");
@@ -18281,7 +18296,7 @@ test("ABI v75: the shipped Wasm agrees with the census oracle on the new export"
   const wasm = new WebAssembly.Instance(module, {}).exports;
   const pick = (n) => wasm[n] ?? wasm[`_${n}`];
   assert.equal(pick("isaac_game_update_slice_abi_version")(), ABI_VERSION);
-  assert.equal(pick("isaac_game_update_slice_runtime_inputs_size")(), 23696);
+  assert.equal(pick("isaac_game_update_slice_runtime_inputs_size")(), ABI_SIZES.runtimeInputs);
   assert.equal(pick("isaac_game_update_slice_state_size")(), 524);
   const r2 = pick("isaac_game_update_slice_global_tree_4aba0_pure");
   assert.equal(typeof r2, "function", "the v79 record-2 export is missing from the module");
@@ -18437,7 +18452,7 @@ test("ABI v75: the latch is a runtime input, not sparse state (the PE reads it a
   const spec = JSON.parse(
     readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"),
   );
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const names = spec.runtimeInputs.map((r) => r.name);
   assert.ok(names.includes("globalTree4aba0BlobReady"), "spec names globalTree4aba0BlobReady");
   assert.ok(names.includes("globalTree4aba0Count"), "spec names globalTree4aba0Count");
@@ -19344,7 +19359,7 @@ test("ABI v95: death arg-prep exports declared on all sides + v69 no-expansion p
 
 test("ABI v95: record idx 43 JSON evidence lands (arg-prep laws)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.name === "playerManagerUpdateDeath");
   assert.ok(rec, "playerManagerUpdateDeath stays an opaque boundary");
   assert.match(rec.abiV95 || "", /receiver|0x9bb643|0x9bb67d|arg.?prep|flag/i);
@@ -19359,7 +19374,7 @@ test("ABI v95 (W29-S6 §8.2 close-out): the 4 nonLaneInventory rows land in tran
      ambient address law returns the module-static scratch (PE never writes
      it; push-0x8a/push-0x3e8 pair unique @0x824cb3). */
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const byName = (n) => spec.translatedHelpers.find((h) => h.name === n);
   const recv = byName("isaac_game_update_slice_death_call_receiver");
   assert.ok(recv, "death_call_receiver recorded (deferred §8.2 row)");
@@ -19382,7 +19397,7 @@ test("ABI v95 (W29-S6 §8.2 close-out): the 4 nonLaneInventory rows land in tran
   /* No layout bytes (blueprint §8.2 verdict): tails + counts unchanged. */
   const maxRt = Math.max(...spec.runtimeInputs.filter((r) => typeof r.offset === "number").map((r) => r.offset + (r.bytes || r.size || 0)));
   const maxEv = Math.max(...spec.events.filter((r) => typeof r.offset === "number").map((r) => r.offset + (r.bytes || 0)));
-  assert.equal(maxRt, 23696, "runtime next-free 23696 (v141 0xb-block probe pack @22572..23695 -- 17 shared lanes + tail trio + 8 elem values + 8 x stride-128 rows after the v140 SPAWN-LOOP pack ending @22572)");
+  assert.equal(maxRt, ABI_SIZES.runtimeInputs, "runtime next-free 23696 (v141 0xb-block probe pack @22572..23695 -- 17 shared lanes + tail trio + 8 elem values + 8 x stride-128 rows after the v140 SPAWN-LOOP pack ending @22572)");
   /* Wave-29 merge: +1 typed event (mid_restock_seed_zero_drop @984,
      events 984 -> 988); v115 @988, v119 @992, v126 @996; v127 adds the
      F3 shop-restock set @1000..1020. */
@@ -19577,7 +19592,7 @@ test("ABI v95: resume walk publishes probe_pure on the pure arms only", () => {
 
 test("ABI v95: JSON records idx 32 probe evidence + v3-bound inputs/event", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.name === "opaqueCall0098dba0PlayerWalk");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV95 || "", /956110|net_gate|phone-home|probe/i);
@@ -19993,7 +20008,7 @@ test("ABI v95: JSON + build record the entity-surface capture contract", () => {
   assert.match(header, /frame_opaque_98dba0_entity_surface_ready/);
   assert.match(header, /frame_opaque_98dba0_entity_surface_capture\[8\]/);
   assert.match(header, /frame_opaque_98dba0_entity_surface_accept_pure/);
-  assert.match(source, /sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
   const build = readFileSync(join(root, "scripts/decomp/build-game-update-slice.mjs"), "utf8");
   for (const name of [
@@ -20119,7 +20134,7 @@ test("ABI v95: listener_walk_accept follows the present/active/release commit ch
 
 test("ABI v95: record idx 9 stays counted; the 6 stale listener-registry JSON rows are DROPPED (wave-30 merge)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.name === "opaqueState24eccUpdate");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.abiV95 || "", /c57b18|listener|a20fb0|0xa209e0/);
@@ -20206,7 +20221,7 @@ test("ABI v95: the shipped Wasm agrees with the listener oracles when the module
    both fail this test. */
 test("ABI v95: record-9 final IRREDUCIBLE assessment is pinned in the JSON record", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 9);
   assert.ok(rec, "record idx 9 exists");
   assert.equal(rec.name, "opaqueState24eccUpdate");
@@ -20509,7 +20524,7 @@ test("ABI v95: 92f1c0 ready=0 keeps the pre-v95 always-host edge with NO typed e
 
 test("ABI v95: JSON record 0x0092f1c0 names the case-arm laws and stays counted", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x0092f1c0");
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.equal(spec.opaqueBoundaries.length, 24);
@@ -20629,7 +20644,7 @@ test("ABI v116: 92f1c0 leaf 0x7eb1b0 mode_2c/mode_2d prefix", () => {
 
 test("ABI v116: JSON record 0x0092f1c0 names the 74f090/7eb1b0 leaf laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(spec.opaqueBoundaries.length, 24);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x0092f1c0");
   assert.ok(rec, "record stays in opaqueBoundaries");
@@ -20789,7 +20804,7 @@ test("ABI v117: 74f690 grid_dist + stage_route + table_type laws", () => {
 
 test("ABI v117: JSON record 0x0092f1c0 names the 74f690 laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(spec.opaqueBoundaries.length, 24);
   const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x0092f1c0");
   assert.ok(rec, "record stays in opaqueBoundaries");
@@ -20905,7 +20920,7 @@ test("ABI v117: the shipped Wasm agrees with the 74f690 oracles when current", (
 
 test("ABI v95: record idx 35 JSON spec lands the rain loop-frame laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 35);
   assert.ok(rec, "record idx 35 stays in opaqueBoundaries");
   assert.equal(rec.operation, "HOST", "record is NARROWED-not-removed this unit");
@@ -21306,7 +21321,7 @@ test("ABI v95: menu-open laws are declared in the header and whitelisted for the
 
 test("ABI v95: record idx 8 JSON evidence names the census + law landing", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 8);
   assert.ok(rec, "record idx 8 stays in opaqueBoundaries");
   assert.match(rec.evidence || "", /1979|7224|census|v95|irreducible/i,
@@ -21641,7 +21656,7 @@ test("ABI v95: plan oracle gates (packReady=0 / both no-op -> null)", () => {
 
 test("ABI v95: JSON evidence + pack/event names recorded", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.targetVa === "0x004212c0");
   assert.ok(rec, "record rides resolvedBoundaries (REMOVED at ABI v99)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.targetVa === "0x004212c0"),
@@ -21867,7 +21882,7 @@ test("ABI v95 tailmid: 800500 timer 72fc pure CF (PE 0x801bf9..0x801c4e)", () =>
 
 test("ABI v95 tailmid: JSON record idx 37 + translatedHelpers land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 37);
   assert.ok(rec, "record stays in opaqueBoundaries");
   assert.match(rec.evidence || "", /820910|801ee0|800500|tailmid|curse/i);
@@ -22083,7 +22098,7 @@ test("ABI v95 7230 spawn frame: typed host call sequence VAs (pos -> genrand -> 
 
 test("ABI v95 7230 spawn frame: JSON record idx 40 + translatedHelpers land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 40);
   assert.ok(rec, "record idx 40 rides resolvedBoundaries (REMOVED at ABI v126)");
   assert.match(rec.evidence || "", /7230|8054|813460|428b20|re-?read|spawn/i);
@@ -22265,7 +22280,7 @@ test("ABI v95: B8 grid cell law is PE-exact at the slice boundary (model)", () =
 
 test("ABI v95: JSON records idx 16 as blob-gated NARROWED and rides resolvedBoundaries (REMOVED at ABI v110)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.name === "opaqueRoomUpdatePrefixB8");
   assert.ok(rec, "idx 16 rides resolvedBoundaries (REMOVED at ABI v110)");
   assert.equal(rec.targetVa, "span");
@@ -22773,7 +22788,7 @@ test("ABI v95 SaveState: source/build/JSON record every law + intended fields", 
   assert.match(header, /ISAAC_GAME_UPDATE_SAVESTATE_DWORD_LOOP = 0xe/);
   assert.match(header, /IsaacGameUpdateSliceSaveStatePlan/);
   assert.match(header, /ISAAC_GAME_UPDATE_SAVESTATE_PLAN_WORDS = 19/);
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   /* ABI v129: record idx 20 rides resolvedBoundaries; the v95 SaveState
      evidence moved with it. */
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 20);
@@ -23016,7 +23031,7 @@ test("ABI v95 tailmid 706c: expire create arg preps mirror PE imms + host VA", (
 
 test("ABI v95 tailmid 706c: JSON record idx 38 + translatedHelpers land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 38);
   assert.ok(rec, "record idx 38 rides resolvedBoundaries (REMOVED at ABI v127)");
   assert.match(rec.evidence || "", /8158a0|706c|expire|tailmid/i);
@@ -23373,7 +23388,7 @@ test("ABI v95 type5 doors: nested site (0x10/3) publishes the typed plan (snapsh
 
 test("ABI v95 type5 doors: JSON evidence — record idx 33 + helpers + events entry land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 33);
   assert.ok(rec, "record idx 33 rides resolvedBoundaries (REMOVED at ABI v119)");
   assert.match((rec.abiV95 || "") + (rec.abiV119 || ""), /type-5 door loop|type5_door_open_calls/);
@@ -23618,7 +23633,7 @@ test("ABI v95: the trigger-clear law exports are declared, defined, and exported
 
 test("ABI v95: JSON evidence names the trigger-clear CALL-ARG/decision laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 31);
   assert.ok(rec, "record idx 31 stays in opaqueBoundaries");
   assert.ok(rec.abiV95 && /stats_args|music_args|deep_music|awards_walk|rewind_tail/.test(rec.abiV95),
@@ -23706,7 +23721,7 @@ test("ABI v95: the shipped Wasm agrees with the oracle on the trigger-clear laws
 
 test("ABI v95: record idx 13 JSON spec lands the B1 fragment wire v45", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 13);
   assert.ok(rec, "record idx 13 stays in opaqueBoundaries");
   assert.equal(rec.operation, "NARROWED", "record is NARROWED-not-removed this unit");
@@ -24185,7 +24200,7 @@ test("ABI v95: TriggerClearAwardsSuite pins the ordered trio 0x7f9960 -> 0x82017
 
 test("ABI v95: record idx 28 JSON evidence names the awards suite-order + gates", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   /* ABI v135 (update-v135-deep-music-pack): record idx 28 REMOVED —
      evidence rides the resolvedBoundaries row. */
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 28);
@@ -25112,7 +25127,7 @@ test("ABI v95 B3B7: resume arms the typed plan when the pack is ready (ready=0 k
 
 test("ABI v95 B3B7: JSON evidence — record idx 15 + helpers + events land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 15);
   assert.ok(rec, "record idx 15 present");
   assert.match(rec.abiV95 || "", /B3B7|typed-host|b3b7_host_fco/i, "idx 15 abiV95 note");
@@ -25470,7 +25485,7 @@ test("ABI v95: B9B11 wire emits typed events on the ready arm; ready=0 keeps the
 
 test("ABI v95: JSON + header record the B9B11 typed events + laws; exports in the build list", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   for (const name of [
     "opaqueRoomUpdatePrefixB9B11Free",
     "opaqueRoomUpdatePrefixB9B11ModeHooks",
@@ -25849,7 +25864,7 @@ test("ABI v95: awards-bit7 wire — 812d00 carriers land from chain captures", (
 
 test("ABI v95 awards-bit7: JSON translatedHelpers + header/cpp/build pins land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const names = spec.translatedHelpers.map((h) => h.name);
   for (const n of [
     "isaac_game_update_slice_awards_bit7_walk_decision",
@@ -25922,7 +25937,7 @@ function bitsOfF32(value) {
 
 test("ABI v95: record idx 42 JSON spec lands the tail-path wire laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 42);
   assert.ok(rec, "record idx 42 rides resolvedBoundaries (REMOVED at ABI v114)");
   assert.match(rec.abiV95 || "", /0x008055a7|trail-loop frame|pass1 filter|0x80635b/i,
@@ -26366,7 +26381,7 @@ test("ABI v114 (wave-33): record idx 42 rides resolvedBoundaries — JSON rows, 
     "tailPathReady lane stays committed");
   /* ABI sizes: events 996 (v119 +1 tail slot) / runtime 14684 / state 524. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen (v119 tail @992)");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 /* Update-slice v120: record idx 41 REMOVED — the boundary row moved to
@@ -26405,7 +26420,7 @@ test("ABI v120: record idx 41 rides resolvedBoundaries — JSON rows, event slot
     "b18EntityReady lane stays committed");
   /* ABI sizes frozen: events 996 / runtime 14684 / state 524, ABI 99. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 /* Update-slice v121: record idx 47 REMOVED — the boundary row moved to
@@ -26444,7 +26459,7 @@ test("ABI v121: record idx 47 rides resolvedBoundaries — JSON rows, event slot
     "sfxStopFoldReady lane stays committed");
   /* ABI sizes frozen: events 996 / runtime 14684 / state 524, ABI 99. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 test("ABI v114: coarse retirement equivalence — gate-open fires carriers only; gate-miss/no-blob keeps the byte-for-byte monolith", () => {
@@ -26522,7 +26537,7 @@ test("ABI v122: record idx 19 rides resolvedBoundaries — JSON rows, event slot
   assert.equal(ev.get(664), "frameEffect6fd7c0Mode4SfxPlayTyped", "typed carrier @664 STAYS");
   /* ABI sizes frozen: events 996 / runtime 14684 / state 524, ABI 99. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 
@@ -26577,7 +26592,7 @@ test("ABI v124: record idx 46 rides resolvedBoundaries — JSON rows, event slot
     "sfxStopReady lane stays committed");
   /* ABI sizes frozen: events 996 / runtime 14684 / state 524, ABI 99. */
   assert.equal(ABI_SIZES.events, 1260, "events ABI size frozen");
-  assert.equal(ABI_SIZES.runtimeInputs, 23696, "runtime ABI size frozen");
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE, "runtime ABI size frozen");
 });
 
 /* ================= ABI v95: record idx 41 opaqueRoomUpdateTailEntity ====
@@ -26859,7 +26874,7 @@ test("ABI v95: B18 exports declared in header, defined in cpp, whitelisted in th
 
 test("ABI v120: record idx 41 JSON REMOVED (B18 walk-frame laws + full-capture theorem)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 41);
   assert.ok(rec, "idx 41 moved to resolvedBoundaries");
   assert.match(rec.abiV95 || "", /0x805532|0x805597|0x80554c|0x80555d|0x80556e|0x80558c|0x6e17c0|0xaf08b1|0x6da530/i);
@@ -27329,7 +27344,7 @@ test("ABI v119 clear-door-slots (idx-24 coarse RETIRED): the mask carrier fires 
 
 test("ABI v95 clear-door-slots: JSON record idx 24 + translatedHelpers + events name land", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 24);
   assert.ok(rec, "record idx 24 rides resolvedBoundaries (REMOVED at ABI v119)");
   assert.match((rec.abiV95 || "") + (rec.abiV119 || ""), /failing|early-out|710dd0|mask|REMOVED/i);
@@ -27680,7 +27695,7 @@ test("ABI v95 triggerOutput: source/build/JSON record every law + intended field
     assert.ok(spec.translatedHelpers.some((t) => t.name === `isaac_game_update_slice_${name}`),
       `json records ${name}`);
   }
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 18);
   assert.ok(rec, "spec keeps record idx 18");
   assert.ok((rec.abiV95 || "").includes("body laws"), "idx18 evidence notes the v95 body laws");
@@ -27901,7 +27916,7 @@ test("ABI v116: 435c70 ctor constants and dword image", () => {
 
 test("ABI v116: JSON idx 18 names the 435c70 ctor laws", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(spec.opaqueBoundaries.length, 24);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 18);
   assert.ok(rec, "idx 18 stays");
@@ -29230,7 +29245,7 @@ function emptyEventsForTest() {
 
 test("ABI v95: JSON records the water-b16 823540 chain + exported laws present", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 36);
   assert.ok(rec, "record idx 36 stays");
   assert.match(rec.evidence || "", /823540|00823540|23370|water/i);
@@ -29540,7 +29555,7 @@ test("ABI v95 B2: pick path — count carrier, spawn plans, seed chain write-bac
 
 test("ABI v95 B2: JSON records idx 14 with the B2 laws + layout names", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   assert.equal(spec.opaqueBoundaries.length, 24);
   const rec = spec.opaqueBoundaries.find((b) => b.idx === 14);
   assert.ok(rec, "idx 14 stays in opaqueBoundaries");
@@ -29859,7 +29874,7 @@ test("ABI v96: sfx play continuation composes window->seed->voice->volume", () =
 /* JSON + build-spec pins for the v96 exports (append-only abiV96 keys). */
 test("ABI v96: JSON records abiV96 evidence + helpers; build whitelist carries all 11", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100, "ABI committed 98");
+  assert.equal(spec.abiVersion, ABI_VERSION, "ABI committed 98");
   const names = [
     "isaac_game_update_slice_705ee0_call_arg",
     "isaac_game_update_slice_705ee0_call_order_plan",
@@ -30362,7 +30377,7 @@ test("ABI v129: record idx 20 coarse edge is retired on every capture-live arm a
 /* JSON / build-spec pins for the record-12 laws (append-only abiV96). */
 test("ABI v96 (record idx 12): JSON abiV96 evidence + helpers + events; build whitelist + no uint8_t", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100, "ABI committed 98");
+  assert.equal(spec.abiVersion, ABI_VERSION, "ABI committed 98");
   /* Wave-31: record idx 12 REMOVED — the boundary row moved to
      resolvedBoundaries (45 -> 44; 5th removal since v79); the typed
      rewind/seam events + residual counters stay committed (see the
@@ -30443,9 +30458,9 @@ test("ABI v96 (record idx 12): JSON abiV96 evidence + helpers + events; build wh
   }
   const blob = spec.runtimeInputs.find((r) => r.name === "rewind705ee0PayloadBlob");
   assert.equal(blob.bytes, 0x82c, "payload blob is 0x20b u32 = 0x82c bytes");
-  assert.equal(spec.abiVersion, 100, "ABI committed 98");
+  assert.equal(spec.abiVersion, ABI_VERSION, "ABI committed 98");
   assert.match(source, /opaque_call_006fd7c0_ready != 0/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(header, /opaque_call_006fd7c0_ready;/);
   assert.match(header, /rewind_705ee0_payload_blob\[ISAAC_GAME_UPDATE_705EE0_PAYLOAD_WORDS\];/);
   assert.doesNotMatch(header, /uint8_t\s+rewind_705ee0_/, "no uint8_t lanes in the record-12 capture");
@@ -30655,14 +30670,14 @@ test("ABI v102: transition pack — source/build/JSON pins; pack COMMITTED at AB
     "abiV103 LANDED at the wave-27 merge (pack committed)");
   assert.ok(!spec.opaqueBoundaries.some((b) => b.idx === 12),
     "record idx 12 is GONE from opaqueBoundaries (45 -> 44)");
-  assert.equal(spec.abiVersion, 100, "ABI committed 98");
+  assert.equal(spec.abiVersion, ABI_VERSION, "ABI committed 98");
   /* No uint8_t scalar params in the new law block (Wasm i32 args are not
      narrowed; byte gates re-narrow in-body). */
   assert.doesNotMatch(header, /6fd7c0_(args_valid|validate_fail_kind|fatal_string_va|fatal_level|blue_room_reach|blue_room_apply_index|engine_prefix_fires|stage_transition_reach|anim0xc_route|player_loop_reach|room_dispatch_reach|engine_room_arg|terminal_265c0_clear)\([^)]*uint8_t/);
   assert.doesNotMatch(source, /6fd7c0_(args_valid|validate_fail_kind|fatal_string_va|fatal_level|blue_room_reach|blue_room_apply_index|engine_prefix_fires|stage_transition_reach|anim0xc_route|player_loop_reach|room_dispatch_reach|engine_room_arg|terminal_265c0_clear)\([^)]*uint8_t/);
   /* Layouts COMMITTED at the ABI-98 merge (struct growth 14292->14328 /
      968->980 + the JSON rows via the append-only §json-delta pass). */
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
 });
 
@@ -30688,14 +30703,14 @@ test("ABI v104 (record-12 transition wire): layout + law pins — the pack lanes
   assert.equal(EVENTS_LAYOUT.frameEffect6fd7c0StageTransition.offset, 968);
   assert.equal(EVENTS_LAYOUT.frameEffect6fd7c0PlayerLoop.offset, 972);
   assert.equal(EVENTS_LAYOUT.frameEffect6fd7c0RoomDispatch.offset, 976);
-  assert.equal(ABI_SIZES.runtimeInputs, 23696);
+  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE);
   assert.equal(ABI_SIZES.events, 1260);
-  assert.equal(ABI_VERSION, 100, "ABI committed 98 at the wave-27 merge");
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION, "ABI committed 98 at the wave-27 merge");
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100, "JSON committed 98");
+  assert.equal(spec.abiVersion, ABI_VERSION, "JSON committed 98");
   assert.ok(spec.runtimeInputs.some((r) => r.name === "transition6fd7c0Ready" && r.offset === 14324),
     "pack voucher row landed (transition6fd7c0Ready @14324)");
-  assert.ok(!spec.runtimeInputs.some((r) => r.offset >= 23696), "no runtime rows at/after the tail in the spec (v141 0xb-block probe pack @22572..23695 ends AT 23696)");
+  assert.ok(!spec.runtimeInputs.some((r) => r.offset >= ABI_SIZES.runtimeInputs), "no runtime rows at/after the tail in the spec (v141 0xb-block probe pack @22572..23695 ends AT 23696)");
   assert.ok(!spec.events.some((e) => e.offset > 1260), "no events rows after the tail in the spec (v142 rt_band_pop composite carrier @1244..1256 ends AT 1260)");
   /* anim0xc_route: gate = anim==0xc && game0==1 FULL-DWORD && alt BYTE==0
      && room_eq && byte1 BYTE!=0; open && route BYTE!=0 -> 1 rewrite,
@@ -31288,7 +31303,7 @@ test("ABI v97: prefix_typed_host_events — the composed typed-host mask", () =>
 
 test("ABI v98: JSON evidence — name-matched opaqueRoomTransitionEnginePrefix REMOVED (abiV97/abiV98 ride resolvedBoundaries), count 48", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.name === "opaqueRoomTransitionEnginePrefix");
   assert.ok(rec, "record found by NAME in resolvedBoundaries (never index-match)");
   assert.equal(rec.targetVa, "0x0082ee40");
@@ -31618,13 +31633,13 @@ test("ABI v96 (wave-22 merge + v104 pack tail): the coordinator-merged tail — 
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
   const model = readFileSync(join(root, "scripts", "decomp", "game-update-model.mjs"), "utf8");
   const verifier = readFileSync(join(root, "scripts", "decomp", "verify-game-update-slice.mjs"), "utf8");
-  assert.equal(ABI_VERSION, 100);
-  assert.equal(spec.abiVersion, 100);
-  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: 23696, events: 1260 });
-  assert.match(header, /ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 100/);
+  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(spec.abiVersion, ABI_VERSION);
+  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: CPP_RUNTIME_INPUTS_SIZE, events: 1260 });
+  assert.match(header, new RegExp("ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = " + ABI_VERSION + "(?![0-9])"));
   assert.match(header, /ISAAC_GAME_UPDATE_8318A0_PLAYER_ENTRY_MAX = 8/);
   assert.match(header, /ISAAC_GAME_UPDATE_ANM2_MAX_LAYERS = 32/);
-  assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`static_assert\(sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /static_assert\(sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
   /* Events tail: 932 (record-4 sfx_manager_stores), 936 (record-10
      true_probe_interior), 940 (record-0 fatal_empty) then the record-22
@@ -31743,9 +31758,9 @@ test("ABI v98 (wave-27 merge): freeze-lift pins — offsets/caps/sizes/verifier 
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
   const model = readFileSync(join(root, "scripts", "decomp", "game-update-model.mjs"), "utf8");
   /* ABI 98 everywhere. */
-  assert.match(header, /ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 100/);
-  assert.match(model, /export const ABI_VERSION = 100/);
-  assert.equal(spec.abiVersion, 100);
+  assert.match(header, new RegExp("ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = " + ABI_VERSION + "(?![0-9])"));
+  assert.match(model, new RegExp("export const ABI_VERSION = " + ABI_VERSION + "(?![0-9])"));
+  assert.equal(spec.abiVersion, ABI_VERSION);
   /* The 7 walker vertices at their PLAN offsets in all three mirrors. */
   const rt = [
     ["hud_stat_walker_player_a", 14276], ["hud_stat_walker_player_b", 14280],
@@ -31771,9 +31786,9 @@ test("ABI v98 (wave-27 merge): freeze-lift pins — offsets/caps/sizes/verifier 
   }
   /* Sizes + the record-12 transition pack COMMITTED (runtime 14328,
      events 980). */
-  assert.match(source, /sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == 23696/);
+  assert.match(source, new RegExp(String.raw`sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
   assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
-  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: 23696, events: 1260 });
+  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: CPP_RUNTIME_INPUTS_SIZE, events: 1260 });
   /* The 9 pack runtime lanes @14292..14324 in all three mirrors. */
   const packRt = [
     ["transition_6fd7c0_game0", "transition6fd7c0Game0", 14292],
@@ -32393,7 +32408,7 @@ test("ABI v115 (wave-33): record idx 23 rides resolvedBoundaries — JSON rows, 
   assert.match(source, /offsetof\(IsaacGameUpdateSliceEvents, clear_path_flag_store\) == 988/);
   assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
   /* CHECK 4 — ABI_SIZES events 992 (state/runtime frozen). */
-  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: 23696, events: 1260 });
+  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: CPP_RUNTIME_INPUTS_SIZE, events: 1260 });
   /* CHECK 5 — the coarse counter @160 STAYS in the events ABI (never
      fires post-retirement). */
   const evMap = new Map(spec.events.map((e) => [e.offset, e.name]));
@@ -32495,7 +32510,7 @@ test("ABI v119 (wave-34): records idx 24 + idx 33 ride resolvedBoundaries — JS
   assert.match(source, /offsetof\(IsaacGameUpdateSliceEvents, type5_door_forced_rerun\) == 992/);
   assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
   /* CHECK 4 — ABI_SIZES events 996 (state/runtime frozen). */
-  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: 23696, events: 1260 });
+  assert.deepEqual(ABI_SIZES, { state: 524, constants: 32, runtimeInputs: CPP_RUNTIME_INPUTS_SIZE, events: 1260 });
   /* CHECK 5 — the coarse counters @164/@196 STAY in the events ABI (never
      fire post-retirement). */
   const evMap = new Map(spec.events.map((e) => [e.offset, e.name]));
@@ -32719,7 +32734,7 @@ test("ABI v123: 706c exports declared in header, defined in cpp, whitelisted in 
 
 test("ABI v123: record idx 38 JSON evidence lands (law pack, boundary STAYS counted)", () => {
   const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, 100);
+  assert.equal(spec.abiVersion, ABI_VERSION);
   const rec = spec.resolvedBoundaries.find((b) => b.idx === 38);
   assert.ok(rec, "idx 38 rides resolvedBoundaries (REMOVED at ABI v127; F4 blockers carried by typed carriers/captures)");
   assert.match(rec.abiV123 || "", /update-v123-706c-restock-laws/);

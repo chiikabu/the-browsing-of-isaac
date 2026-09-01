@@ -2,7 +2,7 @@
  "schemaVersion": 1,
  "rootSymbol": "Game::Update",
  "rootVa": "0x006fadc0",
- "abiVersion": 100,
+ "abiVersion": 101,
  "block": "post-guard timers through room-update prefix/clear/ambient/tail peel of VA 0x00802980: pure B0 entry clear + ordered prefix host residuals B1 / B2-host / B3B7 + pure-gated B8 path-cost + B9B11 + pure B2 Room+0x7764 collectible-timer countdown + pure B6 water-lerp countdown + B14 camera/FX lerp + tail countdowns + StatHUD lanes; record 9 state==2 arm pure (v89) ; record 9 iterate-arm JOIN pure-decision proof (v93)",
  "fields": [
   {
@@ -6855,7 +6855,7 @@
    "offset": 3492,
    "type": "bytes",
    "direction": "in",
-   "bytes": 4
+   "bytes": 256
   },
   {
    "name": "globalTree4aba0BlobReady",
@@ -16935,14 +16935,6 @@
   },
   {
    "name": "waterB16WaterHitCellIdx1",
-   "offset": 15760,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx2",
    "offset": 15764,
    "type": "u32",
    "bytes": 4,
@@ -16950,15 +16942,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx3",
-   "offset": 15768,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx4",
+   "name": "waterB16WaterHitCellIdx2",
    "offset": 15772,
    "type": "u32",
    "bytes": 4,
@@ -16966,15 +16950,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx5",
-   "offset": 15776,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx6",
+   "name": "waterB16WaterHitCellIdx3",
    "offset": 15780,
    "type": "u32",
    "bytes": 4,
@@ -16982,15 +16958,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx7",
-   "offset": 15784,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx8",
+   "name": "waterB16WaterHitCellIdx4",
    "offset": 15788,
    "type": "u32",
    "bytes": 4,
@@ -16998,15 +16966,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx9",
-   "offset": 15792,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx10",
+   "name": "waterB16WaterHitCellIdx5",
    "offset": 15796,
    "type": "u32",
    "bytes": 4,
@@ -17014,15 +16974,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx11",
-   "offset": 15800,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx12",
+   "name": "waterB16WaterHitCellIdx6",
    "offset": 15804,
    "type": "u32",
    "bytes": 4,
@@ -17030,15 +16982,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx13",
-   "offset": 15808,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx14",
+   "name": "waterB16WaterHitCellIdx7",
    "offset": 15812,
    "type": "u32",
    "bytes": 4,
@@ -17046,15 +16990,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx15",
-   "offset": 15816,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx16",
+   "name": "waterB16WaterHitCellIdx8",
    "offset": 15820,
    "type": "u32",
    "bytes": 4,
@@ -17062,15 +16998,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx17",
-   "offset": 15824,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx18",
+   "name": "waterB16WaterHitCellIdx9",
    "offset": 15828,
    "type": "u32",
    "bytes": 4,
@@ -17078,15 +17006,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx19",
-   "offset": 15832,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx20",
+   "name": "waterB16WaterHitCellIdx10",
    "offset": 15836,
    "type": "u32",
    "bytes": 4,
@@ -17094,15 +17014,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx21",
-   "offset": 15840,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx22",
+   "name": "waterB16WaterHitCellIdx11",
    "offset": 15844,
    "type": "u32",
    "bytes": 4,
@@ -17110,15 +17022,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx23",
-   "offset": 15848,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx24",
+   "name": "waterB16WaterHitCellIdx12",
    "offset": 15852,
    "type": "u32",
    "bytes": 4,
@@ -17126,15 +17030,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx25",
-   "offset": 15856,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx26",
+   "name": "waterB16WaterHitCellIdx13",
    "offset": 15860,
    "type": "u32",
    "bytes": 4,
@@ -17142,15 +17038,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx27",
-   "offset": 15864,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx28",
+   "name": "waterB16WaterHitCellIdx14",
    "offset": 15868,
    "type": "u32",
    "bytes": 4,
@@ -17158,15 +17046,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx29",
-   "offset": 15872,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx30",
+   "name": "waterB16WaterHitCellIdx15",
    "offset": 15876,
    "type": "u32",
    "bytes": 4,
@@ -17174,15 +17054,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx31",
-   "offset": 15880,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx32",
+   "name": "waterB16WaterHitCellIdx16",
    "offset": 15884,
    "type": "u32",
    "bytes": 4,
@@ -17190,15 +17062,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx33",
-   "offset": 15888,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx34",
+   "name": "waterB16WaterHitCellIdx17",
    "offset": 15892,
    "type": "u32",
    "bytes": 4,
@@ -17206,15 +17070,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx35",
-   "offset": 15896,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx36",
+   "name": "waterB16WaterHitCellIdx18",
    "offset": 15900,
    "type": "u32",
    "bytes": 4,
@@ -17222,15 +17078,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx37",
-   "offset": 15904,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx38",
+   "name": "waterB16WaterHitCellIdx19",
    "offset": 15908,
    "type": "u32",
    "bytes": 4,
@@ -17238,15 +17086,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx39",
-   "offset": 15912,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx40",
+   "name": "waterB16WaterHitCellIdx20",
    "offset": 15916,
    "type": "u32",
    "bytes": 4,
@@ -17254,15 +17094,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx41",
-   "offset": 15920,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx42",
+   "name": "waterB16WaterHitCellIdx21",
    "offset": 15924,
    "type": "u32",
    "bytes": 4,
@@ -17270,15 +17102,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx43",
-   "offset": 15928,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx44",
+   "name": "waterB16WaterHitCellIdx22",
    "offset": 15932,
    "type": "u32",
    "bytes": 4,
@@ -17286,15 +17110,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx45",
-   "offset": 15936,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx46",
+   "name": "waterB16WaterHitCellIdx23",
    "offset": 15940,
    "type": "u32",
    "bytes": 4,
@@ -17302,15 +17118,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx47",
-   "offset": 15944,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx48",
+   "name": "waterB16WaterHitCellIdx24",
    "offset": 15948,
    "type": "u32",
    "bytes": 4,
@@ -17318,15 +17126,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx49",
-   "offset": 15952,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx50",
+   "name": "waterB16WaterHitCellIdx25",
    "offset": 15956,
    "type": "u32",
    "bytes": 4,
@@ -17334,15 +17134,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx51",
-   "offset": 15960,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx52",
+   "name": "waterB16WaterHitCellIdx26",
    "offset": 15964,
    "type": "u32",
    "bytes": 4,
@@ -17350,15 +17142,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx53",
-   "offset": 15968,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx54",
+   "name": "waterB16WaterHitCellIdx27",
    "offset": 15972,
    "type": "u32",
    "bytes": 4,
@@ -17366,15 +17150,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx55",
-   "offset": 15976,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx56",
+   "name": "waterB16WaterHitCellIdx28",
    "offset": 15980,
    "type": "u32",
    "bytes": 4,
@@ -17382,15 +17158,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx57",
-   "offset": 15984,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx58",
+   "name": "waterB16WaterHitCellIdx29",
    "offset": 15988,
    "type": "u32",
    "bytes": 4,
@@ -17398,15 +17166,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx59",
-   "offset": 15992,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx60",
+   "name": "waterB16WaterHitCellIdx30",
    "offset": 15996,
    "type": "u32",
    "bytes": 4,
@@ -17414,15 +17174,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx61",
-   "offset": 16000,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitCellIdx62",
+   "name": "waterB16WaterHitCellIdx31",
    "offset": 16004,
    "type": "u32",
    "bytes": 4,
@@ -17430,15 +17182,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitCellIdx63",
-   "offset": 16008,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr0",
+   "name": "waterB16WaterHitCellIdx32",
    "offset": 16012,
    "type": "u32",
    "bytes": 4,
@@ -17446,15 +17190,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr1",
-   "offset": 16016,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr2",
+   "name": "waterB16WaterHitCellIdx33",
    "offset": 16020,
    "type": "u32",
    "bytes": 4,
@@ -17462,15 +17198,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr3",
-   "offset": 16024,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr4",
+   "name": "waterB16WaterHitCellIdx34",
    "offset": 16028,
    "type": "u32",
    "bytes": 4,
@@ -17478,15 +17206,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr5",
-   "offset": 16032,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr6",
+   "name": "waterB16WaterHitCellIdx35",
    "offset": 16036,
    "type": "u32",
    "bytes": 4,
@@ -17494,15 +17214,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr7",
-   "offset": 16040,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr8",
+   "name": "waterB16WaterHitCellIdx36",
    "offset": 16044,
    "type": "u32",
    "bytes": 4,
@@ -17510,15 +17222,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr9",
-   "offset": 16048,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr10",
+   "name": "waterB16WaterHitCellIdx37",
    "offset": 16052,
    "type": "u32",
    "bytes": 4,
@@ -17526,15 +17230,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr11",
-   "offset": 16056,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr12",
+   "name": "waterB16WaterHitCellIdx38",
    "offset": 16060,
    "type": "u32",
    "bytes": 4,
@@ -17542,15 +17238,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr13",
-   "offset": 16064,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr14",
+   "name": "waterB16WaterHitCellIdx39",
    "offset": 16068,
    "type": "u32",
    "bytes": 4,
@@ -17558,15 +17246,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr15",
-   "offset": 16072,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr16",
+   "name": "waterB16WaterHitCellIdx40",
    "offset": 16076,
    "type": "u32",
    "bytes": 4,
@@ -17574,15 +17254,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr17",
-   "offset": 16080,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr18",
+   "name": "waterB16WaterHitCellIdx41",
    "offset": 16084,
    "type": "u32",
    "bytes": 4,
@@ -17590,15 +17262,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr19",
-   "offset": 16088,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr20",
+   "name": "waterB16WaterHitCellIdx42",
    "offset": 16092,
    "type": "u32",
    "bytes": 4,
@@ -17606,15 +17270,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr21",
-   "offset": 16096,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr22",
+   "name": "waterB16WaterHitCellIdx43",
    "offset": 16100,
    "type": "u32",
    "bytes": 4,
@@ -17622,15 +17278,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr23",
-   "offset": 16104,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr24",
+   "name": "waterB16WaterHitCellIdx44",
    "offset": 16108,
    "type": "u32",
    "bytes": 4,
@@ -17638,15 +17286,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr25",
-   "offset": 16112,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr26",
+   "name": "waterB16WaterHitCellIdx45",
    "offset": 16116,
    "type": "u32",
    "bytes": 4,
@@ -17654,15 +17294,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr27",
-   "offset": 16120,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr28",
+   "name": "waterB16WaterHitCellIdx46",
    "offset": 16124,
    "type": "u32",
    "bytes": 4,
@@ -17670,15 +17302,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr29",
-   "offset": 16128,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr30",
+   "name": "waterB16WaterHitCellIdx47",
    "offset": 16132,
    "type": "u32",
    "bytes": 4,
@@ -17686,15 +17310,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr31",
-   "offset": 16136,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr32",
+   "name": "waterB16WaterHitCellIdx48",
    "offset": 16140,
    "type": "u32",
    "bytes": 4,
@@ -17702,15 +17318,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr33",
-   "offset": 16144,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr34",
+   "name": "waterB16WaterHitCellIdx49",
    "offset": 16148,
    "type": "u32",
    "bytes": 4,
@@ -17718,15 +17326,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr35",
-   "offset": 16152,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr36",
+   "name": "waterB16WaterHitCellIdx50",
    "offset": 16156,
    "type": "u32",
    "bytes": 4,
@@ -17734,15 +17334,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr37",
-   "offset": 16160,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr38",
+   "name": "waterB16WaterHitCellIdx51",
    "offset": 16164,
    "type": "u32",
    "bytes": 4,
@@ -17750,15 +17342,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr39",
-   "offset": 16168,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr40",
+   "name": "waterB16WaterHitCellIdx52",
    "offset": 16172,
    "type": "u32",
    "bytes": 4,
@@ -17766,15 +17350,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr41",
-   "offset": 16176,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr42",
+   "name": "waterB16WaterHitCellIdx53",
    "offset": 16180,
    "type": "u32",
    "bytes": 4,
@@ -17782,15 +17358,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr43",
-   "offset": 16184,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr44",
+   "name": "waterB16WaterHitCellIdx54",
    "offset": 16188,
    "type": "u32",
    "bytes": 4,
@@ -17798,15 +17366,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr45",
-   "offset": 16192,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr46",
+   "name": "waterB16WaterHitCellIdx55",
    "offset": 16196,
    "type": "u32",
    "bytes": 4,
@@ -17814,15 +17374,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr47",
-   "offset": 16200,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr48",
+   "name": "waterB16WaterHitCellIdx56",
    "offset": 16204,
    "type": "u32",
    "bytes": 4,
@@ -17830,15 +17382,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr49",
-   "offset": 16208,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr50",
+   "name": "waterB16WaterHitCellIdx57",
    "offset": 16212,
    "type": "u32",
    "bytes": 4,
@@ -17846,15 +17390,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr51",
-   "offset": 16216,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr52",
+   "name": "waterB16WaterHitCellIdx58",
    "offset": 16220,
    "type": "u32",
    "bytes": 4,
@@ -17862,15 +17398,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr53",
-   "offset": 16224,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr54",
+   "name": "waterB16WaterHitCellIdx59",
    "offset": 16228,
    "type": "u32",
    "bytes": 4,
@@ -17878,15 +17406,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr55",
-   "offset": 16232,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr56",
+   "name": "waterB16WaterHitCellIdx60",
    "offset": 16236,
    "type": "u32",
    "bytes": 4,
@@ -17894,15 +17414,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr57",
-   "offset": 16240,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr58",
+   "name": "waterB16WaterHitCellIdx61",
    "offset": 16244,
    "type": "u32",
    "bytes": 4,
@@ -17910,15 +17422,7 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
-   "name": "waterB16WaterHitEntPtr59",
-   "offset": 16248,
-   "type": "u32",
-   "bytes": 4,
-   "direction": "in",
-   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
-  },
-  {
-   "name": "waterB16WaterHitEntPtr60",
+   "name": "waterB16WaterHitCellIdx62",
    "offset": 16252,
    "type": "u32",
    "bytes": 4,
@@ -17926,8 +17430,504 @@
    "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
   },
   {
+   "name": "waterB16WaterHitCellIdx63",
+   "offset": 16260,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr0",
+   "offset": 15760,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr1",
+   "offset": 15768,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr2",
+   "offset": 15776,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr3",
+   "offset": 15784,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr4",
+   "offset": 15792,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr5",
+   "offset": 15800,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr6",
+   "offset": 15808,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr7",
+   "offset": 15816,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr8",
+   "offset": 15824,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr9",
+   "offset": 15832,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr10",
+   "offset": 15840,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr11",
+   "offset": 15848,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr12",
+   "offset": 15856,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr13",
+   "offset": 15864,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr14",
+   "offset": 15872,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr15",
+   "offset": 15880,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr16",
+   "offset": 15888,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr17",
+   "offset": 15896,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr18",
+   "offset": 15904,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr19",
+   "offset": 15912,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr20",
+   "offset": 15920,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr21",
+   "offset": 15928,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr22",
+   "offset": 15936,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr23",
+   "offset": 15944,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr24",
+   "offset": 15952,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr25",
+   "offset": 15960,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr26",
+   "offset": 15968,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr27",
+   "offset": 15976,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr28",
+   "offset": 15984,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr29",
+   "offset": 15992,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr30",
+   "offset": 16000,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr31",
+   "offset": 16008,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr32",
+   "offset": 16016,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr33",
+   "offset": 16024,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr34",
+   "offset": 16032,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr35",
+   "offset": 16040,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr36",
+   "offset": 16048,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr37",
+   "offset": 16056,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr38",
+   "offset": 16064,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr39",
+   "offset": 16072,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr40",
+   "offset": 16080,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr41",
+   "offset": 16088,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr42",
+   "offset": 16096,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr43",
+   "offset": 16104,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr44",
+   "offset": 16112,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr45",
+   "offset": 16120,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr46",
+   "offset": 16128,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr47",
+   "offset": 16136,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr48",
+   "offset": 16144,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr49",
+   "offset": 16152,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr50",
+   "offset": 16160,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr51",
+   "offset": 16168,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr52",
+   "offset": 16176,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr53",
+   "offset": 16184,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr54",
+   "offset": 16192,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr55",
+   "offset": 16200,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr56",
+   "offset": 16208,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr57",
+   "offset": 16216,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr58",
+   "offset": 16224,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr59",
+   "offset": 16232,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
+   "name": "waterB16WaterHitEntPtr60",
+   "offset": 16240,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV132": "ABI v132 (update-v132-b16-spawn-pack, record idx 36): capture row (contracts-b16-spawn NOTES §2/§3; Option A)."
+  },
+  {
    "name": "waterB16WaterHitEntPtr61",
-   "offset": 16256,
+   "offset": 16248,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17935,7 +17935,7 @@
   },
   {
    "name": "waterB16WaterHitEntPtr62",
-   "offset": 16260,
+   "offset": 16256,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17951,7 +17951,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx0",
-   "offset": 16268,
+   "offset": 15756,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17959,7 +17959,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx1",
-   "offset": 16272,
+   "offset": 15764,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17967,7 +17967,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx2",
-   "offset": 16276,
+   "offset": 15772,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17975,7 +17975,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx3",
-   "offset": 16280,
+   "offset": 15780,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17983,7 +17983,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx4",
-   "offset": 16284,
+   "offset": 15788,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17991,7 +17991,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx5",
-   "offset": 16288,
+   "offset": 15796,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -17999,7 +17999,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx6",
-   "offset": 16292,
+   "offset": 15804,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18007,7 +18007,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx7",
-   "offset": 16296,
+   "offset": 15812,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18015,7 +18015,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx8",
-   "offset": 16300,
+   "offset": 15820,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18023,7 +18023,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx9",
-   "offset": 16304,
+   "offset": 15828,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18031,7 +18031,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx10",
-   "offset": 16308,
+   "offset": 15836,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18039,7 +18039,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx11",
-   "offset": 16312,
+   "offset": 15844,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18047,7 +18047,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx12",
-   "offset": 16316,
+   "offset": 15852,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18055,7 +18055,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx13",
-   "offset": 16320,
+   "offset": 15860,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18063,7 +18063,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx14",
-   "offset": 16324,
+   "offset": 15868,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18071,7 +18071,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx15",
-   "offset": 16328,
+   "offset": 15876,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18079,7 +18079,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx16",
-   "offset": 16332,
+   "offset": 15884,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18087,7 +18087,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx17",
-   "offset": 16336,
+   "offset": 15892,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18095,7 +18095,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx18",
-   "offset": 16340,
+   "offset": 15900,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18103,7 +18103,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx19",
-   "offset": 16344,
+   "offset": 15908,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18111,7 +18111,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx20",
-   "offset": 16348,
+   "offset": 15916,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18119,7 +18119,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx21",
-   "offset": 16352,
+   "offset": 15924,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18127,7 +18127,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx22",
-   "offset": 16356,
+   "offset": 15932,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18135,7 +18135,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx23",
-   "offset": 16360,
+   "offset": 15940,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18143,7 +18143,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx24",
-   "offset": 16364,
+   "offset": 15948,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18151,7 +18151,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx25",
-   "offset": 16368,
+   "offset": 15956,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18159,7 +18159,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx26",
-   "offset": 16372,
+   "offset": 15964,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18167,7 +18167,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx27",
-   "offset": 16376,
+   "offset": 15972,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18175,7 +18175,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx28",
-   "offset": 16380,
+   "offset": 15980,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18183,7 +18183,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx29",
-   "offset": 16384,
+   "offset": 15988,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18191,7 +18191,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx30",
-   "offset": 16388,
+   "offset": 15996,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18199,7 +18199,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx31",
-   "offset": 16392,
+   "offset": 16004,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18207,7 +18207,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx32",
-   "offset": 16396,
+   "offset": 16012,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18215,7 +18215,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx33",
-   "offset": 16400,
+   "offset": 16020,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18223,7 +18223,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx34",
-   "offset": 16404,
+   "offset": 16028,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18231,7 +18231,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx35",
-   "offset": 16408,
+   "offset": 16036,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18239,7 +18239,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx36",
-   "offset": 16412,
+   "offset": 16044,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18247,7 +18247,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx37",
-   "offset": 16416,
+   "offset": 16052,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18255,7 +18255,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx38",
-   "offset": 16420,
+   "offset": 16060,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18263,7 +18263,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx39",
-   "offset": 16424,
+   "offset": 16068,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18271,7 +18271,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx40",
-   "offset": 16428,
+   "offset": 16076,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18279,7 +18279,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx41",
-   "offset": 16432,
+   "offset": 16084,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18287,7 +18287,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx42",
-   "offset": 16436,
+   "offset": 16092,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18295,7 +18295,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx43",
-   "offset": 16440,
+   "offset": 16100,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18303,7 +18303,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx44",
-   "offset": 16444,
+   "offset": 16108,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18311,7 +18311,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx45",
-   "offset": 16448,
+   "offset": 16116,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18319,7 +18319,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx46",
-   "offset": 16452,
+   "offset": 16124,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18327,7 +18327,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx47",
-   "offset": 16456,
+   "offset": 16132,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18335,7 +18335,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx48",
-   "offset": 16460,
+   "offset": 16140,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18343,7 +18343,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx49",
-   "offset": 16464,
+   "offset": 16148,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18351,7 +18351,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx50",
-   "offset": 16468,
+   "offset": 16156,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18359,7 +18359,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx51",
-   "offset": 16472,
+   "offset": 16164,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18367,7 +18367,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx52",
-   "offset": 16476,
+   "offset": 16172,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18375,7 +18375,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx53",
-   "offset": 16480,
+   "offset": 16180,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18383,7 +18383,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx54",
-   "offset": 16484,
+   "offset": 16188,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18391,7 +18391,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx55",
-   "offset": 16488,
+   "offset": 16196,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18399,7 +18399,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx56",
-   "offset": 16492,
+   "offset": 16204,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18407,7 +18407,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx57",
-   "offset": 16496,
+   "offset": 16212,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18415,7 +18415,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx58",
-   "offset": 16500,
+   "offset": 16220,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18423,7 +18423,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx59",
-   "offset": 16504,
+   "offset": 16228,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18431,7 +18431,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx60",
-   "offset": 16508,
+   "offset": 16236,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18439,7 +18439,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx61",
-   "offset": 16512,
+   "offset": 16244,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18447,7 +18447,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx62",
-   "offset": 16516,
+   "offset": 16252,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18455,7 +18455,7 @@
   },
   {
    "name": "waterB16LavaHitCellIdx63",
-   "offset": 16520,
+   "offset": 16260,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18463,7 +18463,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr0",
-   "offset": 16524,
+   "offset": 15760,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18471,7 +18471,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr1",
-   "offset": 16528,
+   "offset": 15768,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18479,7 +18479,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr2",
-   "offset": 16532,
+   "offset": 15776,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18487,7 +18487,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr3",
-   "offset": 16536,
+   "offset": 15784,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18495,7 +18495,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr4",
-   "offset": 16540,
+   "offset": 15792,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18503,7 +18503,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr5",
-   "offset": 16544,
+   "offset": 15800,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18511,7 +18511,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr6",
-   "offset": 16548,
+   "offset": 15808,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18519,7 +18519,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr7",
-   "offset": 16552,
+   "offset": 15816,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18527,7 +18527,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr8",
-   "offset": 16556,
+   "offset": 15824,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18535,7 +18535,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr9",
-   "offset": 16560,
+   "offset": 15832,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18543,7 +18543,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr10",
-   "offset": 16564,
+   "offset": 15840,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18551,7 +18551,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr11",
-   "offset": 16568,
+   "offset": 15848,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18559,7 +18559,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr12",
-   "offset": 16572,
+   "offset": 15856,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18567,7 +18567,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr13",
-   "offset": 16576,
+   "offset": 15864,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18575,7 +18575,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr14",
-   "offset": 16580,
+   "offset": 15872,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18583,7 +18583,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr15",
-   "offset": 16584,
+   "offset": 15880,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18591,7 +18591,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr16",
-   "offset": 16588,
+   "offset": 15888,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18599,7 +18599,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr17",
-   "offset": 16592,
+   "offset": 15896,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18607,7 +18607,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr18",
-   "offset": 16596,
+   "offset": 15904,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18615,7 +18615,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr19",
-   "offset": 16600,
+   "offset": 15912,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18623,7 +18623,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr20",
-   "offset": 16604,
+   "offset": 15920,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18631,7 +18631,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr21",
-   "offset": 16608,
+   "offset": 15928,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18639,7 +18639,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr22",
-   "offset": 16612,
+   "offset": 15936,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18647,7 +18647,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr23",
-   "offset": 16616,
+   "offset": 15944,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18655,7 +18655,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr24",
-   "offset": 16620,
+   "offset": 15952,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18663,7 +18663,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr25",
-   "offset": 16624,
+   "offset": 15960,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18671,7 +18671,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr26",
-   "offset": 16628,
+   "offset": 15968,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18679,7 +18679,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr27",
-   "offset": 16632,
+   "offset": 15976,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18687,7 +18687,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr28",
-   "offset": 16636,
+   "offset": 15984,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18695,7 +18695,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr29",
-   "offset": 16640,
+   "offset": 15992,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18703,7 +18703,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr30",
-   "offset": 16644,
+   "offset": 16000,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18711,7 +18711,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr31",
-   "offset": 16648,
+   "offset": 16008,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18719,7 +18719,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr32",
-   "offset": 16652,
+   "offset": 16016,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18727,7 +18727,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr33",
-   "offset": 16656,
+   "offset": 16024,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18735,7 +18735,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr34",
-   "offset": 16660,
+   "offset": 16032,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18743,7 +18743,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr35",
-   "offset": 16664,
+   "offset": 16040,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18751,7 +18751,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr36",
-   "offset": 16668,
+   "offset": 16048,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18759,7 +18759,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr37",
-   "offset": 16672,
+   "offset": 16056,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18767,7 +18767,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr38",
-   "offset": 16676,
+   "offset": 16064,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18775,7 +18775,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr39",
-   "offset": 16680,
+   "offset": 16072,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18783,7 +18783,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr40",
-   "offset": 16684,
+   "offset": 16080,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18791,7 +18791,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr41",
-   "offset": 16688,
+   "offset": 16088,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18799,7 +18799,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr42",
-   "offset": 16692,
+   "offset": 16096,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18807,7 +18807,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr43",
-   "offset": 16696,
+   "offset": 16104,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18815,7 +18815,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr44",
-   "offset": 16700,
+   "offset": 16112,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18823,7 +18823,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr45",
-   "offset": 16704,
+   "offset": 16120,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18831,7 +18831,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr46",
-   "offset": 16708,
+   "offset": 16128,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18839,7 +18839,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr47",
-   "offset": 16712,
+   "offset": 16136,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18847,7 +18847,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr48",
-   "offset": 16716,
+   "offset": 16144,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18855,7 +18855,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr49",
-   "offset": 16720,
+   "offset": 16152,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18863,7 +18863,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr50",
-   "offset": 16724,
+   "offset": 16160,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18871,7 +18871,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr51",
-   "offset": 16728,
+   "offset": 16168,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18879,7 +18879,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr52",
-   "offset": 16732,
+   "offset": 16176,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18887,7 +18887,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr53",
-   "offset": 16736,
+   "offset": 16184,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18895,7 +18895,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr54",
-   "offset": 16740,
+   "offset": 16192,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18903,7 +18903,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr55",
-   "offset": 16744,
+   "offset": 16200,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18911,7 +18911,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr56",
-   "offset": 16748,
+   "offset": 16208,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18919,7 +18919,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr57",
-   "offset": 16752,
+   "offset": 16216,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18927,7 +18927,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr58",
-   "offset": 16756,
+   "offset": 16224,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18935,7 +18935,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr59",
-   "offset": 16760,
+   "offset": 16232,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18943,7 +18943,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr60",
-   "offset": 16764,
+   "offset": 16240,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18951,7 +18951,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr61",
-   "offset": 16768,
+   "offset": 16248,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18959,7 +18959,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr62",
-   "offset": 16772,
+   "offset": 16256,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -18967,7 +18967,7 @@
   },
   {
    "name": "waterB16LavaHitEntPtr63",
-   "offset": 16776,
+   "offset": 16264,
    "type": "u32",
    "bytes": 4,
    "direction": "in",
@@ -32407,6 +32407,1118 @@
    "type": "u32",
    "bytes": 4,
    "direction": "in"
+  },
+  {
+   "name": "opaque0092f1c0GameType0",
+   "offset": 23696,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "ABI v101 (record idx 3, case-1 leaf-5 narrow): [Game+0] sampled AT the 0x0092f1c0 boundary — PE 0x0092fe5b mov ecx,[0xc71678]; 0x0092fe61 call 0x0074f090 reads [ecx]; 0x0074f093 cmp eax,5 / ja after dec = unsigned (mode-1)<=5 window. Site-local on purpose (record 23 clearPathGameMode0 samples the same dword elsewhere in the tick). Default 0 is SAFE and EXACT: mode 0 -> 0xffffffff>5 -> AL=0 -> host, the pre-wire behaviour."
+  },
+  {
+   "name": "roomTriggerClearAudioSeed",
+   "offset": 7988,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "roomTriggerClearAudioValue",
+   "offset": 7992,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "roomTriggerClearAudioPlaySound",
+   "offset": 7996,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "roomTriggerClearAudioGate749830",
+   "offset": 8000,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "roomTriggerClearAudioRoomMatch",
+   "offset": 8004,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0SfxGlobal798e4",
+   "offset": 13736,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0SfxGlobal79948",
+   "offset": 13740,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0SfxGlobal79790",
+   "offset": 13744,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0SfxGlobal7978c",
+   "offset": 13748,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0EngineField28",
+   "offset": 13752,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0EngineByte7c",
+   "offset": 13756,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryReady",
+   "offset": 13760,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryCount",
+   "offset": 13764,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB173",
+   "offset": 13768,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB1398",
+   "offset": 13800,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB139a",
+   "offset": 13832,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB171",
+   "offset": 13864,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryW410",
+   "offset": 13896,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryW3fc",
+   "offset": 13928,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryPtr7c",
+   "offset": 13960,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB34",
+   "offset": 13992,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryB88",
+   "offset": 14024,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryW1600",
+   "offset": 14056,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryW418",
+   "offset": 14088,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "opaque8318a0PlayerEntryW16c",
+   "offset": 14120,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeReady",
+   "offset": 14152,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgrBase",
+   "offset": 14156,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgrF18",
+   "offset": 14160,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgrEbc",
+   "offset": 14164,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr14",
+   "offset": 14168,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr21618",
+   "offset": 14172,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr21620",
+   "offset": 14176,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr21624",
+   "offset": 14180,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr2161c",
+   "offset": 14184,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeMgr29fb8",
+   "offset": 14188,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeVolumeBits",
+   "offset": 14192,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeVolumeEqOne",
+   "offset": 14196,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2FilenameReady",
+   "offset": 14212,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2FilenamePtr",
+   "offset": 14216,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2FilenameSize",
+   "offset": 14220,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2FilenameCap",
+   "offset": 14224,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2AnimFirstPre",
+   "offset": 14228,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2AnimSecondPre",
+   "offset": 14232,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2AnimReady",
+   "offset": 14236,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2LoadgraphicsFlagReady",
+   "offset": 14240,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2LoadgraphicsFlags",
+   "offset": 14244,
+   "type": "bytes",
+   "bytes": 32,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerPlayerA",
+   "offset": 14276,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerPlayerB",
+   "offset": 14280,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerBFrame328",
+   "offset": 14284,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkProbe1Arg",
+   "offset": 14288,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0VtableClassBits",
+   "offset": 14332,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0ImplPtr",
+   "offset": 14336,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0ImplB0",
+   "offset": 14340,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0Impl8",
+   "offset": 14344,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0ImplC",
+   "offset": 14348,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0Impl20",
+   "offset": 14352,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0Impl2010",
+   "offset": 14356,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0Netman2b4",
+   "offset": 14360,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0GlobalC73680",
+   "offset": 14364,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0GlobalC73694",
+   "offset": 14368,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture0GlobalC5ac00",
+   "offset": 14372,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1VtableClassBits",
+   "offset": 14376,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1ImplPtr",
+   "offset": 14380,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1ImplB0",
+   "offset": 14384,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1Impl8",
+   "offset": 14388,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1ImplC",
+   "offset": 14392,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1Impl20",
+   "offset": 14396,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1Impl2010",
+   "offset": 14400,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1Netman2b4",
+   "offset": 14404,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1GlobalC73680",
+   "offset": 14408,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1GlobalC73694",
+   "offset": 14412,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture1GlobalC5ac00",
+   "offset": 14416,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2VtableClassBits",
+   "offset": 14420,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2ImplPtr",
+   "offset": 14424,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2ImplB0",
+   "offset": 14428,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2Impl8",
+   "offset": 14432,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2ImplC",
+   "offset": 14436,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2Impl20",
+   "offset": 14440,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2Impl2010",
+   "offset": 14444,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2Netman2b4",
+   "offset": 14448,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2GlobalC73680",
+   "offset": 14452,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2GlobalC73694",
+   "offset": 14456,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture2GlobalC5ac00",
+   "offset": 14460,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3VtableClassBits",
+   "offset": 14464,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3ImplPtr",
+   "offset": 14468,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3ImplB0",
+   "offset": 14472,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3Impl8",
+   "offset": 14476,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3ImplC",
+   "offset": 14480,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3Impl20",
+   "offset": 14484,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3Impl2010",
+   "offset": 14488,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3Netman2b4",
+   "offset": 14492,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3GlobalC73680",
+   "offset": 14496,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3GlobalC73694",
+   "offset": 14500,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture3GlobalC5ac00",
+   "offset": 14504,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4VtableClassBits",
+   "offset": 14508,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4ImplPtr",
+   "offset": 14512,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4ImplB0",
+   "offset": 14516,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4Impl8",
+   "offset": 14520,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4ImplC",
+   "offset": 14524,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4Impl20",
+   "offset": 14528,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4Impl2010",
+   "offset": 14532,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4Netman2b4",
+   "offset": 14536,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4GlobalC73680",
+   "offset": 14540,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4GlobalC73694",
+   "offset": 14544,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture4GlobalC5ac00",
+   "offset": 14548,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5VtableClassBits",
+   "offset": 14552,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5ImplPtr",
+   "offset": 14556,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5ImplB0",
+   "offset": 14560,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5Impl8",
+   "offset": 14564,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5ImplC",
+   "offset": 14568,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5Impl20",
+   "offset": 14572,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5Impl2010",
+   "offset": 14576,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5Netman2b4",
+   "offset": 14580,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5GlobalC73680",
+   "offset": 14584,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5GlobalC73694",
+   "offset": 14588,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture5GlobalC5ac00",
+   "offset": 14592,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6VtableClassBits",
+   "offset": 14596,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6ImplPtr",
+   "offset": 14600,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6ImplB0",
+   "offset": 14604,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6Impl8",
+   "offset": 14608,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6ImplC",
+   "offset": 14612,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6Impl20",
+   "offset": 14616,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6Impl2010",
+   "offset": 14620,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6Netman2b4",
+   "offset": 14624,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6GlobalC73680",
+   "offset": 14628,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6GlobalC73694",
+   "offset": 14632,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture6GlobalC5ac00",
+   "offset": 14636,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7VtableClassBits",
+   "offset": 14640,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7ImplPtr",
+   "offset": 14644,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7ImplB0",
+   "offset": 14648,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7Impl8",
+   "offset": 14652,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7ImplC",
+   "offset": 14656,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7Impl20",
+   "offset": 14660,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7Impl2010",
+   "offset": 14664,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7Netman2b4",
+   "offset": 14668,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7GlobalC73680",
+   "offset": 14672,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7GlobalC73694",
+   "offset": 14676,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque98dba0EntitySurfaceCapture7GlobalC5ac00",
+   "offset": 14680,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "in",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
   }
  ],
  "opaqueBoundaries": [
@@ -32452,7 +33564,8 @@
    "abiV86": "HUD v5 try_pure wire for 0x0092f1c0: ready @6696 / mode @6700 / counter @6704 (runtime 6696->6708), events 480->484 (counterOut); drops the host edge when ready and pure; NARROWED not removed STAYS",
    "abiV95": "case-arm pure laws + typed host events (gate-1ba78, full-body census 0x92f1c0..0x92ffa3): dispatch_case FULL-DWORD (u32)(mode-1)>3 -> jmp [eax*4+0x92ffa4] (0x92f1f0..0x92f1fc); try_pure proves the case-1/2 PURE-TAIL exits — case 1 (mode==2): (u32)counter < (u32)limit (0x92fa0f cmp/0x92fa11 jb) && counter != limit-2 (0x92fd7e..0x92fd83) && (counter != limit-1 (0x92fe46..0x92fe4b jne -> tail) || (field14&0xff)!=0 (0x92fe51/0x92fe55 jne -> tail)); case 2 (mode==3): (u32)counter < (u32)limit (0x92feaa cmp/0x92fead jb -> tail) && !(counter==2 && (field14&0xff)!=0) (0x92fe8b/0x92fe90 -> 0x7eb1b0 host) — counter_next = 0x92ff60 inc (32-bit wrap); cases 0 (mode==1) and 3 (mode==4) are ALWAYS HOST: the Room interior 0x4186c0 call is UNCONDITIONAL before any eligibility (0x92f231 / 0x92fee9; 2026-08-15 addendum verified from the instruction stream) — typed events @548 (opaque0092f1c0Case) + @552 (opaque0092f1c0HostLeaf: 1=case0 uncond 0x4186c0, 2=case3 uncond 0x4186c0, 3=case1 reset, 4=case1 limit-2, 5=case1 0x74f090, 6/7/8=case2 0x7eb1b0/0x746560/both) pin the decisions; runtime limit/field_14 @6872/+@6876 (intended; coordinator merge fixes finals); NARROWED not removed STAYS",
    "abiV116": "ABI v116 (exports-only, ABI 99 frozen): case-arm HOST leaf bodies. 0x74f090 COMPLETE 14-insn/37 B / 0 E8 / 0 IND / 0 SEH / identify-zhl EMPTY: type window UNSIGNED (u32)([ecx]-1)>5 ja false (PE 0x74f090..0x74f096) then Game+0x2654c & 0x10000 FULL-dword bit16 (0x74f09d..0x74f0ad) -> AL=1 else 0; 8 callers including idx-3 0x92fa9b/0x92fe61. 0x7eb1b0 HOST-always 435 insn / 15 E8 / 3 IND / 1 cookie / 0 SEH / identify-zhl EMPTY: peelable prefix FULL-dword Game+0x26584==0x2c -> 0x74f690 (0x7eb1c4/0x7eb1d6) and ==0x2d -> interior (0x7eb1f8/0x7eb202); interior HOST (GetPlayer 0x417870, GetGrid 0x7f0800/0x7f0b20, HasMirrorDimension 0x74ef70, HasAbandonedMineshaft 0x74efd0, 0x8206e0, 0x5cc710 x2, 0x41d2a0 x3, 0x74e9b0). 0x4186c0 untouched. NARROWED not removed STAYS (count honest, this unit did not remove a boundary).",
-   "abiV117": "ABI v117 (exports-only, ABI 99 frozen): 0x74f690 mode-44 stage-type helper pure decision layer. Body 0x74f690..0x74f813: 117 insns / 0 resync / 1 E8 (Game::GetRoomByIdx 0x740bc0 exact-ZHL @0x74f6cf, push -1 + room_idx) / 0 IND / 0 fs:[0] / 0 cookie / 4 exits ret 4 (0x74f6bc, 0x74f74b, 0x74f7b9, 0x74f813); 33 direct E8 callers image-wide incl. idx-3 arm 0x7eb1e0; 0 E9/push-imm/mov-imm/raw dword; identify-zhl EMPTY. Exports: entry_plan (FULL-dword mode==0x2c re-test 0x74f69c/0x74f6a3; room_idx==-10 -> stage==7 FULL-dword ? const4 : [ebx+4] 0x74f6a8..0x74f6b0; SIGNED js negative 0x74f6bf; BYTE flag [ebx+0x183a0] &0xff 0x74f6c3/0x74f6ca -> STAGE vs GETROOM host), clamp_desc_dword0 (SIGNED cmovle 0 / cmovl 0xa8, 0x74f6da..0x74f6ed; the [desc+0x10]!=0 validity gate stays bridge), grid_dist (SIGNED /13 magic 0x4ec4ec4f sar 2 on slot_field [[this+0x18314]*0xb8]+0x14 and room_idx; dist=|r1-r2|+|q1-q2| cdq/xor/sub, 0x74f76b..0x74f7a9), stage_route (POST-call stage re-read 0x74f6f0; SIGNED cmp 6 jg -> lo table, 0xffffffff=-1 routes LO; ==7/==8 FULL-dword; dist>3 SIGNED jg far hi else const 4, 0x74f7ac/0x74f7af), table_type (f32*5.0 [0xbaa784], maxss 0 NaN->0, minss 4.999f [0xbaa780], cvttss2si trunc, a*5+c lea 0x74f72e, tables 0xb6a878/0xb6a8e0 25 dwords hash-bound). NARROWED not removed STAYS."
+   "abiV117": "ABI v117 (exports-only, ABI 99 frozen): 0x74f690 mode-44 stage-type helper pure decision layer. Body 0x74f690..0x74f813: 117 insns / 0 resync / 1 E8 (Game::GetRoomByIdx 0x740bc0 exact-ZHL @0x74f6cf, push -1 + room_idx) / 0 IND / 0 fs:[0] / 0 cookie / 4 exits ret 4 (0x74f6bc, 0x74f74b, 0x74f7b9, 0x74f813); 33 direct E8 callers image-wide incl. idx-3 arm 0x7eb1e0; 0 E9/push-imm/mov-imm/raw dword; identify-zhl EMPTY. Exports: entry_plan (FULL-dword mode==0x2c re-test 0x74f69c/0x74f6a3; room_idx==-10 -> stage==7 FULL-dword ? const4 : [ebx+4] 0x74f6a8..0x74f6b0; SIGNED js negative 0x74f6bf; BYTE flag [ebx+0x183a0] &0xff 0x74f6c3/0x74f6ca -> STAGE vs GETROOM host), clamp_desc_dword0 (SIGNED cmovle 0 / cmovl 0xa8, 0x74f6da..0x74f6ed; the [desc+0x10]!=0 validity gate stays bridge), grid_dist (SIGNED /13 magic 0x4ec4ec4f sar 2 on slot_field [[this+0x18314]*0xb8]+0x14 and room_idx; dist=|r1-r2|+|q1-q2| cdq/xor/sub, 0x74f76b..0x74f7a9), stage_route (POST-call stage re-read 0x74f6f0; SIGNED cmp 6 jg -> lo table, 0xffffffff=-1 routes LO; ==7/==8 FULL-dword; dist>3 SIGNED jg far hi else const 4, 0x74f7ac/0x74f7af), table_type (f32*5.0 [0xbaa784], maxss 0 NaN->0, minss 4.999f [0xbaa780], cvttss2si trunc, a*5+c lea 0x74f72e, tables 0xb6a878/0xb6a8e0 25 dwords hash-bound). NARROWED not removed STAYS.",
+   "abiV101": "ABI v101 (update-v101-92f1c0-leaf5-74f090): the READY NARROW pinned by the 2026-08-31 assessment is LANDED. Record stays OPEN and NARROWED - the count stays 24 - but case-1 leaf 5 is no longer unconditionally host. PE 0x0092fe46..0x0092fe68 re-verified against the instruction stream: lea eax,[ecx-1]; cmp edx,eax; jne 0x92ff60; cmp byte [ebx+0x14],0; jne 0x92ff60; mov ecx,[0xc71678]; call 0x74f090; test al,al; jne 0x92ff60. So on the counter==limit-1 && (field14&0xff)==0 arm the machine consults 0x74f090 and takes the SHARED PURE TAIL when AL!=0; only AL==0 falls through to the host stores at 0x92fe6e (Manager+0x4b2a4=1 / +0x4b2a5=[recv+0xc]). 0x74f090 law re-verified exact (body 0x74f090..0x74f0b4, 13 real insns + int3 padding - the index's 25 counts the padding; 0 E8): AL = ((u32)([Game+0]-1) <= 5) AND (([Game+0x2654c] & 0x10000) != 0), already exported at v116 as isaac_game_update_slice_74f090_result. NEW CAPTURE: opaque0092f1c0GameType0 @23696 = [Game+0] sampled AT THIS BOUNDARY (PE 0x0092fe5b). Site-local on purpose - record 23's clearPathGameMode0 is the same guest dword but sampled elsewhere in the tick, and waterB16GameType0 sets the per-site precedent. flags2654c is reused directly: it is tick state with NO writer in the slice, so it is authoritative at this point. DEFAULT 0 IS SAFE AND EXACT, not merely conservative: mode 0 gives (u32)(0-1)=0xffffffff > 5 -> AL=0 -> host, which is both the pre-wire behaviour and what the machine does for mode 0, so an un-sampling host and a correct host agree. AL==0 STAYS HOST (Game+0x1ba84 behind the Manager stores is still not captured). Full removal still blocked by the unconditional 0x004186c0 entity-list call on cases 0/3/reset plus 0x7eb1b0 / 0x746560 / Level::SetStage."
   },
   {
    "idx": 4,
@@ -37055,6 +38168,78 @@
    "bytes": 4,
    "direction": "out",
    "abiV142": "ABI v142: the five constant param stores 0xc79900..0xc79910 derived PURELY ({0, byte[0xc798e4]&4==0?6:1, 7, 1, 7}) packed 4 bits each p0|p1<<4|p2<<8|p3<<12|p4<<16. The four opaque thiscall leaves on *0xc798e0 stay host actions."
+  },
+  {
+   "name": "opaque008318a0SfxManagerStores",
+   "offset": 932,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "frameOpaque4212c0TrueProbeInterior",
+   "offset": 936,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkFatalEmpty",
+   "offset": 940,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2PrefixFilenameAssign",
+   "offset": 944,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2PrefixCacheFetch",
+   "offset": 948,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "engineAnm2PrefixLoadImage",
+   "offset": 952,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerProbe1",
+   "offset": 956,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerProbe2",
+   "offset": 960,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
+  },
+  {
+   "name": "hudStatWalkerProbe3",
+   "offset": 964,
+   "type": "u32",
+   "bytes": 4,
+   "direction": "out",
+   "abiV101": "row back-filled from the model layout by slice-json.mjs sync (2026-09-01); the owning record's abiV* keys carry the evidence"
   }
  ]
 }

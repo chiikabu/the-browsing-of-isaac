@@ -43,6 +43,8 @@ import {
   stepGameUpdateSlice,
   gameUpdateSliceB16WaterWire,
   gameUpdateSlice92f1c0TryPure,
+  gameUpdateSlice92f1c0DispatchCase,
+  gameUpdateSlice74f090Result,
   writeStruct,
   normalizeRuntimeInputsForLayout,
   overlayHostOwnedState,
@@ -183,10 +185,25 @@ if (!existsSync(wasmPath)) {
   wasm = instantiateSlice(readFileSync(wasmPath));
 } else {
   wasm = instantiateSlice(readFileSync(wasmPath));
-  if (statSync(wasmPath).mtimeMs < statSync(buildScript).mtimeMs) {
+  /* 2026-09-01: the guard also has to look at the SOURCES. A mutation cycle
+     builds the mutant, restores the cpp and leaves the mutant wasm on disk
+     newer than the build script; the old script-only check then verified a
+     module that no longer corresponds to any tracked source (that is how a
+     stranded ABI-101 mutant would have gone unnoticed). Any translation
+     source newer than the module forces a rebuild, ABI match or not. */
+  const sourceInputs = [buildScript];
+  for (const m of readFileSync(buildScript, "utf8")
+    .matchAll(/join\(root, "native", "decomp", "([^"]+\.cpp)"\)/g)) {
+    const cpp = join(root, "native", "decomp", m[1]);
+    if (existsSync(cpp)) sourceInputs.push(cpp, cpp.replace(/\.cpp$/, ".h"));
+  }
+  const newestSource = Math.max(...sourceInputs.filter(existsSync).map((p) => statSync(p).mtimeMs));
+  const wasmMtime = statSync(wasmPath).mtimeMs;
+  if (wasmMtime < newestSource) {
     const probeAbi = wasm.isaac_game_update_slice_abi_version ??
       wasm._isaac_game_update_slice_abi_version;
-    if (typeof probeAbi !== "function" || probeAbi() !== ABI_VERSION) {
+    const sourceNewer = sourceInputs.some((p) => p !== buildScript && existsSync(p) && statSync(p).mtimeMs > wasmMtime);
+    if (sourceNewer || typeof probeAbi !== "function" || probeAbi() !== ABI_VERSION) {
       rebuildSlice();
       wasm = instantiateSlice(readFileSync(wasmPath));
     }
@@ -1831,6 +1848,65 @@ const corpus = [
     opaque0092f1c0Counter: 5,
     opaque0092f1c0Limit: 100,
     opaque0092f1c0Field14: 0,
+  }),
+  // ABI v101 92f1c0 case-1 LEAF 5, both 0x74f090 verdicts. The random draw
+  // reaches this arm about once in 5387 cases (it needs mode==2 AND
+  // counter==limit-1 AND field14 low byte 0 simultaneously), so the two
+  // sub-paths are pinned instead of hoped for.
+  // AL != 0 -> shared pure tail: [Game+0] in 1..6 and bit16 of [Game+0x2654c].
+  completeState({
+    gate1ba78: 1,
+    flags2654c: 0x10000,
+    opaque0092f1c0Ready: 1,
+    opaque0092f1c0Mode: 2,
+    opaque0092f1c0Counter: 1,
+    opaque0092f1c0Limit: 2,
+    opaque0092f1c0Field14: 0,
+    opaque0092f1c0GameType0: 3,
+  }),
+  // AL == 0 by the FLAG half (mode in range, bit16 clear) -> stays host.
+  completeState({
+    gate1ba78: 1,
+    flags2654c: 0,
+    opaque0092f1c0Ready: 1,
+    opaque0092f1c0Mode: 2,
+    opaque0092f1c0Counter: 1,
+    opaque0092f1c0Limit: 2,
+    opaque0092f1c0Field14: 0,
+    opaque0092f1c0GameType0: 3,
+  }),
+  // AL == 0 by the TYPE half (bit16 set, [Game+0] outside 1..6) -> host.
+  // 7 and 0 are the two edges of the unsigned (mode-1)<=5 window.
+  completeState({
+    gate1ba78: 1,
+    flags2654c: 0x10000,
+    opaque0092f1c0Ready: 1,
+    opaque0092f1c0Mode: 2,
+    opaque0092f1c0Counter: 1,
+    opaque0092f1c0Limit: 2,
+    opaque0092f1c0Field14: 0,
+    opaque0092f1c0GameType0: 7,
+  }),
+  completeState({
+    gate1ba78: 1,
+    flags2654c: 0x10000,
+    opaque0092f1c0Ready: 1,
+    opaque0092f1c0Mode: 2,
+    opaque0092f1c0Counter: 1,
+    opaque0092f1c0Limit: 2,
+    opaque0092f1c0Field14: 0,
+    opaque0092f1c0GameType0: 0,
+  }),
+  // upper edge INSIDE the window: [Game+0]==6 -> AL != 0 -> pure tail.
+  completeState({
+    gate1ba78: 1,
+    flags2654c: 0x10001,
+    opaque0092f1c0Ready: 1,
+    opaque0092f1c0Mode: 2,
+    opaque0092f1c0Counter: 5,
+    opaque0092f1c0Limit: 6,
+    opaque0092f1c0Field14: 0x100,
+    opaque0092f1c0GameType0: 6,
   }),
   // tcsStats growth sim: clear_count==0 pre-entry (entry -> 1, gate opens)
   // + float gate open + vec capture -> typed events fire.
@@ -3620,6 +3696,11 @@ for (let index = 0; index < VERIFY_DRAWS; index += 1) {
     mode24ed8: integer(-20, 20),
     gate1d654: integer(0, 5) === 0 ? 1 : 0,
     gate1ba78: integer(0, 5) === 0 ? 1 : 0,
+    /* ABI v101: [Game+0x2654c]. Bit 0x10000 is the second half of the
+       0x74f090 predicate on the record idx-3 case-1 leaf-5 arm; it was
+       pinned to 0 for every gate1ba78 row before this, so the arm's
+       AL!=0 sub-path was unreachable. Both polarities drawn. */
+    flags2654c: [0, 0x10000, 1, 0x10001, 0x80000000, 0xffffffff][integer(0, 5)],
     gate1b83c: integer(0, 5) === 0 ? 1 : 0,
     predicate1ba74: integer(0, 1),
     counter265c0: integer(-20, 120),
@@ -4194,8 +4275,14 @@ for (let index = 0; index < VERIFY_DRAWS; index += 1) {
     frameOpaque98dba0956110VtableResult6: integer(0, 1),
     frameOpaque98dba0956110VtableResult7: integer(0, 1),
     frameOpaque98dba0956110GeneralResult: [0, 1, 0xff, 0x100][integer(0, 3)],
-    opaque0092f1c0Limit: [2, 100, 1024, 0xffffffff][integer(0, 3)],
+    /* ABI v101: small limits so counter==limit-1 (the leaf-5 arm) is
+       reachable from the -4..12 counter draw; 2 alone gave 1 hit in 5387. */
+    opaque0092f1c0Limit: [2, 3, 6, 13, 100, 1024, 0xffffffff][integer(0, 6)],
     opaque0092f1c0Field14: [0, 1, 0x100, 0x1ff][integer(0, 3)],
+    /* ABI v101: [Game+0] at the 0x92f1c0 site. 0/1/6/7 straddle the
+       0x74f090 unsigned (mode-1)<=5 window on both edges; 0xd and a huge
+       value cover the far side. */
+    opaque0092f1c0GameType0: [0, 1, 5, 6, 7, 0xd, 0xffffffff][integer(0, 6)],
     frameOpaque4212c0AbPackReady: integer(0, 3) === 0 ? 0 : 1,
     frameOpaque4212c0AFloat10: float32ToBits(Math.fround(random() * 12 - 1)),
     frameOpaque4212c0BFloat10: float32ToBits(Math.fround(random() * 12 - 1)),
@@ -5681,6 +5768,10 @@ let rebind956110LaneOnCases = 0;   /* 956110-ready rows delivered */
 let rebind956110ProbeCases = 0;    /* module-side probe_pure proof emitted */
 let rebind92f1c0LaneOnCases = 0;   /* 92f1c0-ready rows delivered (limit/field14 drawn) */
 let rebind92f1c0PureTailCases = 0; /* case-2 pure tail (counter<limit, field14 low 0) */
+/* ABI v101: the case-1 leaf-5 arm, split by the 0x74f090 verdict. BOTH must
+   be non-zero or the narrow is unexercised and a green run proves nothing. */
+let leaf5ArmPureCases = 0;   /* AL != 0 -> shared pure tail */
+let leaf5ArmHostCases = 0;   /* AL == 0 -> Manager stores stay host */
 let rebindAbPackLaneOnCases = 0;   /* ab-pack-ready rows delivered */
 let rebindAbPackCases = 0;         /* A/B pair typed advance/rewind events fired */
 let rebindTcsStatsLaneOnCases = 0; /* tcsStatsVecReady rows delivered */
@@ -8526,6 +8617,7 @@ for (let index = 0; index < corpus.length; index += 1) {
     frameOpaque98dba0956110GeneralResult: corpus[index].frameOpaque98dba0956110GeneralResult ?? 0,
     opaque0092f1c0Limit: corpus[index].opaque0092f1c0Limit ?? 0,
     opaque0092f1c0Field14: corpus[index].opaque0092f1c0Field14 ?? 0,
+    opaque0092f1c0GameType0: corpus[index].opaque0092f1c0GameType0 ?? 0,
     frameOpaque4212c0AbPackReady: corpus[index].frameOpaque4212c0AbPackReady ?? 0,
     frameOpaque4212c0AFloat10: corpus[index].frameOpaque4212c0AFloat10 ?? 0,
     frameOpaque4212c0BFloat10: corpus[index].frameOpaque4212c0BFloat10 ?? 0,
@@ -10712,8 +10804,30 @@ const indexOut = new Uint32Array(wasm.memory.buffer, genrandIndexOutAddress(), 1
           counter: (runtimeInputs.opaque0092f1c0Counter ?? 0) | 0,
           limit: (runtimeInputs.opaque0092f1c0Limit ?? 0) >>> 0,
           field14: (runtimeInputs.opaque0092f1c0Field14 ?? 0) >>> 0,
+          gameType0: (runtimeInputs.opaque0092f1c0GameType0 ?? 0) >>> 0,
+          flags2654c: (corpus[index].flags2654c ?? 0) >>> 0,
         }) === 1) {
       rebind92f1c0PureTailCases += 1;
+    }
+    /* ABI v101 leaf-5 coverage: mode==2 (dispatch case 1), counter==limit-1,
+       (field14 & 0xff)==0 — the exact arm PE 0x0092fe46..0x0092fe68 guards. */
+    if ((runtimeInputs.opaque0092f1c0Ready ?? 0) !== 0 &&
+        (corpus[index].gate1ba78 ?? 0) !== 0) {
+      const lim5 = (runtimeInputs.opaque0092f1c0Limit ?? 0) >>> 0;
+      const c5 = (runtimeInputs.opaque0092f1c0Counter ?? 0) >>> 0;
+      const f5 = (runtimeInputs.opaque0092f1c0Field14 ?? 0) >>> 0;
+      if (gameUpdateSlice92f1c0DispatchCase(
+            (runtimeInputs.opaque0092f1c0Mode ?? 0) >>> 0) === 1 &&
+          c5 < lim5 && c5 !== ((lim5 - 2) >>> 0) &&
+          c5 === ((lim5 - 1) >>> 0) && (f5 & 0xff) === 0) {
+        if (gameUpdateSlice74f090Result(
+              (runtimeInputs.opaque0092f1c0GameType0 ?? 0) >>> 0,
+              (corpus[index].flags2654c ?? 0) >>> 0) !== 0) {
+          leaf5ArmPureCases += 1;
+        } else {
+          leaf5ArmHostCases += 1;
+        }
+      }
     }
     if ((runtimeInputs.frameOpaque4212c0AbPackReady ?? 0) !== 0) {
       rebindAbPackLaneOnCases += 1;
@@ -12048,13 +12162,16 @@ if (blobLaneCases < 50 || latchSetLaneCases < 1 || latchMismatchCases !== 0 ||
   if (
     rebind956110LaneOnCases < 1 || rebind956110ProbeCases < 1 ||
     rebind92f1c0LaneOnCases < 1 || rebind92f1c0PureTailCases < 1 ||
+    leaf5ArmPureCases < 1 || leaf5ArmHostCases < 1 ||
     rebindAbPackLaneOnCases < 1 || rebindAbPackCases < 1 ||
     rebindTcsStatsLaneOnCases < 1 || rebindTcsStatsCases < 1
   ) {
     throw new Error(
       `ABI-107 rebind lane coverage broken: 956110 on=${rebind956110LaneOnCases} ` +
       `probe=${rebind956110ProbeCases} 92f1c0 on=${rebind92f1c0LaneOnCases} ` +
-      `pureTail=${rebind92f1c0PureTailCases} abPack on=${rebindAbPackLaneOnCases} ` +
+      `pureTail=${rebind92f1c0PureTailCases} ` +
+      `leaf5pure=${leaf5ArmPureCases} leaf5host=${leaf5ArmHostCases} ` +
+      `abPack on=${rebindAbPackLaneOnCases} ` +
       `advRew=${rebindAbPackCases} tcsStats on=${rebindTcsStatsLaneOnCases} ` +
       `sim=${rebindTcsStatsCases} (whitelist/layout must carry the 36 rebound lanes ` +
       `at the module offsets)`,
@@ -12071,7 +12188,7 @@ if (blobLaneCases < 50 || latchSetLaneCases < 1 || latchMismatchCases !== 0 ||
         `triggerOutput capture lanes so the record-18 body wire runs)`,
     );
   }
-  console.log(`blobLane=${blobLaneCases} latchSet=${latchSetLaneCases} latchMismatch=${latchMismatchCases} flagSet=${flagSetLaneCases} flagClear=${flagClearLaneCases} walkLane=${hudStatWalkLaneOnCases} walk2x=${hudStatWalkDoubleTickCases} walkOffGate=${hudStatWalkOffGateCases} walkOffReady=${hudStatWalkOffReadyCases} walkOffCount0=${hudStatWalkOffCount0Cases} walkOffCap=${hudStatWalkOffCountCapCases} midRestockPure=${midRestockPureLaneCases} midRestockMono=${midRestockMonoLaneCases} midRestockFatalDrop=${midRestockFatalDropLaneCases} rebind956110=${rebind956110ProbeCases}/${rebind956110LaneOnCases} rebind92f1c0=${rebind92f1c0PureTailCases}/${rebind92f1c0LaneOnCases} rebindAbPack=${rebindAbPackCases}/${rebindAbPackLaneOnCases} rebindTcsStats=${rebindTcsStatsCases}/${rebindTcsStatsLaneOnCases} captureOnly=${captureOnlyTriggerEmission} | DIFFERENTIAL PASSED — ${corpus.length} cases, ABI ${abiVersion()}`);
+  console.log(`blobLane=${blobLaneCases} latchSet=${latchSetLaneCases} latchMismatch=${latchMismatchCases} flagSet=${flagSetLaneCases} flagClear=${flagClearLaneCases} walkLane=${hudStatWalkLaneOnCases} walk2x=${hudStatWalkDoubleTickCases} walkOffGate=${hudStatWalkOffGateCases} walkOffReady=${hudStatWalkOffReadyCases} walkOffCount0=${hudStatWalkOffCount0Cases} walkOffCap=${hudStatWalkOffCountCapCases} midRestockPure=${midRestockPureLaneCases} midRestockMono=${midRestockMonoLaneCases} midRestockFatalDrop=${midRestockFatalDropLaneCases} rebind956110=${rebind956110ProbeCases}/${rebind956110LaneOnCases} rebind92f1c0=${rebind92f1c0PureTailCases}/${rebind92f1c0LaneOnCases} leaf5=${leaf5ArmPureCases}p/${leaf5ArmHostCases}h rebindAbPack=${rebindAbPackCases}/${rebindAbPackLaneOnCases} rebindTcsStats=${rebindTcsStatsCases}/${rebindTcsStatsLaneOnCases} captureOnly=${captureOnlyTriggerEmission} | DIFFERENTIAL PASSED — ${corpus.length} cases, ABI ${abiVersion()}`);
 
 /* ============================================================================
  * Live-frame regression guard (update-v96 residual inventory -> permanent).

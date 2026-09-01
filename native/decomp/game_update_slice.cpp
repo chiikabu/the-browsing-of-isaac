@@ -396,7 +396,7 @@ static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, frame_opaque_98dba0_en
               "runtime input ABI changed");
 static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, frame_opaque_98dba0_entity_surface_capture[7]) == 14640,
               "runtime input ABI changed");
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696, "runtime input ABI changed");
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700, "runtime input ABI changed");
 /* ABI v75 record-22 engine-prefix latch gate. */
 static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, engine_anm2_latch_ready) == 3204,
               "runtime input ABI changed");
@@ -431,7 +431,7 @@ static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, global_tree_4aba0_end)
 static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, global_tree_4aba0_nodes) == 3764,
               "runtime input ABI changed");
 static_assert(sizeof(IsaacGlobalTree4aba0Node) == 24, "runtime input ABI changed");
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696, "runtime input ABI changed");
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700, "runtime input ABI changed");
 /* ABI v56 rank-display state writes. */
 static_assert(offsetof(IsaacGameUpdateSliceState, rank_display_switch_after) == 456,
               "state ABI changed");
@@ -577,7 +577,7 @@ static_assert(offsetof(IsaacGameUpdateSliceHudStatPlayerPack, f1464) == 56,
               "runtime ABI changed");
 static_assert(offsetof(IsaacGameUpdateSliceHudStatPlayerPack, f156c) == 60,
               "runtime ABI changed");
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696, "runtime ABI changed");
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700, "runtime ABI changed");
 /* ABI v85: VA 0x0092e300 StopAll voice blob (runtime 5500 -> 6696). */
 static_assert(ISAAC_OPAQUE_0092E300_MAX_VOICES == 32, "0092e300 voice cap changed");
 static_assert(sizeof(IsaacGameUpdateSliceOpaque0092e300VoicePack) == 36,
@@ -676,7 +676,7 @@ static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, state24ecc_8ef990_9567
    capture blocks). */
 static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, clear_path_game_mode_0) == 7888,
               "runtime ABI changed");
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696, "runtime ABI changed");
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700, "runtime ABI changed");
 static_assert(sizeof(IsaacGameUpdateSliceSoundGroupWalkPlan) == 40,
               "sound-group walk plan ABI changed");
 /* ABI v95 (record idx 32): FUN_00956110 arg-prep + result plan carriers. */
@@ -1142,7 +1142,7 @@ static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, hud_message_text_words
               "runtime input ABI changed");
 /* Whole-struct size re-pinned at ABI v87 (8318a0 try_pure blob);
    extended at ABI v92 (98dba0 walk span capture). */
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696, "runtime input ABI changed");
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700, "runtime input ABI changed");
 static_assert((int)ISAAC_GENRAND_STATE_WORDS == (int)ISAAC_ROOM_GENRAND_N,
               "genrand state length must mirror the Room recovery");
 static_assert(ISAAC_GENRAND_MAX_SAMPLES == 448, "genrand sample cap changed");
@@ -1239,7 +1239,7 @@ static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, greed_probe_elems) == 
               "runtime input ABI changed");
 static_assert(offsetof(IsaacGameUpdateSliceRuntimeInputs, greed_probe_elems[7].f20a9) == 15732,
               "runtime input ABI changed");
-static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23696,
+static_assert(sizeof(IsaacGameUpdateSliceRuntimeInputs) == 23700,
               "runtime inputs size changed");
 /* ABI v133 (update-v133-audio-music-pack, records idx26/27): spawn-tail
    capture packs @16780..17536 + tail-spawn carriers @1100..1104. */
@@ -2337,9 +2337,11 @@ static int32_t opaque_0092e230_stop_fold(
    Returns 1 when the host call is still required. */
 int32_t opaque_0092f1c0_needs_host(uint32_t ready, uint32_t mode,
                                    uint32_t counter, uint32_t limit,
-                                   uint32_t field_14) {
+                                   uint32_t field_14, uint32_t game_type_0,
+                                   uint32_t flags_2654c) {
   if (ready == 0u) return 1;
-  return isaac_game_update_slice_92f1c0_try_pure(mode, counter, limit, field_14) == 0
+  return isaac_game_update_slice_92f1c0_try_pure(mode, counter, limit, field_14,
+                                                 game_type_0, flags_2654c) == 0
              ? 1
              : 0;
 }
@@ -4118,8 +4120,14 @@ extern "C" void isaac_game_update_slice_step(
         runtime_inputs != nullptr ? runtime_inputs->opaque_0092f1c0_limit : 0u;
     const uint32_t field_14 =
         runtime_inputs != nullptr ? runtime_inputs->opaque_0092f1c0_field_14 : 0u;
+    /* ABI v101 (record idx 3 case-1 leaf-5): the 0x74f090 predicate inputs.
+       game_type_0 is the site-local [Game+0] sample; flags_2654c is tick
+       state (no writer in the slice, so authoritative at this point). */
+    const uint32_t game_type_0 =
+        runtime_inputs != nullptr ? runtime_inputs->opaque_0092f1c0_game_type_0 : 0u;
+    const uint32_t flags_2654c = state->flags_2654c;
     if (opaque_0092f1c0_needs_host(ready, mode, (uint32_t)counter, limit,
-                                   field_14) != 0) {
+                                   field_14, game_type_0, flags_2654c) != 0) {
       events->opaque_call_0092f1c0 = 1;
       if (ready != 0u) {
         /* ABI v95 typed host events: dispatch case + host leaf code. */
@@ -4134,8 +4142,12 @@ extern "C" void isaac_game_update_slice_step(
               events->opaque_0092f1c0_host_leaf = 3u; /* reset arm */
             } else if (c == limit - 2u) {
               events->opaque_0092f1c0_host_leaf = 4u; /* limit-2 arm */
+            } else if (isaac_game_update_slice_74f090_result(
+                           game_type_0, flags_2654c) != 0u) {
+              /* ABI v101: AL!=0 took the pure tail -- no host leaf. */
+              events->opaque_0092f1c0_host_leaf = 0u;
             } else {
-              events->opaque_0092f1c0_host_leaf = 5u; /* 0x74f090 arm */
+              events->opaque_0092f1c0_host_leaf = 5u; /* 0x74f090 arm, AL==0 */
             }
           } else if (dc == 2) {
             uint32_t leaf = 0u;
@@ -7603,7 +7615,8 @@ extern "C" int32_t isaac_game_update_slice_92f1c0_dispatch_case(uint32_t mode) {
    != 0) (0x92fe8b cmp / 0x92fe90 cmp byte -> 0x7eb1b0 host). field_14 is
    the machine's BYTE test — re-narrowed in-body (& 0xff). */
 extern "C" int32_t isaac_game_update_slice_92f1c0_try_pure(
-    uint32_t mode, uint32_t counter, uint32_t limit, uint32_t field_14) {
+    uint32_t mode, uint32_t counter, uint32_t limit, uint32_t field_14,
+    uint32_t game_type_0, uint32_t flags_2654c) {
   const uint32_t c = counter;
   const uint32_t lim = limit;
   const int32_t dc = isaac_game_update_slice_92f1c0_dispatch_case(mode);
@@ -7612,7 +7625,16 @@ extern "C" int32_t isaac_game_update_slice_92f1c0_try_pure(
   if (dc == 1) {
     if (c >= lim) return 0;      /* reset arm 0x92fa17 (jb not taken) */
     if (c == lim - 2u) return 0; /* limit-2 arm 0x92fd89 */
-    if (c == lim - 1u && (field_14 & 0xffu) == 0u) return 0; /* 0x74f090 arm */
+    if (c == lim - 1u && (field_14 & 0xffu) == 0u) {
+      /* ABI v101: leaf-5 is NOT unconditionally host. PE 0x0092fe5b mov
+         ecx,[0xc71678]; 0x0092fe61 call 0x0074f090; 0x0092fe66 test al,al;
+         0x0092fe68 jne 0x92ff60 -- AL!=0 goes straight to the shared pure
+         tail. AL==0 stays host (0x92fe6e stores Manager+0x4b2a4/+0x4b2a5;
+         Game+0x1ba84 behind them is NOT captured). */
+      return isaac_game_update_slice_74f090_result(game_type_0, flags_2654c) != 0u
+                 ? 1
+                 : 0;
+    }
     return 1; /* pure tail: 0x92fe51 jne / 0x92fe4b jne -> 0x92ff60 */
   }
   /* dc == 2 (case 2, mode==3). */

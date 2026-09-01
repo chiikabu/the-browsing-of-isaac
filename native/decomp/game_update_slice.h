@@ -156,7 +156,7 @@ enum {
      frame_opaque_98dba0_entity_surface_accept_pure @980..984; the
      RTTI-block bl-fold law (isaac_game_update_slice_entity_surface_rtti_
      fold) + the walk_step accept-AL byte-gate correction land in-module. */
-  ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 100,
+  ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 101,
   /* ABI v95 (record idx 15 opaqueRoomUpdatePrefixB3B7): capture caps. A
      host that sees more live entries than the cap MUST NOT set
      b3b7_sparse_ready (module falls back to the monolithic residual). */
@@ -3165,6 +3165,15 @@ typedef struct IsaacGameUpdateSliceRuntimeInputs {
   uint32_t awards_b_block_tail_draw;      /* 0x7e90f0 draw @0x7fbb37 */
   uint32_t awards_b_block_elem_values[ISAAC_GAME_UPDATE_B_BLOCK_MAX_ROWS];
   IsaacGameUpdateSliceBBlockRow awards_b_block_rows[ISAAC_GAME_UPDATE_B_BLOCK_MAX_ROWS];
+  /* ABI v101 (record idx 3, case-1 leaf-5 narrow): [Game+0] sampled AT THE
+     0x0092f1c0 boundary — PE 0x0092fe5b mov ecx,[0xc71678]; 0x0092fe61 call
+     0x0074f090, which reads [ecx]. Site-local on purpose: record 23's
+     clear_path_game_mode_0 is the same guest dword but sampled elsewhere in
+     the tick, and water_b16_game_type_0 sets the per-site precedent.
+     default 0 is SAFE AND EXACT — 0x74f090 tests (u32)(mode-1)<=5, so mode
+     0 gives 0xffffffff>5 -> AL=0 -> host, which is both the pre-wire
+     behaviour and what the machine does for mode 0. */
+  uint32_t opaque_0092f1c0_game_type_0;
 } IsaacGameUpdateSliceRuntimeInputs;
 
 /* ABI v95 (record idx 23 opaqueRoomUpdateClearPath): the two remaining pure
@@ -3831,7 +3840,8 @@ uint32_t isaac_game_update_slice_tailmid_706c_expire_host_va(void);
    eligibility (0x92f231 / 0x92fee9). counter_next mirrors PE 0x92ff60 inc
    dword [ebx+4] (32-bit wrap). Every scalar param is uint32_t: no uint8_t scalar params. */
 int32_t isaac_game_update_slice_92f1c0_dispatch_case(uint32_t mode);
-int32_t isaac_game_update_slice_92f1c0_try_pure(uint32_t mode, uint32_t counter, uint32_t limit, uint32_t field_14);
+int32_t isaac_game_update_slice_92f1c0_try_pure(uint32_t mode, uint32_t counter, uint32_t limit, uint32_t field_14,
+                                               uint32_t game_type_0, uint32_t flags_2654c);
 uint32_t isaac_game_update_slice_92f1c0_counter_next(uint32_t counter);
 /* ABI v116 (record idx 3 case-arm leaves, ABI 99 frozen exports-only):
    0x0074f090 is a COMPLETE 14-insn predicate (37 B, 0 E8 / 0 IND / 0

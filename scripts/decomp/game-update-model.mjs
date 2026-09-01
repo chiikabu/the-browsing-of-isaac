@@ -275,7 +275,7 @@ import {
   SFX_STOP_ALL_GROUP_WALK,
 } from "./sfx-pure-model.mjs";
 
-export const ABI_VERSION = 100;
+export const ABI_VERSION = 101;
 /* ABI v97 (wave-26 merge, PLAN update-v102-abi97-plan): the walker
    freeze-lift — 4 runtime lanes @14276..14292 + 3 walker probe events
    @956..968; record-4 store-plan APPLICATION arm (3 exports); record-12
@@ -322,7 +322,7 @@ export const ABI_SIZES = Object.freeze({
      scalars @15484..15504. */
   /* ABI v131 (update-v131-greed-probe-pack): +232 (greed probe pack
      15504..15736: voucher + count + 8 elems x 7 u32). */
-  runtimeInputs: 23696, // v136 audio head pack 17696..17852; v137 83b0 head/ALT-walk/tail-RNG pack 17856..18012; v139 b1-rain outcome rows @18392..21999; v140 award SPAWN-LOOP pack @22000..22571 (15 shared lanes + 16 x stride-32 rows); v141 0xb-block probe pack @22572..23695 (17 shared lanes + tail-create trio + 8 elem values + 8 x stride-128 rows)
+  runtimeInputs: 23700, // v136 audio head pack 17696..17852; v137 83b0 head/ALT-walk/tail-RNG pack 17856..18012; v139 b1-rain outcome rows @18392..21999; v140 award SPAWN-LOOP pack @22000..22571 (15 shared lanes + 16 x stride-32 rows); v141 0xb-block probe pack @22572..23695 (17 shared lanes + tail-create trio + 8 elem values + 8 x stride-128 rows)
   /* ABI v96 coordinator-merged tail: 932 -> 956 = opaque_008318a0_
      sfx_manager_stores @932 + frame_opaque_4212c0_true_probe_interior
      @936 + hud_stat_walk_fatal_empty @940 (C11 plan) + the record-22
@@ -1904,6 +1904,15 @@ export const RUNTIME_INPUTS_LAYOUT = Object.freeze({
        [recv+0x14] (PE 0x92fe51) — module offsets 6872/6876. */
     opaque0092f1c0Limit: Object.freeze({ offset: 6872, type: "u32" }),
     opaque0092f1c0Field14: Object.freeze({ offset: 6876, type: "u32" }),
+    /* ABI v101 (record idx 3, case-1 leaf-5 narrow): [Game+0] sampled AT THE
+       0x0092f1c0 boundary (PE 0x0092fe5b mov ecx,[0xc71678]; 0x0092fe61 call
+       0x0074f090, which reads [ecx]). Site-local on purpose — record 23's
+       clearPathGameMode0 is the same guest dword but sampled at a different
+       point in the tick, and the b16 lane sets the precedent of capturing
+       [Game+0] per site. Default 0 is SAFE and EXACT: 0x74f090 computes
+       (u32)(mode-1)<=5, so mode 0 gives 0xffffffff>5 -> AL=0 -> host, which
+       is the pre-wire behaviour AND what the machine does for mode 0. */
+    opaque0092f1c0GameType0: Object.freeze({ offset: 23696, type: "u32" }),
     clearPathGameMode0: Object.freeze({ offset: 7888, type: "u32" }),
     b3b7FcoResult: Object.freeze({ offset: 8008, type: "u32" }),
     b3b7Hce2a5Hit: Object.freeze({ offset: 8012, type: "u32" }),
@@ -6257,6 +6266,7 @@ export function gameUpdateSlice92f1c0DispatchCase(mode) {
 }
 export function gameUpdateSlice92f1c0TryPure({
   mode = 0, counter = 0, limit = 0, field14 = 0,
+  gameType0 = 0, flags2654c = 0,
 } = {}) {
   const c = counter >>> 0;
   const lim = limit >>> 0;
@@ -6266,7 +6276,14 @@ export function gameUpdateSlice92f1c0TryPure({
   if (dc === 1) {
     if (c >= lim) return 0;               /* reset arm 0x92fa17 */
     if (c === (lim - 2) >>> 0) return 0;  /* limit-2 arm 0x92fd89 */
-    if (c === (lim - 1) >>> 0 && (field14 & 0xff) === 0) return 0; /* 0x74f090 */
+    if (c === (lim - 1) >>> 0 && (field14 & 0xff) === 0) {
+      /* ABI v101: leaf-5 is NOT unconditionally host. PE 0x0092fe5b mov
+         ecx,[0xc71678]; 0x0092fe61 call 0x0074f090; 0x0092fe66 test al,al;
+         0x0092fe68 jne 0x92ff60 — AL!=0 jumps straight to the shared pure
+         tail. AL==0 stays host (0x92fe6e stores Manager+0x4b2a4/+0x4b2a5,
+         and Game+0x1ba84 behind them is NOT captured). */
+      return gameUpdateSlice74f090Result(gameType0, flags2654c) !== 0 ? 1 : 0;
+    }
     return 1; /* pure tail */
   }
   /* dc === 2 (case 2, mode==3). */
@@ -6280,6 +6297,7 @@ export function gameUpdateSlice92f1c0CounterNext(counter) {
 /* Typed host-leaf code matching the cpp event (1..8). 0 when not host. */
 export function gameUpdateSlice92f1c0HostLeaf({
   mode = 0, counter = 0, limit = 0, field14 = 0,
+  gameType0 = 0, flags2654c = 0,
 } = {}) {
   const dc = gameUpdateSlice92f1c0DispatchCase(mode);
   if (dc < 0) return 0;
@@ -6290,7 +6308,10 @@ export function gameUpdateSlice92f1c0HostLeaf({
   if (dc === 1) {
     if (c >= lim) return 3;              /* reset arm */
     if (c === (lim - 2) >>> 0) return 4; /* limit-2 arm */
-    return 5;                            /* 0x74f090 arm */
+    /* ABI v101: leaf 5 only survives when 0x74f090 returned AL==0; the
+       AL!=0 sub-path took the pure tail and emits no host leaf. */
+    if (gameUpdateSlice74f090Result(gameType0, flags2654c) !== 0) return 0;
+    return 5;                            /* 0x74f090 arm, AL==0 */
   }
   let leaf = 0;
   if (c === 2 && (field14 & 0xff) !== 0) leaf |= 1; /* 0x7eb1b0 */
@@ -6379,9 +6400,12 @@ export function gameUpdateSlice74f690TableType(tableSel, faBits, fbBits) {
 
 export function opaque0092f1c0NeedsHost({
   ready = 0, mode = 0, counter = 0, limit = 0, field14 = 0,
+  gameType0 = 0, flags2654c = 0,
 } = {}) {
   if ((ready | 0) === 0) return true;
-  return gameUpdateSlice92f1c0TryPure({ mode, counter, limit, field14 }) === 0;
+  return gameUpdateSlice92f1c0TryPure({
+    mode, counter, limit, field14, gameType0, flags2654c,
+  }) === 0;
 }
 export function opaque0092f1c0ApplyTail({ mode = 0, counter = 0 } = {}) {
   return hudGate92f1c0Plan({ mode, modeAfterBody: mode, counter });
@@ -12682,9 +12706,16 @@ export function stepGameUpdateSlice(inputState, inputConstants, inputRuntimeInpu
     const counter = runtimeInputs.opaque0092f1c0Counter | 0;
     const limit = (runtimeInputs.opaque0092f1c0Limit ?? 0) >>> 0;
     const field14 = (runtimeInputs.opaque0092f1c0Field14 ?? 0) >>> 0;
+    /* ABI v101 (record idx 3 case-1 leaf-5): the 0x74f090 predicate inputs.
+       gameType0 is the site-local [Game+0] sample; flags2654c is tick state
+       (no writer in the slice, so it is authoritative at this point). */
+    const gameType0 = (runtimeInputs.opaque0092f1c0GameType0 ?? 0) >>> 0;
+    const flags2654c = (state.flags2654c ?? 0) >>> 0;
     events.opaque0092f1c0Case = 0;
     events.opaque0092f1c0HostLeaf = 0;
-    if (opaque0092f1c0NeedsHost({ ready, mode, counter, limit, field14 })) {
+    if (opaque0092f1c0NeedsHost({
+      ready, mode, counter, limit, field14, gameType0, flags2654c,
+    })) {
       events.opaqueCall0092f1c0 = 1;
       /* ABI v95: typed host events pin the dispatch + case-arm decisions
          (ready!=0 only, v94 ready-gated precedent). */
@@ -12692,8 +12723,9 @@ export function stepGameUpdateSlice(inputState, inputConstants, inputRuntimeInpu
         const dc = gameUpdateSlice92f1c0DispatchCase(mode);
         if (dc >= 0) {
           events.opaque0092f1c0Case = dc;
-          events.opaque0092f1c0HostLeaf =
-            gameUpdateSlice92f1c0HostLeaf({ mode, counter, limit, field14 });
+          events.opaque0092f1c0HostLeaf = gameUpdateSlice92f1c0HostLeaf({
+            mode, counter, limit, field14, gameType0, flags2654c,
+          });
         }
       }
       events.continuationKind = UPDATE_CONTINUATION.RESUME_AFTER_92F1C0;
