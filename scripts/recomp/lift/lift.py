@@ -423,6 +423,22 @@ class FuncEmitter:
             self.wr(o, "(uint8_t)(memcmp(%s, %s, %d) %s 0)"
                     % (self.bigptr(ins[0]), self.bigptr(ins[1]),
                        ins[0].size, eq))
+        elif oc in (OpCode.INT_LEFT, OpCode.INT_RIGHT, OpCode.INT_SRIGHT) \
+                and o.size <= 8:
+            # Small (<=8B) result routed here only because the shift-COUNT
+            # operand is a wide register -- e.g. SSE packed shifts psrad/
+            # psrlq/psllq, whose count is the low qword of an XMM. Each lane
+            # is a scalar shift; p-code INT_* shift already saturates when the
+            # count >= the operand's bit width, which matches x86's packed-
+            # shift clamp, so the low 64 bits of the count are sufficient.
+            fn = {OpCode.INT_LEFT: "shl", OpCode.INT_RIGHT: "shr",
+                  OpCode.INT_SRIGHT: "sar"}[oc]
+            cnt = ("recomp_rd64(%s)" % self.bigptr(ins[1])) if ins[1].size > 8 \
+                else self.rd(ins[1])
+            bits = o.size * 8
+            self.wr(o, "recomp_%s%d(%s, (%s)((%s) >= %d ? %d : (%s)))"
+                    % (fn, bits, self.rd(ins[0]), UTYPE[o.size],
+                       cnt, bits, bits, cnt))
         elif oc in (OpCode.INT_LEFT, OpCode.INT_RIGHT):
             d = "l" if oc == OpCode.INT_LEFT else "r"
             self.emit("recomp_wide_sh%s(%s, %s, %d, %s);"
