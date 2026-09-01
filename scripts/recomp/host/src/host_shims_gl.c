@@ -181,9 +181,27 @@ void imp_opengl32__wglShareLists(CpuState *restrict cpu) {
  * no feature flags set, no extension enumeration (count 0 -> the WGL
  * extension-string fallback), no robustness/flush-control register. */
 void imp_opengl32__glGetIntegerv(CpuState *restrict cpu) {
-    uint32_t out = isaac_arg(cpu, 1);
-    if (isaac_is_guest_va(out))
-        *(uint32_t *)isaac_g(out) = 0;
+    uint32_t pname = isaac_arg(cpu, 0), out = isaac_arg(cpu, 1);
+    /* Size caps must be non-zero or the asset loader's image-dimension gate
+     * (0x00a12d50: `cmp w,max / ja fail`, max = a renderer vtable method that
+     * surfaces this query) rejects EVERY texture with "Attempted to create
+     * image larger than max supported size", which leaves gfx/ui/coop menu.png
+     * NULL and faults the HUD load at 0x009a26c2. Report a modern desktop-GL
+     * max (16384). GL_NUM_EXTENSIONS stays 0 on purpose (the comment above):
+     * a non-zero count would send the caller down the glGetStringi walk. */
+    uint32_t v = 0;
+    if (pname == 0x0D33u /* GL_MAX_TEXTURE_SIZE */ ||
+        pname == 0x0D3Au /* GL_MAX_VIEWPORT_DIMS (writes 2; both = 16384) */ ||
+        pname == 0x84E8u /* GL_MAX_RENDERBUFFER_SIZE */ ||
+        pname == 0x8073u /* GL_MAX_3D_TEXTURE_SIZE */ ||
+        pname == 0x851Cu /* GL_MAX_CUBE_MAP_TEXTURE_SIZE */)
+        v = 16384u;
+    if (isaac_is_guest_va(out)) {
+        *(uint32_t *)isaac_g(out) = v;
+        /* GL_MAX_VIEWPORT_DIMS returns two ints. */
+        if (pname == 0x0D3Au && isaac_is_guest_va(out + 4))
+            *(uint32_t *)isaac_g(out + 4) = v;
+    }
     cpu->EAX = 0;
 }
 
