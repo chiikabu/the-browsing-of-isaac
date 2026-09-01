@@ -78,6 +78,22 @@ for (const [key, rel] of [
   };
 }
 
+// -- recomp (machine) track ----------------------------------------------
+out.recomp = null;
+{
+  const bootWasm = join(ROOT, "output", "recomp", "lift", "boot", "boot.wasm");
+  const exportMarker = join(ROOT, "output", "recomp", "export", "decompile-complete.marker");
+  const segs = join(ROOT, "output", "recomp", "host", "isaac.segs.bin");
+  out.recomp = {
+    bulkExportComplete: existsSync(exportMarker),
+    memimage: existsSync(segs),
+    bootModule: existsSync(bootWasm)
+      ? { mb: Math.round(statSync(bootWasm).size / 1e6), mtime: statSync(bootWasm).mtime.toISOString() }
+      : null,
+    run: "cd output/recomp/lift/boot && node boot_integration.mjs ../../host/isaac.segs.bin main",
+  };
+}
+
 // -- PE index -------------------------------------------------------------
 const idxBase = join(ROOT, "output", "decomp");
 if (existsSync(idxBase)) {
@@ -136,6 +152,13 @@ if (wantJson) {
   for (const [k, v] of Object.entries(out.localBuild))
     console.log(`  ${k}: ${v ? JSON.stringify(v) : "absent (run the build/verify scripts)"}`);
   console.log(`PE index: ${out.peIndex ? `${out.peIndex.hash12} (${out.peIndex.mb} MB)` : "MISSING"}`);
+  if (out.recomp) {
+    const r = out.recomp;
+    console.log(`recomp (machine) track: export=${r.bulkExportComplete ? "complete" : "absent"}` +
+      ` memimage=${r.memimage ? "built" : "absent"}` +
+      ` bootModule=${r.bootModule ? `${r.bootModule.mb} MB (${r.bootModule.mtime.slice(0, 10)})` : "absent"}`);
+    if (r.bootModule) console.log(`  run: ${r.run}`);
+  }
   if (out.warnings.length) {
     console.log("\nWARNINGS:");
     for (const w of out.warnings) console.log(`  ! ${w}`);

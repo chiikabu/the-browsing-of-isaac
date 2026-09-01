@@ -28,6 +28,27 @@ emulation and runtime behavior is verified against the original.
    this repo's measured ground truths against the index.
 4. At hand-off, update `decomp/frontier.json` (next VA, notes, date, ABI).
 
+## The machine track (static recompilation) — check it before hand-translating
+
+`scripts/recomp/` is a parallel, machine-heavy pipeline (docs:
+`docs/recomp-architecture.md`, `docs/recomp-boot.md`,
+`docs/recomp-host-boundary.md`). State measured 2026-08-31: Ghidra headless
+bulk export of EVERY function (decompiled C + P-code, ~50 min machine time,
+under ignored `output/recomp/`); a SLEIGH-p-code→C lifter that covers 96.18%
+of `.text` (21,375 functions, 99.66% success) compiling to a ~38 MB wasm
+module; a 7-step boot layer (memimage, IAT shims, TEB/SEH, TLS, `_initterm`);
+a Unicorn ground-truth oracle + differential harness. The lifted module BOOTS:
+all 121 CRT initialisers run, `main()` executes deep into engine init (heap
+peak 52.5 MiB, the game's own logger prints, SwapBuffers reached) before
+trapping on a NULL object caused by the EMPTY shim filesystem + unwritten
+worker/Steam/EOS shims. Reproduce:
+`cd output/recomp/lift/boot && node boot_integration.mjs ../../host/isaac.segs.bin boot|main`.
+Hand-translation (this file's rules) remains the verified-per-boundary track;
+the recomp track is the coverage track. They meet at the hybrid plan in
+`docs/recomp-architecture.md` §8. Prefer machine passes (bulk export, lifter,
+oracle vectors, pequery censuses) over token-driven re-derivation wherever
+the question is mechanical.
+
 ## Worktree and artifact safety
 
 - Work on `codex/decomp` unless the user explicitly selects another branch.
