@@ -270,11 +270,43 @@ export function createMountController(hooks = {}) {
     return current;
   }
 
+  /**
+   * Dev-server auto-mount: files are fetched from /@game/* (see scripts/serve.mjs).
+   * `files` is [{ path, size?, url? }] from /@game-index.json.
+   */
+  async function mountFromServerGame({ files } = {}) {
+    const list = Array.isArray(files) ? files : [];
+    const paths = [];
+    const sizes = {};
+    const serverFiles = [];
+    for (const f of list) {
+      const relativePath = String(f.path || f.relativePath || '').replace(/^[/\\]+/, '').replace(/\\/g, '/');
+      if (!relativePath) continue;
+      paths.push(relativePath);
+      sizes[relativePath] = f.size || 0;
+      const url =
+        f.url ||
+        `/@game/${relativePath.split('/').map(encodeURIComponent).join('/')}`;
+      serverFiles.push({ relativePath, url, size: f.size || 0 });
+    }
+    const index = indexFromPathList(paths, sizes);
+    const validation = validateGameMount(index);
+    if (!validation.ok && hooks.requireValid !== false) {
+      const err = new Error(validation.errors.join('; '));
+      err.validation = validation;
+      throw err;
+    }
+    const plan = planEmscriptenMount(index);
+    current = { source: 'server', index, plan, validation, serverFiles };
+    if (hooks.onMounted) await hooks.onMounted(current);
+    return current;
+  }
+
   function getCurrent() {
     return current;
   }
 
-  return { mountFromPicker, mountFromDrop, getCurrent };
+  return { mountFromPicker, mountFromDrop, mountFromServerGame, getCurrent };
 }
 
 export default {

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "catalogRoot": "third_party/REPENTOGON/libzhl/functions",
+  "roots": [
+    {
+      "symbol": "Game::Update",
+      "catalog": "Game.zhl",
+      "reason": "Top-level simulation tick"
+    },
+    {
+      "symbol": "Game::Render",
+      "catalog": "Game.zhl",
+      "reason": "Top-level frame renderer"
+    },
+    {
+      "symbol": "Game::ProcessInput",
+      "catalog": "Game.zhl",
+      "reason": "Input boundary"
+    },
+    {
+      "symbol": "Game::Exit",
+      "catalog": "Game.zhl",
+      "reason": "Save and shutdown boundary"
+    },
+    {
+      "symbol": "LuaEngine::Init",
+      "catalog": "LuaEngine.zhl",
+      "reason": "Lua runtime boundary"
+    },
+    {
+      "symbol": "LuaEngine::RegisterClasses",
+      "catalog": "LuaEngine.zhl",
+      "reason": "Native-to-Lua API surface"
+    },
+    {
+      "symbol": "LuaEngine::RunBundledScript",
+      "catalog": "LuaEngine.zhl",
+      "reason": "Bundled script loader"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "$comment": "Hand-off pointer. EVERY work unit updates this file when it lands or blocks. `node scripts/decomp/status.mjs` reads it and warns when it lags the tree. Keep it tiny: the full story lives in decomp/game-update-slice.json and docs/decomp-port.md.",
+  "next": "idx 4 opaqueCall008318a0 leftovers @ 0x0082eb90 (last explicit pointer, docs/decomp-port.md CURRENT STATE 2026-08-20); 7 boundary removals landed after that pointer without a recorded hand-off — re-rank from the live open-boundary list in `node scripts/decomp/status.mjs` before starting",
+  "notes": "Open boundaries at seed time: 24 (resolved 27). Tools: status.mjs for the live picture; scripts/decomp/tools/pequery.py for censuses (writers/readers/callers/body/sig) against the prebuilt PE index — do NOT write new census scripts. 2026-08-31 fast driver: the live browser tick is wasm-only (runNativeGameUpdateTickWasmOnly, lockstep opt-in via ?lockstep=1); Update tick measured 18.1 -> 4.9 ms in-page, 60fps budget now has headroom. Room family suite repaired to 155/155 (72 stale numeric abi pins -> symbolic; real inverted-comiss fix in v89 deco render gate at 0x99ab0c). Full-suite runs REQUIRE the emsdk env (export PATH=$HOME/emsdk:$HOME/emsdk/upstream/emscripten:$PATH) — without emcc the self-building family suites fail en masse. Four specced-but-missing bridge capture packs (greedProbe / B16 blob / B16 spawn rows / B1 rain rows) implemented + wired into captureUpdateLanes; bridge suite 21/21.",
+  "updated": "2026-08-31",
+  "updatedAbi": 99
+}

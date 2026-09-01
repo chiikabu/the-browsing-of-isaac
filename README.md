@@ -1,26 +1,59 @@
-﻿# Isaac Repentance+ — Browser WebAssembly host
+# Isaac Repentance+ — Browser WebAssembly host
 
-Self-contained static web page that mounts **your** Binding of Isaac: Repentance(+) install and runs the browser platform host (WebGL2, MEMFS/OPFS mount, input, rAF). Path **B** targets execution of the original PE32 binary under an x86 emulator (Boxedwine); see `docs/`.
+Self-contained static web page that mounts **your** Binding of Isaac:
+Repentance(+) install and runs the browser platform host (WebGL2, MEMFS/OPFS
+mount, input, rAF). The shipped simulation tick is a verified **native/Wasm
+decomp port** of the original binary — see `docs/decomp-port.md` and `AGENTS.md`.
 
-## Current Path B checkpoint
+## Path B (BoxedWine x86 emulation) — REMOVED 2026-08-07
 
-Phase 4 is complete. The served release proof `phase5-iret-cache-release-floor2` runs the unchanged production intro, navigates title → save → main menu → character select, starts a Basement run, renders the floor, and proves movement with a distinct post-input frame. The final blocker was a BoxedWine JIT IRET fall-through; the release exits the translated block immediately after IRET.
+Path B ran the original PE32 binary under an x86 emulator (BoxedWine → Wine)
+compiled to WebAssembly. It was the playable baseline from Phase 2 through
+Candidate H. It has been **removed from this repository in full** by owner
+directive: it measured **11.36 FPS median** on the tested desktop (88 ms median
+frame, 122 ms p95, 7.46 FPS 1%-low), which made it unwanted rather than a
+baseline worth carrying.
 
-The historical one-file proof `phase6-standalone-iret-floor1` repeats the same path and measured 8.547 FPS median. Its original size/hash remain in the evidence ledger. The final standalone is 1,052,643,363 bytes with SHA-256 `7F381319A767673C01A2219410B48B762AD0F4FA60B22C2CC88E1909CE768764`. `npm test` passes 35/35.
+Those measurements are not retracted — they happened, and the honest 60 FPS
+failure they recorded is why the native port is the only remaining route. What
+was removed, and is therefore no longer buildable or reproducible from this
+tree:
 
-Functional completion does not imply the separate 60 FPS target; it remains unmet. Wasm-GC was not applied because it operates on authored GC reference types, while BoxedWine/Emscripten C++ state and guest RAM live in WebAssembly linear memory ([Wasm-GC overview](https://github.com/WebAssembly/gc/blob/main/proposals/gc/Overview.md)). jsDelivr's default GitHub delivery restrictions exclude packages over 150 MB and individual files over 20 MB, serve HTML as `text/plain`, and immutable public CDN caching conflicts with this proprietary/private payload ([jsDelivr restrictions](https://github.com/jsdelivr/jsdelivr#restrictions), [data API restrictions](https://github.com/jsdelivr/data.jsdelivr.com#restrictions)). GitHub also blocks files over 100 MiB in normal repositories ([GitHub large-file limits](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)). Private source repositories were created at [the-browsing-of-isaac](https://github.com/doej13367/the-browsing-of-isaac) and the [BoxedWine fork](https://github.com/doej13367/the-browsing-of-isaac-boxedwine) on branch `isaac-browser`.
+- `web/emu/` — the emulator page, `boxedwine.js`/`.wasm` runtime, Wine/Debian
+  guest images, Isaac guest packs, JIT-cache archives, offline PWA
+  bootstrap/service worker, and guest `steam_api` stubs.
+- `third_party/Boxedwine` — the emulator submodule (`.gitmodules` entry and
+  index entry removed).
+- The build/packaging chain: `rebuild-boxedwine`, `rebuild-gl-present`,
+  `build-candidate-h-runtime`, `build-standalone-html`, `build-offline-pwa`,
+  `serve-standalone`, `serve-offline-pwa`, `stage-benchmark-bundle`,
+  `pack-isaac-app`, and the Phase 4–6 guest-image Python builders.
+- The benchmark/audit harness that existed only to measure the emulator:
+  `benchmark-*.mjs`, `run-benchmark-campaign.mjs`, `run-wgl-*.mjs` and the other
+  Playwright probes, `audit-jitprofile-*`, `audit-browser-memory-trace`,
+  `audit-idbfs-persistence`, `audit-warm-standalone-resume`, and the benchmark
+  save-overlay builders.
+- The evidence documents whose whole subject was that runtime:
+  `docs/candidate-h-release.md`, `docs/reproducibility.md`,
+  `docs/runtime-playable.md`, `docs/phase4-evidence.md`.
 
-The accepted served runtime is JS `31BA195E955CDB552946B6C216EA4DCE2810E6B8BB1A441F975737A602FB4703`, WASM `61AA1E74994EE00BD762544B79B802C6C871E111144AFE4F2DD39E0925A3FB9D`, and index `8C7942255C8BD467BB0E1272F724E3B976A614B89F404BC36D900F3284F6CA25`. `phase6-final-standalone-uncached-default-o3-warm60-floor1` proves the complete seven-stage path with no errors at 10.75268817204301 FPS median (125 samples; 93 ms median, 124 ms p95, 140 ms p99, 144 ms max). The default is `jit-cache=false`: the old safe-cache archive froze at swap #2 after the runtime relink and remains embedded/opt-in only until regenerated. Served acceptance is authoritative. `phase6-final-standalone-file-smoke1` separately proves direct `file://` early boot (one swap, version logged, no errors); it is not a floor proof.
+There is now **no playable full-PE fallback**. Full native root slices for
+Render/Input/Exit/Lua and a live sparse bridge from PE guest RAM are the
+outstanding work; `docs/decomp-port.md` holds the exact next boundary.
 
-See `docs/phase4-evidence.md` for the proof ledger and `docs/reproducibility.md` for local rebuild/run instructions.
+The `usesX86Emulation` flag and the `emulator` / `boxedwine` / `pe-emu` residual
+host kinds survive in `scripts/decomp/frame-path.mjs` and
+`web/js/native-update-bridge.js` deliberately: they now exist only as a guard
+that throws if anything tries to re-enter x86 emulation.
 
 ## Requirements
 
 - Legal Steam install of the game (this repo never ships game files).
 - Node 18+, Emscripten 6.x (`%USERPROFILE%\emsdk`).
-- Chromium-based browser (Chromebook OK) with WebGL2.
+- Chromium-based browser with WebGL2. Chromebook/ChromeOS support requires
+  physical-device validation, which has not been performed.
 
-## Quick start
+## Development-host quick start
 
 ```bat
 cd path\to\the-browsing-of-isaac
@@ -30,7 +63,26 @@ npm test
 npm run serve
 ```
 
-Open `http://127.0.0.1:8765/`. Use **Choose game directory** or drag-and-drop the Steam game folder.
+Open `http://127.0.0.1:8765/`. The page auto-mounts the locally owned game
+instance archived at `game-instance/isaac-phase6-full.zip` (extracted once into
+the ignored `.scratch/game-instance/`); `$ISAAC_INSTANCE_ZIP` overrides that
+archive path and `$ISAAC_GAME_ROOT` (or a `.game-root` file) overrides the mount
+with a directory. **Choose game directory** and drag-and-drop still work.
+
+## Decomp-work quick start
+
+```bat
+npm run decomp:status
+```
+
+prints the live port state (family ABI versions, the open-boundary worklist,
+verification freshness) derived from the tree — never trust a doc's
+"checkpoint" narrative over it. `decomp/frontier.json` holds the last unit's
+hand-off pointer. Binary censuses go through the prebuilt instruction/xref
+index: `npm run decomp:index` once (≈1 min), then
+`python scripts/decomp/tools/pequery.py <writers|readers|callers|body|sig|...>`.
+Per-unit procedure: `docs/unit-runbook.md`. Rules and measured lessons:
+`AGENTS.md` (archived checkpoint narratives: `docs/decomp-history.md`).
 
 ## Layout
 
@@ -39,10 +91,17 @@ Open `http://127.0.0.1:8765/`. Use **Choose game directory** or drag-and-drop th
 | `web/` | Static deliverable (HTML, JS, WASM, platform copy) |
 | `platform/` | Pure JS path/input/mount/frame helpers (unit-tested) |
 | `native/isaac_host.cpp` | Emscripten host (GL, PE load, sigscan, Lua hooks) |
-| `docs/` | Phase 0, RE notes, build flags, imports |
+| `native/decomp/`, `decomp/`, `scripts/decomp/` | Native/Wasm decomp port, oracles, verifier |
+| `docs/` | Phase 0, RE notes, build flags, imports, decomp port log |
+| `game-instance/` | Local-only game instance archive (ignored) |
 | `third_party/REPENTOGON` | Community signature database |
-| `third_party/Boxedwine` | Emulator source for Path B |
 
 ## License / legal
 
-You must own the game. Do not redistribute `isaac-ng.exe` or `resources/packed`.
+You must own the game. All original, modified, extracted, chunked, embedded, or
+packaged game payloads are private/local-only. Do not commit, publish, upload,
+attach to a release, place on a CDN or shared cloud drive, package, or
+redistribute `isaac-phase6-full.zip`, its chunk files, executables,
+`resources/packed`, extracted assets, or containers containing them. Splitting a
+proprietary archive into chunks and keeping a repository private do not grant
+redistribution rights.

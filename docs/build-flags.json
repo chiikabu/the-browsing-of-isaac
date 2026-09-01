@@ -26,6 +26,6 @@
     "MODULARIZE=1 + EXPORT_NAME=createIsaacHost for static page glue",
     "FORCE_FILESYSTEM=1 for MEMFS mounts of user game directory",
     "USE_WEBGL2=1 for browser canvas",
-    "Single-threaded host (no pthreads) for Chromebook file:// and simple serve"
+    "Single-threaded host (no pthreads); physical Chromebook and file:// behavior remain unvalidated"
   ]
 }

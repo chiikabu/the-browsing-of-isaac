@@ -1,11 +1,13 @@
-﻿/**
+/**
  * Structural tests: shipped web artifacts and glue export surface.
+ *
+ * The Path B (BoxedWine x86 emulation) runtime, its packaging/benchmark
+ * harness, and every assertion that covered them were removed with the
+ * emulator; only the native browser deliverable is asserted here.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,6 +30,12 @@ test('index.html uses canvas, rAF path, mount UI, file: guard', () => {
   assert.match(html, /type="module"/);
 });
 
+test('index.html advertises no removed x86 emulation page', () => {
+  const html = readFileSync(join(web, 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /boxedwine|emu\/index\.html/i);
+  assert.ok(!existsSync(join(web, 'emu')), 'web/emu must stay removed');
+});
+
 test('app.js wires requestAnimationFrame loop and mount controllers', () => {
   const js = readFileSync(join(web, 'js/app.js'), 'utf8');
   assert.match(js, /createFrameLoop/);
@@ -35,6 +43,88 @@ test('app.js wires requestAnimationFrame loop and mount controllers', () => {
   assert.match(js, /isaac_init|createIsaacHost/);
   assert.match(js, /showDirectoryPicker|mountFromPicker/);
   assert.match(js, /mountFromDrop/);
+  assert.match(js, /mountFromServerGame/);
+  assert.match(js, /tryAutoServerMount|\/@game-index\.json/);
+  assert.match(js, /menu lane: latched open|setKey\(0x1b/);
+  assert.match(js, /processInputPrepoll/);
+  assert.match(js, /toA1f280AxisSamples/);
+  assert.match(js, /dirBitsMerged/);
+});
+
+test('WASD maps onto recovered a1f280 dirBits, not Game position fields', async () => {
+  const { createInputBridge, BRIDGE_VK } = await import('../scripts/decomp/frame-input-bridge.mjs');
+  const { applyA1f280VcallGatePurePosts } = await import('../scripts/decomp/process-input-residual.mjs');
+  const bridge = createInputBridge();
+  bridge.setKey(BRIDGE_VK.D, true);
+  const posts = applyA1f280VcallGatePurePosts(bridge.toA1f280AxisSamples());
+  const axis = posts.find((row) => row.slot === 'A1F280_AXIS_PAIR0');
+  assert.ok(axis);
+  assert.equal(axis.x, 1);
+  assert.equal(axis.y, 0);
+  assert.ok((axis.dirBitsMerged >>> 0) !== 0);
+  const js = readFileSync(join(web, 'js/app.js'), 'utf8');
+  assert.doesNotMatch(js, /positionXBits\s*=/);
+  assert.match(js, /applyDirBitsToCapturedEntity/);
+  assert.match(js, /entitiesSnapshotUrl/);
+  assert.match(js, /setRenderRecapture/);
+  assert.match(js, /isNativeFrameMountPath/);
+  assert.match(js, /dirBits:\s*lastProcessInput\.dirBitsMerged\s*\|\|\s*0/);
+  assert.doesNotMatch(js, /!menuOpen\s*&&\s*capturedPlayerAddr/);
+  assert.match(js, /in-run sprites: uploaded/);
+});
+
+test('captured WASD writes Entity+_pos, not Game position fields', async () => {
+  const { createLiveGuestMemory } = await import('../web/js/capture-wiring.js');
+  const {
+    applyDirBitsToCapturedEntity,
+    ENTITY_POS_OFF,
+    ENTITY_VEL_OFF,
+  } = await import('../scripts/decomp/game-state-snapshot.mjs');
+  const blob = new Uint8Array(0x368);
+  const view = new DataView(blob.buffer);
+  view.setFloat32(ENTITY_POS_OFF, 100, true);
+  view.setFloat32(ENTITY_POS_OFF + 4, 200, true);
+  const guest = createLiveGuestMemory();
+  guest.addRegion(0x1000, blob);
+  const moved = applyDirBitsToCapturedEntity(guest, 0x1000, { axisX: 1, axisY: 0, speed: 5, tickScale: 1 });
+  assert.ok(moved);
+  assert.equal(moved.x, 105);
+  assert.equal(moved.y, 200);
+  assert.equal(view.getFloat32(ENTITY_VEL_OFF, true), 5);
+
+  view.setFloat32(ENTITY_POS_OFF, 100, true);
+  view.setFloat32(ENTITY_POS_OFF + 4, 200, true);
+  const diag = applyDirBitsToCapturedEntity(guest, 0x1000, { dirBits: 0x2 | 0x8, tickScale: 1 });
+  assert.ok(diag);
+  const step = 5 / Math.SQRT2;
+  assert.ok(Math.abs(diag.vx - step) < 1e-6);
+  assert.ok(Math.abs(diag.vy - step) < 1e-6);
+  const again = applyDirBitsToCapturedEntity(guest, 0x1000, { dirBits: 0x2 | 0x8, tickScale: 1 });
+  assert.ok(Math.abs(again.vx - step) < 1e-6, "strafe must not feed |vel| back into speed");
+});
+
+test('browser mount controller exposes server auto-mount', async () => {
+  const { createMountController } = await import('../platform/browser-mount.js');
+  const seen = [];
+  const ctl = createMountController({
+    requireValid: true,
+    onMounted: (mount) => {
+      seen.push(mount);
+    },
+  });
+  const mount = await ctl.mountFromServerGame({
+    files: [
+      { path: 'isaac-ng.exe', size: 100 },
+      { path: 'resources/font/teammeatfont10.fnt', size: 10 },
+      { path: 'resources/gfx/ui/main menu/titlemenu.anm2', size: 20 },
+    ],
+  });
+  assert.equal(mount.source, 'server');
+  assert.equal(mount.validation.ok, true);
+  assert.equal(mount.serverFiles.length, 3);
+  assert.equal(mount.serverFiles[0].url, '/@game/isaac-ng.exe');
+  assert.match(mount.serverFiles[2].url, /titlemenu\.anm2$/);
+  assert.equal(seen.length, 1);
 });
 
 test('wasm build artifacts present (after build)', () => {
@@ -69,146 +159,5 @@ test('native host exports expected symbols in source', () => {
     'isaac_count_nonblack_samples',
   ]) {
     assert.match(cpp, new RegExp(sym));
-  }
-});
-
-test('Path B Boxedwine emu artifacts present', () => {
-  const emu = join(web, 'emu');
-  for (const f of ['index.html', 'boxedwine.js', 'boxedwine.wasm', 'boxedwine-shell.js', 'README.md']) {
-    assert.ok(existsSync(join(emu, f)), 'missing emu/' + f);
-  }
-  assert.ok(statSync(join(emu, 'boxedwine.wasm')).size > 100_000);
-});
-
-test('Path B page is game-only, fullscreen-capable, and self-configuring without reload', () => {
-  const html = readFileSync(join(web, 'emu', 'index.html'), 'utf8');
-  assert.match(html, /history\.replaceState/);
-  assert.doesNotMatch(html, /location\.replace\(/);
-  assert.match(html, /requestFullscreen/);
-  assert.match(html, /#controls, #console \{ display: none !important; \}/);
-  assert.match(html, /_boxedwine_inject_key/);
-});
-
-test('standalone packer embeds every runtime dependency and proprietary output is ignored', () => {
-  const packer = readFileSync(join(root, 'scripts', 'build-standalone-html.mjs'), 'utf8');
-  for (const name of [
-    'boxedwine.wasm',
-    'boxedwine.zip',
-    'debian10.zip',
-    'isaac-savedir.zip',
-    'isaac-phase6-full.zip',
-    'isaac-phase6-full-jit-modules.zip',
-  ]) {
-    assert.match(packer, new RegExp(name.replaceAll('.', '\\.')));
-  }
-  assert.match(packer, /boxedwineTakeEmbeddedFile/);
-  assert.match(packer, /boxedwineEmbeddedParseProgress/);
-  const ignore = readFileSync(join(root, '.gitignore'), 'utf8');
-  assert.match(ignore, /standalone.*\.html/);
-  const shell = readFileSync(join(web, 'emu', 'boxedwine-shell.js'), 'utf8');
-  assert.match(shell, /boxedwineTakeEmbeddedFile\('boxedwine\.wasm'\)/);
-  assert.match(shell, /boxedwineTakeEmbeddedFile\(filename\)/);
-  const server = readFileSync(join(root, 'scripts', 'serve-standalone.mjs'), 'utf8');
-  assert.match(server, /Cross-Origin-Embedder-Policy/);
-  assert.match(server, /createReadStream/);
-});
-
-test('offline PWA builder versions, verifies, and caches the complete release', () => {
-  const builder = readFileSync(join(root, 'scripts', 'build-offline-pwa.mjs'), 'utf8');
-  const bootstrap = readFileSync(join(web, 'emu', 'offline-bootstrap.js'), 'utf8');
-  const worker = readFileSync(join(web, 'emu', 'offline-sw.js'), 'utf8');
-  for (const name of [
-    'boxedwine.wasm',
-    'boxedwine.zip',
-    'debian10.zip',
-    'isaac-savedir.zip',
-    'isaac-phase6-full.zip',
-    'isaac-phase6-full-jit-modules.zip',
-  ]) {
-    assert.match(builder, new RegExp(name.replaceAll('.', '\\.')));
-  }
-  assert.match(builder, /manifest\.webmanifest/);
-  assert.match(builder, /icon-192\.png/);
-  assert.match(builder, /icon-512\.png/);
-  assert.match(builder, /storage=indexeddb/);
-  assert.match(bootstrap, /navigator\.storage\.persist/);
-  assert.match(bootstrap, /integrity: asset\.integrity/);
-  assert.match(bootstrap, /READY_MARKER/);
-  assert.match(worker, /self\.addEventListener\("fetch"/);
-  assert.match(worker, /self\.addEventListener\("install"/);
-  assert.match(worker, /integrity: asset\.integrity/);
-});
-
-test('IndexedDB failure keeps bundled JIT cache and session startup available', () => {
-  const shell = readFileSync(join(web, 'emu', 'boxedwine-shell.js'), 'utf8');
-  assert.match(shell, /IndexedDB unavailable; using bundled JIT cache in memory/);
-  assert.match(shell, /catch \(error\)[\s\S]*loadServerCache\(\)/);
-  assert.match(shell, /unable to sync persistent folder; continuing in this session/);
-});
-
-test('Boxedwine rebuild helpers require explicit deployment', () => {
-  const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  assert.doesNotMatch(packageJson.scripts['build:boxedwine'], /--deploy/);
-
-  for (const name of ['rebuild-boxedwine.mjs', 'rebuild-gl-present.mjs']) {
-    const source = readFileSync(join(root, 'scripts', name), 'utf8');
-    assert.match(source, /process\.argv\.includes\(["']--deploy["']\)/);
-    assert.match(source, /if \(deploy\)[\s\S]*copyFileSync/);
-    assert.match(source, /without deployment/);
-    assert.match(source, /choose either --deploy or --no-deploy/);
-  }
-});
-
-test('benchmark overlay builder is deterministic, private, and guest-signalled', () => {
-  const builder = readFileSync(join(root, 'scripts', 'make-benchmark-overlay.py'), 'utf8');
-  assert.match(builder, /ZIP_STORED/);
-  assert.match(builder, /1980, 1, 1/);
-  assert.match(builder, /EnableMods=0/);
-  assert.match(builder, /EnableMods=1/);
-  assert.match(builder, /ISAACNGSAVE/);
-  assert.match(builder, /MC_POST_GAME_STARTED/);
-  assert.match(builder, /MC_POST_NEW_ROOM/);
-  assert.match(builder, /MC_POST_UPDATE/);
-  assert.match(builder, /GetStartSeedString/);
-  assert.match(builder, /GetStartingRoomIndex/);
-  assert.match(builder, /guest_frames=30/);
-  assert.match(builder, /refusing to overwrite an input archive/);
-});
-
-test('benchmark overlay builds byte-identically with the expected private members', () => {
-  const temporary = mkdtempSync(join(tmpdir(), 'isaac-benchmark-overlay-'));
-  try {
-    const builder = join(root, 'scripts', 'make-benchmark-overlay.py');
-    const seeded = join(web, 'emu', 'isaac-savedir-seeded.zip');
-    const first = join(temporary, 'first.zip');
-    const second = join(temporary, 'second.zip');
-    for (const output of [first, second]) {
-      const result = spawnSync('python', [builder, '--seed-overlay', seeded, '--output', output], {
-        encoding: 'utf8',
-      });
-      assert.equal(result.status, 0, result.stderr || result.stdout);
-    }
-    assert.deepEqual(readFileSync(first), readFileSync(second));
-
-    const inspect = [
-      'import json,sys',
-      'from zipfile import ZipFile',
-      'z=ZipFile(sys.argv[1])',
-      'n=z.namelist()',
-      'o=[z.read(x).decode("utf-8") for x in n if x.endswith("/options.ini")]',
-      'm=[z.read(x).decode("utf-8") for x in n if x.endswith("/mods/isaac-bench/main.lua")]',
-      'print(json.dumps({"names":n,"options":o,"mods":m}))',
-    ].join(';');
-    const result = spawnSync('python', ['-c', inspect, first], { encoding: 'utf8' });
-    assert.equal(result.status, 0, result.stderr);
-    const archive = JSON.parse(result.stdout);
-    assert.equal(archive.names.filter((name) => /persistentgamedata[1-3]\.dat$/.test(name)).length, 6);
-    assert.equal(archive.names.filter((name) => name.endsWith('/mods/isaac-bench/main.lua')).length, 2);
-    assert.equal(archive.names.filter((name) => name.endsWith('/mods/isaac-bench/metadata.xml')).length, 2);
-    assert.ok(archive.options.every((text) => text.includes('EnableMods=1') && !text.includes('EnableMods=0')));
-    assert.ok(archive.mods.every((text) => text.includes('[ISAAC_BENCH] floor_ready') && text.includes('guest_frames=30')));
-    assert.ok(archive.names.every((name) => !/\.(?:exe|dll)$/i.test(name)));
-  } finally {
-    rmSync(temporary, { recursive: true, force: true });
   }
 });

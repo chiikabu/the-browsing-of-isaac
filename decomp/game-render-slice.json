@@ -1,0 +1,1505 @@
+{
+  "schemaVersion": 1,
+  "abiVersion": 73,
+  "rootSymbol": "opaque_call_0080ea80",
+  "rootVa": "0x0080ea80",
+  "block": "Frame render shell FUN_0080ea80 composed as one root: always-host prolog (precondition) through the manager option gate at VA 0x0080eb1c, the G1 fade-poll gate and RT rebind cluster, the fade-prep locals with the G2 bit9 override from DAT_00babf20, the pure a10d00 quad pack feeding host 0x00a1dfd0, the DAT_00c79900-block global posts with the c79904 cmove, the P0 camera build, the G3 stage-0x39 host fan-out, the G10 bit9 skip, P4a/P4b poll combine, fade base select, the G11 boost-mode gate with the 0x0074efd0 / 0x00827bc0 probe cascade, the G12 force-full gate on the PROLOG-SNAPSHOT manager words, P6 fade t, P7 channel lerps, the P8 DAT_00c379b8 update, the 0x009956e0 color bind, the 0x00424540 tree erase with sentinel self-links and the Game+0x730c clear, the entity loop at VA 0x0080eead-0x0080eed1 with BOTH per-iteration recaptures, the grid loop with its PE-folded product and per-slot null gates, the stage-overlay dual gate with the pure 0x0074ea50 probe and 0x00812d00 Vector producer (helper ABI v31), pure scroll/floor math and the dual-order AnimationState::Render draws, the G8/G13 aux gate with the third pure poll site and the FUN_00817830 body, the RT pop cluster with the pure depth step, and the common epilog with the flag11f6 one-shot. Nested bodies already translated by the render shell pure helpers are reachable through the deep NESTED continuations.\n\nABI v2 delta: the three poll sites (top pair VA 0x0080eb3e/0x0080eb43, fade pair VA 0x0080ed15/0x0080ed1e, aux pair VA 0x0080f14f/0x0080f161) and the overlay 0x0074ea50 probe + 0x00812d00 Vector producer are pure-complete (helper ABI v31) and run inside the resumes from sparse runtime inputs. v1 host events HOST_POLL_6F9400, HOST_POLL_6F95A0, HOST_STAGE_74EA50, HOST_STAGE_812D00 and the continuation kinds atTopPolls / at74ea50 / at812d00 are removed. The top poll results are DISCARDED by the PE (eax overwritten at VA 0x0080eb48) and are now skipped entirely; the fade/aux results are USED. The overlay block emits exactly one recapture (AT_OVERLAY_GATE to resume_overlay_gate) and computes the draw position before the flag branch resolves.",
+  "precondition": "The always-host prolog VA 0x0080ea80..0x0080eb1b has already run: 0x006856c0, 0x00684f30 (+byte write from DAT_00c798e4>>5&1), 0x00a18300(DAT_00c797b4, 0), 0x00a18230, 0x00419b50 (ecx=Game+0x1218, arg=&Game+0x1204), 0x00a19180(1), 0x006836c0, and the manager dword0/dword1 snapshot ([*0xc71678+0]/[+4]) consumed later by the G12 force-full gate. The shell has no exact ZHL match and keeps an address-stable name. Game::Render @ 0x00806c20 IS an exact ZHL match and is deliberately retained as a host mega-event: this slice invokes it per entity, it does not translate it.",
+  "verification": "A hash-bound RVA and evidence record must exist under output/decomp/<binary-hash>/verified-roots.json. Section evidence: output/decomp/5129df723e64/section-notes/render-slice-v1/disasm-80ea80-full.txt (complete shell disassembly) plus render-advance-2 through render-v29; slice v2/v3 evidence: render-slice-v3/NOTES.md (FUN_00817830 entry gates G14..G19, typed GetStageID-host chain).",
+  "status": "v35: three-boundary landing — nineteenth type-9 a102e0 @ 0x00818703 (third pack of the FOURTH a106e0 seam group) peeled as typed HOST_A102E0 (AT_TYPE9_A102E0_18_817830 = 59, recapture; the v34 a102e0_17 resume now emits it), twentieth type-9 a102e0 @ 0x0081875c (fourth pack of the fourth seam group) peeled as typed HOST_A102E0 (AT_TYPE9_A102E0_19_817830 = 60, recapture; the a102e0_18 resume now emits it), and the FIFTH a106e0 seam @ 0x008187a1 (starts the fifth seam group) peeled as typed HOST_A106E0 (AT_TYPE9_A106E0_5_817830 = 61, recapture; the a102e0_19 resume now emits it). resume_817830_type9_a102e0_18 takes POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x0081870b; resume-time slot [esp+0x14] after-push shape); independent pack y=ret_y+0 -> [esp+0xa0], x=mul_05+ret_x -> [esp+0x9c] (post-push); zero store [esp+0x14] and identity arg-setup 0x00818744..0x0081875b stay host; emits pack-20 typed (cont 60). resume_817830_type9_a102e0_19 takes the NO-push [esp+0x14] mul read (resume-time slot [esp+0x14] directly, same no-push shape as v31); x -> [esp+0x64], y -> [esp+0x6c] (post-push; x stored BEFORE y); four lea/push arg pairs 0x0081877e..0x008187a0 feeding the seam stay host; emits seam-5 typed (cont 61). resume_817830_type9_a106e0_5 takes post-push recaptures [esp+0x30] offset_30 (resume-time [esp+0x2c]) / [esp+0xc] offset_c (resume-time [esp+8]) / [esp+0x28] scale_28 (resume-time [esp+0x24]) and the byte-gate (1u & 0xff), NO uint8_t; dest-copy cluster 0x008187a6..0x008187cd and the read-back store [esp+0x544] stay host; emits the twenty-first a102e0 @ 0x0081880c as kind 30 LROOM_REMAIN (not peeled in this ABI). All four VAs re-verified against the PE section table (file+0x417b03 / +0x417b5c / +0x417ba1 / +0x417c0c); census a102e0 163 / a106e0 30 direct rel32; identify-zhl exactMatches []. ROOT SLICE ABI, NOT A PE-FREE RENDER. Not wired into the live frame loop; no performance claim.",
+  "gameObjectMinSize": "0x3bb20",
+  "gameObjectMinSizeDerivation": "Largest recovered read in the section is the RoomDescriptor array at Game+0x14 + slot*0xb8 with slot <= 0x20e (VA 0x00740d25): 0x14 + 526*0xb8 = 0x3ba64, rounded up to a 0x20 boundary. Capture/apply themselves touch offsets up to 0x730f.",
+  "recaptureDiscipline": "Every Game-object field the PE reads after a host boundary is an explicit parameter of the resume entry crossing that boundary; the entry-captured state is never consulted for a post-host decision, so a folded reading is not expressible. Manager/global values consumed after a host boundary come from the runtime-inputs struct, which the caller must refresh before each resume. The known folded-value defect classes this section already hit (0x00408590 pair B, 0x0040c550 dest control, 0x0074f690 stage id, 0x00740bc0 once-guard, 0x0080eead entity loop) are all structural here.",
+  "fields": [
+    {
+      "name": "gameMode",
+      "binaryOffset": "0x08",
+      "type": "int32",
+      "operation": "entry snapshot only; the G11 boost gate re-reads it at VA 0x0080ed55 and the overlay gate at VA 0x0080ef08 (separate resume parameters)"
+    },
+    {
+      "name": "gridW",
+      "binaryOffset": "0x0c",
+      "type": "int32",
+      "operation": "entry snapshot only; re-read at VA 0x0080eed6 after the entity loop (resume parameter)"
+    },
+    {
+      "name": "gridH",
+      "binaryOffset": "0x10",
+      "type": "int32",
+      "operation": "entry snapshot only; re-read at VA 0x0080eed3 after the entity loop (resume parameter)"
+    },
+    {
+      "name": "flag11f6",
+      "binaryOffset": "0x11f6",
+      "type": "uint8",
+      "operation": "epilog one-shot; re-read at VA 0x0080f1d5 AFTER host 0x00825de0 (resume parameter); compared == 1 EXACTLY; cleared to 0 when it was 1 (marker-gated WRITE)"
+    },
+    {
+      "name": "cameraBaseX",
+      "binaryOffset": "0x1204",
+      "type": "float32_bits",
+      "operation": "entry snapshot; re-read at VA 0x0080ecc5 for the P0 camera build (resume parameter — prolog host 0x00419b50 received this address as an argument)"
+    },
+    {
+      "name": "cameraBaseY",
+      "binaryOffset": "0x1208",
+      "type": "float32_bits",
+      "operation": "entry snapshot; re-read at VA 0x0080ecbd (resume parameter)"
+    },
+    {
+      "name": "entityArrayEntry",
+      "binaryOffset": "0x125c",
+      "type": "uint32",
+      "operation": "ENTRY SNAPSHOT ONLY; VA 0x0080eebc re-reads the base at the top of every iteration (per-iteration resume array)"
+    },
+    {
+      "name": "entityCountEntry",
+      "binaryOffset": "0x1264",
+      "type": "uint32",
+      "operation": "ENTRY SNAPSHOT ONLY; the gate value is recaptured at VA 0x0080eead and VA 0x0080eecb re-reads the count after every Game::Render (per-iteration resume array)"
+    },
+    {
+      "name": "fadeSrcR",
+      "binaryOffset": "0x1b5c",
+      "type": "float32_bits",
+      "operation": "fade local source; re-read at VA 0x0080eb9f after the rebind cluster (resume parameter)"
+    },
+    {
+      "name": "fadeSrcG",
+      "binaryOffset": "0x1b60",
+      "type": "float32_bits",
+      "operation": "re-read at VA 0x0080ebc4 (resume parameter)"
+    },
+    {
+      "name": "fadeSrcB",
+      "binaryOffset": "0x1b64",
+      "type": "float32_bits",
+      "operation": "re-read at VA 0x0080ebdb (resume parameter)"
+    },
+    {
+      "name": "fadeSrcA",
+      "binaryOffset": "0x1b68",
+      "type": "float32_bits",
+      "operation": "loaded at VA 0x0080ebef but DEAD in the final quad: its stack slot is overwritten by the Game+0x1b7c re-read at VA 0x0080ee14 (pinned by test)"
+    },
+    {
+      "name": "fadeWord1b6c",
+      "binaryOffset": "0x1b6c",
+      "type": "uint32",
+      "operation": "loaded at VA 0x0080ebab into the fifth color dword; the PE re-zeroes that slot at VA 0x0080ee08 before the bind, so it is dead in the bound quad (pinned by test)"
+    },
+    {
+      "name": "fadeDstR",
+      "binaryOffset": "0x1b70",
+      "type": "float32_bits",
+      "operation": "lerp base; re-read at VA 0x0080ee3c AFTER the poll/probe hosts (resume parameter)"
+    },
+    {
+      "name": "fadeDstG",
+      "binaryOffset": "0x1b74",
+      "type": "float32_bits",
+      "operation": "re-read at VA 0x0080ee22 (resume parameter)"
+    },
+    {
+      "name": "fadeDstB",
+      "binaryOffset": "0x1b78",
+      "type": "float32_bits",
+      "operation": "re-read at VA 0x0080ee00 (resume parameter)"
+    },
+    {
+      "name": "fadeDstA",
+      "binaryOffset": "0x1b7c",
+      "type": "float32_bits",
+      "operation": "re-read at VA 0x0080edf0 and stored UNLERPED as the quad alpha (resume parameter)"
+    },
+    {
+      "name": "stage1d18",
+      "binaryOffset": "0x1d18",
+      "type": "int32",
+      "operation": "entry snapshot; the G3 stage-0x39 compare at VA 0x0080ecb6 uses the post-bind re-read (resume parameter)"
+    },
+    {
+      "name": "overlaySwapFlag",
+      "binaryOffset": "0x6eb0",
+      "type": "uint8",
+      "operation": "entry snapshot; re-read at VA 0x0080f0d7 after the overlay hosts (resume parameter); nonzero draws B (0x6e90) before A (0x6e70)"
+    },
+    {
+      "name": "overlayScaleX",
+      "binaryOffset": "0x6edc",
+      "type": "float32_bits",
+      "operation": "WRITE: VA 0x0080f033 stores DAT_00c3793c (marker-gated apply)"
+    },
+    {
+      "name": "overlayScaleY",
+      "binaryOffset": "0x6ee0",
+      "type": "float32_bits",
+      "operation": "WRITE: VA 0x0080f049 stores DAT_00c37940 (marker-gated apply)"
+    },
+    {
+      "name": "overlayColorWhite",
+      "binaryOffset": "0x6ee8",
+      "type": "byte44",
+      "operation": "WRITE: VA 0x0080f051..0x0080f0a9 white RGBA (1,1,1,1) + zeros through +0x6f13; the MSVC self-assign compare against a stack address can never be equal in the PE — pinned always-write (marker-gated apply)"
+    },
+    {
+      "name": "overlayDrawFlag",
+      "binaryOffset": "0x6f49",
+      "type": "uint8",
+      "operation": "entry snapshot; re-read at VA 0x0080f0ac (resume parameter); zero skips both draws AFTER the draw position was already computed (SSE stores do not touch EFLAGS)"
+    },
+    {
+      "name": "treeHead7308",
+      "binaryOffset": "0x7308",
+      "type": "uint32",
+      "operation": "entry snapshot; recaptured at VA 0x0080ee81 for the erase receiver and the sentinel self-link posts (resume parameter)"
+    },
+    {
+      "name": "treeCount730c",
+      "binaryOffset": "0x730c",
+      "type": "int32",
+      "operation": "WRITE: VA 0x0080eea2 clears it to 0 after the erase host (marker-gated apply)"
+    }
+  ],
+  "runtimeInputs": [
+    {
+      "name": "option2a3c3",
+      "source": "[*0xc7169c + 0x2a3c3] byte",
+      "operation": "G0 main-body gate at VA 0x0080eb1c — a MANAGER byte, not a Game field"
+    },
+    {
+      "name": "option2a3c5",
+      "source": "[*0xc7169c + 0x2a3c5] byte",
+      "operation": "G8 aux gate at VA 0x0080f131"
+    },
+    {
+      "name": "mgrWord0",
+      "source": "[*0xc71678 + 0]",
+      "operation": "PROLOG SNAPSHOT (VA 0x0080eb0f); the G12 force-full gate deliberately uses the snapshot, never a re-read (pinned)"
+    },
+    {
+      "name": "mgrWord1",
+      "source": "[*0xc71678 + 4]",
+      "operation": "PROLOG SNAPSHOT (VA 0x0080eb15); same pinned snapshot semantics"
+    },
+    {
+      "name": "mgrFade26518Bits",
+      "source": "[*0xc71678 + 0x26518] float",
+      "operation": "G1 gate (VA 0x0080eb2e), fade base multiplicand (VA 0x0080ed43), aux G13 gate (VA 0x0080f142); refresh per site"
+    },
+    {
+      "name": "mgrFade2651cBits",
+      "source": "[*0xc71678 + 0x2651c] float",
+      "operation": "fade base multiplicand (VA 0x0080ed3b)"
+    },
+    {
+      "name": "mgr26550",
+      "source": "[*0xc71678 + 0x26550]",
+      "operation": "P4a OR word (VA 0x0080ed0c; re-read at the aux site VA 0x0080f14f)"
+    },
+    {
+      "name": "mgrWord0c",
+      "source": "[*0xc71678 + 0x0c]",
+      "operation": "P4a OR word (VA 0x0080ed12; re-read at the aux site VA 0x0080f155)"
+    },
+    {
+      "name": "mgr1830c",
+      "source": "[*0xc71678 + 0x1830c]",
+      "operation": "boost cascade compare == 1, RE-READ at VA 0x0080ed71 after the 0x0074efd0 probe (explicit resume parameter)"
+    },
+    {
+      "name": "mgr67734Bits",
+      "source": "[*0xc71678 + 0x67734] float",
+      "operation": "P6 fade subtract (VA 0x0080edd3)"
+    },
+    {
+      "name": "mgrCamX2650cBits",
+      "source": "[*0xc71678 + 0x2650c] float",
+      "operation": "P0 camera add (VA 0x0080ecd5)"
+    },
+    {
+      "name": "mgrCamY26510Bits",
+      "source": "[*0xc71678 + 0x26510] float",
+      "operation": "P0 camera add (VA 0x0080eccd)"
+    },
+    {
+      "name": "datC798e4",
+      "source": "0x00c798e4",
+      "operation": "c79904 cmove bit 2 (VA 0x0080ec6f); also feeds the rebind cluster byte write (host action)"
+    },
+    {
+      "name": "datC379b8Snap",
+      "source": "0x00c379b8",
+      "operation": "P8 pointer SNAPSHOT taken at VA 0x0080eb9a, before the fade hosts"
+    },
+    {
+      "name": "datC379b8Now",
+      "source": "0x00c379b8",
+      "operation": "P8 global RE-READ at VA 0x0080ee64 (cmovne fallback)"
+    },
+    {
+      "name": "c379b8Byte4",
+      "source": "byte [snap + 4]",
+      "operation": "P8 host-memory byte read at VA 0x0080ee60; bit 0 selects the snapshot pointer"
+    },
+    {
+      "name": "datC78dc4Bits",
+      "source": "0x00c78dc4 float",
+      "operation": "overlay scroll x (VA 0x0080ef41)"
+    },
+    {
+      "name": "datC78edcBits",
+      "source": "0x00c78edc float",
+      "operation": "overlay scroll y (VA 0x0080efd5)"
+    },
+    {
+      "name": "datC3793cBits",
+      "source": "0x00c3793c float",
+      "operation": "overlay scale-x source (VA 0x0080f019); Game+0x6edc write value"
+    },
+    {
+      "name": "datC37940Bits",
+      "source": "0x00c37940 float",
+      "operation": "overlay scale-y source (VA 0x0080f03e); Game+0x6ee0 write value"
+    },
+    {
+      "name": "datC79790",
+      "source": "0x00c79790",
+      "operation": "RT depth; read at VA 0x0080f187 AFTER a19180 and AGAIN at VA 0x0080f1b5 after the restore pair — two separate refreshes (two resume entries)"
+    },
+    {
+      "name": "datC7978c",
+      "source": "0x00c7978c",
+      "operation": "RT stack base; cleared by cmove only when the decremented depth is exactly 0"
+    },
+    {
+      "name": "datC7977d",
+      "source": "0x00c7977d",
+      "operation": "deep continuations: effective flipY inversion (GetSourceQuad / 0x00409cb0)"
+    },
+    {
+      "name": "datC71678",
+      "source": "0x00c71678",
+      "operation": "manager pointer value; echoed as the receiver of manager-ecx hosts (0x0074efd0, 0x0074ea50)"
+    },
+    {
+      "name": "datC33910",
+      "source": "0x00c33910",
+      "operation": "deep: 0x00409cb0 camera gate byte"
+    },
+    {
+      "name": "datC7b640Bits",
+      "source": "0x00c7b640 float bits",
+      "operation": "deep: camera fallback X. NOTE: above .data raw end — load-time ZERO, not a file constant; host-supplied at runtime"
+    },
+    {
+      "name": "datC7b644Bits",
+      "source": "0x00c7b644 float bits",
+      "operation": "deep: camera fallback Y; same load-time-zero note"
+    },
+    {
+      "name": "datC7163c",
+      "source": "0x00c7163c",
+      "operation": "deep: 0x0040c550 cdecl hook pointer; 0 skips the hook"
+    },
+    {
+      "name": "datC8108c",
+      "source": "0x00c8108c",
+      "operation": "deep: GetRoomByIdx magic-static guard epoch (entry read VA 0x00740bf3; resume re-read VA 0x00740d50 vs -1)"
+    },
+    {
+      "name": "tlsOnceEpoch",
+      "source": "fs:[0x2c] -> [0] + 0xc",
+      "operation": "deep: TLS epoch for the once-init entry gate; signed jg"
+    },
+    {
+      "name": "present38",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "action-id 0x38 map presence (poll A bit0)"
+    },
+    {
+      "name": "present39",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x39 (poll A bit1, gate39-gated)"
+    },
+    {
+      "name": "present3a",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3a (poll A bit2)"
+    },
+    {
+      "name": "present3b",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3b (poll A bit3)"
+    },
+    {
+      "name": "present3c",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3c (poll A bit4)"
+    },
+    {
+      "name": "present3d",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3d (poll A bit5)"
+    },
+    {
+      "name": "present3e",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3e (poll A bit6)"
+    },
+    {
+      "name": "present3f",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x3f (poll B bit0)"
+    },
+    {
+      "name": "present40",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x40 (poll B bit1)"
+    },
+    {
+      "name": "present41",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x41 (poll B bit2)"
+    },
+    {
+      "name": "present42",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x42 (poll B bit3)"
+    },
+    {
+      "name": "present43",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x43 (poll B bit5)"
+    },
+    {
+      "name": "present44",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x44 (poll B bit6)"
+    },
+    {
+      "name": "present46",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x46 force poll-B 0x7f whole-mask replace"
+    },
+    {
+      "name": "present4f",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "0x4f ORs poll-B bit6"
+    },
+    {
+      "name": "mgrWord0Now",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0] gate39 stage + 0x74ea50 this0 at the poll/probe site"
+    },
+    {
+      "name": "mgrWord1Now",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+4] 0x74ea50 this4 at the probe site"
+    },
+    {
+      "name": "mgrMode26584",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0x26584] gate39 mode gate"
+    },
+    {
+      "name": "mgrDifficulty269c8",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0x269c8] gate39 + 0x74ea50 difficulty gate"
+    },
+    {
+      "name": "mgrFlags2654c",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0x2654c] 0x74ea50 early-false flag"
+    },
+    {
+      "name": "bitset26548Lo",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0x26548] 0x74ea50 probe limb low"
+    },
+    {
+      "name": "bitset2654cHi",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[mgr+0x2654c] 0x74ea50 probe limb high"
+    },
+    {
+      "name": "roomDesc",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[room+4] type-chain field (room=[mgr+0x18300] at the call)"
+    },
+    {
+      "name": "roomDescNested",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[desc+0x10]"
+    },
+    {
+      "name": "roomType48",
+      "binaryOffset": null,
+      "type": "int32",
+      "conditionality": "[nest+0x48] LROOM plan selector"
+    },
+    {
+      "name": "roomWidthC",
+      "binaryOffset": null,
+      "type": "int32",
+      "conditionality": "[room+0xc] signed idiv divisor (LROOM)"
+    },
+    {
+      "name": "roomAabb14Bits",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[room+0x14] AABB center x float"
+    },
+    {
+      "name": "roomAabb18Bits",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[room+0x18] AABB center y float"
+    },
+    {
+      "name": "roomAabb1cBits",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[room+0x1c] AABB span x float"
+    },
+    {
+      "name": "roomAabb20Bits",
+      "binaryOffset": null,
+      "type": "uint32",
+      "conditionality": "[room+0x20] AABB span y float"
+    },
+    {
+      "name": "mgr264f8",
+      "binaryOffset": "+0x264f8 from *0xc71678",
+      "type": "int32",
+      "conditionality": "[*0xc71678+0x264f8] frame counter read at VA 0x00817af4, cvtdq2ps (signed). POST-TRUNK recapture for the P17/P18 shader scales."
+    },
+    {
+      "name": "datC379bc",
+      "binaryOffset": "0x00c379bc",
+      "type": "uint32",
+      "conditionality": "shader-map head read at VA 0x00a14063/0x00a14086 inside the a14050 chain walk (lower-bound + sentinel). POST-TRUNK recapture."
+    }
+  ],
+  "hostEvents": [
+    {
+      "kind": 2,
+      "name": "boost827bc0",
+      "targetVa": "0x00827bc0",
+      "dispatch": "direct",
+      "receiver": "Game*"
+    },
+    {
+      "kind": 3,
+      "name": "colorBind9956e0",
+      "targetVa": "0x009956e0",
+      "dispatch": "direct",
+      "receiver": "Game+0x1618",
+      "operation": "arg = &quad {lerpR, lerpG, lerpB, raw1b7c, 0} from events.fadeColorBits*"
+    },
+    {
+      "kind": 4,
+      "name": "entityRender",
+      "targetVa": "0x00806c20",
+      "dispatch": "direct",
+      "zhl": "Game::Render",
+      "receiver": "Game*",
+      "operation": "MEGA-EVENT, deliberately not translated. Called once per entity from VA 0x0080eec5: push [base + i*4], push &camera vector, ecx=Game*. Both the count AND the base are re-derived per iteration because this call can spawn/destroy entities."
+    },
+    {
+      "kind": 5,
+      "name": "gridDraw",
+      "targetVa": "0x0080c810",
+      "dispatch": "direct",
+      "receiver": "Game*",
+      "operation": "once per NON-NULL slot of the Game+0x24 array: push slot value, push &camera, ecx=Game*"
+    },
+    {
+      "kind": 6,
+      "name": "animRender40a030",
+      "targetVa": "0x0040a030",
+      "dispatch": "direct",
+      "zhl": "AnimationState::Render",
+      "operation": "twice, receivers Game+first/second from events.overlayFirstOff/SecondOff, args: clamp DAT_00c7b640 x2 + &draw pos"
+    },
+    {
+      "kind": 7,
+      "name": "body817830",
+      "targetVa": "0x00817830",
+      "dispatch": "direct",
+      "receiver": "Game*",
+      "operation": "push 1 (PE-unused, ret 4); nested bodies reachable through the deep NESTED continuations"
+    },
+    {
+      "kind": 8,
+      "name": "rtPopRestore",
+      "targetVa": "0x00684f30 then 0x00a18300",
+      "dispatch": "direct",
+      "operation": "restore pair; preceded by the 0x00a112c0 empty-stack log (msg 0x00b655e4, arg 0x10) when the refreshed depth is 0"
+    },
+    {
+      "kind": 9,
+      "name": "sprite408590PairA",
+      "targetVa": "UNRESOLVED",
+      "dispatch": "vtable",
+      "receiver": "sprite object at LayerState+0x98",
+      "vtableSlot": "0x44",
+      "operation": "Target chosen at runtime through the sprite vtable and deliberately NOT guessed."
+    },
+    {
+      "kind": 10,
+      "name": "sprite408590PairB",
+      "targetVa": "UNRESOLVED",
+      "dispatch": "vtable",
+      "receiver": "sprite pointer RECAPTURED at VA 0x004085de",
+      "vtableSlot": "0x48"
+    },
+    {
+      "kind": 11,
+      "name": "sharedPtrAddRef",
+      "targetVa": "UNRESOLVED",
+      "dispatch": "vtable",
+      "receiver": "src SharedPtr control block",
+      "vtableSlot": "0x04"
+    },
+    {
+      "kind": 12,
+      "name": "sharedPtrRelease",
+      "targetVa": "UNRESOLVED",
+      "dispatch": "vtable",
+      "receiver": "dest control block RECAPTURED at VA 0x0040c57e",
+      "vtableSlot": "0x0c"
+    },
+    {
+      "kind": 13,
+      "name": "sharedPtrHook",
+      "targetVa": "*0x00c7163c",
+      "dispatch": "indirect-global",
+      "operation": "cdecl, one arg (the dest SharedPtr), add esp,4"
+    },
+    {
+      "kind": 14,
+      "name": "getRoomByIdx",
+      "targetVa": "0x00740bc0",
+      "dispatch": "direct",
+      "zhl": "Game::GetRoomByIdx"
+    },
+    {
+      "kind": 15,
+      "name": "onceInitHeader",
+      "targetVa": "0x00aef29d",
+      "dispatch": "direct",
+      "operation": "CRT guard-epoch header; no ZHL, not named"
+    },
+    {
+      "kind": 16,
+      "name": "roomDescriptorCtor",
+      "targetVa": "0x006ef590",
+      "dispatch": "direct",
+      "zhl": "RoomDescriptor::constructor",
+      "operation": "0xb8 layout proven at helper ABI v28; 2 allocator calls (grid + tree sentinel)"
+    },
+    {
+      "kind": 17,
+      "name": "onceInitAtexit",
+      "targetVa": "0x00aef5af",
+      "dispatch": "direct",
+      "operation": "dtor registrar, callback 0x00b15b30; no ZHL"
+    },
+    {
+      "kind": 18,
+      "name": "onceInitFooter",
+      "targetVa": "0x00aef253",
+      "dispatch": "direct",
+      "operation": "CRT guard-epoch footer; no ZHL"
+    },
+    {
+      "kind": 19,
+      "name": "allocator",
+      "targetVa": "0x00a0f4c0 / 0x0040cf00",
+      "dispatch": "direct",
+      "operation": "Platform primitive; host by standing decision"
+    },
+    {
+      "kind": 20,
+      "name": "rngSeedZeroAssert",
+      "targetVa": "0x00a112c0",
+      "dispatch": "direct",
+      "operation": "Diagnostic sink (GetSourceQuad seed==0 path and the RT-pop empty-stack log)"
+    },
+    {
+      "kind": 21,
+      "name": "epilog825de0",
+      "targetVa": "0x00825de0",
+      "dispatch": "direct",
+      "receiver": "Game*"
+    },
+    {
+      "kind": 22,
+      "name": "epilog826ae0",
+      "targetVa": "0x00826ae0",
+      "dispatch": "direct",
+      "receiver": "Game*",
+      "operation": "only when the flag11f6 one-shot fired (byte was EXACTLY 1); runs AFTER the clear"
+    },
+    {
+      "kind": 23,
+      "name": "epilog820fd0",
+      "targetVa": "0x00820fd0",
+      "dispatch": "direct",
+      "receiver": "Game*",
+      "operation": "TERMINAL: the frame is complete after this host returns"
+    },
+    {
+      "kind": 24,
+      "name": "rtRebindCluster",
+      "targetVa": "0x006856c0, 0x00684f30, 0x00a18300(DAT_00c797cc,1), 0x00a18230",
+      "dispatch": "direct",
+      "operation": "second RT bind; includes the byte write ((DAT_00c798e4>>5)&1) to [684f30_result+4] when non-null"
+    },
+    {
+      "kind": 25,
+      "name": "bindA1dfd0",
+      "targetVa": "0x00a1dfd0",
+      "dispatch": "direct",
+      "operation": "GL bind; its argument object is the PURE 0x00a10d00 pack (helper ABI v24) over DAT_00c79980 / DAT_00c7997c and the fade locals"
+    },
+    {
+      "kind": 26,
+      "name": "stage39_83a1b0",
+      "targetVa": "0x0083a1b0",
+      "dispatch": "direct",
+      "receiver": "Game+0x776c"
+    },
+    {
+      "kind": 27,
+      "name": "treeErase424540",
+      "targetVa": "0x00424540",
+      "dispatch": "direct",
+      "receiver": "Game+0x7308 (thiscall) - host_receiver echoes the recaptured head pointer value",
+      "operation": "args: push [head+4], push &Game.tree7308. Pure posts after return: [head]=[head+4]=[head+8]=head and Game+0x730c=0 (marker-gated apply)"
+    },
+    {
+      "kind": 28,
+      "name": "rtPopA19180",
+      "targetVa": "0x00a19180",
+      "dispatch": "direct",
+      "receiver": "DAT_00c798e0",
+      "operation": "push 1"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 29,
+      "name": "getStageID738470",
+      "operation": "push 0 (unused=false); ecx = DAT_00c71678 (the game manager). Exact ZHL Game::GetStageID(bool unused). Its own CF is pure at render-shell helper ABI v13, but the callsite stays host in this slice because the mode-44 plan reaches the 0x0074f690 host (table/GetRoomByIdx).",
+      "receiver": "inputs.datC71678 (echoed post-call)",
+      "targetVa": "0x00738470"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 30,
+      "name": "body817830Trunk",
+      "operation": "runs FUN_00817830 0x00817830..0x00817adb ONLY (the v3 whole-body edge split in two): entrance once-gate + trunk float math + 0x00682ed0/0x00682f20 color-ctor calls + the 0x00af0917 floor; the frame (0x808-byte local block) is SAVED for the tail host. arg0 = 1 (the caller's push).",
+      "receiver": "none",
+      "targetVa": "0x00817830"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 31,
+      "name": "body817830Tail",
+      "operation": "v20: resumes the TRUNK's saved frame at events.tailStartVa (OTHER 0x0081d20a) or events.lroomNextVa (0x00818228 / 0x00818703 / 0x00819394 / 0x0081a975) after injecting the four prefix locals, runs toward the shared exit 0x0081def9/0x0081df0c (frame consumed).",
+      "receiver": "none",
+      "targetVa": "dynamic (events.tailStartVa or events.lroomNextVa)"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 32,
+      "name": "getLroom81f8b0",
+      "operation": "exact ZHL Room::GetLRoomAreaDesc @ 0x0081f8b0 (callsite 0x00817b53). ecx=Game*; dest=lea [esp+0x2dc]. Frame SAVED for resume_817830_lroom_pack at 0x00817b58.",
+      "receiver": "Game*",
+      "targetVa": "0x0081f8b0",
+      "zhl": "Room::GetLRoomAreaDesc"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 33,
+      "name": "a10690",
+      "operation": "v7/v12: typed GL leaf opaque_call_00a10690 (no exact ZHL). Callsites 0x00817c3d / 0x00817ccc / 0x00817d5c / 0x00817de0 / 0x00817e78 / 0x00817f06; dest lea [esp+0x124]; dest-copy clusters 0x00817c42..0x00817c81, 0x00817cd1..0x00817d13, 0x00817d70..0x00817dce, 0x00817de5..0x00817e24, 0x00817e8c..0x00817ed4, and 0x00817f0b..0x00817f45 are host frame mutation. Frame SAVED for resume_817830_type9_cell1 / resume_817830_type9_cell2 / resume_817830_type9_cell3 / resume_817830_type9_cell4 / resume_817830_type9_cell5 / resume_817830_type9_cell6.",
+      "receiver": "stack dest lea [esp+0x124]",
+      "targetVa": "0x00a10690"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 34,
+      "name": "a102e0",
+      "operation": "v13/v20: typed GL leaf opaque_call_00a102e0 (no exact ZHL; family-owned). Callsites 0x00817f74 / 0x00817fcd / 0x00818023 / 0x00818072 / 0x00818122 / 0x0081817c / 0x008181d2 / 0x00818228 / 0x008182de (v23, ninth pack) / 0x00818338 (v24, tenth pack) / 0x0081838b (v25, eleventh pack) / 0x008183e7 (v26, twelfth pack) / 0x00818497 (v28, thirteenth pack) / 0x008184ee (v29, fourteenth pack) / 0x00818547 (v30, fifteenth pack) / 0x0081859a (v31, sixteenth pack) / 0x00818656 (v33, seventeenth pack, first of the fourth a106e0 seam group) / 0x008186ad (v34, eighteenth pack, second of the fourth a106e0 seam group) / 0x00818703 (v35, nineteenth pack, third of the fourth seam group) / 0x0081875c (v35, twentieth pack, fourth of the fourth seam group). Frame SAVED for resume_817830_type9_a102e0_0 / resume_817830_type9_a102e0_1 / resume_817830_type9_a102e0_2 / resume_817830_type9_a102e0_3 / resume_817830_type9_a102e0_4 / resume_817830_type9_a102e0_5 / resume_817830_type9_a102e0_6 / resume_817830_type9_a102e0_7 / resume_817830_type9_a102e0_8 / resume_817830_type9_a102e0_9 / resume_817830_type9_a102e0_10 / resume_817830_type9_a102e0_11 / resume_817830_type9_a102e0_12 / resume_817830_type9_a102e0_13 / resume_817830_type9_a102e0_14 / resume_817830_type9_a102e0_15 / resume_817830_type9_a102e0_16 / resume_817830_type9_a102e0_17 / resume_817830_type9_a102e0_18 / resume_817830_type9_a102e0_19. Next remain is the eighteenth type-9 a102e0 @ 0x008186ad (v33), not a second peel.",
+      "receiver": "eax Vector return",
+      "targetVa": "0x00a102e0"
+    },
+    {
+      "dispatch": "direct",
+      "kind": 35,
+      "name": "a106e0",
+      "operation": "v17/v22: typed GL leaf opaque_call_00a106e0 (no exact ZHL; family-owned). Callsites 0x008180b4 (v17, dest lea [esp+0x120] prepared by the v16 pack) / 0x00818273 (v22, dest lea [esp+0x120] prepared by the v21 pack) / 0x0081842c (v27, third seam; dest lea [esp+0x120] prepared by the twelfth pack) / 0x008185e8 (v32, fourth seam, peeled; closes the third seam group; dest-copy cluster 0x008185ed..0x0081861b stays host) / 0x008187a1 (v35, fifth seam, peeled; starts the fifth seam group; dest-copy cluster 0x008187a6..0x008187cd stays host).",
+      "receiver": "stack dest lea [esp+0x120]",
+      "targetVa": "0x00a106e0"
+    }
+  ],
+  "continuations": [
+    {
+      "kind": 1,
+      "name": "atEpilog825de0",
+      "resume": "isaac_game_render_slice_resume_epilog",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+0x11f6 byte at VA 0x0080f1d5, AFTER the 0x00825de0 host"
+      ]
+    },
+    {
+      "kind": 2,
+      "name": "atRtRebind",
+      "resume": "isaac_game_render_slice_resume_fade_prep",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+0x1b5c..0x1b6c (5 dwords) at VA 0x0080eb9f..0x0080ebef",
+        "room flags [*(Game+4)+0x44] FIRST read at VA 0x0080ebcc"
+      ],
+      "note": "the top poll results at this site are DISCARDED by the PE (eax overwritten at VA 0x0080eb48); v2 skips them"
+    },
+    {
+      "kind": 3,
+      "name": "atBindA1dfd0",
+      "resume": "isaac_game_render_slice_resume_fade_stage",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+0x1d18 at VA 0x0080ecb6",
+        "Game+0x1204/0x1208 at VA 0x0080ecc5/0x0080ecbd",
+        "room flags SECOND read at VA 0x0080ecfe"
+      ]
+    },
+    {
+      "kind": 4,
+      "name": "atStage39",
+      "resume": "isaac_game_render_slice_resume_tree_erase",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+0x7308 head pointer at VA 0x0080ee81",
+        "[head+4] host memory"
+      ]
+    },
+    {
+      "kind": 5,
+      "name": "atFadePolls",
+      "resume": "isaac_game_render_slice_resume_fade_polls",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+8 at VA 0x0080ed55"
+      ],
+      "note": "poll A/B masks are pure (helper ABI v31) and assembled inside the resume from the sparse presence bytes and the manager words READ AT THE POLL SITE (VA 0x0080ed15/0x0080ed1e)"
+    },
+    {
+      "kind": 6,
+      "name": "atBoost74efd0",
+      "resume": "isaac_game_render_slice_resume_boost_74efd0",
+      "requiresRecapture": true,
+      "recaptured": [
+        "[mgr+0x1830c] RE-READ at VA 0x0080ed71 (the probe AL is PURE since ABI v5: isaac_game_render_slice_boost_74efd0_al over the sparse per-site inputs)"
+      ],
+      "note": "v5: FUN_0074efd0 0x0074efd0..0x0074f02e translated pure (receiver = Game ptr = [0xc71678] at VA 0x0080ed62); inner 0x00748490 poll combine pure over the same masks as the fade poll site"
+    },
+    {
+      "kind": 7,
+      "name": "atBoost827bc0",
+      "resume": "isaac_game_render_slice_resume_boost_827bc0",
+      "requiresRecapture": true,
+      "recaptured": [
+        "AL of the probe"
+      ]
+    },
+    {
+      "kind": 8,
+      "name": "atFadeClose",
+      "resume": "isaac_game_render_slice_resume_fade_close",
+      "requiresRecapture": true,
+      "recaptured": [
+        "room flags THIRD read at VA 0x0080edc6",
+        "Game+0x1b70/0x1b74/0x1b78/0x1b7c at VA 0x0080ee3c/0x0080ee22/0x0080ee00/0x0080edf0",
+        "DAT_00c379b8 re-read + [snap+4] byte"
+      ],
+      "note": "no host action - a pure recapture request; the carried fade base/boost/locals return as parameters"
+    },
+    {
+      "kind": 9,
+      "name": "atColorBind",
+      "resume": "isaac_game_render_slice_resume_tree_erase",
+      "requiresRecapture": true,
+      "recaptured": [
+        "tree head + [head+4] (as atStage39)"
+      ]
+    },
+    {
+      "kind": 10,
+      "name": "atTreeEraseEntry",
+      "resume": "isaac_game_render_slice_resume_tree_erase",
+      "requiresRecapture": true,
+      "recaptured": [
+        "tree head + [head+4]"
+      ],
+      "note": "taken on the bit9 skip path; no host between the gate and the erase"
+    },
+    {
+      "kind": 11,
+      "name": "atTreeErase",
+      "resume": "isaac_game_render_slice_resume_entity",
+      "requiresRecapture": true,
+      "recaptured": [
+        "[Game+0x1264] at the gate VA 0x0080eead",
+        "per-iteration [Game+0x125c] at VA 0x0080eebc",
+        "per-iteration [Game+0x1264] at VA 0x0080eecb"
+      ],
+      "note": "the resume takes per-iteration arrays; a folded [0, count) reading is not expressible through this ABI"
+    },
+    {
+      "kind": 12,
+      "name": "atEntity",
+      "resume": "isaac_game_render_slice_resume_entity",
+      "requiresRecapture": true,
+      "recaptured": [
+        "more per-iteration samples"
+      ],
+      "note": "emitted only on sample exhaustion; the slice never invents an iteration"
+    },
+    {
+      "kind": 13,
+      "name": "atGridEntry",
+      "resume": "isaac_game_render_slice_resume_grid",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+0x0c/0x10 at VA 0x0080eed3",
+        "Game+0x24 slot words"
+      ],
+      "note": "the PE genuinely folds the product once into a stack slot and decrements it - deliberate asymmetry with the entity loop; null slots are skipped without a call"
+    },
+    {
+      "kind": 14,
+      "name": "atGrid",
+      "resume": "isaac_game_render_slice_resume_overlay_gate",
+      "requiresRecapture": true,
+      "recaptured": [
+        "Game+8 at VA 0x0080ef08",
+        "nested room type [*(*(Game+4)+0x10)+0x10]"
+      ]
+    },
+    {
+      "kind": 15,
+      "name": "atOverlayGate",
+      "resume": "isaac_game_render_slice_resume_overlay_gate",
+      "requiresRecapture": true,
+      "recaptured": [
+        "same as atGrid"
+      ],
+      "note": "the 0x0074ea50 probe and 0x00812d00 Vector producer are pure (helper ABI v31) and run inside the resume from sparse inputs"
+    },
+    {
+      "kind": 16,
+      "name": "atAnimRender",
+      "resume": "isaac_game_render_slice_resume_aux_gate",
+      "requiresRecapture": false
+    },
+    {
+      "kind": 17,
+      "name": "atAuxGate",
+      "resume": "isaac_game_render_slice_resume_aux_gate",
+      "requiresRecapture": false,
+      "note": "runtime-inputs refresh only"
+    },
+    {
+      "kind": 18,
+      "name": "atAuxPolls",
+      "resume": "isaac_game_render_slice_resume_aux_polls",
+      "requiresRecapture": true,
+      "recaptured": [
+        "none beyond the runtime-inputs refresh"
+      ],
+      "note": "poll A/B masks are pure (helper ABI v31) over the sparse presence bytes and the manager words READ AT THE POLL SITE (VA 0x0080f158/0x0080f161)"
+    },
+    {
+      "kind": 19,
+      "name": "atBody817830",
+      "resume": "isaac_game_render_slice_resume_rt_pop_begin",
+      "requiresRecapture": false
+    },
+    {
+      "kind": 20,
+      "name": "atRtPopA19180",
+      "resume": "isaac_game_render_slice_resume_rt_pop_check",
+      "requiresRecapture": false,
+      "note": "inputs.datC79790 must be refreshed post-host (read at VA 0x0080f187)"
+    },
+    {
+      "kind": 21,
+      "name": "atRtPopRestore",
+      "resume": "isaac_game_render_slice_resume_rt_pop_final",
+      "requiresRecapture": false,
+      "note": "inputs.datC79790/datC7978c must be refreshed post-restore (the sub at VA 0x0080f1b5 reads again); pure posts: depth-1 store and the cmove base clear only when the result is exactly 0 (0 wraps to 0xffffffff and does NOT clear)"
+    },
+    {
+      "kind": 22,
+      "name": "atEpilog826ae0",
+      "resume": "isaac_game_render_slice_resume_epilog_final",
+      "requiresRecapture": false
+    },
+    {
+      "kind": 23,
+      "name": "atEpilog820fd0",
+      "resume": "none (terminal)",
+      "requiresRecapture": false
+    },
+    {
+      "kind": 24,
+      "name": "nested",
+      "resume": "deep entries (sprite_pair_a / shared_ptr / room_type / once_init)",
+      "requiresRecapture": false,
+      "note": "each deep resume already takes its recaptured value as an explicit parameter per the v26/v27 helper contracts"
+    },
+    {
+      "kind": 25,
+      "name": "atGetStageId817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_gate",
+      "note": "v3: Game::GetStageID (0x00738470, ecx=DAT_00c71678, push 0) host event; then the pure G14..G19 gate runs with the POST-CALL reads as explicit parameters: stageId (eax), slot value at Game+0x1d80+0x13c*[Game+0x1d18] (offset law export isaac_game_render_slice_817830_slot_offset), [*(Game+4)+0x54], [*(Game+4)+0x44], [Game+0x7240] fade bits. Closed -> the 0x66dc-byte body (0x00817830..0x0081adf0) is skipped natively and the RT pop chain (VA 0x0080f182) runs."
+    },
+    {
+      "kind": 26,
+      "name": "atTrunk817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_prefix",
+      "note": "v4: the 0x00817830 body open path enters through the TRUNK edge. Host event 30 runs 0x00817830..0x00817adb (entrance + trunk float/color-ctor prefix; the frame is SAVED for the tail) and the pure prefix 0x00817adc..0x00817b53 resumes natively from POST-TRUNK recaptures: stageId, [*(Game+4)+0x54], [*(Game+4)+0x44], [Game+0x7240], [mgr+0x264f8], DAT_00c379bc head, the a14050 lower-bound walk result (bound.isnil/key/ptr), [roomdesc+0x48] type. Computes P14/P15 blend t ([esp+0x398]), P17/P18 scales ([esp+0x28]/[esp+0x18]/[esp+0x80]), the a14050 chain plan (key = hash of DAT_00b1a5b0 'KAGE_ColorTextureShader' = 0xb3d14323, VA 0x00a14057), and the type ladder (add -9, cmp 3, ja -> tail 0x00817b53 for types 9..12 else 0x0081d20a). FOUND -> recapture continuation 27 (the value derefs are host memory reads); FAIL -> tail host 31 directly (no store)."
+    },
+    {
+      "kind": 27,
+      "name": "atA14050Value817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_a14050_value",
+      "note": "v4: recapture after the a14050 plan FOUND; the host dereferenced [bound+0x14] -> value and byte [value+4] on live memory (bound+0x14 must NOT be dereferenced on the FAIL path). Pure chain resume (VA 0x00a1409e/0x00a140a2/0x00a140a8): store DAT_00c379b8 = value iff value != 0 && byte[value+4] & 1 (byte test; wide inputs narrowed). Re-derives blend/scales/ladder from refreshed recaptures and emits the tail host."
+    },
+    {
+      "kind": 28,
+      "name": "atTail817830",
+      "requiresRecapture": false,
+      "resume": "isaac_game_render_slice_resume_rt_pop_begin",
+      "note": "v6: OTHER tail host (31) at 0x0081d20a (type not in 9..12). Types 9..12 now take AT_LROOM_PACK_817830."
+    },
+    {
+      "kind": 29,
+      "name": "atLroomPack817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_lroom_pack",
+      "note": "v6: host Room::GetLRoomAreaDesc @ 0x0081f8b0 then resume_817830_lroom_pack over POST-LROOM recaptures: [Game+4], [Room+0x10], [nested+0x48], type-9 cell0 stack floats [esp+0xa8]/[esp+0x80]/[esp+0x18]/[esp+0xc]. Pure 12-quad + 6-pair plans, G22, G23, P22. Type==9 emits typed HOST_A10690 at 0x00817c3d."
+    },
+    {
+      "kind": 30,
+      "name": "atLroomRemain817830",
+      "requiresRecapture": false,
+      "resume": "isaac_game_render_slice_resume_rt_pop_begin",
+      "note": "v22: remaining L-room tail host at events.lroomNextVa: 0x008183e7 (twelfth type-9 a102e0 after the eleventh pack, emitted by resume_817830_type9_a102e0_10 since v25), 0x00818703 (nineteenth type-9 a102e0 after the eighteenth pack, emitted by resume_817830_type9_a102e0_17 since v34), 0x00819394 (G22 open && type!=9), 0x0081a975 (G22 open && type==9 join), 0x0081d20a (OTHER tail)"
+    },
+    {
+      "kind": 31,
+      "name": "atType9Cell1817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell1",
+      "note": "v7: host typed a10690 @ 0x00817c3d (dest lea [esp+0x124]; dest-copy 0x00817c42..0x00817c81 host). Then resume_817830_type9_cell1 over POST-A10690 recaptures [esp+0x70]/[esp+0x94]/[esp+0x18]. Pure P23 type9_cell1. Next host is second a10690 at 0x00817ccc (AT_TYPE9_CELL2_817830)."
+    },
+    {
+      "kind": 32,
+      "name": "atType9Cell2817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell2",
+      "note": "v8: host typed a10690 @ 0x00817ccc (dest lea [esp+0x124]; dest-copy 0x00817cd1..0x00817d13 host). Then resume_817830_type9_cell2 over POST-A10690 recaptures [esp+0x38]/[esp+0xac]/[esp+0x18]/[esp+0x94]. Independent cell2 pack. Next host 0x00817d5c (AT_TYPE9_CELL3_817830)."
+    },
+    {
+      "kind": 33,
+      "name": "atType9Cell3817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell3",
+      "note": "v9: host typed a10690 @ 0x00817d5c (dest lea [esp+0x124]; dest-copy 0x00817d70..0x00817dce host). Then resume_817830_type9_cell3 over POST-A10690 recaptures [esp+0x6c]/[esp+0xa8]/[esp+0x38]/[esp+0xac]/[esp+0x18]. Independent cell3 pack. Next host 0x00817de0 (AT_TYPE9_CELL4_817830)."
+    },
+    {
+      "kind": 34,
+      "name": "atType9Cell4817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell4",
+      "note": "v10: host typed a10690 @ 0x00817de0 (dest lea [esp+0x124]; dest-copy 0x00817de5..0x00817e24 host). Then resume_817830_type9_cell4 over POST-A10690 recaptures [esp+0xa8]/[esp+0x70]/[esp+0x18]. Independent cell4 pack. Next host 0x00817e78 (AT_TYPE9_CELL5_817830)."
+    },
+    {
+      "kind": 35,
+      "name": "atType9Cell5817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell5",
+      "note": "v11: host typed a10690 @ 0x00817e78 (dest lea [esp+0x124]; dest-copy 0x00817e8c..0x00817ed4 host). Then resume_817830_type9_cell5 over POST-A10690 recaptures [esp+0x6c]/[esp+0x10]/[esp+0x18]. Independent cell5 pack. Next host 0x00817f06 (AT_TYPE9_CELL6_817830)."
+    },
+    {
+      "kind": 36,
+      "name": "atType9Cell6817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_cell6",
+      "note": "v12: host typed a10690 @ 0x00817f06 (dest prepared by v11 cell5; dest-copy 0x00817f0b..0x00817f45 host). Then resume_817830_type9_cell6 over POST-A10690 recaptures [esp+0x94]/[esp+0xc]/[esp+0x28]. Independent cell6 pack. Next host 0x00817f74 (AT_TYPE9_A102E0_0_817830)."
+    },
+    {
+      "kind": 37,
+      "name": "atType9A102e00817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_0",
+      "note": "v13: host typed a102e0 @ 0x00817f74. Then resume_817830_type9_a102e0_0 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18]. Independent pack y=ret_y+0, x=mul_05+ret_x. Next host 0x00817fcd (AT_TYPE9_A102E0_1_817830)."
+    },
+    {
+      "kind": 38,
+      "name": "atType9A102e01817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_1",
+      "note": "v14: host typed a102e0 @ 0x00817fcd. Then resume_817830_type9_a102e0_1 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18]. Independent pack y=ret_y+0, x=mul_05+ret_x. Next host 0x00818023 (AT_TYPE9_A102E0_2_817830)."
+    },
+    {
+      "kind": 39,
+      "name": "atType9A102e02817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_2",
+      "note": "v15: host typed a102e0 @ 0x00818023. Then resume_817830_type9_a102e0_2 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18]. Independent pack y=ret_y+0, x=mul_05+ret_x. Next host 0x00818072 (AT_TYPE9_A102E0_3_817830)."
+    },
+    {
+      "kind": 40,
+      "name": "atType9A102e03817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_3",
+      "note": "v16: host typed a102e0 @ 0x00818072. Then resume_817830_type9_a102e0_3 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14]. Independent pack y=ret_y+0, x=mul_14+ret_x. Dest-copy of later a106e0 stays host. Next host AT_TYPE9_A106E0_817830 at 0x008180b4."
+    },
+    {
+      "kind": 41,
+      "name": "atType9A106e0817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a106e0",
+      "note": "v17: host typed a106e0 @ 0x008180b4 (dest lea [esp+0x120]; dest-copy 0x008180b9..0x008180f3 host). Then resume_817830_type9_a106e0 over POST-A106E0 recaptures [esp+0x9c]/[esp+0xc]/[esp+0x28]. Independent identity pack x/y/angle. Next host 0x00818122 (AT_TYPE9_A102E0_4_817830)."
+    },
+    {
+      "kind": 42,
+      "name": "atType9A102e04817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_4",
+      "note": "v18: host typed a102e0 @ 0x00818122. Then resume_817830_type9_a102e0_4 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14]. Independent pack y=ret_y+0, x=mul_14+ret_x. Dest-copy 0x008180b9..0x008180f3 stays host. Next host 0x0081817c (AT_TYPE9_A102E0_5_817830)."
+    },
+    {
+      "kind": 43,
+      "name": "atType9A102e05817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_5",
+      "note": "v19: host typed a102e0 @ 0x0081817c. Then resume_817830_type9_a102e0_5 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18]. Independent pack y=ret_y+0, x=mul_05+ret_x. Dest-copy 0x008180b9..0x008180f3 stays host. Host a106e0 stays host. Do not reopen 0x00818122. Next host 0x008181d2 (seventh type-9 a102e0, AT_TYPE9_A102E0_6_817830 since v20)."
+    },
+    {
+      "kind": 44,
+      "name": "atType9A102e06817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_6",
+      "note": "v20: host typed a102e0 @ 0x008181d2. Then resume_817830_type9_a102e0_6 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18]. Independent pack y=ret_y+0, x=mul_05+ret_x. Dest-copy 0x008180b9..0x008180f3 stays host. Host a106e0 stays host. Do not reopen 0x00818122 or 0x0081817c. Next remain 0x00818228 (eighth type-9 a102e0)."
+    },
+    {
+      "kind": 45,
+      "name": "atType9A102e07817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_7",
+      "note": "v21: host typed a102e0 @ 0x00818228. Then resume_817830_type9_a102e0_7 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14]. Independent pack y=ret_y+0, x=mul_05+ret_x. v22: emits the typed AT_TYPE9_A106E0_2_817830 (46) to the second a106e0 @ 0x00818273."
+    },
+    {
+      "kind": 46,
+      "name": "atType9A106e02817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a106e0_2",
+      "note": "v22: host typed a106e0 @ 0x00818273 (dest lea [esp+0x120] prepared by v21 pack; dest-copy 0x00818278..0x008182b2 host). Then resume_817830_type9_a106e0_2 over POST-A106E0 recaptures [esp+0x40]/[esp+0xc]/[esp+0x28] (identity x/y/angle stores to the next-host arg frame) and the byte-gate: mov byte [esp+0x140],1 then dword read-back -> (1u & 0xff) as uint32_t, NO uint8_t (the Wasm ABI does not narrow and -O2 deletes masks on uint8_t params). v23: now emits the typed AT_TYPE9_A102E0_8_817830 (47) to the ninth a102e0 @ 0x008182de (hostArg0 / lroomNextVa = 0x008182de)."
+    },
+    {
+      "kind": 47,
+      "name": "atType9A102e08817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_8",
+      "note": "v23: host typed a102e0 @ 0x008182de (ninth type-9 a102e0; the v22 a106e0_2 seam now emits it). Then resume_817830_type9_a102e0_8 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14] (no next-host push before the mul read; resume-time slot [esp+0x14] directly, same shape as v21). Independent pack y=ret_y+0, x=mul_05+ret_x. Identity arg-setup of later hosts stays host. v24: now emits the typed AT_TYPE9_A102E0_9_817830 (48) to the tenth a102e0 @ 0x00818338 (hostArg0 / lroomNextVa = 0x00818338)."
+    },
+    {
+      "kind": 48,
+      "name": "atType9A102e09817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_9",
+      "note": "v24: host typed a102e0 @ 0x00818338 (tenth type-9 a102e0; the v23 a102e0_8 resume now emits it). Then resume_817830_type9_a102e0_9 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x00818340; resume-time slot [esp+0x14], same after-push shape as v20). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x64], x -> [esp+0x60] (post-push offsets; the resume writes the bits, the host glue places them). Identity arg-setup 0x00818373..0x0081838a ([esp+0x40]->[esp+0x68], [esp+0x28]->[esp] angle, push eax) and the zero store [esp+0x6c] stay host. v25: now emits the typed AT_TYPE9_A102E0_10_817830 (49) to the eleventh a102e0 @ 0x0081838b (hostArg0 / lroomNextVa = 0x0081838b); the remain moved to the twelfth a102e0 @ 0x008183e7 (kind 30, emitted by resume_817830_type9_a102e0_10)."
+    },
+    {
+      "kind": 49,
+      "name": "atType9A102e010817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_10",
+      "note": "v25: host typed a102e0 @ 0x0081838b (eleventh type-9 a102e0; the v24 a102e0_9 resume now emits it). Then resume_817830_type9_a102e0_10 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x00818393; resume-time slot [esp+0x14], same after-push shape as v24). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x98], x -> [esp+0x94] (post-push offsets; the resume writes the bits, the host glue places them). Identity arg-setup 0x008183cc..0x008183e6 ([esp+0x9c]->[esp+0x10], [esp+0x28]->[esp] angle, push eax) and the zero store [esp+0x14] stay host. v26: now emits the typed AT_TYPE9_A102E0_11_817830 (50) to the twelfth a102e0 @ 0x008183e7 (hostArg0 / lroomNextVa = 0x008183e7); the remain moved to the third type-9 a106e0 seam @ 0x0081842c (kind 30, emitted by resume_817830_type9_a102e0_11)."
+    },
+    {
+      "kind": 50,
+      "name": "atType9A102e011817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_11",
+      "note": "v26: host typed a102e0 @ 0x008183e7 (twelfth type-9 a102e0; the v25 a102e0_10 resume now emits it). Then resume_817830_type9_a102e0_11 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14] (no next-host push before the mul read in this flow - the first push is the arg lea at 0x0081840d, AFTER the recapture; resume-time slot [esp+0x14] directly, same no-push shape as v23). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x7c], x -> [esp+0x74] (post-push offsets; the resume writes the bits, the host glue places them). Identity arg-setup 0x00818409..0x0081842b (three lea/push arg pairs feeding the third a106e0 seam) stays host. v27: now emits the typed AT_TYPE9_A106E0_3_817830 (51) to the third a106e0 @ 0x0081842c (hostArg0 / lroomNextVa = 0x0081842c); the seam dest-copy cluster 0x00818431..0x0081846d stays host."
+    },
+    {
+      "kind": 51,
+      "name": "atType9A106e03817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a106e0_3",
+      "note": "v27: host typed a106e0 @ 0x0081842c (third a106e0 seam; dest lea [esp+0x120] prepared by the v26 pack; dest-copy 0x00818431..0x0081846d host). Then resume_817830_type9_a106e0_3 over POST-A106E0 recaptures [esp+0x48]/[esp+0xc]/[esp+0x28] (identity x/y/angle stores to the next-host arg frame) and the byte-gate: mov byte [esp+0x140],1 then dword read-back -> (1u & 0xff) as uint32_t, NO uint8_t (the Wasm ABI does not narrow and -O2 deletes masks on uint8_t params). v28: now emits the typed AT_TYPE9_A102E0_12_817830 (52) to the thirteenth a102e0 @ 0x00818497 (hostArg0 / lroomNextVa = 0x00818497)."
+    },
+    {
+      "kind": 52,
+      "name": "atType9A102e012817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_12",
+      "note": "v28: host typed a102e0 @ 0x00818497 (thirteenth type-9 a102e0; the v27 a106e0_3 seam now emits it). Then resume_817830_type9_a102e0_12 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x0081849f; resume-time slot [esp+0x14], same after-push shape as v24/v25). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x3c], x -> [esp+0x38] (post-push offsets; the resume writes the bits, the host glue places them). Identity arg-setup 0x008184ca..0x008184e8 ([esp+0x40]->[esp+0x58], [esp+0xc]->[esp+0x5c], [esp+0x28]->[esp] angle, push eax) stays host. v29: now emits the typed AT_TYPE9_A102E0_13_817830 (53) to the fourteenth a102e0 @ 0x008184ee (hostArg0 / lroomNextVa = 0x008184ee)."
+    },
+    {
+      "kind": 53,
+      "name": "atType9A102e013817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_13",
+      "note": "v29: host typed a102e0 @ 0x008184ee (fourteenth type-9 a102e0; the v28 a102e0_12 resume now emits it). Then resume_817830_type9_a102e0_13 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x008184f6; resume-time slot [esp+0x14], same after-push shape as v24/v25). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0xa0], x -> [esp+0x9c] (post-push offsets; the resume writes the bits, the host glue places them). Zero store [esp+0x6c] and identity arg-setup 0x0081852f..0x00818545 ([esp+0x48]->[esp+0x68], [esp+0x28]->[esp] angle, push eax) stay host. v30: now emits the typed AT_TYPE9_A102E0_14_817830 (54) to the fifteenth a102e0 @ 0x00818547 (hostArg0 / lroomNextVa = 0x00818547)."
+    },
+    {
+      "kind": 54,
+      "name": "atType9A102e014817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_14",
+      "note": "v30: host typed a102e0 @ 0x00818547 (fifteenth type-9 a102e0; the v29 a102e0_13 resume now emits it). Then resume_817830_type9_a102e0_14 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x0081854f; resume-time slot [esp+0x14], same after-push shape as v24/v25). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x64], x -> [esp+0x60] (post-push offsets; the resume writes the bits, the host glue places them; identical store offsets to the v24 tenth pack). Zero store [esp+0x14] and identity arg-setup 0x00818582..0x00818598 ([esp+0x40]->[esp+0x10], [esp+0x28]->[esp] angle, push eax) stay host. v31: now emits the typed AT_TYPE9_A102E0_15_817830 (55) to the sixteenth a102e0 @ 0x0081859a (hostArg0 / lroomNextVa = 0x0081859a)."
+    },
+    {
+      "kind": 55,
+      "name": "atType9A102e015817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_15",
+      "note": "v31: host typed a102e0 @ 0x0081859a (sixteenth type-9 a102e0; the v30 a102e0_14 resume now emits it). Then resume_817830_type9_a102e0_15 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14] (NO next-host push before the mul read - the first push is the arg lea at 0x008185c0, AFTER the recaptures; resume-time slot [esp+0x14] directly, same no-push shape as v23/v26). Independent pack y=ret_y+0, x=mul_05+ret_x; stores x -> [esp+0x98], y -> [esp+0xa0] (post-push offsets; the resume writes the bits, the host glue places them; x stored BEFORE y). Four lea/push arg pairs 0x008185bc..0x008185e7 feeding the fourth a106e0 seam stay host. v32: now emits the typed AT_TYPE9_A106E0_4_817830 (56) to the fourth a106e0 @ 0x008185e8 (hostArg0 / lroomNextVa = 0x008185e8); the seam's dest-copy cluster 0x008185ed..0x0081861b stays host."
+    },
+    {
+      "kind": 56,
+      "name": "atType9A106e04817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a106e0_4",
+      "note": "v32: host typed a106e0 @ 0x008185e8 (fourth a106e0 seam; closes the third a106e0 seam group; dest-copy cluster 0x008185ed..0x0081861b host; dest lea [esp+0x120] prepared by the v31 pack). Then resume_817830_type9_a106e0_4 over POST-A106E0 recaptures [esp+0xa8]/[esp+8]/[esp+0x28] (identity x/y/angle stores to the next-host arg frame [esp+0x4c]/[esp+0x54]/[esp]; x stored BEFORE the next-host push) and the byte-gate: mov byte [esp+0x140],1 then dword read-back -> (1u & 0xff) as uint32_t, NO uint8_t (the Wasm ABI does not narrow and -O2 deletes masks on uint8_t params). Emits pack-17 a102e0 @ 0x00818656 as kind 30 remain (LROOM_REMAIN; not peeled in this ABI; one peel per ABI). v33: now emits the typed AT_TYPE9_A102E0_16_817830 (57) to the seventeenth a102e0 @ 0x00818656 (hostArg0 / lroomNextVa = 0x00818656)."
+    },
+    {
+      "kind": 57,
+      "name": "atType9A102e016817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_16",
+      "note": "v33: host typed a102e0 @ 0x00818656 (seventeenth type-9 a102e0; first pack of the fourth a106e0 seam group; the v32 a106e0_4 resume now emits it). Then resume_817830_type9_a102e0_16 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x0081865e; resume-time slot [esp+0x14] — the same after-push shape as v24/v25/v28). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x3c], x -> [esp+0x38] (post-push; identical store offsets to the v28 twelfth pack). Identity arg-setup 0x00818689..0x008186ac ([esp+0x48]->[esp+0x58], [esp+0xc]->[esp+0x5c], [esp+0x28]->[esp] angle, push eax) stays host (v18-style; feeds pack-18). v34: now emits the typed AT_TYPE9_A102E0_17_817830 (58) to the eighteenth a102e0 @ 0x008186ad (hostArg0 / lroomNextVa = 0x008186ad)."
+    },
+    {
+      "kind": 58,
+      "name": "atType9A102e017817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_17",
+      "note": "v34: host typed a102e0 @ 0x008186ad (eighteenth type-9 a102e0; second pack of the fourth a106e0 seam group; the v33 a102e0_16 resume now emits it). Then resume_817830_type9_a102e0_17 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x008186b5; resume-time slot [esp+0x14] — the same after-push shape as v24/v25/v28/v33). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0x44], x -> [esp+0x40] (post-push offsets; the resume writes the bits, the host glue places them). Zero store [esp+0x6c] (constant arg-setup, same pattern as v24/v25/v29) stays host. Identity arg-setup 0x008186e8..0x00818702 ([esp+0xac]->[esp+0x68], [esp+0x28]->[esp] angle, push eax) stays host (v18-style; feeds pack-19). v35: now emits the typed AT_TYPE9_A102E0_18_817830 (59) to the nineteenth a102e0 @ 0x00818703 (hostArg0 / lroomNextVa = 0x00818703)."
+    },
+    {
+      "kind": 59,
+      "name": "atType9A102e018817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_18",
+      "note": "v35: host typed a102e0 @ 0x00818703 (nineteenth type-9 a102e0; third pack of the fourth a106e0 seam group; the v34 a102e0_17 resume now emits it). Then resume_817830_type9_a102e0_18 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x18] (instruction operand AFTER the next-host push ecx at 0x0081870b; resume-time slot [esp+0x14] — the same after-push shape as v24/v25/v28/v33/v34). Independent pack y=ret_y+0, x=mul_05+ret_x; stores y -> [esp+0xa0], x -> [esp+0x9c] (post-push offsets; identical store offsets to the v29 fourteenth pack). Zero store [esp+0x14] (constant arg-setup) stays host. Identity arg-setup 0x00818744..0x0081875b ([esp+0x48]->[esp+0x10], [esp+0x28]->[esp] angle, push eax) stays host (v18-style; feeds pack-20). Emits the typed AT_TYPE9_A102E0_19_817830 (60) to the twentieth a102e0 @ 0x0081875c (hostArg0 / lroomNextVa = 0x0081875c)."
+    },
+    {
+      "kind": 60,
+      "name": "atType9A102e019817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a102e0_19",
+      "note": "v35: host typed a102e0 @ 0x0081875c (twentieth type-9 a102e0; fourth pack of the fourth a106e0 seam group; the a102e0_18 resume now emits it). Then resume_817830_type9_a102e0_19 over POST-A102E0 recaptures [eax]/[eax+4]/[esp+0x14] (NO next-host push before the mul read — the first push is the arg lea at 0x00818782, AFTER the recaptures; resume-time slot [esp+0x14] directly, the same no-push shape as v23/v26/v31). Independent pack y=ret_y+0, x=mul_05+ret_x; stores x -> [esp+0x64], y -> [esp+0x6c] (post-push offsets; x stored BEFORE y, same shape as the v31 sixteenth pack with different store offsets). Four lea/push arg pairs 0x0081877e..0x008187a0 feeding the fifth a106e0 seam stay host. Emits the typed AT_TYPE9_A106E0_5_817830 (61) to the fifth a106e0 @ 0x008187a1 (hostArg0 / lroomNextVa = 0x008187a1; starts the fifth seam group)."
+    },
+    {
+      "kind": 61,
+      "name": "atType9A106e05817830",
+      "requiresRecapture": true,
+      "resume": "isaac_game_render_slice_resume_817830_type9_a106e0_5",
+      "note": "v35: host typed a106e0 @ 0x008187a1 (fifth a106e0 seam; starts the FIFTH a106e0 seam group; dest lea [esp+0x120] prepared by the a102e0_19 pack; dest-copy cluster 0x008187a6..0x008187cd plus the read-back store [esp+0x544] stay host). Then resume_817830_type9_a106e0_5 over POST-A106E0 recaptures [esp+0x30] offset_30 (resume-time [esp+0x2c]), [esp+0xc] offset_c (resume-time [esp+8]; the same physical y slot as the a106e0_4 seam) and [esp+0x28] scale_28 (resume-time [esp+0x24]) — all three instruction operands AFTER the next-host push ecx at 0x008187d5 — and the byte-gate: mov byte [esp+0x140],1 then dword read-back -> (1u & 0xff) as uint32_t, NO uint8_t (the Wasm ABI does not narrow and -O2 deletes masks on uint8_t params). Identity x -> [esp+0x50], y -> [esp+0x54], angle -> [esp] (post-push; the resume writes the bits, the host glue places them). Emits the twenty-first a102e0 @ 0x0081880c as kind 30 LROOM_REMAIN (first pack of the fifth seam group; not peeled in this ABI)."
+    }
+  ],
+  "resolvedBoundaries": [
+    {
+      "target": "opaque_call_00409cb0",
+      "targetVa": "0x00409cb0",
+      "state": "pure-complete since render shell pure helpers ABI v25",
+      "resume": "none required"
+    },
+    {
+      "target": "opaque_call_0040c6f0",
+      "targetVa": "0x0040c6f0",
+      "state": "pure-complete since ABI v23"
+    },
+    {
+      "target": "AnimationLayer::GetSourceQuad",
+      "targetVa": "0x004098a0",
+      "state": "pure-complete except the seed==0 assert path"
+    },
+    {
+      "target": "0x00af0917",
+      "targetVa": "0x00af0917",
+      "state": "IAT thunk resolved to CRT floor and translated exactly (ABI v26); the overlay floor math in this slice is pure"
+    },
+    {
+      "target": "opaque_call_00a10d00",
+      "targetVa": "0x00a10d00",
+      "state": "pure-complete since ABI v24; feeds the a1dfd0 bind argument"
+    },
+    {
+      "target": "0x006f9400 (poll A)",
+      "targetVa": "0x006f9400",
+      "state": "pure-complete at helper ABI v31 (gate39 + presence mask); three slice sites, top results discarded"
+    },
+    {
+      "target": "0x006f95a0 (poll B)",
+      "targetVa": "0x006f95a0",
+      "state": "pure-complete at helper ABI v31 (presence mask + 0x46 force + 0x4f OR)"
+    },
+    {
+      "target": "0x0074ea50 (stage overlay probe)",
+      "targetVa": "0x0074ea50",
+      "state": "pure-complete at helper ABI v31; AL derived from sparse presence bytes + per-site manager words + 64-bit bitset limb"
+    },
+    {
+      "target": "0x00812d00 (Vector producer)",
+      "targetVa": "0x00812d00",
+      "state": "pure-complete at helper ABI v31 (body pure since v16; v31 removed the returned-pointer host result)"
+    },
+    {
+      "targetVa": "0x0081784e..0x008178c8",
+      "target": "0x00817830 body entrance peel (v3)",
+      "state": "typed host chain: Game::GetStageID (0x00738470) host event + pure G14..G19 resume gate (slot==0 exit 0x0081def9; stage set {4,5,6,0x1b,0x1c}; [room+0x54]>=0; ([room+0x44]>>5)&1; comiss fade>0). Closed -> 0x66dc-byte body skipped natively to the RT pop chain; open -> the AT_BODY_817830 host still runs 0x00817830..0x0081adf0."
+    },
+    {
+      "target": "FUN_0074efd0 (boost probe A body)",
+      "targetVa": "0x0074efd0",
+      "state": "pure-complete at slice ABI v5 (isaac_game_render_slice_boost_74efd0_al; 0x0074efd0..0x0074f02e, inner 0x00748490 combine pure)"
+    }
+  ],
+  "staleStateCorrections": [
+    {
+      "boundary": "0x00408590",
+      "abi": "helper v26",
+      "defect": "pair-B chosen from a pre-call snapshot; the PE reloads the sprite pointer at VA 0x004085de",
+      "expressedAs": "resume_sprite_pair_a takes sprite_after"
+    },
+    {
+      "boundary": "0x0040c550",
+      "abi": "helper v26",
+      "defect": "[dest+4] folded to the entry zeroing; the PE re-reads it at VA 0x0040c57e",
+      "expressedAs": "resume_shared_ptr takes dest_ctrl_after"
+    },
+    {
+      "boundary": "0x0074f690",
+      "abi": "helper v27",
+      "defect": "one stage snapshot used across the GetRoomByIdx call; the PE reads [this+0] at both VA 0x0074f6ad and VA 0x0074f6f0",
+      "expressedAs": "resume_room_type takes stage_entry AND stage_after"
+    },
+    {
+      "boundary": "0x00740bc0",
+      "abi": "helper v27",
+      "defect": "magic-static guard folded to the entry compare; the PE re-reads DAT_00c8108c at VA 0x00740d50",
+      "expressedAs": "resume_once_init takes guard_after"
+    },
+    {
+      "boundary": "0x0080eead",
+      "abi": "helper v29",
+      "defect": "loop bound and array base folded once; the PE re-derives both per iteration",
+      "expressedAs": "resume_entity takes base_seq and count_seq"
+    },
+    {
+      "boundary": "0x0080ebcc/0x0080ecfe/0x0080edc6",
+      "abi": "slice v1",
+      "defect": "three room-flags reads with host calls between each pair",
+      "expressedAs": "flags_g2 / flags_g10 / flags_g12 parameters on the three resumes"
+    },
+    {
+      "boundary": "0x0080ed55/0x0080ef08",
+      "abi": "slice v1",
+      "defect": "Game+8 read twice across the entity/grid host loops",
+      "expressedAs": "game_mode_ed55 and game_mode_ef08 parameters"
+    },
+    {
+      "boundary": "0x0080f187/0x0080f1b5",
+      "abi": "slice v1",
+      "defect": "one RT-depth read would fold two reads across the restore pair",
+      "expressedAs": "rt_pop_check and rt_pop_final take separately refreshed inputs"
+    },
+    {
+      "boundary": "0x0080f1d5",
+      "abi": "slice v1",
+      "defect": "the epilog flag byte is read after host 0x00825de0 (ecx=Game*)",
+      "expressedAs": "resume_epilog takes flag11f6_after; compare is == 1 EXACTLY"
+    },
+    {
+      "boundary": "0x0080eb3e/0x0080eb43",
+      "abi": "slice v2",
+      "defect": "v1 treated the top polls as host events whose results were consumed; the PE discards BOTH results (eax overwritten at VA 0x0080eb48)",
+      "expressedAs": "top polls removed from the ABI entirely"
+    },
+    {
+      "boundary": "0x0080ef28/0x0080ef3c",
+      "abi": "slice v2",
+      "defect": "v1 split the overlay into probe-host + draw-host with a produced-Vector parameter; both bodies are pure at helper ABI v31",
+      "expressedAs": "resume_overlay_gate computes AL + Vector internally from sparse inputs"
+    },
+    {
+      "boundary": "0x0081785a",
+      "abi": "slice v3",
+      "defect": "the FUN_00817830 entry ran as one opaque mega-host whose first act is Game::GetStageID (0x00738470)",
+      "expressedAs": "typed AT_GET_STAGE_ID_817830 host event + pure resume_817830_gate composing the G14..G19 decision; the common closed-slot path skips the whole 0x66dc body natively"
+    }
+  ],
+  "translatedHelpers": [
+    {
+      "targetVa": "0x00409cb0",
+      "operation": "dest quad whole-body pure compute",
+      "evidence": "render-v24 NOTES"
+    },
+    {
+      "targetVa": "0x006ef590",
+      "operation": "RoomDescriptor 0xb8 layout init",
+      "evidence": "render-v28 NOTES; size cross-confirmed by the GetRoomByIdx stride"
+    },
+    {
+      "targetVa": "0x00708eb0",
+      "operation": "vector<EntitySaveState> grow arithmetic",
+      "evidence": "render-v29 NOTES"
+    },
+    {
+      "targetVa": "0x006f9400",
+      "operation": "poll-A mask: presences 0x38..0x3e with the gate39 stage/mode/difficulty gate",
+      "evidence": "render-v31 NOTES; slice render-slice-v3 NOTES gate table"
+    },
+    {
+      "targetVa": "0x006f95a0",
+      "operation": "poll-B mask: presences 0x3f..0x44 plus 0x46 force 0x7f and 0x4f OR bit6",
+      "evidence": "render-v31 NOTES"
+    },
+    {
+      "targetVa": "0x0074ea50",
+      "operation": "stage-overlay probe AL: this0/this4/flag/difficulty early-false + combined select + 64-bit bitset limb bit test",
+      "evidence": "render-v31 NOTES"
+    },
+    {
+      "targetVa": "0x00812d00",
+      "operation": "Vector producer: room type-chain plan + AABB center/span math (v31 removed the host pointer result)",
+      "evidence": "render-v16 + render-v31 NOTES"
+    },
+    {
+      "targetVa": "0x0081785f",
+      "operation": "slot-offset law imul [Game+0x1d18], 0x13c (export isaac_game_render_slice_817830_slot_offset)",
+      "evidence": "render-advance-5 disasm-817830-head lines 0x0081785f..0x00817869"
+    },
+    {
+      "targetVa": "0x00817869..0x008178c8",
+      "operation": "817830 body-needed gate: slot==0 exit; stage-id special set; room word54 signed>=0; room flags bit5; comiss fade vs +0.0 (NaN closes)",
+      "evidence": "render-advance-5 disasm-817830-head (gates G14..G19)"
+    },
+    {
+      "targetVa": "0x00817b58..0x00817c3d",
+      "operation": "type-9..12 pack after GetLRoomAreaDesc: 12x a10690 unit-quad plan, 6x a0f550/a10c00 pair plan, G22 room/nested, G23 type==9, P22 type-9 cell0 (export isaac_game_render_slice_resume_817830_lroom_pack)",
+      "evidence": "render-slice-v4/disasm-817b58-tail-full.txt + render-advance-7 NOTES (P20/P20b/G26/P21/P22) + render-advance-10 a10690/a0f550/a10c00"
+    },
+    {
+      "targetVa": "0x00817c3d..0x00817ccc",
+      "operation": "type-9 first a10690 host + dest-copy cluster + P23 type9_cell1 (export isaac_game_render_slice_resume_817830_type9_cell1). Next host 0x00817ccc.",
+      "evidence": "cpu-dump/00817c3d.txt (9 E8: 6x a10690 + 3x a102e0, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 54-76 + render-shell type9_cell1"
+    },
+    {
+      "targetVa": "0x00817ccc..0x00817d5c",
+      "operation": "type-9 second a10690 host + dest-copy cluster + independent cell2 pack (export isaac_game_render_slice_resume_817830_type9_cell2). Next host 0x00817d5c.",
+      "evidence": "cpu-dump/00817ccc.txt (83 insn, 0 resync, 4 E8 all 0x00a10690, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 76-99"
+    },
+    {
+      "targetVa": "0x00817d5c..0x00817de0",
+      "operation": "type-9 third a10690 host + dest-copy cluster + independent cell3 pack (export isaac_game_render_slice_resume_817830_type9_cell3). Next host 0x00817de0.",
+      "evidence": "cpu-dump/00817d5c.txt (62 insn, 0 resync, 3 E8 all 0x00a10690, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 99-119"
+    },
+    {
+      "targetVa": "0x00817de0..0x00817e78",
+      "operation": "type-9 fourth a10690 host + dest-copy cluster + independent cell4 pack (export isaac_game_render_slice_resume_817830_type9_cell4). Next host 0x00817e78.",
+      "evidence": "cpu-dump/00817de0.txt (64 insn, 3 resync, 3 E8 all 0x00a10690, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 119-144"
+    },
+    {
+      "targetVa": "0x00817e78..0x00817f06",
+      "operation": "type-9 fifth a10690 host + dest-copy cluster + independent cell5 pack (export isaac_game_render_slice_resume_817830_type9_cell5). Next host 0x00817f06.",
+      "evidence": "cpu-dump/00817e78.txt (198 insn, 0 resync, 12 E8: a10690x2 / a102e0x8 / a106e0x2, no ret)"
+    },
+    {
+      "targetVa": "0x00817f06..0x00817f74",
+      "operation": "type-9 sixth a10690 host + dest-copy cluster + independent cell6 pack (export isaac_game_render_slice_resume_817830_type9_cell6). Next host 0x00817f74.",
+      "evidence": "cpu-dump/00817f06.txt (72 insn, 0 resync, 5 E8: a10690x1 / a102e0x4, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 169-187"
+    },
+    {
+      "targetVa": "0x00817f74..0x00817fcd",
+      "operation": "type-9 first a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_0). Next host 0x00817fcd.",
+      "evidence": "cpu-dump/00817f74.txt (77 insn, 1 resync, 5 E8: a102e0x4 / a106e0x1, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 187-204"
+    },
+    {
+      "targetVa": "0x00817fcd..0x00818023",
+      "operation": "type-9 second a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_1). Next host 0x00818023.",
+      "evidence": "cpu-dump/00817fcd.txt (76 insn, 4 resync, 5 E8: a102e0x4 / a106e0x1, no ret) + render-slice-v4/disasm-817b58-tail-full.txt"
+    },
+    {
+      "targetVa": "0x00818023..0x00818072",
+      "operation": "type-9 third a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_2). Next host 0x00818072.",
+      "evidence": "cpu-dump/00818023.txt (51 insn, 1 resync, 3 E8: a102e0x2 / a106e0x1, no ret)"
+    },
+    {
+      "targetVa": "0x00818072..0x008180b4",
+      "operation": "type-9 fourth a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_3). Dest-copy of later a106e0 stays host. Next host typed a106e0 at 0x008180b4.",
+      "evidence": "cpu-dump/00818072.txt (50 insn, 0 resync, 3 E8: a102e0x2 / a106e0x1, no ret) + render-slice-v4/disasm-817b58-tail-full.txt lines 237-254"
+    },
+    {
+      "targetVa": "0x008180b4..0x00818122",
+      "operation": "type-9 first a106e0 host + independent identity pack (export isaac_game_render_slice_resume_817830_type9_a106e0). Dest-copy 0x008180b9..0x008180f3 stays host. Next host typed a102e0 at 0x00818122.",
+      "evidence": "cpu-dump/008180b4.txt + render-slice-v4/disasm-817b58-tail-full.txt"
+    },
+    {
+      "targetVa": "0x00818122..0x0081817c",
+      "operation": "type-9 fifth a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_4). Dest-copy 0x008180b9..0x008180f3 stays host. Next host typed a102e0 at 0x0081817c.",
+      "evidence": "cpu-dump/00818122.txt (76 insn, 2 resync, 5 E8: a102e0x4 / a106e0x1, no ret)"
+    },
+    {
+      "targetVa": "0x0081817c..0x008181d2",
+      "operation": "type-9 sixth a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_5). Dest-copy 0x008180b9..0x008180f3 stays host. Host a106e0 stays host. Do not reopen 0x00818122. Next host 0x008181d2 (peeled since v20).",
+      "evidence": "cpu-dump/0081817c.txt + render-slice-v19/0081817c.txt (section table). identify-zhl 0x00a102e0 / 0x0081817c / recovered callees all exactMatches []."
+    },
+    {
+      "targetVa": "0x008181d2..0x00818228",
+      "operation": "type-9 seventh a102e0 host + independent pack (export isaac_game_render_slice_resume_817830_type9_a102e0_6). Dest-copy 0x008180b9..0x008180f3 stays host. Host a106e0 stays host. Do not reopen 0x00818122 or 0x0081817c. Next remain 0x00818228.",
+      "evidence": "cpu-dump/008181d2.txt + render-slice-v20/008181d2.txt (section table). identify-zhl 0x00a102e0 / 0x008181d2 / 0x00818228 all exactMatches []."
+    }
+  ],
+  "byteWidthDiscipline": "All slice boundary parameters that model x86 byte tests are uint32_t with explicit in-body masks (the Wasm ABI does not narrow i32 arguments and -O2 deletes masks on uint8_t parameters). The underlying render-shell helper family was audited under the same rule: 95 uint8_t scalar parameters widened; direct probe on the previously shipped module confirmed 22 of 39 byte-param exports divergent (25 function,param axes) before the fix and 0 after."
+}

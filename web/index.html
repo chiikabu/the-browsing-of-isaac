@@ -10,8 +10,9 @@
   <header>
     <h1>Isaac Repentance+ — Browser WASM Host</h1>
     <p class="sub">
-      Mount your legitimate Steam install (executable + <code>resources/</code>).
-      Nothing is redistributed — files stay on your device (MEMFS / OPFS).
+      Auto-mounts the local game instance. Title menu opens on boot.
+      Keys: Esc toggle · arrows select · Enter submit.
+      Hybrid port — not a full in-run Isaac yet.
     </p>
   </header>
 
@@ -39,10 +40,11 @@
       <h2>Notes</h2>
       <ul class="notes">
         <li>Expected: <code>isaac-ng.exe</code> + <code>resources/packed/*.a</code></li>
-        <li>Platform path: <strong>B</strong> (x86 PE under emulator host) + browser shims</li>
+        <li>Auto-mount: the page loads the fresh instance saved locally (<code>game-instance/isaac-phase6-full.zip</code>) automatically — no mounting, no picker needed</li>
+        <li>Keys: <code>Esc</code> menu · arrows select · <code>Enter</code> submit. Menu lane is the playable hybrid surface today.</li>
+        <li>Simulation tick: <strong>native-wasm</strong> Game::Update slice when available (<code>/@decomp/wasm/</code>); residual hosts never re-enter PE</li>
         <li>Saves map to virtual <code>/saves</code> (Documents/My Games/…)</li>
         <li>Own a legal copy — this page only mounts files you provide</li>
-        <li><a href="emu/index.html">Open Path B emulator page</a> (Boxedwine WASM; needs Wine <code>boxedwine.zip</code>)</li>
       </ul>
     </aside>
   </main>

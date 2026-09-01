@@ -60,7 +60,7 @@ Full patterns: `third_party/REPENTOGON/libzhl/functions/LuaEngine.zhl`, `Game.zh
 | Desktop assumption | Browser proxy |
 |--------------------|---------------|
 | HWND / WGL context | Emscripten canvas + WebGL2 (`isaac_init` / `isaac_set_canvas_size`) |
-| OpenAL device | (host stub; OpenAL-soft emscripten planned with Boxedwine path) |
+| OpenAL device | (host stub; OpenAL-soft emscripten still to be ported) |
 | `CreateFile` / CRT `fopen` on install path | MEMFS `/isaac/...` + OPFS backing via mount UI |
 | Documents saves | Virtual `/saves` (`platform/path.js` rewrite) |
 | Message pump + rAF | JS `createFrameLoop` → `isaac_tick` |
@@ -69,7 +69,7 @@ Full patterns: `third_party/REPENTOGON/libzhl/functions/LuaEngine.zhl`, `Game.zh
 
 ## Threading
 
-Binary uses threads. Host currently **single-threaded** (Chromebook-friendly, no COOP/COEP required). Boxedwine multi-threaded WASM build needs COOP/COEP (`npm run serve` with `COOP_COEP=1`).
+Binary uses threads. Host currently **single-threaded**, so this build does not require COOP/COEP; no physical Chromebook validation has been performed. `npm run serve` still accepts `COOP_COEP=1` for a future pthreads build. (The removed Path B / BoxedWine multi-threaded WASM build was the original reason that switch exists.)
 
 ## Build flags
 

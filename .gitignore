@@ -1,8 +1,9 @@
 # Dependencies, caches, and local state
 /node_modules/
 /.scratch/
+/.snapshots/
+/.restore-snap/
 /re/ghidra_project/
-/third_party/Boxedwine/project/emscripten/Build/
 **/__pycache__/
 *.py[cod]
 *.log
@@ -10,20 +11,35 @@
 .DS_Store
 Thumbs.db
 
+# Session scratch — keep the repo root clean; use output/decomp/_scratch/
+/_*
+/.tmp*
+/tmp_*
+/*.bak*
+/*.tmp
+/$null
+/2
+/UsersLuca*
+/section-notes/
+/cpu-dump/
+/*.pid
+/scan.out
+decomp/*.tmp
+scripts/decomp/_*
+scripts/decomp/*.bak*
+scripts/decomp/*.mutbak
+
 # Proprietary/local game inputs and generated packages
 /extracted_resources/
 /extracted_work/
 /tools/
 /output/
-/output/*standalone*.html
-/web/emu/*.zip*
+# Local game instance archive auto-mounted by scripts/serve.mjs
+/game-instance/
 
 # Generated runtime/build products (source-only repository)
 /web/isaac-host.js
 /web/isaac-host.wasm
-/web/emu/boxedwine.js*
-/web/emu/boxedwine.wasm*
-/web/emu/*.dll
 /native/**/*.dll
 
 # Direct game-binary-derived inventories
@@ -31,10 +47,17 @@ Thumbs.db
 /docs/pe-imports.json
 /docs/phase1-binary-recovery.json
 
-# Local legacy probes and upstream page copies outside the curated source snapshot
+# Local legacy probes outside the curated source snapshot
 /scripts/_*.py
 /scripts/run-*.mjs
-!/scripts/run-wgl-menu.mjs
-/web/emu/boxedwine.html
-/web/emu/boxedwine.css
 /docs/phase0-baseline.md
+/_*.exe
+
+# optional local Isaac Steam install path for the dev server auto-mount
+/.game-root
+
+# Local Claude Code permissions (machine-specific)
+.claude/settings.local.json
+native/decomp/*.bak*
+native/decomp/*.tmp
+native/decomp/*.new

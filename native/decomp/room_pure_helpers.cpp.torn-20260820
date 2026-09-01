@@ -1,0 +1,1395 @@
+#include "room_pure_helpers.h"
+
+#include <stddef.h>
+
+static_assert(sizeof(IsaacRoomCameraFxState) == 32, "camera FX ABI changed");
+static_assert(sizeof(IsaacRoomClearDelayState) == 28, "clear-delay ABI changed");
+static_assert(sizeof(IsaacRoomWaterLavaState) == 20, "water/lava ABI changed");
+static_assert(offsetof(IsaacRoomWaterLavaState, room_desc_flags_44) == 16, "water/lava ABI changed");
+static_assert(sizeof(IsaacRoomTriggerClearEntry) == 8, "TriggerClear entry ABI changed");
+static_assert(offsetof(IsaacRoomTriggerClearEntry, room_desc_clear_count_4a) == 4,
+              "TriggerClear entry ABI changed");
+static_assert(sizeof(IsaacRoomAmbient824800State) == 12, "ambient 824800 ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824800State, intensity_7458) == 4,
+              "ambient 824800 ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824800State, flag_745c) == 8,
+              "ambient 824800 ABI changed");
+static_assert(sizeof(IsaacRoomB1Corners) == 16, "B1 corners ABI changed");
+static_assert(offsetof(IsaacRoomB1Corners, c3) == 12, "B1 corners ABI changed");
+static_assert(sizeof(IsaacRoomB1CornerWorld) == 8, "B1 corner world ABI changed");
+static_assert(offsetof(IsaacRoomB1CornerWorld, y) == 4, "B1 corner world ABI changed");
+/* IsaacRoomB1ResidualPlan: 11×int32/uint32 + 3×float = 56 bytes, sfx_pan @52. */
+static_assert(sizeof(IsaacRoomB1ResidualPlan) == 56, "B1 residual plan ABI changed");
+static_assert(offsetof(IsaacRoomB1ResidualPlan, sfx_pan) == 52,
+              "B1 residual plan ABI changed");
+/* IsaacRoomB1SpawnIterPlan: 10×i32/u32 + 3×f32 + 2×i32 = 60 bytes, continue @56. */
+static_assert(sizeof(IsaacRoomB1SpawnIterPlan) == 60, "B1 spawn iter plan ABI changed");
+static_assert(offsetof(IsaacRoomB1SpawnIterPlan, continue_loop) == 56,
+              "B1 spawn iter plan ABI changed");
+static_assert(offsetof(IsaacRoomB1SpawnIterPlan, world_x) == 40,
+              "B1 spawn iter plan ABI changed");
+static_assert(sizeof(IsaacRoomAmbient824a70BodyBounds) == 28,
+              "824a70 body bounds ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70BodyBounds, loop_count) == 24,
+              "824a70 body bounds ABI changed");
+static_assert(sizeof(IsaacRoomAmbient824a70Color) == 12, "824a70 color ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70Color, b) == 8, "824a70 color ABI changed");
+/* IsaacRoomAmbient824a70ResidualPlan: 6×int32 = 24 bytes, age @20. */
+static_assert(sizeof(IsaacRoomAmbient824a70ResidualPlan) == 24,
+              "824a70 residual plan ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70ResidualPlan, age) == 20,
+              "824a70 residual plan ABI changed");
+/* IsaacRoomAmbient824a70AnimFramePosts: i32 + u32 + f32 = 12 bytes. */
+static_assert(sizeof(IsaacRoomAmbient824a70AnimFramePosts) == 12,
+              "824a70 anim frame posts ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70AnimFramePosts, frame_f32) == 8,
+              "824a70 anim frame posts ABI changed");
+/* IsaacRoomAmbient824a70LayerColorPads: 3×u32 = 12 bytes. */
+static_assert(sizeof(IsaacRoomAmbient824a70LayerColorPads) == 12,
+              "824a70 layer color pads ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70LayerColorPads, dword) == 8,
+              "824a70 layer color pads ABI changed");
+/* IsaacRoomAmbient824a70LayerColorPlan: 13×4 = 52 bytes, pad_dword_off @48. */
+static_assert(sizeof(IsaacRoomAmbient824a70LayerColorPlan) == 52,
+              "824a70 layer color plan ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70LayerColorPlan, pad_dword_off) == 48,
+              "824a70 layer color plan ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70LayerColorPlan, color_off) == 36,
+              "824a70 layer color plan ABI changed");
+/* IsaacRoomAmbient824a70CreateArgsPlan: 7×u32 = 28 bytes, game_ptr_global @24. */
+static_assert(sizeof(IsaacRoomAmbient824a70CreateArgsPlan) == 28,
+              "824a70 create args plan ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70CreateArgsPlan, game_ptr_global) == 24,
+              "824a70 create args plan ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70CreateArgsPlan, seed) == 16,
+              "824a70 create args plan ABI changed");
+/* IsaacRoomAmbient824a70CreateHostGates: 18×4 = 72 bytes, host_v0 @68. */
+static_assert(sizeof(IsaacRoomAmbient824a70CreateHostGates) == 72,
+              "824a70 create host gates ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70CreateHostGates, host_v0) == 68,
+              "824a70 create host gates ABI changed");
+static_assert(offsetof(IsaacRoomAmbient824a70CreateHostGates, a2_clear_needed) == 8,
+              "824a70 create host gates ABI changed");
+
+/* Dual camera/FX float lerp recovered from FrameOpaque_802980 (VA 0x00802980) block B14:
+   if (Room+0x70d8 < Room+0x70dc) { ++counter; value += step; }
+   if (Room+0x70f4 < Room+0x70f8) { value += step; ++counter; }
+   Complete pure block: no callees, no globals. */
+extern "C" void isaac_room_camera_fx_lerp_step(IsaacRoomCameraFxState* state) {
+  if (state == nullptr) return;
+  if (state->counter_70d8 < state->limit_70dc) {
+    state->counter_70d8 += 1;
+    state->value_70cc = state->value_70cc + state->step_70d4;
+  }
+  if (state->counter_70f4 < state->limit_70f8) {
+    state->value_70e8 = state->value_70e8 + state->step_70f0;
+    state->counter_70f4 += 1;
+  }
+}
+
+/* Clear-delay pure shell recovered from FrameOpaque_802980 block B12 arithmetic:
+   alive = max(0, a + b)
+   if enemies or greed wave timer: set delay to 10 (or 20 for boss subtype 3)
+   else if delay > 0: decrement
+   Host clear/transition side effects remain outside this helper. */
+extern "C" void isaac_room_clear_delay_step(IsaacRoomClearDelayState* state) {
+  if (state == nullptr) return;
+  int32_t alive = state->alive_a + state->alive_b;
+  if (alive < 0) alive = 0;
+  const int32_t enemies = (int32_t)(state->enemies_present != 0);
+  if (enemies != 0 || state->greed_wave_timer != 0) {
+    int32_t delay = 10;
+    if (state->room_type == 0x10 && state->room_subtype == 3) {
+      delay = 20;
+    }
+    state->room_clear_delay = delay;
+  } else if (state->room_clear_delay > 0) {
+    state->room_clear_delay -= 1;
+  }
+}
+
+/* B0 pure write recovered from FrameOpaque_802980 entry:
+   mov byte ptr [edi+0x7220], 0  (exact machine at VA ~0x008029d0). */
+extern "C" void isaac_room_entry_clear_7220(uint8_t* field_7220) {
+  if (field_7220 == nullptr) return;
+  *field_7220 = 0;
+}
+
+/* B6 _waterLerpColorCountdown and B17 Room+0x722c pure countdown:
+   if (0 < *counter) *counter = *counter + -1; signed int32. */
+extern "C" void isaac_room_countdown_dec_if_positive(int32_t* counter) {
+  if (counter == nullptr) return;
+  if (*counter > 0) {
+    *counter -= 1;
+  }
+}
+
+/* B2 collectible timer pure countdown (VA ~0x00803318 after host special case):
+   if (-1 < *counter) *counter = *counter + -1;  // i.e. >= 0 then --
+   Zero becomes -1. Host pool/spawn and empty-weight set-to-60 stay residual. */
+extern "C" void isaac_room_countdown_dec_if_nonnegative(int32_t* counter) {
+  if (counter == nullptr) return;
+  if (*counter >= 0) {
+    *counter -= 1;
+  }
+}
+
+/* Mid-tail Room+0x706c pure countdown (VA ~0x00804xxx after FUN_00801ee0/800500):
+   if (0 < *counter) {
+     iVar = *counter + -1;
+     *counter = iVar;
+     if (iVar < 1) *counter = -1;   // byte-wise writes of 0xffffffff
+   }
+   Host FUN_008158a0 on the expire path stays residual. */
+extern "C" void isaac_room_countdown_dec_expire_neg1(int32_t* counter) {
+  if (counter == nullptr) return;
+  if (*counter > 0) {
+    const int32_t next = *counter - 1;
+    *counter = next < 1 ? -1 : next;
+  }
+}
+
+/* B10 boss deathspawn bookkeeping pure assign (VA ~0x00803e70):
+   sum = Room+0x12c8 + Room+0x12cc  (signed int32 wrap)
+   Room+0x7224 = (0 < sum) ? sum : 0   // max(0, sum)
+   Pre-assign fatal when (sum < 1 && old 7224 > 0) remains host residual. */
+extern "C" void isaac_room_boss_count_snapshot(int32_t* out_7224, int32_t count_12c8,
+                                               int32_t count_12cc) {
+  if (out_7224 == nullptr) return;
+  const int32_t sum = count_12c8 + count_12cc;
+  *out_7224 = sum > 0 ? sum : 0;
+}
+
+/* B16 pure float shell (VA ~0x008050d0 after rain block):
+   if (challenge_0x123 && room_type != 0x10) {
+     water += DAT_00baa120 (0.1f);
+     // pure: band DAT_00baa3d8 < water < DAT_00baa3e8 → desc|0x100
+     // host residual: (flags>>5)&1 type-7 grid walk after pure |0x100
+     if (DAT_00baa454 < water) water = 1.0f;
+   }
+   if (0.0f < water && 0.0f < lava) {
+     lava *= DAT_00baa3f4 (0.92f);
+     // host: band old/new vs DAT_00baa198 → grid + FUN_00714610
+     if (lava < DAT_00baa020 (0.001f)) lava = 0.0f;
+     // host: FUN_00823540
+   }
+   PE bits verified from hash-bound exe: 0x3dcccccd / 0x3f800000 / 0x3f6b851f /
+   0x3a83126f / 0x3f63d70a / 0x3f68f5c3. */
+extern "C" void isaac_room_water_lava_float_step(IsaacRoomWaterLavaState* state) {
+  if (state == nullptr) return;
+  /* Exact PE float32 bit patterns (not decimal approximations). */
+  const float water_step = __builtin_bit_cast(float, 0x3dcccccdu);     /* DAT_00baa120 */
+  const float water_ceiling = __builtin_bit_cast(float, 0x3f800000u);  /* DAT_00baa454 */
+  const float lava_decay = __builtin_bit_cast(float, 0x3f6b851fu);     /* DAT_00baa3f4 */
+  const float lava_zero = __builtin_bit_cast(float, 0x3a83126fu);      /* DAT_00baa020 */
+  const float water_band_lo = __builtin_bit_cast(float, 0x3f63d70au);  /* DAT_00baa3d8 */
+  const float water_band_hi = __builtin_bit_cast(float, 0x3f68f5c3u);  /* DAT_00baa3e8 */
+  const float zero = 0.0f;
+
+  if (state->challenge_0x123 != 0 && state->room_type_8 != 0x10) {
+    float water = state->water_amount_7240 + water_step;
+    /* Band test uses post-add, pre-clamp water (exact PE order). */
+    if (water_band_lo < water && water < water_band_hi) {
+      state->room_desc_flags_44 |= 0x100u;
+    }
+    if (water_ceiling < water) {
+      water = water_ceiling;
+    }
+    state->water_amount_7240 = water;
+  }
+
+  if (zero < state->water_amount_7240 && zero < state->lava_intensity_7740) {
+    float lava = state->lava_intensity_7740 * lava_decay;
+    if (lava < lava_zero) {
+      lava = zero;
+    }
+    state->lava_intensity_7740 = lava;
+  }
+}
+
+/* Room::TriggerClear pure entry (VA 0x008068f0 machine):
+   or dword ptr [desc+0x44], 1
+   inc word ptr [desc+0x4a]
+   Exact ZHL: Room::TriggerClear(bool playSound); RoomDescriptor::Flags /
+   ClearCount. Host residual room_trigger_clear starts at first call
+   FUN_009e5960 (must not re-run this entry). Wired from clear-path when
+   (flags & 9) == 0. */
+extern "C" void isaac_room_trigger_clear_entry(IsaacRoomTriggerClearEntry* state) {
+  if (state == nullptr) return;
+  state->room_desc_flags_44 |= 1u;
+  /* Exact machine: inc word ptr [desc+0x4a] (unsigned 16-bit wrap). */
+  state->room_desc_clear_count_4a =
+      (int16_t)(uint16_t)((uint16_t)state->room_desc_clear_count_4a + 1u);
+}
+
+/* FUN_00710dd0 pure early-out prologue (machine at VA 0x00710dd0):
+   if ((field_3a0 & 0x10) && field_8 != 8) return 1;
+   if ((field_3a0 & 0x20) && field_8 == 4) return 1;
+   if (field_c == 2) return 1;
+   if (field_8 == 7) return 1;
+   return 0;  // fall through to host residual body
+   No callees; complete pure gate. */
+extern "C" uint32_t isaac_door_helper_710dd0_early_out(uint32_t field_3a0, int32_t field_8,
+                                                      int32_t field_c) {
+  if ((field_3a0 & 0x10u) != 0u && field_8 != 8) return 1u;
+  if ((field_3a0 & 0x20u) != 0u && field_8 == 4) return 1u;
+  if (field_c == 2) return 1u;
+  if (field_8 == 7) return 1u;
+  return 0u;
+}
+
+extern "C" int32_t isaac_door_slots_710dd0_any_needs_host(
+    const IsaacDoorSlotFields* slots) {
+  if (slots == nullptr) return 0;
+  for (int i = 0; i < ISAAC_ROOM_DOOR_SLOT_COUNT; ++i) {
+    if (slots[i].present == 0u) continue;
+    if (isaac_door_helper_710dd0_early_out(slots[i].field_3a0, slots[i].field_8,
+                                           slots[i].field_c) == 0u) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+extern "C" int32_t isaac_door_slots_710dd0_any_type5_needs_host(
+    const IsaacDoorSlotFields* slots) {
+  if (slots == nullptr) return 0;
+  for (int i = 0; i < ISAAC_ROOM_DOOR_SLOT_COUNT; ++i) {
+    if (slots[i].present == 0u) continue;
+    if (slots[i].field_c != 5) continue;
+    if (isaac_door_helper_710dd0_early_out(slots[i].field_3a0, slots[i].field_8,
+                                           slots[i].field_c) == 0u) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* B16 residual gates. PE DAT_00baa120 / band / DAT_00baa198 from hash-bound exe. */
+extern "C" int32_t isaac_room_b16_needs_type7_grid(uint32_t challenge_0x123,
+                                                   int32_t room_type_8, float water_pre,
+                                                   uint32_t room_desc_flags_44_post) {
+  if (challenge_0x123 == 0u || room_type_8 == 0x10) return 0;
+  const float water_step = __builtin_bit_cast(float, 0x3dcccccdu);    /* DAT_00baa120 */
+  const float water_band_lo = __builtin_bit_cast(float, 0x3f63d70au); /* DAT_00baa3d8 */
+  const float water_band_hi = __builtin_bit_cast(float, 0x3f68f5c3u); /* DAT_00baa3e8 */
+  const float water_post_add = water_pre + water_step;
+  /* Type-7 grid only inside pure |0x100 band block, then (flags>>5)&1. */
+  if (!(water_band_lo < water_post_add && water_post_add < water_band_hi)) return 0;
+  return ((room_desc_flags_44_post >> 5) & 1u) != 0u ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b16_needs_lava_band_grid(float lava_pre, float lava_post_mul) {
+  const float lava_band = __builtin_bit_cast(float, 0x3e4ccccdu); /* DAT_00baa198 = 0.2f */
+  const float zero = 0.0f;
+  if (!(zero < lava_pre)) return 0;
+  return (lava_post_mul < lava_band && !(lava_pre < lava_band)) ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b16_needs_823540(float water_post_step, float lava_pre) {
+  const float zero = 0.0f;
+  return (zero < water_post_step && zero < lava_pre) ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b16_needs_grid_host(uint32_t challenge_0x123,
+                                                  int32_t room_type_8, float water_pre,
+                                                  float lava_pre,
+                                                  uint32_t room_desc_flags_44_post) {
+  /* Recompute post-step water the same way as the pure float shell (no clamp
+     needed for the lava-block outer gate beyond the pure helper's path). */
+  const float water_step = __builtin_bit_cast(float, 0x3dcccccdu);
+  const float water_ceiling = __builtin_bit_cast(float, 0x3f800000u);
+  float water_post = water_pre;
+  if (challenge_0x123 != 0u && room_type_8 != 0x10) {
+    water_post = water_pre + water_step;
+    if (water_ceiling < water_post) water_post = water_ceiling;
+  }
+  if (isaac_room_b16_needs_type7_grid(challenge_0x123, room_type_8, water_pre,
+                                      room_desc_flags_44_post) != 0) {
+    return 1;
+  }
+  /* Lava block owns band grid + FUN_00823540; band is nested inside it. */
+  return isaac_room_b16_needs_823540(water_post, lava_pre);
+}
+
+/* FUN_0074efd0 room-callsite gate (machine VA 0x0074efd0..0x0074f02e, this=Game
+   at the 0x8233c7 grid site). Returns the AL byte 0/1. Every PE branch pinned:
+   - 0x74efdf/0x74efe4: difficulty 2/3 -> AL=0
+   - 0x74efeb lea eax,[stage-1]; 0x74efee cmp eax,5; 0x74eff1 ja skip: UNSIGNED
+     (u32)(stage-1) > 5 skips the flag test (stage 1..6 gets tested)
+   - 0x74eff3/0x74effb: [Game+0x2654c] & 0x10000 -> AL=0
+   - 0x74f005..0x74f010: stage_type not 4/5 -> AL=0
+   - 0x74f012: stage == 4 -> AL=1; 0x74f017: stage != 3 -> AL=0
+   - 0x74f01e call 0x748490 (poll combine); 0x74f023 test al,2 -> bit1 decides.
+   The 0x748490 combine result is a TYPED-HOST input (0x6f9400/0x6f95a0 walk the
+   action map via host residuals 0x4288a0). */
+extern "C" uint32_t isaac_room_b16_mineshaft_gate(uint32_t difficulty_269c8,
+                                                  uint32_t stage_0,
+                                                  uint32_t stage_type_4,
+                                                  uint32_t flags_2654c,
+                                                  uint32_t poll_combine_byte) {
+  if (difficulty_269c8 == 2u || difficulty_269c8 == 3u) return 0u;
+  if (stage_0 - 1u <= 5u) {
+    if ((flags_2654c & 0x10000u) != 0u) return 0u;
+  }
+  if (stage_type_4 != 4u && stage_type_4 != 5u) return 0u;
+  if (stage_0 == 4u) return 1u;
+  if (stage_0 != 3u) return 0u;
+  return (poll_combine_byte & 0x2u) != 0u ? 1u : 0u;
+}
+
+/* FUN_00823370 grid math (machine VA 0x00823370..0x00823536, this=Room, arg =
+   out[6 floats]). Pure over captured fields; the 0x74efd0 gate result +
+   Game+0x1830c are passed in as typed inputs. PE float32 constants extracted
+   from the hash-bound exe: 1.0f / 0.75f / 0.03f / 0.4f / 0.45f / 0.2f. */
+extern "C" void isaac_room_b16_grid_step(float* out, const float* in,
+                                         int32_t room_type_8,
+                                         uint32_t desc_flags_44,
+                                         int32_t desc_54,
+                                         uint32_t room_1d18,
+                                         int32_t grid_w_c,
+                                         int32_t grid_h_10,
+                                         float lava_7740,
+                                         uint32_t mineshaft_al,
+                                         int32_t transition_1830c) {
+  if (out == nullptr || in == nullptr) return;
+  /* Copy 6 floats (Room+0x1b10..0x1b28; +0x1b20 skipped by the PE). */
+  for (int i = 0; i < 6; ++i) out[i] = in[i];
+  const float lerp_target = __builtin_bit_cast(float, 0x3f800000u); /* 1.0f */
+  const float lerp_factor = __builtin_bit_cast(float, 0x3f400000u); /* 0.75f */
+  const float zero = 0.0f;
+  const int32_t gate_open =
+      room_type_8 == 7 || room_type_8 == 8 || room_type_8 == 0x1d ||
+      (mineshaft_al != 0u && transition_1830c == 1);
+  if (gate_open != 0) {
+    /* 0x8233f9..0x82346f: out[i] = out[i] + (A - out[i]) * B, per-element f32. */
+    for (int i = 0; i < 4; ++i) {
+      const float d0 = lerp_target - out[i];
+      const float m0 = d0 * lerp_factor;
+      out[i] = m0 + out[i];
+    }
+    const float d4 = zero - out[4]; /* xorps 0.0: (0 - out[4]) * B + out[4] */
+    const float m4 = d4 * lerp_factor;
+    out[4] = m4 + out[4];
+    const float d5 = lerp_target - out[5];
+    const float m5 = d5 * lerp_factor;
+    out[5] = m5 + out[5];
+  }
+  /* 0x82347c shr eax,9 / test al,1: bit 9 of desc_flags_44 -> out[4] += 0.03f. */
+  if (((desc_flags_44 >> 9) & 1u) != 0u) {
+    out[4] = out[4] + __builtin_bit_cast(float, 0x3cf5c28fu); /* 0.03f */
+  }
+  /* 0x823495..0x8234a8: room_1d18 == 0x20 && bit 5 of desc_flags_44. */
+  if (room_1d18 == 0x20u && ((desc_flags_44 >> 5) & 1u) != 0u) {
+    /* 0x8234ae: prod = (h-2)*(w-2) INT32 wrap (w=Room+0xc, h=Room+0x10). */
+    const int32_t prod = (grid_h_10 - 2) * (grid_w_c - 2);
+    /* 0x8234c2 divss float(desc+0x54) / float(prod); 0x8234d4 * lava. */
+    const float v = (static_cast<float>(desc_54) / static_cast<float>(prod)) *
+                    lava_7740;
+    out[0] = out[0] - v;
+    const float vc2 = v * __builtin_bit_cast(float, 0x3ecccccdU); /* 0.4f */
+    out[1] = out[1] + vc2;
+    out[2] = out[2] + vc2;
+    const float vc3 = v * __builtin_bit_cast(float, 0x3ee66666u); /* 0.45f */
+    out[3] = out[3] - vc3;
+    const float vc4 = v * __builtin_bit_cast(float, 0x3e4ccccdu); /* 0.2f */
+    out[5] = out[5] + vc4;
+  }
+}
+
+/* FUN_00823540 wrapper al gate (machine VA 0x00823557..0x0082356d): the wrapper
+   calls FUN_007067c0 with al = (byte[Game+0x183a0]==0 && byte[Game+0x269e9]==0).
+   Both bytes are typed params (host-captured). */
+extern "C" uint32_t isaac_room_b16_spray_gate_al(uint32_t byte_183a0,
+                                                 uint32_t byte_269e9) {
+  return ((byte_183a0 & 0xffu) == 0u && (byte_269e9 & 0xffu) == 0u) ? 1u : 0u;
+}
+
+/* FUN_007067c0 water-spray vector state math (machine VA 0x007067c0..0x007068be,
+   no callees). Pure over caller-owned arrays; the Game+0x676xx access is the
+   caller's. Returns the gate byte the PE stores at Game+0x676b4.
+   - inactive (low byte of `active` == 0): prev[0..3] = cur[0..3] (16-byte copy;
+     prev[4..5] untouched, gate byte NOT written), returns 0.
+   - active: vel_out[i] = |cur[i] - prev[i]| * factor (f32, andps 0x7fffffff abs),
+     returns 1. */
+extern "C" uint32_t isaac_room_b16_spray_step(float* prev, const float* cur,
+                                              float factor, uint32_t active,
+                                              float* vel_out) {
+  if (prev == nullptr || cur == nullptr || vel_out == nullptr) return 0u;
+  if ((active & 0xffu) == 0u) {
+    prev[0] = cur[0];
+    prev[1] = cur[1];
+    prev[2] = cur[2];
+    prev[3] = cur[3];
+    return 0u;
+  }
+  for (int i = 0; i < 6; ++i) {
+    const float d = cur[i] - prev[i];
+    const uint32_t abs_bits = __builtin_bit_cast(uint32_t, d) & 0x7fffffffu;
+    const float abs_d = __builtin_bit_cast(float, abs_bits);
+    vel_out[i] = abs_d * factor;
+  }
+  return 1u;
+}
+
+/* FUN_0070ee40 pure early-out (machine at VA 0x0070ee40):
+   cmp byte [door+0x149], 0; je epilog
+   Returns 1 to skip residual body, 0 to continue (entry clear + ANM2/host). */
+extern "C" uint32_t isaac_door_helper_70ee40_early_out(uint32_t field_149_byte) {
+  return (field_149_byte & 0xffu) == 0u ? 1u : 0u;
+}
+
+/* Room::TriggerClear residual pure gates (VA 0x008068f0 after entry).
+   PE: if ((Game[0x9a72] != 2) && (Game[0x9a72] != 3)) non-greed path;
+       if ((flags >> 7 & 1) == 0) awards bit7 walk. */
+extern "C" int32_t isaac_room_trigger_clear_is_greed_mode(int32_t difficulty_269c8) {
+  return (difficulty_269c8 == 2 || difficulty_269c8 == 3) ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_trigger_clear_needs_non_greed_host(
+    int32_t difficulty_269c8) {
+  return isaac_room_trigger_clear_is_greed_mode(difficulty_269c8) == 0 ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_trigger_clear_needs_awards_bit7_walk(
+    uint32_t room_desc_flags_44) {
+  return ((room_desc_flags_44 >> 7) & 1u) == 0u ? 1 : 0;
+}
+
+/* Mid-tail Room+0x706c: FUN_008158a0 only when pre>0 and post-dec < 1. */
+extern "C" int32_t isaac_room_706c_needs_expire_host(int32_t pre_timer_706c) {
+  if (!(pre_timer_706c > 0)) return 0;
+  const int32_t next = pre_timer_706c - 1;
+  return next < 1 ? 1 : 0;
+}
+
+/* Mid-tail Room+0x7230: spawn residual when pre>0 and pre % 5 == 0 (signed). */
+extern "C" int32_t isaac_room_7230_needs_spawn_host(int32_t pre_timer_7230) {
+  if (!(pre_timer_7230 > 0)) return 0;
+  return (pre_timer_7230 % 5) == 0 ? 1 : 0;
+}
+
+/* B18: entity walk only when pre-clear flag byte nonzero. */
+extern "C" int32_t isaac_room_b18_needs_entity_walk_host(uint32_t room_flag_7894) {
+  return (room_flag_7894 & 0xffu) != 0u ? 1 : 0;
+}
+
+/* ---- B18 entity residual pure islands (helpers ABI v29 freestanding). ---- */
+
+extern "C" uint32_t isaac_room_b18_entity_type5(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B18_ENTITY_TYPE5);
+}
+extern "C" uint32_t isaac_room_b18_entity_type1(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B18_ENTITY_TYPE1);
+}
+extern "C" uint32_t isaac_room_b18_type_range_base(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B18_TYPE_RANGE_BASE);
+}
+extern "C" uint32_t isaac_room_b18_type_range_span(void) {
+  return ISAAC_ROOM_B18_TYPE_RANGE_SPAN;
+}
+extern "C" uint32_t isaac_room_b18_mode_gate(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B18_MODE_GATE);
+}
+extern "C" uint32_t isaac_room_b18_rtti_src_ptr(void) {
+  return ISAAC_ROOM_B18_RTTI_SRC_PTR;
+}
+extern "C" uint32_t isaac_room_b18_rtti_dst_ptr(void) {
+  return ISAAC_ROOM_B18_RTTI_DST_PTR;
+}
+extern "C" uint32_t isaac_room_b18_room_vec_offset(void) {
+  return ISAAC_ROOM_B18_ROOM_VEC_OFF;
+}
+extern "C" uint32_t isaac_room_b18_room_count_offset(void) {
+  return ISAAC_ROOM_B18_ROOM_COUNT_OFF;
+}
+extern "C" uint32_t isaac_room_b18_entity_type_offset(void) {
+  return ISAAC_ROOM_B18_ENTITY_TYPE_OFF;
+}
+extern "C" uint32_t isaac_room_b18_room_flag_offset(void) {
+  return ISAAC_ROOM_B18_ROOM_FLAG_OFF;
+}
+extern "C" uint32_t isaac_room_b18_game_mode_offset(void) {
+  return ISAAC_ROOM_B18_GAME_MODE_OFF;
+}
+
+extern "C" uint32_t isaac_room_b18_host_va_flag_test(void) {
+  return ISAAC_ROOM_B18_HOST_VA_FLAG_TEST;
+}
+extern "C" uint32_t isaac_room_b18_host_va_walk_start(void) {
+  return ISAAC_ROOM_B18_HOST_VA_WALK_START;
+}
+extern "C" uint32_t isaac_room_b18_host_va_type5(void) {
+  return ISAAC_ROOM_B18_HOST_VA_TYPE5;
+}
+extern "C" uint32_t isaac_room_b18_host_va_rtti(void) {
+  return ISAAC_ROOM_B18_HOST_VA_RTTI;
+}
+extern "C" uint32_t isaac_room_b18_host_va_path_b(void) {
+  return ISAAC_ROOM_B18_HOST_VA_PATH_B;
+}
+extern "C" uint32_t isaac_room_b18_host_va_flag_clear(void) {
+  return ISAAC_ROOM_B18_HOST_VA_FLAG_CLEAR;
+}
+extern "C" uint32_t isaac_room_b18_host_va_next(void) {
+  return ISAAC_ROOM_B18_HOST_VA_NEXT;
+}
+
+/* PE: xor esi,esi; cmp [Room+0x1264],esi; jbe flag_clear. */
+extern "C" int32_t isaac_room_b18_list_empty(uint32_t entity_count_1264) {
+  return entity_count_1264 == 0u ? 1 : 0;
+}
+
+/* PE: inc esi; cmp esi,[count]; jb loop. */
+extern "C" int32_t isaac_room_b18_list_continue(uint32_t index,
+                                                uint32_t entity_count_1264) {
+  const uint32_t next = index + 1u;
+  return next < entity_count_1264 ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b18_entity_is_type5(int32_t entity_type_28) {
+  return entity_type_28 == ISAAC_ROOM_B18_ENTITY_TYPE5 ? 1 : 0;
+}
+
+/* PE: cmp [Game+0x26614],2; jl range_check; cmp type,1; je rtti. */
+extern "C" int32_t isaac_room_b18_entity_type1_mode_gate(
+    int32_t timed_transition_cleanup_mode, int32_t entity_type_28) {
+  if (!(timed_transition_cleanup_mode >= ISAAC_ROOM_B18_MODE_GATE)) return 0;
+  return entity_type_28 == ISAAC_ROOM_B18_ENTITY_TYPE1 ? 1 : 0;
+}
+
+/* PE: lea eax,[type-0xa]; cmp eax,0x3dd; ja skip → (type-10U) < 0x3de. */
+extern "C" int32_t isaac_room_b18_entity_type_in_range(int32_t entity_type_28) {
+  const uint32_t delta =
+      static_cast<uint32_t>(entity_type_28) -
+      static_cast<uint32_t>(ISAAC_ROOM_B18_TYPE_RANGE_BASE);
+  return delta < ISAAC_ROOM_B18_TYPE_RANGE_SPAN ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b18_entity_path_b_candidate(
+    int32_t timed_transition_cleanup_mode, int32_t entity_type_28) {
+  if (isaac_room_b18_entity_type1_mode_gate(timed_transition_cleanup_mode,
+                                            entity_type_28) != 0) {
+    return 1;
+  }
+  return isaac_room_b18_entity_type_in_range(entity_type_28);
+}
+
+extern "C" int32_t isaac_room_b18_entity_action(
+    int32_t timed_transition_cleanup_mode, int32_t entity_type_28) {
+  if (isaac_room_b18_entity_is_type5(entity_type_28) != 0) {
+    return ISAAC_ROOM_B18_ACTION_TYPE5;
+  }
+  if (isaac_room_b18_entity_path_b_candidate(timed_transition_cleanup_mode,
+                                             entity_type_28) != 0) {
+    return ISAAC_ROOM_B18_ACTION_RTTI_CANDIDATE;
+  }
+  return ISAAC_ROOM_B18_ACTION_SKIP;
+}
+
+/* PE: test eax,eax after RTTI; je skip; mov ecx,eax; call 0x6da530. */
+extern "C" int32_t isaac_room_b18_path_b_needs_host(uint32_t rtti_cast_result) {
+  return rtti_cast_result != 0u ? 1 : 0;
+}
+
+extern "C" void isaac_room_b18_residual_plan(uint32_t room_flag_7894,
+                                             uint32_t entity_count_1264,
+                                             IsaacRoomB18ResidualPlan* out) {
+  if (out == nullptr) return;
+  const int32_t outer = isaac_room_b18_needs_entity_walk_host(room_flag_7894);
+  out->needs_host = outer;
+  out->entity_count = static_cast<int32_t>(entity_count_1264);
+  if (outer == 0) {
+    out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_NONE;
+    out->pure_complete = 1;
+    out->host_needed = 0;
+    out->entity_count = 0;
+    return;
+  }
+  if (isaac_room_b18_list_empty(entity_count_1264) != 0) {
+    out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_PURE_COMPLETE;
+    out->pure_complete = 1;
+    out->host_needed = 0;
+    return;
+  }
+  out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_HOST_WALK;
+  out->pure_complete = 0;
+  out->host_needed = 1;
+}
+
+extern "C" void isaac_room_b18_wire_decide(int32_t flag_ready, int32_t count_ready,
+                                           uint32_t room_flag_7894,
+                                           uint32_t entity_count_1264,
+                                           IsaacRoomB18ResidualPlan* out) {
+  if (out == nullptr) return;
+  if (flag_ready == 0) {
+    out->needs_host = 0;
+    out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_MONOLITHIC;
+    out->pure_complete = 0;
+    out->host_needed = 1;
+    out->entity_count = 0;
+    return;
+  }
+  const int32_t outer = isaac_room_b18_needs_entity_walk_host(room_flag_7894);
+  if (outer == 0) {
+    out->needs_host = 0;
+    out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_NONE;
+    out->pure_complete = 1;
+    out->host_needed = 0;
+    out->entity_count = 0;
+    return;
+  }
+  if (count_ready == 0) {
+    out->needs_host = 1;
+    out->residual_kind = ISAAC_ROOM_B18_RESIDUAL_MONOLITHIC;
+    out->pure_complete = 0;
+    out->host_needed = 1;
+    out->entity_count = 0;
+    return;
+  }
+  isaac_room_b18_residual_plan(room_flag_7894, entity_count_1264, out);
+}
+
+/* ---- B19 path-rebuild residual pure islands (helpers ABI v30 freestanding). ---- */
+
+extern "C" int32_t isaac_room_b19_needs_path_rebuild_host(uint32_t room_flag_7769) {
+  return (room_flag_7769 & 0xffu) != 0u ? 1 : 0;
+}
+
+extern "C" uint32_t isaac_room_b19_entity_type5(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ENTITY_TYPE5);
+}
+extern "C" uint32_t isaac_room_b19_entity_variant_100(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ENTITY_VARIANT_100);
+}
+extern "C" uint32_t isaac_room_b19_entity_flag_bit(void) {
+  return ISAAC_ROOM_B19_ENTITY_FLAG_BIT;
+}
+extern "C" uint32_t isaac_room_b19_query_imm_8000(void) {
+  return ISAAC_ROOM_B19_QUERY_IMM_8000;
+}
+extern "C" uint32_t isaac_room_b19_cell_buf_size(void) {
+  return ISAAC_ROOM_B19_CELL_BUF_SIZE;
+}
+extern "C" uint32_t isaac_room_b19_tree_node_size(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_TREE_NODE_SIZE);
+}
+extern "C" uint32_t isaac_room_b19_grid_cell_bits(void) {
+  return ISAAC_ROOM_B19_GRID_CELL_BITS;
+}
+extern "C" uint32_t isaac_room_b19_grid_y0_bits(void) {
+  return ISAAC_ROOM_B19_GRID_Y0_BITS;
+}
+extern "C" uint32_t isaac_room_b19_grid_half_bits(void) {
+  return ISAAC_ROOM_B19_GRID_HALF_BITS;
+}
+extern "C" uint32_t isaac_room_b19_room_w_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ROOM_W_OFF);
+}
+extern "C" uint32_t isaac_room_b19_room_h_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ROOM_H_OFF);
+}
+extern "C" uint32_t isaac_room_b19_room_vec_offset(void) {
+  return ISAAC_ROOM_B19_ROOM_VEC_OFF;
+}
+extern "C" uint32_t isaac_room_b19_room_count_offset(void) {
+  return ISAAC_ROOM_B19_ROOM_COUNT_OFF;
+}
+extern "C" uint32_t isaac_room_b19_room_flag_offset(void) {
+  return ISAAC_ROOM_B19_ROOM_FLAG_OFF;
+}
+extern "C" uint32_t isaac_room_b19_entity_type_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ENTITY_TYPE_OFF);
+}
+extern "C" uint32_t isaac_room_b19_entity_variant_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B19_ENTITY_VARIANT_OFF);
+}
+extern "C" uint32_t isaac_room_b19_entity_pos_x_offset(void) {
+  return ISAAC_ROOM_B19_ENTITY_POS_X_OFF;
+}
+extern "C" uint32_t isaac_room_b19_entity_pos_y_offset(void) {
+  return ISAAC_ROOM_B19_ENTITY_POS_Y_OFF;
+}
+extern "C" uint32_t isaac_room_b19_entity_dead_offset(void) {
+  return ISAAC_ROOM_B19_ENTITY_DEAD_OFF;
+}
+extern "C" uint32_t isaac_room_b19_entity_field_534_offset(void) {
+  return ISAAC_ROOM_B19_ENTITY_FIELD_534_OFF;
+}
+extern "C" uint32_t isaac_room_b19_entity_flags_168_offset(void) {
+  return ISAAC_ROOM_B19_ENTITY_FLAGS_168_OFF;
+}
+extern "C" uint32_t isaac_room_b19_refcount_va(void) {
+  return ISAAC_ROOM_B19_REFCOUNT_VA;
+}
+
+extern "C" uint32_t isaac_room_b19_host_va_flag_test(void) {
+  return ISAAC_ROOM_B19_HOST_VA_FLAG_TEST;
+}
+extern "C" uint32_t isaac_room_b19_host_va_rebuild_start(void) {
+  return ISAAC_ROOM_B19_HOST_VA_REBUILD_START;
+}
+extern "C" uint32_t isaac_room_b19_host_va_memset(void) {
+  return ISAAC_ROOM_B19_HOST_VA_MEMSET;
+}
+extern "C" uint32_t isaac_room_b19_host_va_get_grid_collision(void) {
+  return ISAAC_ROOM_B19_HOST_VA_GET_GRID_COLLISION;
+}
+extern "C" uint32_t isaac_room_b19_host_va_entity_walk(void) {
+  return ISAAC_ROOM_B19_HOST_VA_ENTITY_WALK;
+}
+extern "C" uint32_t isaac_room_b19_host_va_query_8000(void) {
+  return ISAAC_ROOM_B19_HOST_VA_QUERY_8000;
+}
+extern "C" uint32_t isaac_room_b19_host_va_tree_alloc(void) {
+  return ISAAC_ROOM_B19_HOST_VA_TREE_ALLOC;
+}
+extern "C" uint32_t isaac_room_b19_host_va_pos_finish(void) {
+  return ISAAC_ROOM_B19_HOST_VA_POS_FINISH;
+}
+extern "C" uint32_t isaac_room_b19_host_va_spawn(void) {
+  return ISAAC_ROOM_B19_HOST_VA_SPAWN;
+}
+extern "C" uint32_t isaac_room_b19_host_va_get_alt_pedestal(void) {
+  return ISAAC_ROOM_B19_HOST_VA_GET_ALT_PEDESTAL;
+}
+extern "C" uint32_t isaac_room_b19_host_va_set_alt_pedestal(void) {
+  return ISAAC_ROOM_B19_HOST_VA_SET_ALT_PEDESTAL;
+}
+extern "C" uint32_t isaac_room_b19_host_va_flag_clear(void) {
+  return ISAAC_ROOM_B19_HOST_VA_FLAG_CLEAR;
+}
+extern "C" uint32_t isaac_room_b19_host_va_next(void) {
+  return ISAAC_ROOM_B19_HOST_VA_NEXT;
+}
+
+/* PE: mov eax,[edi+0x10]; imul eax,[edi+0xc]. */
+extern "C" int32_t isaac_room_b19_cell_count(int32_t width_c, int32_t height_10) {
+  return width_c * height_10;
+}
+
+/* PE: test eax,eax; jle skip_loop. */
+extern "C" int32_t isaac_room_b19_cell_loop_enter(int32_t cell_count) {
+  return cell_count > 0 ? 1 : 0;
+}
+
+/* PE: inc esi; cmp esi,cell_count; jl loop. */
+extern "C" int32_t isaac_room_b19_cell_loop_continue(int32_t index,
+                                                     int32_t cell_count) {
+  const int32_t next = index + 1;
+  return next < cell_count ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b19_list_empty(uint32_t entity_count_1264) {
+  return entity_count_1264 == 0u ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b19_list_continue(uint32_t index,
+                                                uint32_t entity_count_1264) {
+  const uint32_t next = index + 1u;
+  return next < entity_count_1264 ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b19_entity_is_mark_candidate(
+    int32_t entity_type_28, int32_t entity_variant_2c) {
+  if (entity_type_28 != ISAAC_ROOM_B19_ENTITY_TYPE5) return 0;
+  return entity_variant_2c == ISAAC_ROOM_B19_ENTITY_VARIANT_100 ? 1 : 0;
+}
+
+/* PE: cmp byte +0x173,0; jne skip; cmp dword +0x534,0; jne skip;
+   and flags,0x80000; or eax,0; je skip. */
+extern "C" int32_t isaac_room_b19_entity_secondary_eligible(uint32_t dead_173_byte,
+                                                            uint32_t field_534,
+                                                            uint32_t flags_168) {
+  if ((dead_173_byte & 0xffu) != 0u) return 0;
+  if (field_534 != 0u) return 0;
+  return (flags_168 & ISAAC_ROOM_B19_ENTITY_FLAG_BIT) != 0u ? 1 : 0;
+}
+
+/* PE after GetGridCollision: neg eax; sbb al,al → 0x00 or 0xFF. */
+extern "C" uint32_t isaac_room_b19_collision_byte(uint32_t grid_collision_result) {
+  return grid_collision_result != 0u ? 0xffu : 0u;
+}
+
+namespace {
+
+inline float b19_f32_bits(uint32_t bits) {
+  return __builtin_bit_cast(float, bits);
+}
+
+/* PE: (pos - base) / cell + 0.5 → cvttss2si (trunc toward zero). */
+inline int32_t b19_world_axis(float pos, float base, float cell, float half) {
+  const float t0 = pos - base;
+  const float t1 = t0 / cell;
+  const float t2 = t1 + half;
+  return static_cast<int32_t>(t2);
+}
+
+}  // namespace
+
+extern "C" int32_t isaac_room_b19_world_to_grid_x(float pos_x) {
+  const float cell = b19_f32_bits(ISAAC_ROOM_B19_GRID_CELL_BITS);
+  const float half = b19_f32_bits(ISAAC_ROOM_B19_GRID_HALF_BITS);
+  return b19_world_axis(pos_x, cell, cell, half);
+}
+
+extern "C" int32_t isaac_room_b19_world_to_grid_y(float pos_y) {
+  const float cell = b19_f32_bits(ISAAC_ROOM_B19_GRID_CELL_BITS);
+  const float y0 = b19_f32_bits(ISAAC_ROOM_B19_GRID_Y0_BITS);
+  const float half = b19_f32_bits(ISAAC_ROOM_B19_GRID_HALF_BITS);
+  return b19_world_axis(pos_y, y0, cell, half);
+}
+
+extern "C" int32_t isaac_room_b19_world_to_grid_index(float pos_x, float pos_y,
+                                                      int32_t width_c,
+                                                      int32_t height_10) {
+  const int32_t gx = isaac_room_b19_world_to_grid_x(pos_x);
+  const int32_t gy = isaac_room_b19_world_to_grid_y(pos_y);
+  if (gx < 0) return -1;
+  if (!(gx < width_c)) return -1;
+  if (gy < 0) return -1;
+  if (!(gy < height_10)) return -1;
+  const int32_t index = gy * width_c + gx;
+  if (index < 0) return -1;
+  return index;
+}
+
+extern "C" int32_t isaac_room_b19_grid_index_valid(int32_t grid_index) {
+  return grid_index >= 0 ? 1 : 0;
+}
+
+extern "C" void isaac_room_b19_residual_plan(uint32_t room_flag_7769,
+                                             int32_t width_c, int32_t height_10,
+                                             IsaacRoomB19ResidualPlan* out) {
+  if (out == nullptr) return;
+  const int32_t outer = isaac_room_b19_needs_path_rebuild_host(room_flag_7769);
+  out->needs_host = outer;
+  out->cell_count = isaac_room_b19_cell_count(width_c, height_10);
+  if (outer == 0) {
+    out->residual_kind = ISAAC_ROOM_B19_RESIDUAL_NONE;
+    out->pure_complete = 1;
+    out->host_needed = 0;
+    out->cell_count = 0;
+    return;
+  }
+  /* Flag-on always hosts (refcount / memset / tree alloc / free). */
+  out->residual_kind = ISAAC_ROOM_B19_RESIDUAL_HOST_REBUILD;
+  out->pure_complete = 0;
+  out->host_needed = 1;
+}
+
+extern "C" void isaac_room_b19_wire_decide(int32_t flag_ready,
+                                           uint32_t room_flag_7769,
+                                           int32_t width_c, int32_t height_10,
+                                           IsaacRoomB19ResidualPlan* out) {
+  if (out == nullptr) return;
+  if (flag_ready == 0) {
+    out->needs_host = 0;
+    out->residual_kind = ISAAC_ROOM_B19_RESIDUAL_MONOLITHIC;
+    out->pure_complete = 0;
+    out->host_needed = 1;
+    out->cell_count = 0;
+    return;
+  }
+  isaac_room_b19_residual_plan(room_flag_7769, width_c, height_10, out);
+}
+
+/* ---- B20 trail-list residual pure islands (helpers ABI v31 outer / v32 body). ---- */
+
+extern "C" int32_t isaac_room_b20_needs_trail_host(uint32_t list_begin_c82674,
+                                                   uint32_t list_end_c82678) {
+  return list_begin_c82674 != list_end_c82678 ? 1 : 0;
+}
+
+extern "C" uint32_t isaac_room_b20_pass1_type_a(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_PASS1_TYPE_A);
+}
+extern "C" uint32_t isaac_room_b20_pass1_type_b(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_PASS1_TYPE_B);
+}
+extern "C" uint32_t isaac_room_b20_pass1_type_c(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_PASS1_TYPE_C);
+}
+extern "C" uint32_t isaac_room_b20_pass1_type_d(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_PASS1_TYPE_D);
+}
+extern "C" uint32_t isaac_room_b20_pair_y_type(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_PAIR_Y_TYPE);
+}
+extern "C" uint32_t isaac_room_b20_flag_bit_4000(void) {
+  return ISAAC_ROOM_B20_FLAG_BIT_4000;
+}
+extern "C" uint32_t isaac_room_b20_flag_clear_mask(void) {
+  return ISAAC_ROOM_B20_FLAG_CLEAR_MASK;
+}
+extern "C" uint32_t isaac_room_b20_spawn_flag_bit_80(void) {
+  return ISAAC_ROOM_B20_SPAWN_FLAG_BIT_80;
+}
+extern "C" uint32_t isaac_room_b20_collect_flag_bits(void) {
+  return ISAAC_ROOM_B20_COLLECT_FLAG_BITS;
+}
+extern "C" uint32_t isaac_room_b20_pair_x_offset_bits(void) {
+  return ISAAC_ROOM_B20_PAIR_X_OFFSET_BITS;
+}
+extern "C" uint32_t isaac_room_b20_pair_y_offset_bits(void) {
+  return ISAAC_ROOM_B20_PAIR_Y_OFFSET_BITS;
+}
+extern "C" uint32_t isaac_room_b20_grid_cell_bits(void) {
+  return ISAAC_ROOM_B20_GRID_CELL_BITS;
+}
+extern "C" uint32_t isaac_room_b20_rng_span_bits(void) {
+  return ISAAC_ROOM_B20_RNG_SPAN_BITS;
+}
+extern "C" uint32_t isaac_room_b20_unit_scale_bits(void) {
+  return ISAAC_ROOM_B20_UNIT_SCALE_BITS;
+}
+extern "C" uint32_t isaac_room_b20_rng_radius_bits(void) {
+  return ISAAC_ROOM_B20_RNG_RADIUS_BITS;
+}
+extern "C" uint32_t isaac_room_b20_type_range_base(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_TYPE_RANGE_BASE);
+}
+extern "C" uint32_t isaac_room_b20_type_range_span(void) {
+  return ISAAC_ROOM_B20_TYPE_RANGE_SPAN;
+}
+extern "C" uint32_t isaac_room_b20_mode_gate(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_MODE_GATE);
+}
+extern "C" uint32_t isaac_room_b20_default_field184_gate(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_DEFAULT_FIELD184_GATE);
+}
+extern "C" uint32_t isaac_room_b20_entity_type_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_ENTITY_TYPE_OFF);
+}
+extern "C" uint32_t isaac_room_b20_entity_variant_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_ENTITY_VARIANT_OFF);
+}
+extern "C" uint32_t isaac_room_b20_entity_subtype_offset(void) {
+  return static_cast<uint32_t>(ISAAC_ROOM_B20_ENTITY_SUBTYPE_OFF);
+}
+extern "C" uint32_t isaac_room_b20_entity_pos_x_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_POS_X_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_pos_y_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_POS_Y_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_flags_168_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FLAGS_168_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_flags_16c_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FLAGS_16C_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_184_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_184_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_32c_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_32C_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_370_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_370_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_3bc_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_3BC_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_3c0_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_3C0_OFF;
+}
+extern "C" uint32_t isaac_room_b20_entity_field_3ec_offset(void) {
+  return ISAAC_ROOM_B20_ENTITY_FIELD_3EC_OFF;
+}
+extern "C" uint32_t isaac_room_b20_list_begin_va(void) {
+  return ISAAC_ROOM_B20_LIST_BEGIN_VA;
+}
+extern "C" uint32_t isaac_room_b20_list_end_va(void) {
+  return ISAAC_ROOM_B20_LIST_END_VA;
+}
+extern "C" uint32_t isaac_room_b20_list_cap_va(void) {
+  return ISAAC_ROOM_B20_LIST_CAP_VA;
+}
+extern "C" uint32_t isaac_room_b20_spawn_pos_vec_ptr(void) {
+  return ISAAC_ROOM_B20_SPAWN_POS_VEC_PTR;
+}
+extern "C" uint32_t isaac_room_b20_game_mode_offset(void) {
+  return ISAAC_ROOM_B20_GAME_MODE_OFF;
+}
+
+extern "C" uint32_t isaac_room_b20_host_va_list_test(void) {
+  return ISAAC_ROOM_B20_HOST_VA_LIST_TEST;
+}
+extern "C" uint32_t isaac_room_b20_host_va_pass1(void) {
+  return ISAAC_ROOM_B20_HOST_VA_PASS1;
+}
+extern "C" uint32_t isaac_room_b20_host_va_pass2(void) {
+  return ISAAC_ROOM_B20_HOST_VA_PASS2;
+}
+extern "C" uint32_t isaac_room_b20_host_va_flagged_genrand(void) {
+  return ISAAC_ROOM_B20_HOST_VA_FLAGGED_GENRAND;
+}
+extern "C" uint32_t isaac_room_b20_host_va_multispawn(void) {
+  return ISAAC_ROOM_B20_HOST_VA_MULTISPAWN;
+}
+extern "C" uint32_t isaac_room_b20_host_va_collect_or_4080(void) {
+  return ISAAC_ROOM_B20_HOST_VA_COLLECT_OR_4080;
+}
+extern "C" uint32_t isaac_room_b20_host_va_pair_y(void) {
+  return ISAAC_ROOM_B20_HOST_VA_PAIR_Y;
+}
+extern "C" uint32_t isaac_room_b20_host_va_default_field184(void) {
+  return ISAAC_ROOM_B20_HOST_VA_DEFAULT_FIELD184;
+}
+extern "C" uint32_t isaac_room_b20_host_va_default_rng(void) {
+  return ISAAC_ROOM_B20_HOST_VA_DEFAULT_RNG;
+}
+extern "C" uint32_t isaac_room_b20_host_va_pair_x(void) {
+  return ISAAC_ROOM_B20_HOST_VA_PAIR_X;
+}
+extern "C" uint32_t isaac_room_b20_host_va_vector_push(void) {
+  return ISAAC_ROOM_B20_HOST_VA_VECTOR_PUSH;
+}
+extern "C" uint32_t isaac_room_b20_host_va_spawn(void) {
+  return ISAAC_ROOM_B20_HOST_VA_SPAWN;
+}
+extern "C" uint32_t isaac_room_b20_host_va_genrand(void) {
+  return ISAAC_ROOM_B20_HOST_VA_GENRAND;
+}
+extern "C" uint32_t isaac_room_b20_host_va_sin(void) {
+  return ISAAC_ROOM_B20_HOST_VA_SIN;
+}
+extern "C" uint32_t isaac_room_b20_host_va_cos(void) {
+  return ISAAC_ROOM_B20_HOST_VA_COS;
+}
+extern "C" uint32_t isaac_room_b20_host_va_pos_pack(void) {
+  return ISAAC_ROOM_B20_HOST_VA_POS_PACK;
+}
+extern "C" uint32_t isaac_room_b20_host_va_deallocate(void) {
+  return ISAAC_ROOM_B20_HOST_VA_DEALLOCATE;
+}
+extern "C" uint32_t isaac_room_b20_host_va_flag_clear(void) {
+  return ISAAC_ROOM_B20_HOST_VA_FLAG_CLEAR;
+}
+extern "C" uint32_t isaac_room_b20_host_va_free(void) {
+  return ISAAC_ROOM_B20_HOST_VA_FREE;
+}
+extern "C" uint32_t isaac_room_b20_host_va_epilogue(void) {
+  return ISAAC_ROOM_B20_HOST_VA_EPILOGUE;
+}
+
+/* PE: sub eax,edx; sar eax,2. */
+extern "C" int32_t isaac_room_b20_list_count(uint32_t list_begin,
+                                             uint32_t list_end) {
+  const int32_t delta =
+      static_cast<int32_t>(list_end) - static_cast<int32_t>(list_begin);
+  return delta >> 2;
+}
+
+extern "C" int32_t isaac_room_b20_list_empty(int32_t list_count) {
+  return list_count == 0 ? 1 : 0;
+}
+
+/* PE: inc; cmp; jb — index/count treated as unsigned for the jb. */
+extern "C" int32_t isaac_room_b20_list_continue(uint32_t index,
+                                                int32_t list_count) {
+  const uint32_t next = index + 1u;
+  return next < static_cast<uint32_t>(list_count) ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b20_pass1_type_match(int32_t entity_type_28) {
+  if (entity_type_28 == ISAAC_ROOM_B20_PASS1_TYPE_A) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PASS1_TYPE_B) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PASS1_TYPE_C) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PASS1_TYPE_D) return 1;
+  return 0;
+}
+
+extern "C" uint32_t isaac_room_b20_flag_or_4000(uint32_t flags_16c) {
+  return flags_16c | ISAAC_ROOM_B20_FLAG_BIT_4000;
+}
+
+extern "C" uint32_t isaac_room_b20_flag_clear_4000(uint32_t flags_16c) {
+  return flags_16c & ISAAC_ROOM_B20_FLAG_CLEAR_MASK;
+}
+
+extern "C" int32_t isaac_room_b20_entity_is_flagged(uint32_t flags_16c) {
+  return (flags_16c & ISAAC_ROOM_B20_FLAG_BIT_4000) != 0u ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b20_entity_is_pair_x(int32_t entity_type_28) {
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_A) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_B) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_C) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_D) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_E) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_F) return 1;
+  if (entity_type_28 == ISAAC_ROOM_B20_PAIR_X_TYPE_G) return 1;
+  return 0;
+}
+
+extern "C" int32_t isaac_room_b20_entity_is_pair_y(int32_t entity_type_28) {
+  return entity_type_28 == ISAAC_ROOM_B20_PAIR_Y_TYPE ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b20_pass2_action(uint32_t flags_16c,
+                                               int32_t entity_type_28) {
+  if (isaac_room_b20_entity_is_flagged(flags_16c) != 0) {
+    return ISAAC_ROOM_B20_ACTION_FLAGGED;
+  }
+  if (isaac_room_b20_entity_is_pair_x(entity_type_28) != 0) {
+    return ISAAC_ROOM_B20_ACTION_PAIR_X;
+  }
+  if (isaac_room_b20_entity_is_pair_y(entity_type_28) != 0) {
+    return ISAAC_ROOM_B20_ACTION_PAIR_Y;
+  }
+  return ISAAC_ROOM_B20_ACTION_DEFAULT;
+}
+
+extern "C" int32_t isaac_room_b20_flagged_multispawn_enter(uint32_t field_3c0) {
+  return field_3c0 == 0u ? 1 : 0;
+}
+
+/* PE: child!=0 && ((mode>=2 && type==1) || (type-10u) < 0x3de). */
+extern "C" int32_t isaac_room_b20_chain_continue(
+    uint32_t child_ptr_3bc, int32_t timed_transition_cleanup_mode,
+    int32_t child_type_28) {
+  if (child_ptr_3bc == 0u) return 0;
+  if (timed_transition_cleanup_mode >= ISAAC_ROOM_B20_MODE_GATE &&
+      child_type_28 == 1) {
+    return 1;
+  }
+  const uint32_t range =
+      static_cast<uint32_t>(child_type_28) -
+      static_cast<uint32_t>(ISAAC_ROOM_B20_TYPE_RANGE_BASE);
+  return range < ISAAC_ROOM_B20_TYPE_RANGE_SPAN ? 1 : 0;
+}
+
+extern "C" uint32_t isaac_room_b20_spawn_flag_or_80(uint32_t flags_16c) {
+  return flags_16c | ISAAC_ROOM_B20_SPAWN_FLAG_BIT_80;
+}
+
+extern "C" uint32_t isaac_room_b20_collect_flag_or_4080(uint32_t flags_16c) {
+  /* PE 0x008063f0: or dword ptr [ecx+0x16c], 0x4080 */
+  return flags_16c | ISAAC_ROOM_B20_COLLECT_FLAG_BITS;
+}
+
+extern "C" int32_t isaac_room_b20_default_field184_is_special(int32_t field_184) {
+  /* PE 0x008065a5: cmp dword ptr [esi+0x184], 5; jne default-alt */
+  return field_184 == ISAAC_ROOM_B20_DEFAULT_FIELD184_GATE ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b20_vector_needs_free(uint32_t vector_begin_ptr) {
+  /* PE 0x0080686e: test esi,esi; je epilogue */
+  return vector_begin_ptr != 0u ? 1 : 0;
+}
+
+extern "C" int32_t isaac_room_b20_collect_loop_enter(int32_t collect_count) {
+  /* PE 0x008063b7 / 0x00806840: test count; je skip */
+  return collect_count != 0 ? 1 : 0;
+}
+
+namespace {
+
+inline float b20_f32_bits(uint32_t bits) {
+  return __builtin_bit_cast(float, bits);
+}
+
+}  // namespace
+
+extern "C" float isaac_room_b20_unit_float(uint32_t genrand) {
+  /* PE after genrand @ 0x0080620b…0x00806223 (also default @ 0x008065c7):
+     MSVC u32→f32 + DAT_00ba9ff4. B20-named (no ambient/7230 symbol reuse). */
+  const int32_t as_signed = static_cast<int32_t>(genrand);
+  double d = static_cast<double>(as_signed);
+  if ((genrand >> 31) != 0u) {
+    d += 4294967296.0; /* DAT_00bacb00[1] = 2^32 as f64 */
+  }
+  const float as_f32 = static_cast<float>(d);
+  return as_f32 * b20_f32_bits(ISAAC_ROOM_B20_UNIT_SCALE_BITS);
+}
+
+extern "C" float isaac_room_b20_angle_from_unit(float unit) {
+  /* PE: mulss DAT_00baa704 (π); addss self → unit * 2π */
+  float angle = unit * b20_f32_bits(ISAAC_ROOM_B20_RNG_SPAN_BITS);
+  angle = angle + angle;
+  return angle;
+}
+
+extern "C" float isaac_room_b20_angle_from_genrand(uint32_t genrand) {
+  return isaac_room_b20_angle_from_unit(isaac_room_b20_unit_float(genrand));
+}
+
+extern "C" float isaac_room_b20_dir_scale_grid(float dir) {
+  /* PE 0x0080626b / 0x00806273: mulss DAT_00baa904 (40.0) */
+  return dir * b20_f32_bits(ISAAC_ROOM_B20_GRID_CELL_BITS);
+}
+
+extern "C" float isaac_room_b20_dir_scale_radius(float dir) {
+  /* PE 0x00806600 / 0x00806625: mulss DAT_00baa87c (20.0) */
+  return dir * b20_f32_bits(ISAAC_ROOM_B20_RNG_RADIUS_BITS);
+}
+
+extern "C" void isaac_room_b20_pair_x_left(float pos_x, float pos_y,
+                                           IsaacRoomB20Pos2* out) {
+  if (out == nullptr) return;
+  const float off = b20_f32_bits(ISAAC_ROOM_B20_PAIR_X_OFFSET_BITS);
+  out->x = pos_x - off;
+  out->y = pos_y - 0.0f; /* PE subss with xorps zero */
+}
+
+extern "C" void isaac_room_b20_pair_x_right(float pos_x, float pos_y,
+                                            IsaacRoomB20Pos2* out) {
+  if (out == nullptr) return;
+  const float off = b20_f32_bits(ISAAC_ROOM_B20_PAIR_X_OFFSET_BITS);
+  out->x = pos_x + off;
+  out->y = pos_y + 0.0f;
+}
+
+extern "C" void isaac_room_b20_pair_y_up(float pos_x, float pos_y,
+                                         IsaacRoomB20Pos2* out) {
+  if (out == nullptr) return;
+  const float off = b20_f32_bits(ISAAC_ROOM_B20_PAIR_Y_OFFSET_BITS);
+  out->x = pos_x + 0.0f;
+  out->y = pos_y + off;
+}
+
+extern "C" void isaac_room_b20_pair_y_down(float pos_x, float pos_y,
+                                           IsaacRoomB20Pos2* out) {
+  if (out == nullptr) return;
+  const float off = b20_f32_bits(ISAAC_ROOM_B20_PAIR_Y_OFFSET_BITS);
+  out->x = pos_x - 0.0f;
+  out->y = pos_y - off;
+}
+
+extern "C" void isaac_room_b20_flagged_spawn_offset(float pos_x, float pos_y,
+                                                    float sin_a, float cos_a,
+                                                    IsaacRoomB20Pos2* out) {
+  /* PE 0x008062a1…0x008062b9: x += cos*40; y += sin*40 */
+  if (out == nullptr) return;
+  out->x = pos_x + isaac_room_b20_dir_scale_grid(cos_a);
+  out->y = pos_y + isaac_room_b20_dir_scale_grid(sin_a);
+}
+
+extern "C" void isaac_room_b20_default_spawn_offset(float pos_x, float pos_y,
+                                                    float sin_a, float cos_a,
+                                                    IsaacRoomB20Pos2* out) {
+  /* PE 0x00806600…0x00806641: x += cos*20; y += sin*20 */
+  if (out == nullptr) return;
+  out->x = pos_x + isaac_room_b20_dir_scale_radius(cos_a);
+  out->y = pos_y + isaac_room_b20_dir_scale_radius(sin_a);
+}
+
+extern "C" void isaac_room_b20_residual_plan(uint32_t list_begin_c82674,
+                                             uint32_t list_end_c82678,
+                                             IsaacRoomB20ResidualPlan* out) {
+  if (out == nullptr) return;
+  const int32_t outer =
+      isaac_room_b20_needs_trail_host(list_begin_c82674, list_end_c82678);
+  out->needs_host = outer;
+  out->list_count =
+      isaac_room_b20_list_count(list_begin_c82674, list_end_c82678);
+  if (outer == 0) {
+    out->residual_kind = ISAAC_ROOM_B20_RESIDUAL_NONE;
+    out->pure_complete = 1;
+    out->host_needed = 0;
+    out->list_count = 0;
+    return;
+  }
+  /* begin!=end always hosts (SEH/local vector/free even when count==0). */
+  out->residual_kind = ISAAC_ROOM_B20_RESIDUAL_HOST_TRAIL;
+  out->pure_complete = 0;
+  out->host_needed = 1;
+}
+
+extern "C" void isaac_room_b20_wire_decide(int32_t list_ready,
+                                           uint32_t list_begin_c82674,
+                                           uint32_t list_end_c82678,
+                                           IsaacRoomB20ResidualPlan* out) {
+  if (out == nullptr) return;
+  if (list_ready == 0) {
+    out->needs_host = 0;
+    out->residual_kind = ISAAC_ROOM_B20_RESIDUAL_MONOLITHIC;
+    out->pure_complete = 0;
+    out->host_needed = 1;
+    out->list_count = 0;
+    return;
+  }
+  isaac_room_b20_residual_plan(list_begin_c82674, list_end_c82678, out);
+}
+
+/* B8: (int)Game+0x264f8 % 3 == 0 && cell_count > 0. Signed % matches PE idiv. */
+extern "C" int32_t isaac_room_b8_needs_path_cost_host(int32_t frame_counter_264f8,
+                                                      int32_t cell_count) {
+  if (!(cell_count > 0)) return 0;
+  return (frame_counter_264f8 % 3) == 0 ? 1 : 0;
+}
+
+/* B13 ambient: FUN_00824800 pure float shell (PE DAT_00baa08c / DAT_00baa06c). */
+extern "C" void isaac_room_ambient_824800_float_step(
+    IsaacRoomAmbient824800State* state) {
+  if (state == nullptr) return;
+  if (!(state->count_7454 > 0)) return;
+  /* PE: xorps xmm0; comiss xmm0, intensity; jae epilog → skip when !(0 < i). */
+  if (!(0.0f < state->intensity_7458)) return;
+
+  const float decay = __builtin_bit_cast(float, 0x3ca3d70au);   /* DAT_00baa08c */
+  const float threshold = __builtin_bit_cast(float, 0x3c23d70au); /* DAT_00baa06c */
+  float intensity = state->intensity_7458;
+  if ((state->flag_745c & 0xffu) != 0u) {
+    intensity = intensity - decay;
+    if (intensity < 0.0f) intensity = 0.0f; /* maxss with +0.0 */
+    state->intensity_7458 = intensity;
+  }
+  intensity = state->intensity_7458;
+  /* PE: comiss threshold, intensity; jbe host_spawn; else intensity=0; ret */
+  if (threshold > intensity) {
+    state->intensity_7458 = 0.0f;
+  }
+}
+
+extern "C" int32_t isaac_room_ambient_824800_needs_spawn_host(
+    const IsaacRoomAmbient824800State* state_post) {
+  if (state_post == nullptr) return 0;
+  if (!(state_post->count_7454 > 0)) return 0;
+  const float threshold = __builtin_bit_cast(float, 0x3c23d70au);
+  /* Host when threshold <= intensity (PE jbe into spawn body). */
+  return !(threshold > state_post->intensity_7458) ? 1 : 0;
+}
+
+/* FUN_007f01c0: host when gate==0 && not special 0x10/0x23 && players>0. */
+extern "C" int32_t isaac_room_ambient_7f01c0_needs_host(int32_t gate_1b83c,
+                                                        uint32_t desc_present,
+                                                        int32_t desc_type_8,
+                                                        int32_t desc_id_0,
+                                                        int32_t player_count) {
+  if (gate_1b83c != 0) return 0;
+  if (desc_present != 0u && desc_type_8 == 0x10 && desc_id_0 == 0x23) return 0;
+  if (player_count == 0) return 0;
+  return 1;
+}
+
+/* FUN_00824ee0: host when velocity != PE zero vector (exact equality). */
+extern "C" int32_t isaac_room_ambient_24ee0_needs_host(float vel_x_7460,
+                                                       float vel_y_7464) {
+  const float zx = __builtin_bit_cast(float, 0x3760371cu); /* DAT_00c7b640 */
+  const float zy = __builtin_bit_cast(float, 0x37873770u); /* DAT_00c7b644 */
+  if (vel_x_7460 == zx && vel_y_7464 == zy) return 0;
+  return 1;
+}
+
+/* FUN_008024f0: (flags >> 1) & 1 → early-out skip body. */
+extern "C" uint32_t isaac_room_ambient_8024f0_flags_early_out(
+    uint32_t room_desc_flags_44) {
+  return ((room_desc_flags_44 >> 1) & 1u) != 0u ? 1u : 0u;
+}
+
+extern "C" int32_t isaac_room_ambient_special_1023_needs_host(
+    uint32_t desc_present, int32_t desc_type_8, int32_t desc_id_0) {
+  if (desc_present == 0u) return 0;
+  if (desc_type_8 != 0x10) return 0;
+  if (desc_id_0 != 0x23) return 0;
+  return 1;
+}
+
+extern "C" void isaac_room_ambient_greed_stage_remap(int32_t difficulty_269c8,
+                                                     int32_t* stage,
+                                                     int32_t* stage_type) {
+  if (stage == nullptr || stage_type == nullptr) return;
+  if (!(difficulty_269c8 == 2 || difficu

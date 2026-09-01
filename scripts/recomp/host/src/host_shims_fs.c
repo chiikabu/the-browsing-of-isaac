@@ -1,0 +1,586 @@
+/* host_shims_fs.c -- in-memory guest filesystem for the wasm port.
+ *
+ * The game's bootstrap demands a real filesystem in the first seconds of
+ * main(): it probes the save-data directory (getenv USERPROFILE), creates it
+ * with CreateDirectoryA, scans it with FindFirstFileA, opens options/config
+ * with fopen, and later writes logs. There is no host filesystem inside WASM
+ * yet, so this module provides a self-consistent RAM FS:
+ *
+ *   - entries: a flat table of {canonical key, is_dir, bytes}
+ *   - keys: '/' separators, lowercase, no leading "./", no trailing '/';
+ *     "" is the root. Relative paths resolve against "." (the virtual cwd;
+ *     the game runs with its data next to it, so cwd == root).
+ *   - the root exists at boot (the game's save dir, resolved to "." by the
+ *     USERPROFILE default in host_shims_misc.c, is the root)
+ *   - FILE* is a guest 32-byte _iobuf from the guest heap with the host
+ *     file-table token in the `file` slot (+0x10).
+ *   - FindFirstFileA/Next hand out snapshot handles (0x200+idx).
+ *
+ * Everything written here is readable back within the same session; nothing
+ * persists. The future work unit replaces the backing store with a real
+ * host mapping (and IndexedDB for saves) without changing these handlers.
+ */
+#include "isaac_host.h"
+#include "shim_decls.h"
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <ctype.h>
+#include <time.h>
+
+#define ERRNO_CELL_VA     (ISAAC_TEB_VA + 0x800u)
+
+#define FS_SLOTS      512u
+#define FS_FILE_RG    64u
+#define FS_FIND_RG    8u
+#define FILE_TOKEN(x) ((x) + 0x100u)
+#define FIND_TOKEN(x) ((x) + 0x200u)
+
+typedef struct {
+    char     key[160];
+    uint8_t  is_dir;
+    uint8_t *data;            /* file bytes (host heap) */
+    uint32_t size, cap;
+} fs_entry;
+
+static fs_entry g_fs[FS_SLOTS];
+static uint32_t g_file_used[FS_FILE_RG];       /* 0 = free */
+/* open-file registry: guest FILE* -> token -> file index */
+static uint32_t g_file_idx[FS_FILE_RG];
+static uint64_t g_file_pos[FS_FILE_RG];
+static uint8_t  g_file_w[FS_FILE_RG], g_file_app[FS_FILE_RG];
+/* find snapshots */
+static uint32_t g_find_used[FS_FIND_RG];
+static uint32_t g_find_dir[FS_FIND_RG];        /* entry index */
+static uint32_t g_find_cur[FS_FIND_RG];
+static uint32_t g_find_n[FS_FIND_RG];
+static uint32_t g_find_ids[FS_FIND_RG][128];
+
+static uint32_t fs_err_last(void) { return isaac_r32(ISAAC_TEB_VA + 0x34u); }
+static void fs_err_set(uint32_t e) { isaac_w32(ISAAC_TEB_VA + 0x34u, e); }
+
+/* ---- key normalisation ------------------------------------------------- */
+/* Returns 1 on success, 0 if the path is unusable (empty key is the root). */
+static int fs_key(const char *p, char *out, size_t cap) {
+    char tmp[256];
+    size_t n = 0, i = 0;
+    /* strip leading "./" sequences */
+    while (p[i] == '.' && p[i + 1] == '/' && p[i + 2]) i += 2;
+    /* collapse separators: both / and \ */
+    for (; p[i] && n + 1 < sizeof tmp; ++i) {
+        char c = p[i];
+        if (c == '\\') c = '/';
+        if (c == '/') {
+            while (p[i + 1] == '/' || p[i + 1] == '\\') ++i;
+            if (n && tmp[n - 1] != '/') tmp[n++] = '/';
+        } else {
+            tmp[n++] = (char)tolower((unsigned char)c);
+        }
+    }
+    /* drop a single trailing "/" */
+    while (n > 1 && tmp[n - 1] == '/') --n;
+    tmp[n] = 0;
+    /* resolve relative paths against the virtual cwd (the game's data root).
+     * On Windows the save dir "." IS the cwd, so both spellings must land on
+     * the same key. */
+    char cleaned[256];
+    size_t cn = 0;
+    int absolute = (tmp[0] == '/');
+    if (!absolute && !(n >= 3 && tmp[1] == ':')) {
+        static const char cwd[] = "c:/isaac";
+        if (n) {
+            memcpy(cleaned, cwd, sizeof cwd - 1);
+            cn = sizeof cwd - 1;
+            cleaned[cn++] = '/';
+        } else {
+            memcpy(cleaned, cwd, sizeof cwd);
+            cn = sizeof cwd - 1;
+        }
+        if (n) { memcpy(cleaned + cn, tmp, n + 1); cn += n; }
+    } else {
+        memcpy(cleaned, tmp, n + 1);
+        cn = n;
+    }
+    if (cn >= cap) return 0;
+    memcpy(out, cleaned, cn + 1);
+    return 1;
+}
+
+static fs_entry *fs_find(const char *key) {
+    for (unsigned i = 0; i < FS_SLOTS; ++i)
+        if (g_fs[i].is_dir || g_fs[i].data)       /* slot live */
+            if (strcmp(g_fs[i].key, key) == 0)
+                return &g_fs[i];
+    return NULL;
+}
+
+static fs_entry *fs_new(const char *key, int is_dir) {
+    fs_entry *e = fs_find(key);
+    if (e) return e;
+    for (unsigned i = 0; i < FS_SLOTS; ++i) {
+        if (!g_fs[i].is_dir && !g_fs[i].data) {
+            memset(&g_fs[i], 0, sizeof g_fs[i]);
+            strncpy(g_fs[i].key, key, sizeof g_fs[i].key - 1);
+            g_fs[i].is_dir = (uint8_t)is_dir;
+            return &g_fs[i];
+        }
+    }
+    return NULL;
+}
+
+static void fs_free_entry(fs_entry *e) {
+    if (e->data) free(e->data);
+    memset(e, 0, sizeof *e);
+}
+
+/* parent key of a key; "" if none */
+static void fs_parent_key(const char *key, char *out, size_t cap) {
+    size_t n = strlen(key);
+    if (!n) { out[0] = 0; return; }
+    const char *slash = strrchr(key, '/');
+    size_t m = slash ? (size_t)(slash - key) : 0;
+    if (m >= cap) m = cap - 1;
+    memcpy(out, key, m);
+    out[m] = 0;
+}
+
+/* ---- guest helpers ----------------------------------------------------- */
+static uint32_t fs_iobuf_alloc(uint32_t token) {
+    uint32_t fp = isaac_guest_alloc(0x20u);
+    if (!fp) return 0;
+    for (unsigned k = 0; k < 0x20; k += 4) isaac_w32(fp + k, 0);
+    isaac_w32(fp + 0x10u, token);               /* _iobuf.file slot */
+    return fp;
+}
+
+/* ---- directory / file lifecycle (kernel32) ----------------------------- */
+
+void imp_kernel32__GetFileAttributesA(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "GetFileAttributesA");
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    fs_entry *e = fs_find(key);
+    if (!e) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; } /* INVALID_FILE_ATTRIBUTES */
+    cpu->EAX = e->is_dir ? 0x10u : 0x80u;
+}
+
+void imp_kernel32__CreateDirectoryA(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "CreateDirectoryA");
+    (void)isaac_arg(cpu, 1);
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(3u); cpu->EAX = 0; return; }
+    if (fs_find(key)) { fs_err_set(183u); cpu->EAX = 0; return; }   /* already exists */
+    char parent[256];
+    fs_parent_key(key, parent, sizeof parent);
+    if (parent[0] && !fs_find(parent)) { fs_err_set(3u); cpu->EAX = 0; return; } /* path not found */
+    if (!fs_new(key, 1)) { fs_err_set(5u); cpu->EAX = 0; return; }
+    fs_err_set(0);
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__DeleteFileA(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "DeleteFileA");
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0; return; }
+    fs_entry *e = fs_find(key);
+    if (!e || e->is_dir) { fs_err_set(2u); cpu->EAX = 0; return; }
+    fs_free_entry(e);
+    fs_err_set(0);
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__RemoveDirectoryA(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "RemoveDirectoryA");
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(3u); cpu->EAX = 0; return; }
+    if (!key[0] || key[0] == 0) { fs_err_set(5u); cpu->EAX = 0; return; }
+    fs_entry *e = fs_find(key);
+    if (!e) { fs_err_set(3u); cpu->EAX = 0; return; }
+    if (!e->is_dir) { fs_err_set(5u); cpu->EAX = 0; return; }
+    /* empty check */
+    size_t pref = strlen(key);
+    for (unsigned i = 0; i < FS_SLOTS; ++i) {
+        if (!g_fs[i].is_dir && !g_fs[i].data) continue;
+        if (strncmp(g_fs[i].key, key, pref) == 0 && g_fs[i].key[pref] == '/') {
+            fs_err_set(145u); cpu->EAX = 0; return;      /* ERROR_DIR_NOT_EMPTY */
+        }
+    }
+    fs_free_entry(e);
+    fs_err_set(0);
+    cpu->EAX = 1;
+}
+
+/* ---- FindFirst/Next/Close ---------------------------------------------- */
+
+static void fs_find_fill(CpuState *cpu, uint32_t findbuf, fs_entry *e) {
+    /* WIN32_FIND_DATAA: attr +0, ctime +4, atime +0xc, wtime +0x14,
+     * nSizeHigh +0x1c, nSizeLow +0x20, res0 +0x24, res1 +0x28,
+     * cFileName +0x2c (260). */
+    isaac_w32(findbuf + 0x00u, e->is_dir ? 0x10u : 0x80u);
+    isaac_w32(findbuf + 0x04u, 0); isaac_w32(findbuf + 0x08u, 0);
+    isaac_w32(findbuf + 0x0cu, 0); isaac_w32(findbuf + 0x10u, 0);
+    isaac_w32(findbuf + 0x14u, 0); isaac_w32(findbuf + 0x18u, 0);
+    isaac_w32(findbuf + 0x1cu, 0); isaac_w32(findbuf + 0x20u, 0);
+    isaac_w32(findbuf + 0x24u, 0); isaac_w32(findbuf + 0x28u, 0);
+    isaac_w32(findbuf + 0x130u, 0); isaac_w32(findbuf + 0x134u, 0);
+    isaac_w32(findbuf + 0x138u, 0); isaac_w32(findbuf + 0x13cu, 0);
+    const char *base = strrchr(e->key, '/');
+    const char *nm = base ? base + 1 : e->key;
+    uint32_t dst = findbuf + 0x2cu;
+    while (*nm) {
+        *(uint8_t *)isaac_g(dst) = (uint8_t)*nm;
+        ++nm; ++dst;
+    }
+    *(uint8_t *)isaac_g(dst) = 0;
+}
+
+void imp_kernel32__FindFirstFileA(CpuState *restrict cpu) {
+    char p[512]; uint32_t findbuf = isaac_arg(cpu, 1);
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "FindFirstFileA");
+    /* strip trailing "\*" / "/*" pattern */
+    size_t n = strlen(p);
+    if (n >= 2 && p[n - 1] == '*' && (p[n - 2] == '/' || p[n - 2] == '\\'))
+        p[n - 2] = 0;
+    char key[256];
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    fs_entry *dir = fs_find(key);
+    if (!dir || !dir->is_dir) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    /* snapshot children (key + "/" + name, no deeper nesting) */
+    uint32_t sid = 0xFFFFFFFFu;
+    for (unsigned s = 0; s < FS_FIND_RG; ++s) if (!g_find_used[s]) { sid = s; break; }
+    if (sid == 0xFFFFFFFFu) { fs_err_set(18u); cpu->EAX = 0xFFFFFFFFu; return; }
+    size_t pref = strlen(key);
+    uint32_t cnt = 0;
+    for (unsigned i = 0; i < FS_SLOTS && cnt < 128; ++i) {
+        if (!g_fs[i].is_dir && !g_fs[i].data) continue;
+        const char *k = g_fs[i].key;
+        if (strncmp(k, key, pref) == 0 && k[pref] == '/' &&
+            !strchr(k + pref + 1, '/'))
+            g_find_ids[sid][cnt++] = i;
+    }
+    if (!cnt) {
+        fs_err_set(18u);                         /* no files -> exhausted */
+        cpu->EAX = 0xFFFFFFFFu;
+        return;
+    }
+    g_find_used[sid] = 1;
+    g_find_dir[sid] = 0; g_find_cur[sid] = 0; g_find_n[sid] = cnt;
+    fs_find_fill(cpu, findbuf, &g_fs[g_find_ids[sid][0]]);
+    fs_err_set(0);
+    cpu->EAX = FIND_TOKEN(sid);
+}
+
+void imp_kernel32__FindNextFileA(CpuState *restrict cpu) {
+    uint32_t h = isaac_arg(cpu, 0), findbuf = isaac_arg(cpu, 1);
+    uint32_t sid = h - FIND_TOKEN(0);
+    if (sid >= FS_FIND_RG || !g_find_used[sid]) { fs_err_set(6u); cpu->EAX = 0; return; }
+    uint32_t c = g_find_cur[sid] + 1;
+    if (c >= g_find_n[sid]) { fs_err_set(18u); cpu->EAX = 0; return; }
+    g_find_cur[sid] = c;
+    fs_find_fill(cpu, findbuf, &g_fs[g_find_ids[sid][c]]);
+    fs_err_set(0);
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__FindClose(CpuState *restrict cpu) {
+    uint32_t h = isaac_arg(cpu, 0);
+    uint32_t sid = h - FIND_TOKEN(0);
+    if (sid < FS_FIND_RG && g_find_used[sid]) g_find_used[sid] = 0;
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__FindFirstFileW(CpuState *restrict cpu) {
+    (void)cpu; (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
+    fs_err_set(2u);
+    cpu->EAX = 0xFFFFFFFFu;
+}
+
+/* ---- stdio FILE family -------------------------------------------------- */
+static int fs_token_module(uint32_t v) { return v; }   /* _fileno passthrough */
+
+static uint32_t fs_tok_to_idx(uint32_t tok) {
+    if (tok < FILE_TOKEN(0)) return 0xFFFFFFFFu;
+    uint32_t i = tok - FILE_TOKEN(0);
+    if (i >= FS_FILE_RG || !g_file_used[i]) return 0xFFFFFFFFu;
+    return i;
+}
+
+static fs_entry *fs_file_entry(uint32_t idx) {
+    uint32_t ei = g_file_idx[idx];
+    if (ei >= FS_SLOTS) return NULL;
+    return &g_fs[ei];
+}
+
+void imp_api_ms_win_crt_stdio__fopen(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "fopen");
+    if (!fs_key(p, key, sizeof key)) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = 0; return; }
+    /* empty key (root) is never a file */
+    if (!key[0]) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = 0; return; }
+    char mode[16];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 1), mode, sizeof mode, "fopen mode");
+    fs_entry *e = fs_find(key);
+    int reading = 0, writing = 0, append = 0;
+    for (const char *m = mode; *m; ++m) {
+        char c = *m;
+        if (c == 'r') reading = 1;
+        else if (c == 'w') writing = 1;
+        else if (c == 'a') { writing = 1; append = 1; }
+        else if (c == '+') { writing = 1; reading = 1; }
+    }
+    (void)reading; (void)fs_token_module;
+    if (!e && writing) {
+        e = fs_new(key, 0);
+        if (!e) { isaac_w32(ERRNO_CELL_VA, 13u); cpu->EAX = 0; return; }
+    }
+    if (!e || e->is_dir) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = 0; return; }
+    uint32_t fi = 0xFFFFFFFFu;
+    for (unsigned i = 0; i < FS_FILE_RG; ++i) if (!g_file_used[i]) { fi = i; break; }
+    if (fi == 0xFFFFFFFFu) { isaac_w32(ERRNO_CELL_VA, 24u); cpu->EAX = 0; return; } /* EMFILE */
+    if (writing && !append) e->size = 0;        /* "w": truncate */
+    g_file_used[fi] = 1; g_file_idx[fi] = (uint32_t)(e - g_fs);
+    g_file_pos[fi] = append ? e->size : 0;
+    g_file_w[fi] = (uint8_t)(writing ? 1 : 0);
+    g_file_app[fi] = (uint8_t)(append ? 1 : 0);
+    uint32_t fp = fs_iobuf_alloc(FILE_TOKEN(fi));
+    if (!fp) { g_file_used[fi] = 0; isaac_w32(ERRNO_CELL_VA, 12u); cpu->EAX = 0; return; }
+    cpu->EAX = fp;
+}
+
+void imp_api_ms_win_crt_stdio__fclose(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0);
+    if (!fp) { cpu->EAX = 0; return; }
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi != 0xFFFFFFFFu) g_file_used[fi] = 0;
+    isaac_guest_free(fp);
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__fflush(CpuState *restrict cpu) {
+    (void)cpu;
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__fread(CpuState *restrict cpu) {
+    uint32_t dst = isaac_arg(cpu, 0), sz = isaac_arg(cpu, 1),
+             nm = isaac_arg(cpu, 2), fp = isaac_arg(cpu, 3);
+    uint64_t want = (uint64_t)sz * nm;
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    uint32_t got = 0;
+    if (fi != 0xFFFFFFFFu) {
+        fs_entry *e = fs_file_entry(fi);
+        uint64_t pos = g_file_pos[fi];
+        uint64_t avail = (pos < e->size) ? e->size - pos : 0;
+        got = (uint32_t)(avail < want ? avail : want);
+        if (got) {
+            memcpy(isaac_g(dst), e->data + (size_t)pos, got);
+            g_file_pos[fi] = pos + got;
+        }
+    }
+    cpu->EAX = sz ? got / sz : 0;
+}
+
+void imp_api_ms_win_crt_stdio__fwrite(CpuState *restrict cpu) {
+    uint32_t src = isaac_arg(cpu, 0), sz = isaac_arg(cpu, 1),
+             nm = isaac_arg(cpu, 2), fp = isaac_arg(cpu, 3);
+    uint64_t want = (uint64_t)sz * nm;
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    uint32_t got = 0;
+    if (fi != 0xFFFFFFFFu && g_file_w[fi]) {
+        fs_entry *e = fs_file_entry(fi);
+        uint64_t pos = g_file_pos[fi], end = pos + want;
+        if (end > e->cap) {
+            uint64_t ncap = end + 4096u;
+            uint8_t *nd = realloc(e->data, (size_t)ncap);
+            if (!nd) { cpu->EAX = 0; return; }
+            e->data = nd; e->cap = (uint32_t)ncap;
+        }
+        if (end > e->size) e->size = (uint32_t)end;
+        memcpy(e->data + (size_t)pos, isaac_g(src), (size_t)want);
+        g_file_pos[fi] = end;
+        got = (uint32_t)nm;
+    }
+    cpu->EAX = sz ? got : 0;
+}
+
+void imp_api_ms_win_crt_stdio__fgetc(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    int c = -1;
+    if (fi != 0xFFFFFFFFu) {
+        fs_entry *e = fs_file_entry(fi);
+        if (g_file_pos[fi] < e->size) {
+            c = e->data[(size_t)g_file_pos[fi]];
+            ++g_file_pos[fi];
+        }
+    }
+    cpu->EAX = (uint32_t)c;
+}
+
+void imp_api_ms_win_crt_stdio__fputc(CpuState *restrict cpu) {
+    uint32_t ch = isaac_arg(cpu, 0), fp = isaac_arg(cpu, 1);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi == 0xFFFFFFFFu || !g_file_w[fi]) { cpu->EAX = 0xFFFFFFFFu; return; }
+    fs_entry *e = fs_file_entry(fi);
+    uint64_t pos = g_file_pos[fi];
+    if (pos + 1 > e->cap) {
+        uint64_t ncap = pos + 4096u;
+        uint8_t *nd = realloc(e->data, (size_t)ncap);
+        if (!nd) { cpu->EAX = 0xFFFFFFFFu; return; }
+        e->data = nd; e->cap = (uint32_t)ncap;
+    }
+    e->data[(size_t)pos] = (uint8_t)ch;
+    if (pos + 1 > e->size) e->size = (uint32_t)(pos + 1);
+    ++g_file_pos[fi];
+    cpu->EAX = ch;
+}
+
+void imp_api_ms_win_crt_stdio__ungetc(CpuState *restrict cpu) {
+    (void)isaac_arg(cpu, 0);
+    uint32_t fp = isaac_arg(cpu, 1);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi != 0xFFFFFFFFu && g_file_pos[fi] > 0) --g_file_pos[fi];
+    cpu->EAX = (uint32_t)-1;
+}
+
+void imp_api_ms_win_crt_stdio__fseek(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0);
+    int32_t off = (int32_t)isaac_arg(cpu, 1);
+    uint32_t whence = isaac_arg(cpu, 2);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi == 0xFFFFFFFFu) { cpu->EAX = (uint32_t)-1; return; }
+    fs_entry *e = fs_file_entry(fi);
+    int64_t base = 0;
+    if (whence == 1) base = (int64_t)g_file_pos[fi];
+    else if (whence == 2) base = (int64_t)e->size;
+    int64_t np = base + off;
+    if (np < 0) { cpu->EAX = (uint32_t)-1; return; }
+    g_file_pos[fi] = (uint64_t)np;
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio___fseeki64(CpuState *restrict cpu) {
+    /* _fseeki64(fp, __int64 off, int whence): off = edx:eax pair */
+    uint32_t fp = isaac_arg(cpu, 0), lo = isaac_arg(cpu, 1), hi = isaac_arg(cpu, 2);
+    uint32_t whence = isaac_arg(cpu, 3);
+    int64_t off = (int64_t)((uint64_t)lo | ((uint64_t)hi << 32));
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi == 0xFFFFFFFFu) { cpu->EAX = (uint32_t)-1; return; }
+    fs_entry *e = fs_file_entry(fi);
+    int64_t base = 0;
+    if (whence == 1) base = (int64_t)g_file_pos[fi];
+    else if (whence == 2) base = (int64_t)e->size;
+    int64_t np = base + off;
+    if (np < 0) { cpu->EAX = (uint32_t)-1; return; }
+    g_file_pos[fi] = (uint64_t)np;
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__ftell(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    cpu->EAX = (fi == 0xFFFFFFFFu) ? 0xFFFFFFFFu : (uint32_t)g_file_pos[fi];
+    cpu->EDX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__fgetpos(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0), ppos = isaac_arg(cpu, 1);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi == 0xFFFFFFFFu) { cpu->EAX = (uint32_t)-1; return; }
+    uint64_t v = g_file_pos[fi];
+    isaac_w32(ppos, (uint32_t)v);
+    isaac_w32(ppos + 4, (uint32_t)(v >> 32));
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__fsetpos(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0), ppos = isaac_arg(cpu, 1);
+    uint32_t tok = isaac_r32(fp + 0x10u);
+    uint32_t fi = fs_tok_to_idx(tok);
+    if (fi == 0xFFFFFFFFu) { cpu->EAX = (uint32_t)-1; return; }
+    uint64_t v = (uint64_t)isaac_r32(ppos) | ((uint64_t)isaac_r32(ppos + 4) << 32);
+    fs_entry *e = fs_file_entry(fi);
+    if (v > e->size) { cpu->EAX = (uint32_t)-1; return; }
+    g_file_pos[fi] = v;
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio__setvbuf(CpuState *restrict cpu) {
+    (void)cpu;
+    cpu->EAX = 0;
+}
+
+void imp_api_ms_win_crt_stdio___fileno(CpuState *restrict cpu) {
+    uint32_t fp = isaac_arg(cpu, 0);
+    cpu->EAX = fp ? isaac_r32(fp + 0x10u) : (uint32_t)-1;
+}
+
+void imp_api_ms_win_crt_stdio___get_osfhandle(CpuState *restrict cpu) {
+    cpu->EAX = isaac_arg(cpu, 0);               /* token doubles as the HANDLE */
+}
+
+void imp_api_ms_win_crt_filesystem___lock_file(CpuState *restrict cpu) {
+    (void)cpu;
+}
+void imp_api_ms_win_crt_filesystem___unlock_file(CpuState *restrict cpu) {
+    (void)cpu;
+}
+
+void imp_api_ms_win_crt_filesystem__remove(CpuState *restrict cpu) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "remove");
+    if (!fs_key(p, key, sizeof key)) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = (uint32_t)-1; return; }
+    fs_entry *e = fs_find(key);
+    if (!e || e->is_dir) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = (uint32_t)-1; return; }
+    fs_free_entry(e);
+    isaac_w32(ERRNO_CELL_VA, 0);
+    cpu->EAX = 0;
+}
+
+void imp_kernel32__MoveFileExA(CpuState *restrict cpu) {
+    char a[512], b[512], ka[256], kb[256];
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), a, sizeof a, "MoveFileExA");
+    (void)isaac_guest_cstr(isaac_arg(cpu, 1), b, sizeof b, "MoveFileExA");
+    (void)isaac_arg(cpu, 2);
+    if (!fs_key(a, ka, sizeof ka) || !fs_key(b, kb, sizeof kb)) { cpu->EAX = 0; return; }
+    fs_entry *e = fs_find(ka);
+    if (!e) { fs_err_set(2u); cpu->EAX = 0; return; }
+    fs_entry *d = fs_find(kb);
+    if (d) fs_free_entry(d);
+    strncpy(e->key, kb, sizeof e->key - 1);
+    e->key[sizeof e->key - 1] = 0;
+    fs_err_set(0);
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__LockFileEx(CpuState *restrict cpu) {
+    (void)cpu;
+    cpu->EAX = 1;
+}
+void imp_kernel32__UnlockFileEx(CpuState *restrict cpu) {
+    (void)cpu;
+    cpu->EAX = 1;
+}
+
+void imp_kernel32__GetFileTime(CpuState *restrict cpu) {
+    uint32_t f = isaac_arg(cpu, 0), ct = isaac_arg(cpu, 1),
+             at = isaac_arg(cpu, 2), wt = isaac_arg(cpu, 3);
+    (void)f;
+    uint64_t now = (uint64_t)time(NULL) + 11644473600ull;  /* epoch->1601 */
+    uint64_t ft = now * 10000000ull;
+    if (ct) { isaac_w32(ct, (uint32_t)ft); isaac_w32(ct + 4, (uint32_t)(ft >> 32)); }
+    if (at) { isaac_w32(at, (uint32_t)ft); isaac_w32(at + 4, (uint32_t)(ft >> 32)); }
+    if (wt) { isaac_w32(wt, (uint32_t)ft); isaac_w32(wt + 4, (uint32_t)(ft >> 32)); }
+    cpu->EAX = 1;
+}

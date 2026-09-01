@@ -270,11 +270,40 @@ export function createMountController(hooks = {}) {
     return current;
   }
 
+  async function mountFromServerGame({ files, requireValid = hooks.requireValid }) {
+    // files: [{ path: "posix/relative", size: number }] served by the dev
+    // server under /@game/. Avoids showDirectoryPicker entirely.
+    if (!Array.isArray(files)) throw new TypeError("files array required");
+    const paths = files.map((f) => f.path);
+    const sizes = {};
+    for (const f of files) sizes[f.path] = f.size ?? 0;
+    const index = indexFromPathList(paths, sizes);
+    const validation = validateGameMount(index);
+    if (!validation.ok && requireValid !== false) {
+      const err = new Error(validation.errors.join("; "));
+      err.validation = validation;
+      throw err;
+    }
+    const plan = planEmscriptenMount(index);
+    current = {
+      source: "server",
+      index,
+      plan,
+      validation,
+      serverFiles: paths.map((p) => ({
+        relativePath: p,
+        url: "/@game/" + encodeURIComponent(p),
+      })),
+    };
+    if (hooks.onMounted) await hooks.onMounted(current);
+    return current;
+  }
+
   function getCurrent() {
     return current;
   }
 
-  return { mountFromPicker, mountFromDrop, getCurrent };
+  return { mountFromPicker, mountFromDrop, mountFromServerGame, getCurrent };
 }
 
 export default {

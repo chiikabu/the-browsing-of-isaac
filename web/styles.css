@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: dark;
   --bg: #0e0f14;
   --panel: #171923;
@@ -100,5 +100,6 @@ header h1 { margin: 0 0 0.35rem; font-size: 1.25rem; font-weight: 650; }
   border: 1px solid var(--accent);
   border-radius: 8px;
 }
+.hidden { display: none; }
 .banner.hidden { display: none; }
 code { font-family: ui-monospace, Consolas, monospace; font-size: 0.88em; }

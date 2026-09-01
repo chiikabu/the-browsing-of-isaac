@@ -1,0 +1,13605 @@
+import test from "node:test";
+import rawAssert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  LOG_PURE_ABI_VERSION,
+  LOG_VA_LOGGER,
+  LOG_VA_MUTEX_INIT,
+  LOG_VA_MUTEX_LOCK,
+  LOG_VA_MUTEX_UNLOCK,
+  LOG_VA_SPRINTF_SHIM,
+  LOG_VA_VSNPRINTF_SHIM,
+  LOG_VA_STDIO_OPTIONS,
+  LOG_VA_LISTENER_INSTALLER,
+  LOG_VA_LISTENER_WRITE,
+  LOG_VA_SHUTDOWN_GUARD_STORE,
+  LOG_VA_JUMP_TABLE,
+  LOG_VA_INDEX_TABLE,
+  LOG_IAT_OUTPUT_DEBUG_STRING_A,
+  LOG_IAT_ENTER_CRITICAL_SECTION,
+  LOG_IAT_LEAVE_CRITICAL_SECTION,
+  LOG_IAT_STDIO_COMMON_VSPRINTF,
+  LOG_IAT_FOPEN,
+  LOG_IAT_FWRITE,
+  LOG_IAT_FFLUSH,
+  LOG_IAT_FCLOSE,
+  LOG_GUARD_VA,
+  LOG_LISTENER_PTR_VA,
+  LOG_LISTENER_MASK_VA,
+  LOG_AT_LINE_START_VA,
+  LOG_BUFFER_VA,
+  LOG_PRE_BUFFER_BYTE_VA,
+  LOG_MUTEX_HOLDER_VA,
+  LOG_MUTEX_VTABLE_VA,
+  LOG_SINK_VTABLE_VA,
+  LOG_GUARD_UNINIT,
+  LOG_GUARD_BUSY,
+  LOG_GUARD_READY,
+  LOG_BUFFER_CAPACITY,
+  LOG_NEWLINE_BYTE,
+  LOG_INSTALLER_MASK,
+  LOG_VA_START_STACK_DISP,
+  LOG_PREFIX_INDEX_BOUND,
+  LOG_PREFIX_CASE_INFO,
+  LOG_PREFIX_CASE_NET,
+  LOG_PREFIX_CASE_WARN,
+  LOG_PREFIX_CASE_ERROR,
+  LOG_PREFIX_CASE_ASSERT,
+  LOG_PREFIX_CASE_DEFAULT,
+  LOG_PREFIX_VA_INFO,
+  LOG_PREFIX_VA_NET,
+  LOG_PREFIX_VA_WARN,
+  LOG_PREFIX_VA_ERROR,
+  LOG_PREFIX_VA_ASSERT,
+  LOG_PREFIX_VA_DEFAULT,
+  LOG_FMT_S_VA,
+  LOG_PREFIX_TEXT,
+  LOG_CALLSITES,
+  LOG_ADDRESS_ESCAPES,
+  LOG_RETURN_VALUE_DEPENDENT_SITES,
+  LOG_SITES_LEVEL_INFO,
+  LOG_SITES_LEVEL_NET,
+  LOG_SITES_LEVEL_WARN,
+  LOG_SITES_LEVEL_ERROR,
+  LOG_SITES_LEVEL_ASSERT,
+  LOG_SITES_LEVEL_REGISTER,
+  LOG_MAX_VARARG_DWORDS,
+  LOG_CLEANUP_HISTOGRAM,
+  logGuardBlocks,
+  logListenerHitPre,
+  logLevelLowByte,
+  logEmitGate,
+  logMessageDropped,
+  logInitNeeded,
+  logGuardAfterInit,
+  logGuardAfter,
+  logInitAlwaysSucceeds,
+  logPrefixCase,
+  logPrefixVa,
+  logPrefixLen,
+  logPrefixWritten,
+  logAppendDestOff,
+  logAppendCapacity,
+  logConsoleGate,
+  logListenerGatePost,
+  logNextAtLineStart,
+  logEmptyAppendClearsLineStart,
+  logBufferResetByte,
+  logInitialAtLineStart,
+  logVarargDwordCount,
+  logVaStartStackDisp,
+  logEmitPlan,
+  logAbiVersion,
+  /* v2: lifecycle */
+  LOG_VA_TEARDOWN,
+  LOG_VA_TEARDOWN_END,
+  LOG_VA_ISAAC_MAIN,
+  LOG_VA_INSTALLER_CALLSITE,
+  LOG_VA_TEARDOWN_CALLSITE,
+  LOG_VA_CRT_MAIN_CALLSITE,
+  LOG_VA_TEARDOWN_PTR_READ_PRE,
+  LOG_VA_TEARDOWN_PTR_READ_POST,
+  LOG_VA_TEARDOWN_PTR_STORE,
+  LOG_VA_TEARDOWN_JOIN,
+  LOG_VA_TEARDOWN_MASK_STORE,
+  LOG_VA_TEARDOWN_SECOND_FLUSH,
+  LOG_VA_TEARDOWN_GUARD_TEST,
+  LOG_VA_TEARDOWN_GUARD_BRANCH,
+  LOG_VA_TEARDOWN_CRITSEC_STORE,
+  LOG_VA_TEARDOWN_FLAGS_STORE,
+  LOG_VA_TEARDOWN_BYTE_STORE,
+  LOG_VA_INSTALLER_PTR_STORE,
+  LOG_VA_INSTALLER_PTR_FAIL_STORE,
+  LOG_VA_INSTALLER_MASK_STORE,
+  LOG_VA_LOCK_ASSERT_SITE,
+  LOG_LOCK_ASSERT_STRING_VA,
+  LOG_LOCK_ASSERT_STRING,
+  LOG_LOCK_ASSERT_LEVEL,
+  LOG_HOLDER_FLAGS_VA,
+  LOG_CRITSEC_PTR_VA,
+  LOG_TEARDOWN_BYTE_VA,
+  LOG_TEARDOWN_ENGAGE_VALUE,
+  LOG_CRITSEC_SIZE,
+  LOG_HOLDER_INIT_BIT,
+  LOG_HOLDER_FLAGS_CLEAR_MASK,
+  LOG_SINK_ALLOC_SIZE,
+  LOG_SINK_STATE_NO_FILE,
+  LOG_SINK_STATE_OPEN,
+  LOG_SINK_STATE_NONE,
+  LOG_TEARDOWN_CALLSITES,
+  LOG_TEARDOWN_ADDRESS_ESCAPES,
+  LOG_INSTALLER_CALLSITES,
+  LOG_INSTALLER_ADDRESS_ESCAPES,
+  LOG_ISAAC_MAIN_CALLSITES,
+  LOG_TEARDOWN_INTERNAL_LOG_SITES,
+  LOG_GUARD_READERS,
+  LOG_GUARD_WRITERS,
+  LOG_GUARD_WRITER_SITES,
+  LOG_LISTENER_PTR_WRITERS,
+  LOG_LISTENER_PTR_NONZERO_WRITERS,
+  LOG_LISTENER_MASK_WRITERS,
+  LOG_LISTENER_MASK_NONZERO_WRITERS,
+  LOG_CRITSEC_PTR_WRITERS,
+  LOG_HOLDER_FLAGS_WRITERS,
+  LOG_POST_TEARDOWN_FUNCTIONS,
+  LOG_POST_TEARDOWN_LOG_SITES,
+  LOG_POST_TEARDOWN_LOG_FUNCTIONS,
+  LOG_POST_TEARDOWN_FAMILY_GAME_LOGIC_EDGES,
+  LOG_POST_TEARDOWN_LOG_FUNCTION_VAS,
+  LOG_TEXT_INSN_COUNT_V2,
+  logTeardownFlushNeeded,
+  logTeardownDestroyNeeded,
+  logTeardownListenerPtrAfter,
+  logTeardownListenerMaskAfter,
+  logTeardownMaskClearUnconditional,
+  logTeardownSecondFlushReached,
+  logTeardownEngaged,
+  logTeardownCritsecDeleteNeeded,
+  logTeardownCritsecPtrAfter,
+  logTeardownHolderFlagsAfter,
+  logTeardownGuardAfter,
+  logTeardownByteAfter,
+  logPostTeardownBlocksAll,
+  logTeardownLeavesLoggerLive,
+  logTeardownCritsecFreeSize,
+  logInstallerPrevDestroyNeeded,
+  logInstallerListenerPtrAfter,
+  logInstallerListenerMaskAfter,
+  logInstallerMaskUnconditional,
+  logInstallerMaskSetWithoutSink,
+  logInstallerSinkState,
+  logListenerHitAfterInstall,
+  logTeardownPlan,
+  /* v3: the init + the D-LOG-3 answer */
+  LOG_TEXT_INSN_COUNT,
+  LOG_VA_INIT,
+  LOG_VA_INIT_RET_OK,
+  LOG_VA_INIT_RET_FAIL,
+  LOG_VA_INIT_FAIL_LABEL,
+  LOG_VA_INIT_CALLER,
+  LOG_VA_INIT_CALLSITE,
+  LOG_VA_INIT_SEH_HANDLER,
+  LOG_VA_INIT_ARG0_STORE,
+  LOG_VA_INIT_ARG1_STORE,
+  LOG_INIT_ARG0_VA,
+  LOG_INIT_ARG1_VA,
+  LOG_VA_INIT_LIFECYCLE_TEST,
+  LOG_VA_INIT_LIFECYCLE_BRANCH,
+  LOG_VA_INIT_WARN_SITE,
+  LOG_VA_INIT_WARN_CLEANUP,
+  LOG_INIT_WARN_STRING_VA,
+  LOG_INIT_WARN_STRING,
+  LOG_VA_INIT_LIFECYCLE_STORE,
+  LOG_VA_LIFECYCLE_OTHER_READER,
+  LOG_VA_LIFECYCLE_OTHER_LOG_SITE,
+  LOG_LIFECYCLE_OTHER_STRING_VA,
+  LOG_LIFECYCLE_OTHER_STRING,
+  LOG_VA_INIT_OBJECT_ALLOC_TEST,
+  LOG_VA_INIT_OBJECT_FAIL_LABEL,
+  LOG_VA_INIT_OBJECT_PUBLISH,
+  LOG_INIT_OBJECT_VA,
+  LOG_INIT_OBJECT_SIZE,
+  LOG_VA_INIT_OBJECT_MAGIC_STORE,
+  LOG_INIT_OBJECT_MAGIC,
+  LOG_VA_INIT_MUTEX_VTABLE_STORE,
+  LOG_INIT_HOLDER_OFFSET,
+  LOG_VA_INIT_DEVIRT_TEST,
+  LOG_VA_INIT_DEVIRT_DIRECT,
+  LOG_VA_INIT_DEVIRT_INDIRECT,
+  LOG_VA_INIT_CRITSEC_TEST,
+  LOG_VA_INIT_CRITSEC_FAIL_LABEL,
+  LOG_VA_INIT_CRITSEC_TAIL,
+  LOG_VA_INIT_CRITSEC_BTS,
+  LOG_VA_INIT_CRITSEC_PTR_STORE,
+  LOG_VA_INIT_CRITSEC_FLAGS_STORE,
+  LOG_INIT_CRITSEC_FLAGS_VA,
+  LOG_INIT_CRITSEC_PTR_VA,
+  LOG_INIT_CRITSEC_READY_BIT,
+  LOG_INIT_CRITSEC_ZERO_OFFSET,
+  LOG_VA_INIT_CMD_THREAD_TEST,
+  LOG_VA_INIT_CMD_THREAD_WARN_SITE,
+  LOG_VA_INIT_CMD_THREAD_SKIP,
+  LOG_VA_INIT_CMD_THREAD_BTS,
+  LOG_VA_INIT_CMD_THREAD_FLAGS_STORE,
+  LOG_VA_INIT_CMD_THREAD_JOIN,
+  LOG_INIT_CMD_THREAD_FLAGS_VA,
+  LOG_INIT_CMD_THREAD_STRING_VA,
+  LOG_INIT_CMD_THREAD_STRING,
+  LOG_INIT_CMD_THREAD_READY_BIT,
+  LOG_VA_INIT_FAIL_BRANCH_0,
+  LOG_VA_INIT_FAIL_BRANCH_1,
+  LOG_VA_INIT_FAIL_BRANCH_2,
+  LOG_INIT_FAIL_PREDECESSORS,
+  LOG_INIT_WARN_LEVEL,
+  LOG_INIT_WARN_CLEANUP_IMM,
+  LOG_INIT_LOG_SITES,
+  LOG_INIT_CALLSITES,
+  LOG_INIT_ADDRESS_ESCAPES,
+  LOG_INIT_INBOUND_TRANSFERS,
+  LOG_INIT_INSN_COUNT,
+  LOG_INIT_UNDECODABLE_BYTES,
+  LOG_INIT_ORPHAN_BLOCKS,
+  LOG_LIFECYCLE_BYTE_READERS,
+  LOG_LIFECYCLE_BYTE_WRITERS,
+  LOG_LIFECYCLE_BYTE_WRITER_SITES,
+  LOG_INIT_ARG0_WRITERS,
+  LOG_INIT_ARG1_WRITERS,
+  LOG_VA_BOOT_LOG_SITE,
+  LOG_VA_BOOT_LOG_LEVEL_PUSH,
+  LOG_BOOT_LOG_LEVEL,
+  LOG_BOOT_LOG_STRING_VA,
+  LOG_BOOT_LOG_STRING,
+  LOG_VA_ISAAC_MAIN_SCOPE_TABLE,
+  LOG_VA_ISAAC_MAIN_UNWIND_FUNCLET,
+  LOG_VA_ISAAC_MAIN_EXCEPT_HANDLER,
+  LOG_ISAAC_MAIN_SCOPE_ENTRIES,
+  LOG_ISAAC_MAIN_INSN_COUNT,
+  LOG_ISAAC_MAIN_UNDECODABLE_BYTES,
+  LOG_ISAAC_MAIN_ORPHAN_BLOCKS,
+  LOG_GUARD_ADDRESS_ESCAPES,
+  LOG_GUARD_DISTINCT_VALUES,
+  LOG_GUARD_REACHABLE_VALUES,
+  LOG_TEARDOWN_CALLSITES_V3,
+  LOG_TEXT_INSN_COUNT_V3,
+  LOG_TEXT_UNDECODABLE_BYTES_V3,
+  logInitAlreadyInitialized,
+  logInitWarnLevel,
+  logInitWarnVarargCount,
+  logInitArgsPublished,
+  logInitObjectAllocated,
+  logInitObjectAfter,
+  logInitCritsecInitRuns,
+  logInitCritsecFlagsAfter,
+  logInitCritsecPtrAfter,
+  logInitCritsecMarkedWithoutCritsec,
+  logInitCmdThreadWarns,
+  logInitCmdThreadCreates,
+  logInitCmdThreadFlagsAfter,
+  logInitLifecycleByteAfter,
+  logInitDevirtualizesToMutexInit,
+  logInitGuardAfter,
+  logBootLogLevel,
+  logBootSiteDominatesTeardown,
+  logGuardAfterBootSite,
+  logShippedGuardAtTeardown,
+  logGuardZeroAtTeardownReachable,
+  logShippedTeardownLeavesLoggerLive,
+  logShippedPostTeardownBlocksAll,
+  logGuardValueReachable,
+  logLifecycleByteAfterInitThenTeardown,
+  logInitPlan,
+  /* v4: the mutex lock / unlock pair */
+  LOG_VA_LOCK,
+  LOG_VA_UNLOCK,
+  LOG_VA_LOCK_RET_TRUE,
+  LOG_VA_LOCK_RET_FALSE,
+  LOG_VA_UNLOCK_RET,
+  LOG_VA_MUTEX_DTOR,
+  LOG_VA_MUTEX_DESTROY,
+  LOG_MUTEX_VTBL_SLOT_LOCK,
+  LOG_MUTEX_VTBL_SLOT_UNLOCK,
+  LOG_VA_VTBL_LOCK_ENTRY,
+  LOG_VA_VTBL_UNLOCK_ENTRY,
+  LOG_MUTEX_VTABLE_SLOTS,
+  LOG_HOLDER_FLAGS_OFFSET,
+  LOG_HOLDER_CRITSEC_OFFSET,
+  LOG_HOLDER_LOAD_TIME_FLAGS,
+  LOG_HOLDER_LOAD_TIME_CRITSEC,
+  LOG_VA_LOCK_ASSERT_TEST_V4,
+  LOG_VA_LOCK_ASSERT_BRANCH,
+  LOG_VA_LOCK_ASSERT_CLEANUP,
+  LOG_VA_UNLOCK_ASSERT_TEST,
+  LOG_VA_UNLOCK_ASSERT_SITE,
+  LOG_UNLOCK_ASSERT_STRING_VA,
+  LOG_UNLOCK_ASSERT_STRING,
+  LOG_LOCK_ASSERT_STRING_LEN,
+  LOG_UNLOCK_ASSERT_STRING_LEN,
+  LOG_LOCK_ASSERT_CLEANUP_IMM,
+  LOG_LOCK_READY_BIT,
+  LOG_VA_LOCK_TIMEOUT_TEST,
+  LOG_VA_LOCK_TIMED_ENTRY,
+  LOG_VA_LOCK_ZERO_BRANCH,
+  LOG_LOCK_TIMEOUT_INFINITE,
+  LOG_LOCK_ARM_INFINITE,
+  LOG_LOCK_ARM_ZERO_TIMEOUT,
+  LOG_LOCK_ARM_TIMED,
+  LOG_VA_LOCK_CRITSEC_READ,
+  LOG_VA_LOCK_ENTER_CALL,
+  LOG_VA_LOCK_SLEEP_PTR_LOAD,
+  LOG_VA_LOCK_SPIN_HEAD,
+  LOG_VA_LOCK_SPIN_RETEST,
+  LOG_VA_LOCK_SPIN_BACK_EDGE,
+  LOG_VA_LOCK_OWNED_STORE,
+  LOG_VA_LOCK_SUCCESS,
+  LOG_LOCK_SPIN_SLEEP_MS,
+  LOG_LOCK_OWNED_VALUE,
+  LOG_LOCK_SPIN_NEVER_RETURNS,
+  LOG_VA_LOCK_RETRY_HEAD,
+  LOG_VA_LOCK_TRY_CALL,
+  LOG_VA_LOCK_GIVEBACK_LEAVE,
+  LOG_VA_LOCK_TIMED_SUCCESS_BRANCH,
+  LOG_VA_LOCK_NOW_READ,
+  LOG_VA_LOCK_ELAPSED_DEAD_JB,
+  LOG_VA_LOCK_FAIL,
+  LOG_LOCK_RETRY_SLEEP_MS,
+  LOG_LOCK_TRY_ARM_SUCCESS,
+  LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP,
+  LOG_LOCK_TRY_ARM_SLEEP,
+  LOG_VA_LOCK_CLOCK,
+  LOG_IAT_QPC,
+  LOG_IAT_QPF,
+  LOG_IAT_TRY_ENTER_CRITICAL_SECTION,
+  LOG_VA_CLOCK_NS_SCALE,
+  LOG_LOCK_MS_DIVISOR,
+  LOG_LOCK_MS_MAGIC_LO,
+  LOG_LOCK_MS_MAGIC_HI,
+  LOG_LOCK_MS_SHIFT,
+  LOG_VA_UNLOCK_CRITSEC_READ,
+  LOG_VA_UNLOCK_OWNED_STORE,
+  LOG_VA_UNLOCK_LEAVE_CALL,
+  LOG_LOCK_DIRECT_CALLSITES,
+  LOG_UNLOCK_DIRECT_CALLSITES,
+  LOG_LOCK_TAIL_JUMPS,
+  LOG_UNLOCK_TAIL_JUMPS,
+  LOG_LOCK_IMMEDIATE_SITES,
+  LOG_UNLOCK_IMMEDIATE_SITES,
+  LOG_LOCK_RAW_OCCURRENCES,
+  LOG_UNLOCK_RAW_OCCURRENCES,
+  LOG_MUTEX_VTABLE_RAW_OCCURRENCES,
+  LOG_MUTEX_VTABLE_TEXT_STORES,
+  LOG_MUTEX_VTABLE_DATA_INSTANCES,
+  LOG_MUTEX_GLOBAL_DISPATCH_SITES,
+  LOG_MUTEX_GLOBAL_LOCK_SITES,
+  LOG_MUTEX_GLOBAL_INFINITE_SITES,
+  LOG_MUTEX_GLOBAL_FINITE_SITES,
+  LOG_HOLDER_FLAGS_READERS,
+  LOG_HOLDER_FLAGS_INDIRECT_READERS,
+  LOG_TEXT_INSN_COUNT_V4,
+  LOG_TEXT_UNDECODABLE_BYTES_V4,
+  LOG_V4_BATCHED_VAS,
+  LOG_V4_EXACT_ZHL_MATCHES,
+  LOG_READY_BIT_PREDICATE_SITES,
+  LOG_READY_BIT_PREDICATE_VAS,
+  LOG_READY_BIT_PREDICATE_BYTES,
+  LOG_LAZY_INIT_TEMPLATE_INSTANCES,
+  LOG_LAZY_INIT_TEMPLATE_VAS,
+  LOG_LAZY_INIT_TEMPLATE_INSNS,
+  LOG_ASSERT_GUARD_TEMPLATE_INSTANCES,
+  LOG_ASSERT_GUARD_TEMPLATE_VAS,
+  logLockAssertFires,
+  logUnlockAssertFires,
+  logLockAssertStringVa,
+  logLockAssertVarargCount,
+  logLockAssertSetsReadyBit,
+  logLockAssertIsLazyInitTemplate,
+  logLockHolderFlagsAfter,
+  logLockAssertReachableFromLogger,
+  logLockTimeoutInfinite,
+  logLockTimeoutArm,
+  logLockZeroTimeoutTries,
+  logLockSpinEntered,
+  logLockSpinContinues,
+  logLockSpinSleepMs,
+  logLockSpinReloadsCritsec,
+  logLockTimedReloadsCritsec,
+  logLockSpinBounded,
+  logLockSpinReadsSleepPointerPerIteration,
+  logLockSpinHoldsCritsec,
+  logUnlockEntersCritsec,
+  logLockSelfReentrantSpinsForever,
+  logLockSpinIterations,
+  logLockTryEntered,
+  logLockTryArm,
+  logLockTryLeaves,
+  logLockRetrySleepMs,
+  logLockTicksToMs,
+  logLockTicksToMsLo,
+  logLockTicksToMsHi,
+  logLockElapsedExpired,
+  logLockUnderflowBranchDead,
+  logLockStartRefetched,
+  logLockNowRefetched,
+  logLockMarksOwned,
+  logLockOwnedByteAfter,
+  logTimedSuccessSkipsOwnedStore,
+  logLockAcquired,
+  logUnlockOwnedByteAfter,
+  logUnlockClearsBeforeLeave,
+  logUnlockTakesTimeout,
+  logLockNullCritsecReached,
+  logLockAssertsOnFailedInit,
+  logLockFirstNullAccessVa,
+  logLockPlan,
+  logUnlockPlan,
+  /* v5 */
+  LOG_VA_MUTEX_UNWIND_DESTROY,
+  LOG_VA_MUTEX_DESTROY_END,
+  LOG_VA_MUTEX_UNWIND_DESTROY_END,
+  LOG_VA_MUTEX_DTOR_END,
+  LOG_VA_VTBL_DTOR_ENTRY,
+  LOG_VA_VTBL_DESTROY_ENTRY,
+  LOG_VA_MUTEX_BASE_VTABLE,
+  LOG_VA_MUTEX_BASE_PURECALL,
+  LOG_VA_DESTROY_CRITSEC_TEST,
+  LOG_VA_DESTROY_DELETE_CALL,
+  LOG_VA_DESTROY_FREE_CALL,
+  LOG_VA_DESTROY_NULL_STORE,
+  LOG_VA_DESTROY_CLEAR,
+  LOG_VA_DTOR_DELETE_FLAG_TEST,
+  LOG_VA_DTOR_EXIT_VTABLE_STORE,
+  LOG_VA_DTOR_CLEAR,
+  LOG_VA_UNWIND_CLEAR,
+  LOG_VA_TEARDOWN_INLINE_DESTROY,
+  LOG_VA_TEARDOWN_DELETE_CALL,
+  LOG_VA_TEARDOWN_CLEAR,
+  LOG_VA_STATIC_DTOR_DELETE_CALL,
+  LOG_VA_STATIC_DTOR_CLEAR,
+  LOG_VA_STATIC_DTOR_ATEXIT_SITE,
+  LOG_VA_ATEXIT,
+  LOG_VA_RAW_FREE,
+  LOG_VA_SHARED_ALLOCATOR,
+  LOG_VA_HOLDER_READY_BIT_SET,
+  LOG_MUTEX_CRITSEC_SIZE,
+  LOG_MUTEX_OBJECT_SIZE,
+  LOG_MUTEX_OWNED_OFFSET,
+  LOG_DESTROY_VARIANT_DESTROY,
+  LOG_DESTROY_VARIANT_UNWIND,
+  LOG_DESTROY_VARIANT_DTOR,
+  LOG_DESTROY_VARIANT_TEARDOWN,
+  LOG_DESTROY_VARIANT_STATIC,
+  LOG_DESTROY_VARIANTS,
+  LOG_DESTROY_ACTION_NONE,
+  LOG_DESTROY_ACTION_STORE_ENTRY_VTABLE,
+  LOG_DESTROY_ACTION_DELETE_CRITICAL_SECTION,
+  LOG_DESTROY_ACTION_FREE_CRITSEC,
+  LOG_DESTROY_ACTION_STORE_NULL_CRITSEC,
+  LOG_DESTROY_ACTION_CLEAR_READY_BIT,
+  LOG_DESTROY_ACTION_STORE_EXIT_VTABLE,
+  LOG_DESTROY_ACTION_FREE_OBJECT,
+  LOG_DESTROY_ACTIONS_MAX,
+  LOG_READY_STATE_DOWN,
+  LOG_READY_STATE_LIVE,
+  LOG_READY_STATE_FAILED,
+  LOG_READY_STATE_IMPOSSIBLE,
+  LOG_READY_STATES_REACHABLE,
+  LOG_DESTROY_BODY_BYTES,
+  LOG_UNWIND_DESTROY_BODY_BYTES,
+  LOG_DTOR_BODY_BYTES,
+  LOG_DESTROY_SHARED_BYTES_0_1,
+  LOG_DESTROY_SHARED_BYTES_1_2,
+  LOG_DESTROY_SHARED_BYTES_0_2,
+  LOG_DESTROY_VTABLE_STORE_BYTES,
+  LOG_DESTROY_FORCED_REL32_DELTA_BYTES,
+  LOG_REACH_CHANNEL_DIRECT_CALL,
+  LOG_REACH_CHANNEL_TAIL_JUMP,
+  LOG_REACH_CHANNEL_RAW_DWORD,
+  LOG_REACH_CHANNELS,
+  LOG_UNWIND_DESTROY_TAIL_JUMPS,
+  LOG_UNWIND_DESTROY_FRAME_FUNCLETS,
+  LOG_UNWIND_DESTROY_ABSOLUTE_THUNKS,
+  LOG_UNWIND_DESTROY_REACH_V4_REPORTED,
+  LOG_UNWIND_DESTROY_TAIL_JUMP_SITES,
+  LOG_BASE_RELOCATIONS_HIGHLOW,
+  LOG_DELETE_CRITICAL_SECTION_SITES,
+  LOG_DESTROY_TEMPLATE_INSTANCES,
+  LOG_DESTROY_TEMPLATE_OUT_OF_LINE,
+  LOG_DESTROY_TEMPLATE_INLINED,
+  LOG_HOLDER_DESTROY_SITES,
+  LOG_HOLDER_READY_BIT_SETTERS,
+  LOG_HOLDER_READY_BIT_CLEARERS,
+  LOG_HOLDER_READY_BIT_ABSOLUTE_SETTERS,
+  LOG_DESTROY_DANGLING_WINDOW_INSNS,
+  LOG_TEXT_INSN_COUNT_V5,
+  LOG_TEXT_UNDECODABLE_BYTES_V5,
+  LOG_V5_EXACT_ZHL_MATCHES,
+  logDestroyFreesCritsec,
+  logDestroyStoresNullCritsec,
+  logDestroyCritsecPtrAfter,
+  logDestroyCritsecFreeSize,
+  logDestroySizedDeleteIgnoresSize,
+  logDestroyFlagsAfter,
+  logDestroyClearsReadyBit,
+  logDestroyClearUnconditional,
+  logDestroyIsIdempotent,
+  logDestroyVariants,
+  logDestroyBodyVa,
+  logDestroyEntryVtableVa,
+  logDestroyExitVtableVa,
+  logDestroyClearVa,
+  logDestroyStackBytesPopped,
+  logDestroyReturnsThis,
+  logDestroyHasDeleteFlagGate,
+  logDestroyOperatesOnLoggerHolder,
+  logDestroyBodyBytes,
+  logDestroySharedBytes,
+  logDestroyIsOneTemplate,
+  logDtorFreesObject,
+  logDtorObjectFreeSize,
+  logDtorRestoresBaseVtableUnconditionally,
+  logDtorVtableStorePreservesFlags,
+  logReadyState,
+  logReadyStateReachable,
+  logReadyStateAfterInit,
+  logReadyStateAfterDestroy,
+  logHolderReadyBitSetters,
+  logHolderReadyBitClearers,
+  logHolderReadyBitClearVa,
+  logHolderReadyBitSetVa,
+  logLockNullDerefReached,
+  logDestroyThenLockAsserts,
+  logDestroyThenLockFaults,
+  logDestroyThenLockFaultVa,
+  logPostDestroyLockDispatchVa,
+  logDestroyHoldsLock,
+  logDestroyClearsBeforeFree,
+  logDestroyDanglingWindowStartVa,
+  logDestroyDanglingWindowEndVa,
+  logDestroyDanglingWindowInsns,
+  logDestroyReachSites,
+  logDestroyTotalReach,
+  logUnwindDestroyReachMeasured,
+  logUnwindDestroyReachV4Reported,
+  logUnwindDestroyIsDeadCode,
+  logDestroyActionCount,
+  logDestroyActionAt,
+  logDestroyActionIsPlatform,
+  logDestroyPlan,
+  /* v6 */
+  LOG_VA_WRITE,
+  LOG_VA_WRITE_END,
+  LOG_VA_WRITE_STATE_TEST,
+  LOG_VA_WRITE_STATE_BRANCH,
+  LOG_VA_WRITE_SKIP_FFLUSH,
+  LOG_VA_WRITE_FWRITE,
+  LOG_VA_WRITE_IMUL,
+  LOG_VA_WRITE_OK_FFLUSH,
+  LOG_VA_WRITE_LOGGER_SLOT_LOAD,
+  LOG_VA_WRITE_LOGGER_CALL,
+  /* v17: logger mid-body dispatch/tail passes */
+  LOG_VA_DISPATCH_STRLEN_PASS,
+  LOG_VA_DISPATCH_NMEMB_PUSH,
+  LOG_VA_TAIL_STRLEN_PASS,
+  LOG_VA_TAIL_NEWLINE_CMP,
+  /* v18: the shared sub-object vector dtor 0x00426980 */
+  LOG_VA_SUB_DTOR,
+  LOG_SUB_DTOR_END,
+  LOG_SUB_DTOR_BODY_BYTES,
+  LOG_SUB_DTOR_INSN_COUNT,
+  LOG_SUB_DTOR_FIRST_RET_VA,
+  LOG_SUB_DTOR_RET_ARGS,
+  LOG_SUB_DTOR_BEGIN_OFFSET,
+  LOG_SUB_DTOR_MYLAST_OFFSET,
+  LOG_SUB_DTOR_MYEND_OFFSET,
+  LOG_SUB_DTOR_COUNT_MASK,
+  LOG_SUB_DTOR_SMALL_BOUND,
+  LOG_SUB_DTOR_LARGE_SIZE_BIAS,
+  LOG_SUB_DTOR_HEADER_DELTA_MAX,
+  LOG_SUB_DTOR_DELETE_VA,
+  LOG_SUB_DTOR_INVALID_IAT,
+  LOG_SUB_DTOR_INVALID_CALL_VA,
+  LOG_SUB_DTOR_FREE_CALL_VA,
+  LOG_SUB_DTOR_NULL1_VA,
+  LOG_SUB_DTOR_NULL2_VA,
+  LOG_SUB_DTOR_NULL3_VA,
+  LOG_SUB_DTOR_E8_CALLSITES,
+  LOG_SUB_DTOR_RAW_OCCURRENCES,
+  LOG_SUB_DTOR_PLAN_NONE,
+  LOG_SUB_DTOR_PLAN_SMALL,
+  LOG_SUB_DTOR_PLAN_LARGE,
+  LOG_SUB_DTOR_PLAN_INVALID,
+  LOG_TEXT_INSN_COUNT_V18,
+  LOG_TEXT_UNDECODABLE_BYTES_V18,
+  LOG_V18_BATCHED_VAS,
+  LOG_V18_EXACT_ZHL_MATCHES,
+  /* v19: the open-helper path-combine 0x00a5a7a0 */
+  LOG_VA_OPEN_COMBINE,
+  LOG_OPEN_COMBINE_END,
+  LOG_OPEN_COMBINE_BODY_BYTES,
+  LOG_OPEN_COMBINE_INSN_COUNT,
+  LOG_OPEN_COMBINE_FIRST_RET_VA,
+  LOG_OPEN_COMBINE_RET_ARGS,
+  LOG_OPEN_COMBINE_RETS,
+  LOG_OPEN_COMBINE_INBOUND_CALLSITES,
+  LOG_OPEN_COMBINE_RAW_OCCURRENCES,
+  LOG_OPEN_COMBINE_SEP_SLASH,
+  LOG_OPEN_COMBINE_SEP_BACKSLASH,
+  LOG_OPEN_COMBINE_JOIN_SEP_VA,
+  LOG_OPEN_COMBINE_JOIN_NOSEP_VA,
+  LOG_OPEN_COMBINE_SLASH_STR_VA,
+  LOG_OPEN_COMBINE_FAIL_CODE,
+  LOG_OPEN_COMBINE_FAIL_BROADCAST_VA,
+  LOG_OPEN_COMBINE_FAIL_LIST_HEAD_VA,
+  LOG_OPEN_COMBINE_ALLOC_VA,
+  LOG_OPEN_COMBINE_VSPRINTF_S_VA,
+  LOG_OPEN_COMBINE_OPTIONS_GETTER,
+  LOG_OPEN_COMBINE_OPTIONS_VA,
+  LOG_OPEN_COMBINE_MALLOC_IAT,
+  LOG_OPEN_COMBINE_STRNCPY_S_IAT,
+  LOG_OPEN_COMBINE_STRCAT_S_IAT,
+  LOG_OPEN_COMBINE_VSPRINTF_S_IAT,
+  LOG_OPEN_COMBINE_COUNTER_DEFAULT_VA,
+  LOG_OPEN_COMBINE_COUNTER_INIT_OFFSET,
+  LOG_OPEN_COMBINE_INIT_OBJECT_VA,
+  LOG_OPEN_COMBINE_BASE_GLOBAL_VA,
+  LOG_OPEN_COMBINE_BOTH_EMPTY_HEADER,
+  LOG_OPEN_COMBINE_BOTH_EMPTY_DELTA,
+  LOG_OPEN_COMBINE_SIZE_SLACK,
+  LOG_OPEN_COMBINE_MODE_COPY_PATH,
+  LOG_OPEN_COMBINE_MODE_COPY_BASE,
+  LOG_OPEN_COMBINE_MODE_JOIN,
+  LOG_TEXT_INSN_COUNT_V19,
+  LOG_TEXT_UNDECODABLE_BYTES_V19,
+  LOG_V19_BATCHED_VAS,
+  LOG_V19_EXACT_ZHL_MATCHES,
+  LOG_VA_SINK_DTOR,
+  LOG_VA_SINK_FLUSH,
+  LOG_VA_WRITE_SIBLING,
+  LOG_VA_VTBL_WRITE_ENTRY,
+  LOG_VA_VTBL_FLUSH_ENTRY,
+  LOG_SINK_VTBL_SLOT_WRITE,
+  LOG_SINK_VTBL_SLOT_FLUSH,
+  LOG_SINK_STATE_OFFSET,
+  LOG_SINK_FILE_OFFSET,
+  LOG_WRITE_STACK_BYTES,
+  LOG_WRITE_ARG_COUNT,
+  LOG_WRITE_BODY_BYTES,
+  LOG_WRITE_INSN_COUNT,
+  LOG_WRITE_SIBLING_BODY_BYTES,
+  LOG_LOGGER_WRITE_SIZE_IMM,
+  LOG_FOPEN_MODE_VA,
+  LOG_WRITE_DIRECT_CALLSITES,
+  LOG_WRITE_TAIL_JUMPS,
+  LOG_WRITE_RAW_OCCURRENCES,
+  LOG_WRITE_LOGGER_DISPATCH_SITES,
+  LOG_WRITE_INBOUND_EXTERIOR,
+  LOG_FWRITE_SITES,
+  LOG_FFLUSH_SITES,
+  LOG_FOPEN_SITES,
+  LOG_WRITE_FWRITE_SITES_IN_BODY,
+  LOG_WRITE_FFLUSH_SITES_IN_BODY,
+  LOG_SINK_VTABLE_TEXT_STORES,
+  LOG_WRITE_ACTION_NONE,
+  LOG_WRITE_ACTION_FWRITE,
+  LOG_WRITE_ACTION_FFLUSH,
+  LOG_WRITE_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V6,
+  LOG_TEXT_UNDECODABLE_BYTES_V6,
+  LOG_V6_EXACT_ZHL_MATCHES,
+  logWriteStateIsOpen,
+  logWriteFwriteNeeded,
+  logWriteFflushNeeded,
+  logWriteTestsFileNull,
+  logWriteFopenFailPublishesSink,
+  logWriteFlushVcallIsNop,
+  logWriteByteCount,
+  logWriteBytesReturned,
+  logWriteStackBytesPopped,
+  logWriteVtblSlot,
+  logWriteBodyVa,
+  logWriteBodyBytes,
+  logWriteLoggerSizeImm,
+  logWriteDirectCallsites,
+  logWriteRawOccurrences,
+  logWriteLoggerDispatchSites,
+  /* v17 */
+  logDispatchNmembLen,
+  logTailLenAfterDispatch,
+  logDispatchReturnDropped,
+  logDispatchStrlenPassVa,
+  logDispatchNmembPushVa,
+  logTailStrlenPassVa,
+  logTailNewlineCmpVa,
+  /* v18 */
+  logSubDtorNeeded,
+  logSubDtorByteCount,
+  logSubDtorLarge,
+  logSubDtorHeaderSane,
+  logSubDtorFreePlan,
+  logSubDtorFreePtr,
+  logSubDtorFreeSize,
+  logSubDtorInvalidNeeded,
+  logSubDtorNullAfter,
+  logSubDtorBodyVa,
+  logSubDtorBodyBytes,
+  logSubDtorInsnCount,
+  logSubDtorFirstRetVa,
+  logSubDtorRetArgs,
+  logSubDtorBeginOffset,
+  logSubDtorMylastOffset,
+  logSubDtorMyendOffset,
+  logSubDtorDeleteVa,
+  logSubDtorInvalidIatVa,
+  logSubDtorInvalidCallVa,
+  logSubDtorE8Callsites,
+  logSubDtorRawOccurrences,
+  /* v19 */
+  logCombineHasTrailingSep,
+  logCombineBothEmpty,
+  logCombineCounterVa,
+  logCombineBothEmptyHeader,
+  logCombineBothEmptyDelta,
+  logCombineAllocSize,
+  logCombineCopyCount,
+  logCombineMode,
+  logCombineJoinUsesSep,
+  logCombineNormalizeChar,
+  logCombineTrailingNeeded,
+  logCombineFailCrashes,
+  logCombineFailCode,
+  logCombineBodyVa,
+  logCombineEndVa,
+  logCombineBodyBytes,
+  logCombineInsnCount,
+  logCombineFirstRetVa,
+  logCombineRetArgs,
+  logCombineRets,
+  logCombineInboundCallsites,
+  logCombineRawOccurrences,
+  logCombineJoinSepVa,
+  logCombineJoinNosepVa,
+  logCombineSlashStrVa,
+  logCombineFailBroadcastVa,
+  logCombineAllocVa,
+  logCombineMallocIatVa,
+  logCombineStrncpySIatVa,
+  logCombineStrcatSIatVa,
+  /* v20: the fail-broadcast list walk 0x00a23200 */
+  LOG_VA_FAIL_BROADCAST,
+  LOG_FAIL_BROADCAST_END,
+  LOG_FAIL_BROADCAST_BODY_BYTES,
+  LOG_FAIL_BROADCAST_INSN_COUNT,
+  LOG_FAIL_BROADCAST_FIRST_RET_VA,
+  LOG_FAIL_BROADCAST_RET_ARGS,
+  LOG_FAIL_BROADCAST_RETS,
+  LOG_FAIL_BROADCAST_INDIRECT_CALLS,
+  LOG_FAIL_BROADCAST_E8_CALLS,
+  LOG_FAIL_BROADCAST_DIRECT_CALLSITES,
+  LOG_FAIL_BROADCAST_INLINED_COPIES,
+  LOG_FAIL_BROADCAST_RAW_OCCURRENCES,
+  LOG_FAIL_BROADCAST_LIST_HEAD_VA,
+  LOG_FAIL_BROADCAST_FAIL_CODE,
+  LOG_FAIL_BROADCAST_CONSTANT_CODE_SITES,
+  LOG_FAIL_BROADCAST_DYNAMIC_CODE_SITE_VA,
+  LOG_FAIL_BROADCAST_DYNAMIC_CODE_SOURCE_VA,
+  LOG_FAIL_BROADCAST_NODE_NEXT_OFFSET,
+  LOG_FAIL_BROADCAST_NODE_PREV_OFFSET,
+  LOG_FAIL_BROADCAST_NODE_FN_OFFSET,
+  LOG_FAIL_BROADCAST_NODE_CTX_OFFSET,
+  LOG_FAIL_BROADCAST_CALLBACK_ARGS,
+  LOG_FAIL_BROADCAST_CALLBACK_STACK_BYTES,
+  LOG_FAIL_BROADCAST_HEAD_WRITERS,
+  LOG_FAIL_BROADCAST_HEAD_ZERO_WRITE_VA,
+  LOG_FAIL_BROADCAST_HEAD_SENTINEL_WRITE_VA,
+  LOG_FAIL_BROADCAST_HEAD_READER_SITES,
+  LOG_FAIL_BROADCAST_HEAD_LOAD_VALUE,
+  LOG_FAIL_BROADCAST_HEAD_WRITES_AFTER_INIT,
+  LOG_FAIL_BROADCAST_SENTINEL_SELF_LINKS,
+  LOG_FAIL_BROADCAST_INIT_THUNK_VA,
+  LOG_FAIL_BROADCAST_INIT_TABLE_SLOT_VA,
+  LOG_FAIL_BROADCAST_INIT_SEH_VA,
+  LOG_FAIL_BROADCAST_OBJECT_VA,
+  LOG_FAIL_BROADCAST_OBJECT_VTABLE_VA,
+  LOG_FAIL_BROADCAST_ACTIVE_LIST_HEAD_VA,
+  LOG_FAIL_BROADCAST_SENTINEL_A_SIZE,
+  LOG_FAIL_BROADCAST_SENTINEL_B_SIZE,
+  LOG_FAIL_BROADCAST_SENTINEL_TAG,
+  LOG_FAIL_BROADCAST_DTOR_VA,
+  LOG_FAIL_BROADCAST_DTOR_BODY_BYTES,
+  LOG_FAIL_BROADCAST_DTOR_FIRST_RET_VA,
+  LOG_FAIL_BROADCAST_DTOR_RET_ARGS,
+  LOG_FAIL_BROADCAST_DTOR_HEAD_DELETE_SIZE,
+  LOG_FAIL_BROADCAST_DTOR_CLEARS_HEAD,
+  LOG_FAIL_BROADCAST_DTOR_VTABLE_SWAP_1,
+  LOG_FAIL_BROADCAST_DTOR_VTABLE_SWAP_2,
+  LOG_FAIL_BROADCAST_ATEXIT_VA,
+  LOG_TEXT_INSN_COUNT_V20,
+  LOG_TEXT_UNDECODABLE_BYTES_V20,
+  LOG_V20_BATCHED_VAS,
+  LOG_V20_EXACT_ZHL_MATCHES,
+  /* v21: the sink Close member 0x00a526f0 (vtbl+0x34) */
+  LOG_VA_SINK_CLOSE,
+  LOG_SINK_CLOSE_END,
+  LOG_SINK_CLOSE_BODY_BYTES,
+  LOG_SINK_CLOSE_INSN_COUNT,
+  LOG_SINK_CLOSE_FIRST_RET_VA,
+  LOG_SINK_CLOSE_RET_ARGS,
+  LOG_SINK_CLOSE_RETS,
+  LOG_SINK_CLOSE_E8_CALLS,
+  LOG_SINK_CLOSE_INDIRECT_CALLS,
+  LOG_SINK_CLOSE_MEM_STORES,
+  LOG_SINK_CLOSE_DISPATCH_VA,
+  LOG_SINK_CLOSE_DISPATCH_SLOT,
+  LOG_SINK_CLOSE_FCLOSE_LEAF_VA,
+  LOG_SINK_CLOSE_STATE_STORE_VA,
+  LOG_SINK_CLOSE_STATE_VALUE,
+  LOG_SINK_CLOSE_STATE_STORES,
+  LOG_SINK_CLOSE_VTABLE_STORES,
+  LOG_SINK_CLOSE_STATE_OFFSET,
+  LOG_SINK_CLOSE_PATH_OFFSET,
+  LOG_SINK_CLOSE_FILE_OFFSET,
+  LOG_SINK_CLOSE_FREE_GATE_VA,
+  LOG_SINK_CLOSE_FREE_BRANCH_VA,
+  LOG_SINK_CLOSE_FREE_CALL_VA,
+  LOG_SINK_CLOSE_FREE_MODE,
+  LOG_SINK_CLOSE_PATH_NULL_VA,
+  LOG_SINK_CLOSE_FREE_HELPER_VA,
+  LOG_SINK_CLOSE_SEH_HANDLER,
+  LOG_SINK_CLOSE_STATE_GETTER_VA,
+  LOG_SINK_CLOSE_SINK_SLOT_VA,
+  LOG_SINK_CLOSE_SIBLING_SLOT_VA,
+  LOG_SINK_CLOSE_VTABLE_SLOTS,
+  LOG_SINK_CLOSE_RAW_OCCURRENCES,
+  LOG_SINK_CLOSE_DIRECT_CALLSITES,
+  LOG_SINK_CLOSE_DISPATCH_UNCONDITIONAL,
+  LOG_SINK_CLOSE_FCLOSE_GATE_VA,
+  LOG_SINK_CLOSE_FCLOSE_TEST_VA,
+  LOG_SINK_CLOSE_FCLOSE_BRANCH_VA,
+  LOG_SINK_CLOSE_FCLOSE_CALL_VA,
+  LOG_SINK_CLOSE_FCLOSE_NULL_VA,
+  LOG_TEXT_INSN_COUNT_V21,
+  LOG_TEXT_UNDECODABLE_BYTES_V21,
+  LOG_V21_BATCHED_VAS,
+  LOG_V21_EXACT_ZHL_MATCHES,
+  /* v22: the state!=2 getter 0x00a25440 (vtbl+0x30) */
+  LOG_VA_STATE_GETTER,
+  LOG_STATE_GETTER_END,
+  LOG_STATE_GETTER_BODY_BYTES,
+  LOG_STATE_GETTER_INSN_COUNT,
+  LOG_STATE_GETTER_FIRST_RET_VA,
+  LOG_STATE_GETTER_RET_ARGS,
+  LOG_STATE_GETTER_RETS,
+  LOG_STATE_GETTER_E8_CALLS,
+  LOG_STATE_GETTER_INDIRECT_CALLS,
+  LOG_STATE_GETTER_MEM_STORES,
+  LOG_STATE_GETTER_STATE_OFFSET,
+  LOG_STATE_GETTER_READ_WIDTH,
+  LOG_STATE_GETTER_COMPARE_VALUE,
+  LOG_STATE_GETTER_VTABLE_SLOTS,
+  LOG_STATE_GETTER_EXTRA_SLOT_VA,
+  LOG_STATE_GETTER_RAW_OCCURRENCES,
+  LOG_STATE_GETTER_DIRECT_CALLSITES,
+  LOG_STATE_GETTER_INLINED_COPIES,
+  LOG_STATE_GETTER_DEVIRT_CMP_1,
+  LOG_STATE_GETTER_DEVIRT_CMP_2,
+  LOG_STATE_GETTER_DEVIRT_CMP_3,
+  LOG_STATE_GETTER_SLOT_DTOR_BASE_VA,
+  LOG_STATE_GETTER_SLOT_SINK_VA,
+  LOG_STATE_GETTER_SLOT_SIBLING_VA,
+  LOG_TEXT_INSN_COUNT_V22,
+  LOG_TEXT_UNDECODABLE_BYTES_V22,
+  logBroadcastWalkEmpty,
+  logBroadcastWalkContinues,
+  logBroadcastWalkTerminates,
+  logBroadcastVisitedCount,
+  logBroadcastCodePassthrough,
+  logBroadcastCallbackArgs,
+  logBroadcastCallbackStackBytes,
+  logBroadcastCallbackDispatchIsPlatform,
+  logBroadcastFailCode,
+  logBroadcastFailCodeMatchesInitMagic,
+  logBroadcastConstantCodeSites,
+  logBroadcastDynamicCodeSiteVa,
+  logBroadcastDynamicCodeSourceVa,
+  logBroadcastDynamicSiteFires,
+  logBroadcastSentinelTag,
+  logBroadcastSentinelTagLowByte,
+  logBroadcastBodyVa,
+  logBroadcastEndVa,
+  logBroadcastBodyBytes,
+  logBroadcastInsnCount,
+  logBroadcastFirstRetVa,
+  logBroadcastRetArgs,
+  logBroadcastRets,
+  logBroadcastIndirectCalls,
+  logBroadcastE8Calls,
+  logBroadcastDirectCallsites,
+  logBroadcastInlinedCopies,
+  logBroadcastRawOccurrences,
+  logBroadcastListHeadVa,
+  logBroadcastNodeNextOffset,
+  logBroadcastNodePrevOffset,
+  logBroadcastNodeFnOffset,
+  logBroadcastNodeCtxOffset,
+  logBroadcastHeadWriters,
+  logBroadcastHeadZeroWriteVa,
+  logBroadcastHeadSentinelWriteVa,
+  logBroadcastHeadReaderSites,
+  logBroadcastHeadLoadValue,
+  logBroadcastHeadWritesAfterInit,
+  logBroadcastSentinelSelfLinks,
+  logBroadcastInitThunkVa,
+  logBroadcastInitTableSlotVa,
+  logBroadcastInitSehVa,
+  logBroadcastObjectVa,
+  logBroadcastObjectVtableVa,
+  logBroadcastActiveListHeadVa,
+  logBroadcastSentinelASize,
+  logBroadcastSentinelBSize,
+  logBroadcastDtorVa,
+  logBroadcastDtorBodyBytes,
+  logBroadcastDtorFirstRetVa,
+  logBroadcastDtorRetArgs,
+  logBroadcastDtorHeadDeleteSize,
+  logBroadcastDtorClearsHead,
+  logBroadcastDtorVtableSwap1,
+  logBroadcastDtorVtableSwap2,
+  logBroadcastAtexitVa,
+  /* v21: the sink Close member 0x00a526f0 (vtbl+0x34) */
+  logSinkCloseDispatchFires,
+  logSinkCloseDispatchVa,
+  logSinkCloseDispatchSlot,
+  logSinkCloseFcloseLeafVa,
+  logSinkCloseFileGate,
+  logSinkCloseFileAfter,
+  logSinkCloseStateAfter,
+  logSinkCloseStateValue,
+  logSinkCloseStateStoreCount,
+  logSinkCloseStateStoreVa,
+  logSinkCloseStateGetterVa,
+  logSinkCloseFreeGate,
+  logSinkCloseFreeBranchVa,
+  logSinkCloseFreeCallVa,
+  logSinkCloseFreeMode,
+  logSinkCloseFreeHelperVa,
+  logSinkClosePathNullVa,
+  logSinkClosePathAfter,
+  logSinkCloseFileOffset,
+  logSinkClosePathOffset,
+  logSinkCloseStateOffset,
+  logSinkCloseVtableStoreCount,
+  logSinkCloseBodyVa,
+  logSinkCloseEndVa,
+  logSinkCloseBodyBytes,
+  logSinkCloseInsnCount,
+  logSinkCloseFirstRetVa,
+  logSinkCloseRetArgs,
+  logSinkCloseRets,
+  logSinkCloseE8Calls,
+  logSinkCloseIndirectCalls,
+  logSinkCloseMemStores,
+  logSinkCloseSehHandler,
+  logSinkCloseSinkSlotVa,
+  logSinkCloseSiblingSlotVa,
+  logSinkCloseVtableSlots,
+  logSinkCloseRawOccurrences,
+  logSinkCloseDirectCallsites,
+  logSinkCloseDispatchUnconditional,
+  logSinkCloseFcloseGateVa,
+  logSinkCloseFcloseTestVa,
+  logSinkCloseFcloseBranchVa,
+  logSinkCloseFcloseCallVa,
+  logSinkCloseFcloseNullVa,
+  /* v22: the state!=2 getter 0x00a25440 (vtbl+0x30) */
+  logStateGetterNeq,
+  logStateGetterBodyVa,
+  logStateGetterEndVa,
+  logStateGetterBodyBytes,
+  logStateGetterInsnCount,
+  logStateGetterFirstRetVa,
+  logStateGetterRetArgs,
+  logStateGetterRets,
+  logStateGetterE8Calls,
+  logStateGetterIndirectCalls,
+  logStateGetterMemStores,
+  logStateGetterStateOffset,
+  logStateGetterReadWidth,
+  logStateGetterCompareValue,
+  logStateGetterVtableSlots,
+  logStateGetterExtraSlotVa,
+  logStateGetterRawOccurrences,
+  logStateGetterDirectCallsites,
+  logStateGetterInlinedCopies,
+  logStateGetterDevirtCmp1,
+  logStateGetterDevirtCmp2,
+  logStateGetterDevirtCmp3,
+  logStateGetterSlotDtorBaseVa,
+  logStateGetterSlotSinkVa,
+  logStateGetterSlotSiblingVa,
+  logWriteActionCount,
+  logWriteActionAt,
+  logWriteActionIsPlatform,
+  logWritePlan,
+  /* v7 */
+  LOG_VA_SIBLING_WRITE,
+  LOG_VA_SIBLING_WRITE_END,
+  LOG_VA_SIBLING_WRITE_STATE_TEST,
+  LOG_VA_SIBLING_WRITE_STATE_BRANCH,
+  LOG_VA_SIBLING_WRITE_FWRITE,
+  LOG_VA_SIBLING_WRITE_IMUL,
+  LOG_VA_SIBLING_FLUSH,
+  LOG_VA_SIBLING_FLUSH_END,
+  LOG_VA_SIBLING_FREAD,
+  LOG_VA_SIBLING_DTOR,
+  LOG_VA_SIBLING_OPEN_WRITE,
+  LOG_VA_NEXT_ISLAND,
+  LOG_SIBLING_VTABLE_VA,
+  LOG_VA_SIBLING_VTBL_WRITE_ENTRY,
+  LOG_VA_SIBLING_VTBL_FLUSH_ENTRY,
+  LOG_VA_SIBLING_VTBL_FREAD_ENTRY,
+  LOG_IAT_FREAD,
+  LOG_FOPEN_MODE_AB_VA,
+  LOG_FOPEN_MODE_RB_VA,
+  LOG_SIBLING_WRITE_BODY_BYTES,
+  LOG_SIBLING_WRITE_INSN_COUNT,
+  LOG_SIBLING_FLUSH_BODY_BYTES,
+  LOG_SIBLING_SHARED_PREFIX_BYTES,
+  LOG_SIBLING_FREAD_SHARED_BYTES,
+  LOG_SIBLING_FREAD_DIFF_BYTES,
+  LOG_SIBLING_WRITE_DIRECT_CALLSITES,
+  LOG_SIBLING_WRITE_RAW_OCCURRENCES,
+  LOG_SIBLING_FLUSH_RAW_OCCURRENCES,
+  LOG_SIBLING_FREAD_RAW_OCCURRENCES,
+  LOG_SIBLING_WRITE_INBOUND_EXTERIOR,
+  LOG_SIBLING_VTABLE_TEXT_STORES,
+  LOG_SIBLING_WRITE_FWRITE_SITES_IN_BODY,
+  LOG_SIBLING_WRITE_FFLUSH_SITES_IN_BODY,
+  LOG_SIBLING_FLUSH_FFLUSH_SITES_IN_BODY,
+  LOG_FREAD_SITES,
+  LOG_SIBLING_WRITE_ACTION_NONE,
+  LOG_SIBLING_WRITE_ACTION_FWRITE,
+  LOG_SIBLING_WRITE_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V7,
+  LOG_TEXT_UNDECODABLE_BYTES_V7,
+  LOG_V7_EXACT_ZHL_MATCHES,
+  logSiblingWriteStateIsOpen,
+  logSiblingWriteFwriteNeeded,
+  logSiblingWriteFflushNeeded,
+  logSiblingWriteTestsFileNull,
+  logSiblingFlushTestsFileNull,
+  logSiblingFlushVcallIsNop,
+  logSiblingWriteByteCount,
+  logSiblingWriteBytesReturned,
+  logSiblingWriteStackBytesPopped,
+  logSiblingWriteVtblSlot,
+  logSiblingWriteBodyVa,
+  logSiblingWriteBodyBytes,
+  logSiblingWriteDirectCallsites,
+  logSiblingWriteRawOccurrences,
+  logSiblingFlushBodyVa,
+  logSiblingFlushBodyBytes,
+  logSiblingWriteIsOneTemplateWithV6,
+  logSiblingWriteSharedPrefixBytes,
+  logSiblingFreadIsOneTemplate,
+  logSiblingFreadSharedBytes,
+  logSiblingWriteActionCount,
+  logSiblingWriteActionAt,
+  logSiblingWriteActionIsPlatform,
+  logSiblingWritePlan,
+  /* v8 */
+  LOG_VA_SIBLING_FREAD_END,
+  LOG_VA_SIBLING_FREAD_STATE_TEST,
+  LOG_VA_SIBLING_FREAD_STATE_BRANCH,
+  LOG_VA_SIBLING_FREAD_FREAD,
+  LOG_VA_SIBLING_FREAD_IMUL,
+  LOG_VA_SINK_VTBL_FREAD_ENTRY,
+  LOG_SINK_VTBL_SLOT_FREAD,
+  LOG_SINK_STATE_OPEN_READ,
+  LOG_SIBLING_FREAD_BODY_BYTES,
+  LOG_SIBLING_FREAD_INSN_COUNT,
+  LOG_SIBLING_FREAD_DIRECT_CALLSITES,
+  LOG_SIBLING_FREAD_FREAD_SITES_IN_BODY,
+  LOG_SIBLING_FREAD_FFLUSH_SITES_IN_BODY,
+  LOG_SIBLING_FREAD_ACTION_NONE,
+  LOG_SIBLING_FREAD_ACTION_FREAD,
+  LOG_SIBLING_FREAD_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V8,
+  LOG_TEXT_UNDECODABLE_BYTES_V8,
+  LOG_V8_EXACT_ZHL_MATCHES,
+  logSiblingFreadStateIsReadable,
+  logSiblingFreadNeeded,
+  logSiblingFreadFflushNeeded,
+  logSiblingFreadTestsFileNull,
+  logSiblingFreadByteCount,
+  logSiblingFreadBytesReturned,
+  logSiblingFreadStackBytesPopped,
+  logSiblingFreadVtblSlot,
+  logSiblingFreadBodyVa,
+  logSiblingFreadBodyBytes,
+  logSiblingFreadDirectCallsites,
+  logSiblingFreadRawOccurrences,
+  logSiblingFreadWriteSiblingVa,
+  logSiblingFreadIsFoldedIntoV7,
+  logSiblingFreadActionCount,
+  logSiblingFreadActionAt,
+  logSiblingFreadActionIsPlatform,
+  logSiblingFreadPlan,
+  /* v9 */
+  LOG_VA_NEIGHBOR_DTOR,
+  LOG_VA_SINK_DTOR_INNER,
+  LOG_VA_NEIGHBOR_DTOR_INNER,
+  LOG_VA_SINK_DTOR_VTABLE_STORE,
+  LOG_VA_SINK_DTOR_GATE,
+  LOG_VA_NEIGHBOR_DTOR_GATE,
+  LOG_SINK_DTOR_BODY_BYTES,
+  LOG_NEIGHBOR_DTOR_BODY_BYTES,
+  LOG_SINK_DTOR_FREE_SIZE,
+  LOG_NEIGHBOR_DTOR_FREE_SIZE,
+  LOG_NEIGHBOR_DTOR_VTABLE,
+  LOG_DTOR_ISLAND_VARIANTS,
+  LOG_DTOR_ISLAND_VARIANT_SINK,
+  LOG_DTOR_ISLAND_VARIANT_NEIGHBOR,
+  LOG_DTOR_ISLAND_RET_ARGS,
+  LOG_DTOR_ISLAND_FLAG_BIT,
+  LOG_DTOR_ISLAND_SIZED_DELETE_VA,
+  logDtorIslandVariants,
+  logDtorIslandBodyVa,
+  logDtorIslandBodyBytes,
+  logDtorIslandInnerBodyVa,
+  logDtorIslandFreeSize,
+  logDtorIslandVtableVa,
+  logDtorIslandWrapperStoresVtable,
+  logDtorIslandRetArgs,
+  logDtorIslandReturnsThis,
+  logDtorIslandDeleteNeeded,
+  /* v15 */
+  LOG_VA_SINK_DTOR_INNER_CALL,
+  LOG_VA_NEIGHBOR_DTOR_INNER_CALL,
+  LOG_VA_SINK_DTOR_DELETE_CALL,
+  LOG_VA_NEIGHBOR_DTOR_DELETE_CALL,
+  LOG_DTOR_ISLAND_PLAN_FIELDS,
+  logDtorIslandInnerFires,
+  logDtorIslandSizedDeleteSize,
+  /* v16 */
+  LOG_DTOR_ISLAND_VARIANT_SIBLING,
+  LOG_SIBLING_DTOR_BODY_BYTES,
+  LOG_VA_SIBLING_DTOR_INNER,
+  LOG_SIBLING_DTOR_INNER_CALL,
+  LOG_VA_SIBLING_DTOR_GATE,
+  LOG_SIBLING_DTOR_DELETE_CALL,
+  LOG_SIBLING_DTOR_RET_VA,
+  LOG_SIBLING_DTOR_FREE_SIZE,
+  LOG_SIBLING_DTOR_VTABLE,
+  LOG_SINK_DTOR_RET_VA,
+  LOG_NEIGHBOR_DTOR_RET_VA,
+  logDtorIslandInnerCallVa,
+  logDtorIslandGateVa,
+  logDtorIslandDeleteCallVa,
+  logDtorIslandRetVa,
+  logDtorIslandVtableEntryVa,
+  logDtorIslandWrapperPlan,
+  /* v10: the open helpers (vtbl +0x24/+0x28) */
+  LOG_VA_OPEN_READ,
+  LOG_VA_OPEN_READ_END,
+  LOG_VA_OPEN_WRITE,
+  LOG_VA_OPEN_WRITE_END,
+  LOG_OPEN_READ_BODY_BYTES,
+  LOG_OPEN_WRITE_BODY_BYTES,
+  LOG_OPEN_READ_INSN_COUNT,
+  LOG_OPEN_WRITE_INSN_COUNT,
+  LOG_OPEN_READ_RET_ARGS,
+  LOG_OPEN_WRITE_RET_ARGS,
+  LOG_OPEN_MODE_WB_VA,
+  LOG_OPEN_MODE_AB_VA,
+  LOG_OPEN_MODE_RB_VA,
+  LOG_OPEN_MODE_LEN,
+  LOG_OPEN_READ_STATE,
+  LOG_OPEN_WRITE_STATE,
+  LOG_VA_OPEN_READ_PATH_GATE,
+  LOG_VA_OPEN_READ_FOPEN,
+  LOG_VA_OPEN_READ_FILE_STORE,
+  LOG_VA_OPEN_READ_STATE_STORE,
+  LOG_VA_OPEN_READ_COMBINE1,
+  LOG_VA_OPEN_READ_COMBINE2,
+  LOG_VA_OPEN_READ_RET_OK,
+  LOG_VA_OPEN_READ_RET_FAIL,
+  LOG_VA_OPEN_READ_ACCOUNTING_OK_SITE,
+  LOG_VA_OPEN_READ_ACCOUNTING_FAIL_SITE,
+  LOG_VA_OPEN_WRITE_MODE_TEST,
+  LOG_VA_OPEN_WRITE_MODE_SELECT,
+  LOG_VA_OPEN_WRITE_FOPEN,
+  LOG_VA_OPEN_WRITE_FILE_STORE,
+  LOG_VA_OPEN_WRITE_STATE_STORE,
+  LOG_VA_OPEN_WRITE_COMBINE1,
+  LOG_VA_OPEN_WRITE_COMBINE2,
+  LOG_VA_OPEN_WRITE_ACCOUNTING_GATE,
+  LOG_VA_OPEN_WRITE_ACCOUNTING_SITE,
+  LOG_VA_OPEN_WRITE_RET,
+  LOG_OPEN_READ_ACCOUNTING_SITES,
+  LOG_OPEN_WRITE_ACCOUNTING_SITES,
+  LOG_OPEN_READ_COMBINE_BASE,
+  LOG_OPEN_WRITE_COMBINE_BASE_VA,
+  LOG_OPEN_READ_SEH_HANDLER,
+  LOG_OPEN_WRITE_SEH_HANDLER,
+  LOG_OPEN_VTABLE_SLOT_READ,
+  LOG_OPEN_VTABLE_SLOT_WRITE,
+  LOG_VA_SIBLING_VTBL_OPEN_READ_ENTRY,
+  LOG_VA_SIBLING_VTBL_OPEN_WRITE_ENTRY,
+  LOG_VA_SINK_VTBL_OPEN_READ_ENTRY,
+  LOG_VA_SINK_VTBL_OPEN_WRITE_ENTRY,
+  LOG_OPEN_READ_DIRECT_CALLSITES,
+  LOG_OPEN_WRITE_DIRECT_CALLSITES,
+  LOG_OPEN_READ_RAW_OCCURRENCES,
+  LOG_OPEN_WRITE_RAW_OCCURRENCES,
+  LOG_VA_OPEN_READ_DEVIRT_COMPARE,
+  LOG_VA_OPEN_READ_DEVIRT_CALL,
+  LOG_VA_OPEN_WRITE_DEVIRT_COMPARE,
+  LOG_VA_OPEN_WRITE_DEVIRT_CALL,
+  LOG_OPEN_ACTION_NONE,
+  LOG_OPEN_ACTION_FOPEN,
+  LOG_OPEN_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V10,
+  LOG_TEXT_UNDECODABLE_BYTES_V10,
+  LOG_V10_BATCHED_VAS,
+  LOG_V10_EXACT_ZHL_MATCHES,
+  logOpenReadPathGate,
+  logOpenReadModeVa,
+  logOpenReadModeLen,
+  logOpenReadFileAfter,
+  logOpenReadStateAfter,
+  logOpenReadPathAfter,
+  logOpenReadReturns,
+  logOpenReadAccountingReached,
+  logOpenReadAccountingSites,
+  logOpenWriteModeVa,
+  logOpenWriteModeLen,
+  logOpenWriteFopenGated,
+  logOpenWriteFileAfter,
+  logOpenWriteStateAfter,
+  logOpenWritePathAfter,
+  logOpenWriteReturns,
+  logOpenWriteAccountingReached,
+  logOpenWriteAccountingSites,
+  logOpenReadBodyVa,
+  logOpenReadBodyBytes,
+  logOpenReadInsnCount,
+  logOpenReadRetArgs,
+  logOpenReadVtblSlot,
+  logOpenReadDirectCallsites,
+  logOpenReadRawOccurrences,
+  logOpenWriteBodyVa,
+  logOpenWriteBodyBytes,
+  logOpenWriteInsnCount,
+  logOpenWriteRetArgs,
+  logOpenWriteVtblSlot,
+  logOpenWriteDirectCallsites,
+  logOpenWriteRawOccurrences,
+  logOpenReadDevirtCallVa,
+  logOpenWriteDevirtCallVa,
+  logOpenReadActionCount,
+  logOpenReadActionAt,
+  logOpenReadActionIsPlatform,
+  logOpenReadPlan,
+  logOpenWriteActionCount,
+  logOpenWriteActionAt,
+  logOpenWriteActionIsPlatform,
+  logOpenWritePlan,
+  /* v11: the dtor inner body 0x00a52410 */
+  LOG_VA_DTOR_INNER,
+  LOG_VA_DTOR_INNER_END,
+  LOG_DTOR_INNER_BODY_BYTES,
+  LOG_DTOR_INNER_INSN_COUNT,
+  LOG_DTOR_INNER_RET_ARGS,
+  LOG_DTOR_INNER_SEH_HANDLER,
+  LOG_DTOR_INNER_VTABLE_BASE,
+  LOG_DTOR_INNER_VTABLE_MID,
+  LOG_DTOR_INNER_VTABLE_FINAL,
+  LOG_DTOR_INNER_STATE_VALUE,
+  LOG_DTOR_INNER_STATE_STORES,
+  LOG_VA_DTOR_INNER_FCLOSE_GATE,
+  LOG_VA_DTOR_INNER_FCLOSE_CALL,
+  LOG_VA_DTOR_INNER_FILE_NULL,
+  LOG_VA_DTOR_INNER_FREE_GATE,
+  LOG_VA_DTOR_INNER_FREE_CALL,
+  LOG_VA_DTOR_INNER_PATH_NULL,
+  LOG_VA_DTOR_INNER_STATE_STORE1,
+  LOG_VA_DTOR_INNER_STATE_STORE2,
+  LOG_VA_DTOR_INNER_VTABLE_STORE1,
+  LOG_VA_DTOR_INNER_VTABLE_STORE2,
+  LOG_VA_DTOR_INNER_VTABLE_STORE3,
+  LOG_DTOR_INNER_INBOUND_CALLSITES,
+  LOG_DTOR_INNER_RAW_OCCURRENCES,
+  LOG_DTOR_INNER_FCLOSE_IAT_SITES,
+  LOG_DTOR_INNER_ACTION_NONE,
+  LOG_DTOR_INNER_ACTION_FCLOSE,
+  LOG_DTOR_INNER_ACTION_FREE,
+  LOG_DTOR_INNER_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V11,
+  LOG_TEXT_UNDECODABLE_BYTES_V11,
+  LOG_V11_BATCHED_VAS,
+  LOG_V11_EXACT_ZHL_MATCHES,
+  logDtorInnerFcloseGate,
+  logDtorInnerFcloseIatVa,
+  logDtorInnerFileAfter,
+  logDtorInnerFreeGate,
+  logDtorInnerFreeHelperVa,
+  logDtorInnerPathAfter,
+  logDtorInnerStateAfter,
+  logDtorInnerStateValue,
+  logDtorInnerStateStoreCount,
+  logDtorInnerVtableBase,
+  logDtorInnerVtableMid,
+  logDtorInnerVtableFinal,
+  logDtorInnerVtableMidStored,
+  logDtorInnerVtableAfter,
+  logDtorInnerBodyVa,
+  logDtorInnerBodyBytes,
+  logDtorInnerInsnCount,
+  logDtorInnerRetArgs,
+  logDtorInnerSehHandler,
+  logDtorInnerInboundCallsites,
+  logDtorInnerRawOccurrences,
+  logDtorInnerFcloseIatSites,
+  logDtorInnerActionCount,
+  logDtorInnerActionAt,
+  logDtorInnerActionIsPlatform,
+  /* v12: the neighbor dtor inner body 0x00a84060 */
+  LOG_VA_NEIGHBOR_DTOR_INNER_END,
+  LOG_NEIGHBOR_DTOR_INNER_BODY_BYTES,
+  LOG_NEIGHBOR_DTOR_INNER_INSN_COUNT,
+  LOG_NEIGHBOR_DTOR_INNER_RET_ARGS,
+  LOG_NEIGHBOR_DTOR_INNER_SEH_HANDLER,
+  LOG_NEIGHBOR_DTOR_INNER_VTABLE_BASE,
+  LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL,
+  LOG_NEIGHBOR_DTOR_INNER_PATH_OFFSET,
+  LOG_NEIGHBOR_DTOR_INNER_LOBBY_OFFSET,
+  LOG_NEIGHBOR_DTOR_INNER_SUB_OFFSET,
+  LOG_VA_NEIGHBOR_DTOR_INNER_FREE_GATE,
+  LOG_VA_NEIGHBOR_DTOR_INNER_FREE_CALL,
+  LOG_VA_NEIGHBOR_DTOR_INNER_PATH_NULL,
+  LOG_VA_NEIGHBOR_DTOR_INNER_RELEASE_CALL,
+  LOG_VA_NEIGHBOR_DTOR_INNER_LOBBY_NULL,
+  LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE1,
+  LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE2,
+  LOG_VA_NEIGHBOR_DTOR_INNER_SUB_DTOR_CALL,
+  LOG_NEIGHBOR_DTOR_INNER_SUB_DTOR_VA,
+  LOG_NEIGHBOR_DTOR_INNER_INBOUND_CALLSITES,
+  LOG_NEIGHBOR_DTOR_INNER_RAW_OCCURRENCES,
+  LOG_NEIGHBOR_DTOR_INNER_RELEASE_IAT_SITES,
+  LOG_NEIGHBOR_DTOR_INNER_ACTION_NONE,
+  LOG_NEIGHBOR_DTOR_INNER_ACTION_FREE,
+  LOG_NEIGHBOR_DTOR_INNER_ACTION_RELEASE,
+  LOG_NEIGHBOR_DTOR_INNER_ACTIONS_MAX,
+  LOG_TEXT_INSN_COUNT_V12,
+  LOG_TEXT_UNDECODABLE_BYTES_V12,
+  LOG_V12_BATCHED_VAS,
+  LOG_V12_EXACT_ZHL_MATCHES,
+  logNeighborDtorInnerFreeGate,
+  logNeighborDtorInnerFreeHelperVa,
+  logNeighborDtorInnerPathAfter,
+  logNeighborDtorInnerVtableBase,
+  logNeighborDtorInnerVtableFinal,
+  logNeighborDtorInnerVtableBaseStored,
+  logNeighborDtorInnerVtableFinalAfter,
+  logNeighborDtorInnerReleaseUnconditional,
+  logNeighborDtorInnerReleaseArg,
+  logNeighborDtorInnerLobbyAfter,
+  logNeighborDtorInnerReleaseIatVa,
+  logNeighborDtorInnerSubDtorVa,
+  logNeighborDtorInnerSubDtorOffset,
+  logNeighborDtorInnerBodyVa,
+  logNeighborDtorInnerBodyBytes,
+  logNeighborDtorInnerInsnCount,
+  logNeighborDtorInnerRetArgs,
+  logNeighborDtorInnerSehHandler,
+  logNeighborDtorInnerInboundCallsites,
+  logNeighborDtorInnerRawOccurrences,
+  logNeighborDtorInnerReleaseIatSites,
+  logNeighborDtorInnerActionCount,
+  logNeighborDtorInnerActionAt,
+  logNeighborDtorInnerActionIsPlatform,
+  /* v13: the sibling vtbl+0x20 flush slot 0x00a52880 */
+  LOG_VA_FLUSH_SLOT,
+  LOG_VA_FLUSH_SLOT_END,
+  LOG_FLUSH_SLOT_BODY_BYTES,
+  LOG_FLUSH_SLOT_INSN_COUNT,
+  LOG_FLUSH_SLOT_FIRST_RET_VA,
+  LOG_FLUSH_SLOT_RET_ARGS,
+  LOG_FLUSH_SLOT_STACK_BYTES_POPPED,
+  LOG_FLUSH_SLOT_FILE_OFFSET,
+  LOG_FLUSH_SLOT_IAT_VA,
+  LOG_FLUSH_SLOT_VTBL_SLOT,
+  LOG_FLUSH_SLOT_VTBL_VA,
+  LOG_FLUSH_SLOT_VTBL_ENTRY_VA,
+  LOG_FLUSH_SLOT_PUSH_VA,
+  LOG_FLUSH_SLOT_CALL_VA,
+  LOG_FLUSH_SLOT_POP_VA,
+  LOG_FLUSH_SLOT_RET_VA,
+  LOG_FLUSH_SLOT_INDIRECT_CALLS,
+  LOG_FLUSH_SLOT_DIRECT_CALLSITES,
+  LOG_FLUSH_SLOT_INBOUND,
+  LOG_FLUSH_SLOT_RAW_OCCURRENCES,
+  LOG_FLUSH_SLOT_FFLUSH_IAT_SITES,
+  LOG_FLUSH_SLOT_VTBL_IS_NOP,
+  LOG_TEXT_INSN_COUNT_V13,
+  LOG_TEXT_UNDECODABLE_BYTES_V13,
+  LOG_V13_BATCHED_VAS,
+  LOG_V13_EXACT_ZHL_MATCHES,
+  logFlushSlotFileOffset,
+  logFlushSlotIatVa,
+  logFlushSlotCallUnconditional,
+  logFlushSlotRetArgs,
+  logFlushSlotStackBytesPopped,
+  logFlushSlotRetIsFflush,
+  logFlushSlotBodyVa,
+  logFlushSlotBodyBytes,
+  logFlushSlotInsnCount,
+  logFlushSlotFirstRetVa,
+  logFlushSlotVtblSlot,
+  logFlushSlotVtblVa,
+  logFlushSlotVtblEntryVa,
+  logFlushSlotPushVa,
+  logFlushSlotCallVa,
+  logFlushSlotPopVa,
+  logFlushSlotRetVa,
+  logFlushSlotIndirectCalls,
+  logFlushSlotDirectCallsites,
+  logFlushSlotInbound,
+  logFlushSlotRawOccurrences,
+  logFlushSlotFflushIatSites,
+  logFlushSlotVtblIsNop,
+  /* v14: the fd lock/unlock helper 0x00a52890 */
+  LOG_VA_FDLOCK,
+  LOG_VA_FDLOCK_END,
+  LOG_FDLOCK_BODY_BYTES,
+  LOG_FDLOCK_INSN_COUNT,
+  LOG_FDLOCK_FIRST_RET_VA,
+  LOG_FDLOCK_RET_ARGS,
+  LOG_FDLOCK_INDIRECT_CALLS,
+  LOG_FDLOCK_DIRECT_CALLSITES,
+  LOG_FDLOCK_IAT_OSFHANDLE,
+  LOG_FDLOCK_IAT_UNLOCK,
+  LOG_FDLOCK_IAT_LOCK,
+  LOG_FDLOCK_IAT_ERRNO,
+  LOG_FDLOCK_OVERLAPPED_ZERO_DWORDS,
+  LOG_FDLOCK_OVERLAPPED_BYTES,
+  LOG_FDLOCK_UNLOCK_RESERVED,
+  LOG_FDLOCK_UNLOCK_LENGTH_LOW,
+  LOG_FDLOCK_UNLOCK_LENGTH_HIGH,
+  LOG_FDLOCK_LOCK_LENGTH_LOW,
+  LOG_FDLOCK_LOCK_LENGTH_HIGH,
+  LOG_FDLOCK_LOCK_OVERLAPPED_NULL,
+  LOG_FDLOCK_ERRNO_EINVAL,
+  LOG_FDLOCK_FAIL_RETURN,
+  LOG_FDLOCK_DISPATCH_NONE,
+  LOG_FDLOCK_DISPATCH_LOCK_FLAGS_BIT,
+  LOG_FDLOCK_DISPATCH_LOCK_EXCLUSIVE,
+  LOG_FDLOCK_DISPATCH_UNLOCK_ONLY,
+  LOG_FDLOCK_MODE_MASK,
+  LOG_TEXT_INSN_COUNT_V14,
+  LOG_TEXT_UNDECODABLE_BYTES_V14,
+  LOG_V14_BATCHED_VAS,
+  logFdlockBodyVa,
+  logFdlockBodyBytes,
+  logFdlockInsnCount,
+  logFdlockFirstRetVa,
+  logFdlockRetArgs,
+  logFdlockDirectCallsites,
+  logFdlockIndirectCalls,
+  logFdlockOverlappedZeroDwords,
+  logFdlockOverlappedBytes,
+  logFdlockOsfhandleIatVa,
+  logFdlockUnlockIatVa,
+  logFdlockLockIatVa,
+  logFdlockErrnoIatVa,
+  logFdlockOsfhandleUnconditional,
+  logFdlockUnlockUnconditional,
+  logFdlockUnlockResultIgnored,
+  logFdlockUnlockReserved,
+  logFdlockUnlockLengthLow,
+  logFdlockUnlockLengthHigh,
+  logFdlockUnlockUsesOverlapped,
+  logFdlockDispatch,
+  logFdlockLockFires,
+  logFdlockLockFlags,
+  logFdlockLockLengthLow,
+  logFdlockLockLengthHigh,
+  logFdlockLockOverlappedNull,
+  logFdlockErrnoValue,
+  logFdlockFailReturn,
+  logFdlockErrnoAfter,
+  logFdlockReturns,
+  /* v23: engine-binding census final + cluster closure (pins only) */
+  LOG_VA_PATH_GETTER,
+  LOG_PATH_GETTER_END,
+  LOG_PATH_GETTER_BODY_BYTES,
+  LOG_PATH_GETTER_INSN_COUNT,
+  LOG_PATH_GETTER_FIRST_RET_VA,
+  LOG_PATH_GETTER_RET_ARGS,
+  LOG_PATH_GETTER_RETS,
+  LOG_PATH_GETTER_E8_CALLS,
+  LOG_PATH_GETTER_INDIRECT_CALLS,
+  LOG_PATH_GETTER_MEM_STORES,
+  LOG_PATH_GETTER_PATH_OFFSET,
+  LOG_PATH_GETTER_DIRECT_CALLSITES,
+  LOG_PATH_GETTER_REGISTRATION_PUSHES,
+  LOG_PATH_GETTER_REG_PUSH_VA_1,
+  LOG_PATH_GETTER_REG_PUSH_VA_2,
+  LOG_PATH_GETTER_RAW_OCCURRENCES,
+  LOG_PATH_GETTER_VTABLE_SLOTS,
+  LOG_PATH_GETTER_SLOT_DTOR_BASE_VA,
+  LOG_PATH_GETTER_SLOT_SINK_VA,
+  LOG_PATH_GETTER_SLOT_SIBLING_VA,
+  LOG_PATH_GETTER_SLOT_EXTRA_VA,
+  LOG_SINK_DTOR_WRAPPER_VA,
+  LOG_SIBLING_DTOR_WRAPPER_VA,
+  LOG_SINK_WRITE_VA,
+  LOG_SIBLING_WRITE_VA,
+  LOG_SINK_FLUSH_VA,
+  LOG_SIBLING_FLUSH_VA,
+  LOG_SINK_SIBLING_SHARED_SLOTS,
+  LOG_TEXT_INSN_COUNT_V23,
+  LOG_TEXT_UNDECODABLE_BYTES_V23,
+  /* v24: engine-family owner identified + lease transfer proposed */
+  LOG_PATH_GETTER_ROW1_CALL_VA,
+  LOG_PATH_GETTER_ROW1_BINDER_VA,
+  LOG_PATH_GETTER_ROW1_NAME_VA,
+  LOG_PATH_GETTER_ROW2_CALL_VA,
+  LOG_PATH_GETTER_ROW2_BINDER_VA,
+  LOG_PATH_GETTER_ROW2_NAME_VA,
+  LOG_ENGINE_REGISTER_CLASSES_VA,
+  LOG_ENGINE_REGISTER_CLASSES_END_VA,
+  LOG_ENGINE_REGISTER_CLASSES_BODY_BYTES,
+  LOG_MEGABLOCK_A_GAP_ROWS,
+  LOG_MEGABLOCK_A_GAP_FIRST_CALL_VA,
+  LOG_MEGABLOCK_A_GAP_LAST_CALL_VA,
+  /* v25: base-class table closure (laws land, ABI 22 -> 23) */
+  LOG_VA_BASE_FLAGS_SET1,
+  LOG_BASE_FLAGS_SET1_END,
+  LOG_BASE_FLAGS_SET1_BODY_BYTES,
+  LOG_BASE_FLAGS_SET1_INSN_COUNT,
+  LOG_BASE_FLAGS_SET1_FIRST_RET_VA,
+  LOG_BASE_FLAGS_SET1_RET_ARGS,
+  LOG_BASE_FLAGS_SET1_RETS,
+  LOG_BASE_FLAGS_SET1_E8_CALLS,
+  LOG_BASE_FLAGS_SET1_INDIRECT_CALLS,
+  LOG_BASE_FLAGS_SET1_MEM_STORES,
+  LOG_BASE_FLAGS_SET1_STATE_OFFSET,
+  LOG_BASE_FLAGS_SET1_READ_WIDTH,
+  LOG_BASE_FLAGS_SET1_VTABLE_SLOTS,
+  LOG_BASE_FLAGS_SET1_SLOT_1_VA,
+  LOG_BASE_FLAGS_SET1_SLOT_2_VA,
+  LOG_BASE_FLAGS_SET1_SLOT_3_VA,
+  LOG_BASE_FLAGS_SET1_SLOT_4_VA,
+  LOG_BASE_FLAGS_SET1_SLOT_5_VA,
+  LOG_BASE_FLAGS_SET1_RAW_OCCURRENCES,
+  LOG_BASE_FLAGS_SET1_DIRECT_CALLSITES,
+  LOG_BASE_FLAGS_SET1_SIBLING_CLEAR_VA,
+  LOG_VA_BASE_FLUSH_CLEAR,
+  LOG_BASE_FLUSH_CLEAR_END,
+  LOG_BASE_FLUSH_CLEAR_BODY_BYTES,
+  LOG_BASE_FLUSH_CLEAR_INSN_COUNT,
+  LOG_BASE_FLUSH_CLEAR_FIRST_RET_VA,
+  LOG_BASE_FLUSH_CLEAR_RET_ARGS,
+  LOG_BASE_FLUSH_CLEAR_RETS,
+  LOG_BASE_FLUSH_CLEAR_E8_CALLS,
+  LOG_BASE_FLUSH_CLEAR_INDIRECT_CALLS,
+  LOG_BASE_FLUSH_CLEAR_MEM_STORES,
+  LOG_BASE_FLUSH_CLEAR_LISTENER_GLOBAL_VA,
+  LOG_BASE_FLUSH_CLEAR_FLUSH_SLOT,
+  LOG_BASE_FLUSH_CLEAR_CLEAR_MASK,
+  LOG_BASE_FLUSH_CLEAR_READ_WIDTH,
+  LOG_BASE_FLUSH_CLEAR_FLUSH_CALL_VA,
+  LOG_BASE_FLUSH_CLEAR_CLEAR_VA,
+  LOG_BASE_FLUSH_CLEAR_RAW_OCCURRENCES,
+  LOG_BASE_FLUSH_CLEAR_DIRECT_CALLSITES,
+  LOG_VA_BASE_OPEN0,
+  LOG_BASE_OPEN0_END,
+  LOG_BASE_OPEN0_BODY_BYTES,
+  LOG_BASE_OPEN0_INSN_COUNT,
+  LOG_BASE_OPEN0_FIRST_RET_VA,
+  LOG_BASE_OPEN0_RET_ARGS,
+  LOG_BASE_OPEN0_RETS,
+  LOG_BASE_OPEN0_E8_CALLS,
+  LOG_BASE_OPEN0_INDIRECT_CALLS,
+  LOG_BASE_OPEN0_MEM_STORES,
+  LOG_BASE_OPEN0_STATE_VALUE,
+  LOG_BASE_OPEN0_STATE_OFFSET,
+  LOG_BASE_OPEN0_PATH_OFFSET,
+  LOG_BASE_OPEN0_STATE_STORE_VA,
+  LOG_BASE_OPEN0_COMBINE_CALL_VA,
+  LOG_BASE_OPEN0_CLEANUP_VA,
+  LOG_BASE_OPEN0_RAW_OCCURRENCES,
+  LOG_BASE_OPEN0_DIRECT_CALLSITES,
+  LOG_VA_BASE_OPEN1,
+  LOG_BASE_OPEN1_END,
+  LOG_BASE_OPEN1_BODY_BYTES,
+  LOG_BASE_OPEN1_INSN_COUNT,
+  LOG_BASE_OPEN1_FIRST_RET_VA,
+  LOG_BASE_OPEN1_RET_ARGS,
+  LOG_BASE_OPEN1_RETS,
+  LOG_BASE_OPEN1_E8_CALLS,
+  LOG_BASE_OPEN1_INDIRECT_CALLS,
+  LOG_BASE_OPEN1_MEM_STORES,
+  LOG_BASE_OPEN1_STATE_VALUE,
+  LOG_BASE_OPEN1_STATE_OFFSET,
+  LOG_BASE_OPEN1_PATH_OFFSET,
+  LOG_BASE_OPEN1_STATE_STORE_VA,
+  LOG_BASE_OPEN1_COMBINE_CALL_VA,
+  LOG_BASE_OPEN1_CLEANUP_VA,
+  LOG_BASE_OPEN1_ARG2_DEAD,
+  LOG_BASE_OPEN1_RAW_OCCURRENCES,
+  LOG_BASE_OPEN1_DIRECT_CALLSITES,
+  LOG_BASE_OPEN_COMBINE_BASE_NULL,
+  LOG_BASE_OPEN_COMBINE_FLAGS_ZERO,
+  LOG_BASE_OPEN_COMBINE_MODE,
+  LOG_BASE_DTOR_TABLE_VA,
+  LOG_BASE_TABLE_VA,
+  LOG_BASE_TABLE_SLOTS,
+  LOG_BASE_TABLE_NULL_SLOT,
+  LOG_VA_BASE_DTOR_WRAPPER,
+  LOG_BASE_DTOR_WRAPPER_END,
+  LOG_BASE_DTOR_WRAPPER_BODY_BYTES,
+  LOG_BASE_DTOR_WRAPPER_SEH,
+  LOG_VA_BASE_TIMED_WINDOW,
+  LOG_VA_BASE_OPEN_GATED,
+  LOG_VA_BASE_FACTORY,
+  LOG_VA_BASE_SEH_WRAPPER,
+  LOG_VA_BASE_ACCESS_LEAF,
+  LOG_BASE_ACCESS_LEAF_END,
+  LOG_BASE_ACCESS_LEAF_DIRECT_CALLSITES,
+  LOG_BASE_ACCESS_LEAF_CALLSITE_VA,
+  LOG_VA_BASE_GFA_LEAF,
+  LOG_BASE_GFA_LEAF_END,
+  LOG_VA_BASE_STATS_WRITER,
+  LOG_VA_BASE_GETTER_18,
+  LOG_BASE_GETTER_18_END,
+  LOG_BASE_GETTER_18_REG_PUSH_VA,
+  LOG_VA_BASE_COMBINE_WRAPPER,
+  LOG_TEXT_INSN_COUNT_V25,
+  LOG_TEXT_UNDECODABLE_BYTES_V25,
+  LOG_V25_BATCHED_VAS,
+  LOG_V25_EXACT_ZHL_MATCHES,
+  logBaseFlagsAfterSet1,
+  logBaseFlagsSet1ReturnsOne,
+  logBaseFlagsSet1BodyVa,
+  logBaseFlagsSet1EndVa,
+  logBaseFlagsSet1BodyBytes,
+  logBaseFlagsSet1InsnCount,
+  logBaseFlagsSet1FirstRetVa,
+  logBaseFlagsSet1RetArgs,
+  logBaseFlagsSet1Rets,
+  logBaseFlagsSet1E8Calls,
+  logBaseFlagsSet1IndirectCalls,
+  logBaseFlagsSet1MemStores,
+  logBaseFlagsSet1StateOffset,
+  logBaseFlagsSet1ReadWidth,
+  logBaseFlagsSet1VtableSlots,
+  logBaseFlagsSet1Slot1Va,
+  logBaseFlagsSet1Slot2Va,
+  logBaseFlagsSet1Slot3Va,
+  logBaseFlagsSet1Slot4Va,
+  logBaseFlagsSet1Slot5Va,
+  logBaseFlagsSet1RawOccurrences,
+  logBaseFlagsSet1DirectCallsites,
+  logBaseFlagsSet1SiblingClearVa,
+  LOG_VA_BASE_FLAGS_CLEAR1,
+  LOG_BASE_FLAGS_CLEAR1_END,
+  LOG_BASE_FLAGS_CLEAR1_BODY_BYTES,
+  LOG_BASE_FLAGS_CLEAR1_INSN_COUNT,
+  LOG_BASE_FLAGS_CLEAR1_FIRST_RET_VA,
+  LOG_BASE_FLAGS_CLEAR1_RET_ARGS,
+  LOG_BASE_FLAGS_CLEAR1_RETS,
+  LOG_BASE_FLAGS_CLEAR1_E8_CALLS,
+  LOG_BASE_FLAGS_CLEAR1_INDIRECT_CALLS,
+  LOG_BASE_FLAGS_CLEAR1_MEM_STORES,
+  LOG_BASE_FLAGS_CLEAR1_STATE_OFFSET,
+  LOG_BASE_FLAGS_CLEAR1_CLEAR_MASK,
+  LOG_BASE_FLAGS_CLEAR1_BYTE_MASK,
+  LOG_BASE_FLAGS_CLEAR1_READ_WIDTH,
+  LOG_BASE_FLAGS_CLEAR1_VTABLE_SLOTS,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_1_VA,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_2_VA,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_3_VA,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_4_VA,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_5_VA,
+  LOG_BASE_FLAGS_CLEAR1_SLOT_6_VA,
+  LOG_BASE_FLAGS_CLEAR1_RAW_OCCURRENCES,
+  LOG_BASE_FLAGS_CLEAR1_DIRECT_CALLSITES,
+  LOG_BASE_FLAGS_CLEAR1_SIBLING_SET_VA,
+  LOG_BASE_FLAGS_SET1_TO_CLEAR1_PAD_BYTES,
+  logBaseFlagsAfterClear1,
+  logBaseFlagsClear1Unconditional,
+  logBaseFlagsClear1BodyVa,
+  logBaseFlagsClear1EndVa,
+  logBaseFlagsClear1BodyBytes,
+  logBaseFlagsClear1InsnCount,
+  logBaseFlagsClear1FirstRetVa,
+  logBaseFlagsClear1RetArgs,
+  logBaseFlagsClear1Rets,
+  logBaseFlagsClear1E8Calls,
+  logBaseFlagsClear1IndirectCalls,
+  logBaseFlagsClear1MemStores,
+  logBaseFlagsClear1StateOffset,
+  logBaseFlagsClear1ClearMask,
+  logBaseFlagsClear1ByteMask,
+  logBaseFlagsClear1ReadWidth,
+  logBaseFlagsClear1VtableSlots,
+  logBaseFlagsClear1Slot1Va,
+  logBaseFlagsClear1Slot2Va,
+  logBaseFlagsClear1Slot3Va,
+  logBaseFlagsClear1Slot4Va,
+  logBaseFlagsClear1Slot5Va,
+  logBaseFlagsClear1Slot6Va,
+  logBaseFlagsClear1RawOccurrences,
+  logBaseFlagsClear1DirectCallsites,
+  logBaseFlagsClear1SiblingSetVa,
+  logBaseFlagsSet1ToClear1PadBytes,
+  logBaseFlushNeeded,
+  logBaseFlushClearsBit0,
+  logBaseFlushClearUnconditional,
+  logBaseFlushClearBodyVa,
+  logBaseFlushClearEndVa,
+  logBaseFlushClearBodyBytes,
+  logBaseFlushClearInsnCount,
+  logBaseFlushClearFirstRetVa,
+  logBaseFlushClearRetArgs,
+  logBaseFlushClearRets,
+  logBaseFlushClearE8Calls,
+  logBaseFlushClearIndirectCalls,
+  logBaseFlushClearMemStores,
+  logBaseFlushClearListenerGlobalVa,
+  logBaseFlushClearFlushSlot,
+  logBaseFlushClearClearMask,
+  logBaseFlushClearReadWidth,
+  logBaseFlushClearFlushCallVa,
+  logBaseFlushClearClearVa,
+  logBaseFlushClearRawOccurrences,
+  logBaseFlushClearDirectCallsites,
+  logBaseOpen0StateAfter,
+  logBaseOpen1StateAfter,
+  logBaseOpenCombineBaseNull,
+  logBaseOpenCombineFlagsZero,
+  logBaseOpenCombineMode,
+  logBaseOpenReturnsOne,
+  logBaseOpen0RetArgs,
+  logBaseOpen1RetArgs,
+  logBaseOpen1Arg2Dead,
+  logBaseOpen0CombineCallVa,
+  logBaseOpen1CombineCallVa,
+  logBaseOpen0CleanupVa,
+  logBaseOpen1CleanupVa,
+  logBaseOpen0StateStoreVa,
+  logBaseOpen1StateStoreVa,
+  logBaseOpen0BodyVa,
+  logBaseOpen0EndVa,
+  logBaseOpen0BodyBytes,
+  logBaseOpen0InsnCount,
+  logBaseOpen0FirstRetVa,
+  logBaseOpen0Rets,
+  logBaseOpen0E8Calls,
+  logBaseOpen0IndirectCalls,
+  logBaseOpen0MemStores,
+  logBaseOpen0StateValue,
+  logBaseOpen0RawOccurrences,
+  logBaseOpen0DirectCallsites,
+  logBaseOpen1BodyVa,
+  logBaseOpen1EndVa,
+  logBaseOpen1BodyBytes,
+  logBaseOpen1InsnCount,
+  logBaseOpen1FirstRetVa,
+  logBaseOpen1Rets,
+  logBaseOpen1E8Calls,
+  logBaseOpen1IndirectCalls,
+  logBaseOpen1MemStores,
+  logBaseOpen1StateValue,
+  logBaseOpen1RawOccurrences,
+  logBaseOpen1DirectCallsites,
+  logBaseDtorWrapperVa,
+  logBaseDtorWrapperEndVa,
+  logBaseDtorWrapperBodyBytes,
+  logBaseDtorWrapperSeh,
+  logBaseAccessLeafDirectCallsites,
+  logBaseAccessLeafCallsiteVa,
+  logBaseGetter18EndVa,
+  logTextInsnCountV25,
+  logTextUndecodableBytesV25,
+  /* v26: the KAGE::MutexBase same-template trio */
+  LOG_MUTEXBASE_SDTOR_VA,
+  LOG_MUTEXBASE_SDTOR_FREE_SIZE,
+  LOG_MUTEXBASE_SDTOR_VTABLE,
+  LOG_MUTEXBASE_OBJECT_SIZE,
+  LOG_MUTEXBASE_LOCK_CLOCK_RECHECK,
+  LOG_VA_MUTEXBASE_SET1,
+  LOG_MUTEXBASE_SET1_END,
+  LOG_MUTEXBASE_SET1_BODY_BYTES,
+  LOG_MUTEXBASE_SET1_INSN_COUNT,
+  LOG_MUTEXBASE_SET1_FIRST_RET_VA,
+  LOG_MUTEXBASE_SET1_RETS,
+  LOG_MUTEXBASE_SET1_MEM_STORES,
+  LOG_MUTEXBASE_SET1_CELL_OFFSET,
+  LOG_MUTEXBASE_SET1_READ_WIDTH,
+  LOG_MUTEXBASE_SET1_BIT,
+  LOG_MUTEXBASE_SET1_VTABLE_REF_RDATA,
+  LOG_VA_MUTEXBASE_CLEAR1,
+  LOG_MUTEXBASE_CLEAR1_END,
+  LOG_MUTEXBASE_CLEAR1_BODY_BYTES,
+  LOG_MUTEXBASE_CLEAR1_INSN_COUNT,
+  LOG_MUTEXBASE_CLEAR1_BYTE_MASK,
+  LOG_MUTEXBASE_CLEAR1_READ_WIDTH,
+  LOG_MUTEXBASE_CLEAR1_CELL_OFFSET,
+  LOG_MUTEXBASE_CLEAR1_VTABLE_REF_RDATA,
+  logMutexbaseSet1After,
+  logMutexbaseSet1ReturnsOne,
+  logMutexbaseClear1After,
+  logMutexbaseClear1Unconditional,
+  logMutexbaseSdtorVa,
+  logMutexbaseSdtorFreeSize,
+  logMutexbaseSdtorVtable,
+  logMutexbaseObjectSize,
+  logMutexbaseLockClockRecheck,
+  logMutexbaseSet1BodyVa,
+  logMutexbaseSet1EndVa,
+  logMutexbaseSet1BodyBytes,
+  logMutexbaseSet1InsnCount,
+  logMutexbaseSet1FirstRetVa,
+  logMutexbaseSet1Rets,
+  logMutexbaseSet1MemStores,
+  logMutexbaseSet1CellOffset,
+  logMutexbaseSet1ReadWidth,
+  logMutexbaseSet1Bit,
+  logMutexbaseSet1VtableRefRdata,
+  logMutexbaseSet1DirectCallsites,
+  logMutexbaseClear1BodyVa,
+  logMutexbaseClear1EndVa,
+  logMutexbaseClear1BodyBytes,
+  logMutexbaseClear1InsnCount,
+  logMutexbaseClear1ByteMask,
+  logMutexbaseClear1ReadWidth,
+  logMutexbaseClear1CellOffset,
+  logMutexbaseClear1VtableRefRdata,
+} from "../scripts/decomp/log-pure-model.mjs";
+
+/* Executed-assertion counter: the report quotes how many checks actually
+   ran, not just how many test blocks passed. */
+let ASSERTIONS = 0;
+const assert = new Proxy(rawAssert, {
+  apply(target, thisArg, args) {
+    ASSERTIONS += 1;
+    return Reflect.apply(target, thisArg, args);
+  },
+  get(target, prop, receiver) {
+    const value = Reflect.get(target, prop, receiver);
+    if (typeof value === "function") {
+      return (...args) => {
+        ASSERTIONS += 1;
+        return value.apply(target, args);
+      };
+    }
+    return value;
+  },
+});
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const header = join(root, "native", "decomp", "log_pure_helpers.h");
+const source = join(root, "native", "decomp", "log_pure_helpers.cpp");
+/* Wave-26 hardening (update-v102-hardening GAP B): 120-attempt retried
+   source write so a crashed/failed mutant restore can never strand a
+   mutant in the tracked log_pure_helpers.cpp (Windows open-lock EUNKNOWN class; room/anm2
+   convention). */
+const writeSourceRetry = (content) => {
+  for (let attempt = 0; ; ++attempt) {
+    try {
+      writeFileSync(source, content, "utf8");
+      return;
+    } catch (e) {
+      if (attempt >= 120) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
+        Math.min(25 * (attempt + 1), 500));
+    }
+  }
+};
+
+const outDir = join(root, "output", "decomp", "log-pure");
+const wasmPath = join(outDir, "log-pure-helpers.wasm");
+
+function firstExisting(paths, label) {
+  const found = paths.find((path) => path && existsSync(path));
+  assert.ok(found, `${label} not found:\n${paths.filter(Boolean).join("\n")}`);
+  return found;
+}
+
+const EXPORTS = [
+  "isaac_log_guard_blocks",
+  "isaac_log_listener_hit_pre",
+  "isaac_log_level_low_byte",
+  "isaac_log_emit_gate",
+  "isaac_log_message_dropped",
+  "isaac_log_init_needed",
+  "isaac_log_guard_after_init",
+  "isaac_log_guard_after",
+  "isaac_log_init_always_succeeds",
+  "isaac_log_prefix_case",
+  "isaac_log_prefix_va",
+  "isaac_log_prefix_len",
+  "isaac_log_prefix_written",
+  "isaac_log_append_dest_off",
+  "isaac_log_append_capacity",
+  "isaac_log_console_gate",
+  "isaac_log_listener_gate_post",
+  "isaac_log_next_at_line_start",
+  "isaac_log_empty_append_clears_line_start",
+  "isaac_log_buffer_reset_byte",
+  "isaac_log_initial_at_line_start",
+  "isaac_log_vararg_dword_count",
+  "isaac_log_va_start_stack_disp",
+  "isaac_log_emit_plan",
+  /* v17: logger mid-body dispatch + tail length laws */
+  "isaac_log_dispatch_nmemb_len",
+  "isaac_log_tail_len_after_dispatch",
+  "isaac_log_dispatch_return_dropped",
+  "isaac_log_dispatch_strlen_pass_va",
+  "isaac_log_dispatch_nmemb_push_va",
+  "isaac_log_tail_strlen_pass_va",
+  "isaac_log_tail_newline_cmp_va",
+  /* v18: the shared sub-object vector dtor 0x00426980 */
+  "isaac_log_sub_dtor_needed",
+  "isaac_log_sub_dtor_byte_count",
+  "isaac_log_sub_dtor_large",
+  "isaac_log_sub_dtor_header_sane",
+  "isaac_log_sub_dtor_free_plan",
+  "isaac_log_sub_dtor_free_ptr",
+  "isaac_log_sub_dtor_free_size",
+  "isaac_log_sub_dtor_invalid_needed",
+  "isaac_log_sub_dtor_null_after",
+  "isaac_log_sub_dtor_body_va",
+  "isaac_log_sub_dtor_body_bytes",
+  "isaac_log_sub_dtor_insn_count",
+  "isaac_log_sub_dtor_first_ret_va",
+  "isaac_log_sub_dtor_ret_args",
+  "isaac_log_sub_dtor_begin_offset",
+  "isaac_log_sub_dtor_mylast_offset",
+  "isaac_log_sub_dtor_myend_offset",
+  "isaac_log_sub_dtor_delete_va",
+  "isaac_log_sub_dtor_invalid_iat_va",
+  "isaac_log_sub_dtor_invalid_call_va",
+  "isaac_log_sub_dtor_e8_callsites",
+  "isaac_log_sub_dtor_raw_occurrences",
+  "isaac_log_combine_has_trailing_sep",
+  "isaac_log_combine_both_empty",
+  "isaac_log_combine_counter_va",
+  "isaac_log_combine_both_empty_header",
+  "isaac_log_combine_both_empty_delta",
+  "isaac_log_combine_alloc_size",
+  "isaac_log_combine_copy_count",
+  "isaac_log_combine_mode",
+  "isaac_log_combine_join_uses_sep",
+  "isaac_log_combine_normalize_char",
+  "isaac_log_combine_trailing_needed",
+  "isaac_log_combine_fail_crashes",
+  "isaac_log_combine_fail_code",
+  "isaac_log_combine_body_va",
+  "isaac_log_combine_end_va",
+  "isaac_log_combine_body_bytes",
+  "isaac_log_combine_insn_count",
+  "isaac_log_combine_first_ret_va",
+  "isaac_log_combine_ret_args",
+  "isaac_log_combine_rets",
+  "isaac_log_combine_inbound_callsites",
+  "isaac_log_combine_raw_occurrences",
+  "isaac_log_combine_join_sep_va",
+  "isaac_log_combine_join_nosep_va",
+  "isaac_log_combine_slash_str_va",
+  "isaac_log_combine_fail_broadcast_va",
+  "isaac_log_combine_alloc_va",
+  "isaac_log_combine_malloc_iat_va",
+  "isaac_log_combine_strncpy_s_iat_va",
+  "isaac_log_combine_strcat_s_iat_va",
+  /* v20: the fail-broadcast list walk 0x00a23200 */
+  "isaac_log_broadcast_walk_empty",
+  "isaac_log_broadcast_walk_continues",
+  "isaac_log_broadcast_walk_terminates",
+  "isaac_log_broadcast_visited_count",
+  "isaac_log_broadcast_code_passthrough",
+  "isaac_log_broadcast_callback_args",
+  "isaac_log_broadcast_callback_stack_bytes",
+  "isaac_log_broadcast_callback_dispatch_is_platform",
+  "isaac_log_broadcast_fail_code",
+  "isaac_log_broadcast_fail_code_matches_init_magic",
+  "isaac_log_broadcast_constant_code_sites",
+  "isaac_log_broadcast_dynamic_code_site_va",
+  "isaac_log_broadcast_dynamic_code_source_va",
+  "isaac_log_broadcast_dynamic_site_fires",
+  "isaac_log_broadcast_sentinel_tag",
+  "isaac_log_broadcast_sentinel_tag_low_byte",
+  "isaac_log_broadcast_body_va",
+  "isaac_log_broadcast_end_va",
+  "isaac_log_broadcast_body_bytes",
+  "isaac_log_broadcast_insn_count",
+  "isaac_log_broadcast_first_ret_va",
+  "isaac_log_broadcast_ret_args",
+  "isaac_log_broadcast_rets",
+  "isaac_log_broadcast_indirect_calls",
+  "isaac_log_broadcast_e8_calls",
+  "isaac_log_broadcast_direct_callsites",
+  "isaac_log_broadcast_inlined_copies",
+  "isaac_log_broadcast_raw_occurrences",
+  "isaac_log_broadcast_list_head_va",
+  "isaac_log_broadcast_node_next_offset",
+  "isaac_log_broadcast_node_prev_offset",
+  "isaac_log_broadcast_node_fn_offset",
+  "isaac_log_broadcast_node_ctx_offset",
+  "isaac_log_broadcast_head_writers",
+  "isaac_log_broadcast_head_zero_write_va",
+  "isaac_log_broadcast_head_sentinel_write_va",
+  "isaac_log_broadcast_head_reader_sites",
+  "isaac_log_broadcast_head_load_value",
+  "isaac_log_broadcast_head_writes_after_init",
+  "isaac_log_broadcast_sentinel_self_links",
+  "isaac_log_broadcast_init_thunk_va",
+  "isaac_log_broadcast_init_table_slot_va",
+  "isaac_log_broadcast_init_seh_va",
+  "isaac_log_broadcast_object_va",
+  "isaac_log_broadcast_object_vtable_va",
+  "isaac_log_broadcast_active_list_head_va",
+  "isaac_log_broadcast_sentinel_a_size",
+  "isaac_log_broadcast_sentinel_b_size",
+  "isaac_log_broadcast_dtor_va",
+  "isaac_log_broadcast_dtor_body_bytes",
+  "isaac_log_broadcast_dtor_first_ret_va",
+  "isaac_log_broadcast_dtor_ret_args",
+  "isaac_log_broadcast_dtor_head_delete_size",
+  "isaac_log_broadcast_dtor_clears_head",
+  "isaac_log_broadcast_dtor_vtable_swap_1",
+  "isaac_log_broadcast_dtor_vtable_swap_2",
+  "isaac_log_broadcast_atexit_va",
+  /* v21: the sink Close member 0x00a526f0 (vtbl+0x34) */
+  "isaac_log_sink_close_dispatch_fires",
+  "isaac_log_sink_close_dispatch_va",
+  "isaac_log_sink_close_dispatch_slot",
+  "isaac_log_sink_close_fclose_leaf_va",
+  "isaac_log_sink_close_file_gate",
+  "isaac_log_sink_close_file_after",
+  "isaac_log_sink_close_state_after",
+  "isaac_log_sink_close_state_value",
+  "isaac_log_sink_close_state_store_count",
+  "isaac_log_sink_close_state_store_va",
+  "isaac_log_sink_close_state_getter_va",
+  "isaac_log_sink_close_free_gate",
+  "isaac_log_sink_close_free_branch_va",
+  "isaac_log_sink_close_free_call_va",
+  "isaac_log_sink_close_free_mode",
+  "isaac_log_sink_close_free_helper_va",
+  "isaac_log_sink_close_path_null_va",
+  "isaac_log_sink_close_path_after",
+  "isaac_log_sink_close_file_offset",
+  "isaac_log_sink_close_path_offset",
+  "isaac_log_sink_close_state_offset",
+  "isaac_log_sink_close_vtable_store_count",
+  "isaac_log_sink_close_body_va",
+  "isaac_log_sink_close_end_va",
+  "isaac_log_sink_close_body_bytes",
+  "isaac_log_sink_close_insn_count",
+  "isaac_log_sink_close_first_ret_va",
+  "isaac_log_sink_close_ret_args",
+  "isaac_log_sink_close_rets",
+  "isaac_log_sink_close_e8_calls",
+  "isaac_log_sink_close_indirect_calls",
+  "isaac_log_sink_close_mem_stores",
+  "isaac_log_sink_close_seh_handler",
+  "isaac_log_sink_close_sink_slot_va",
+  "isaac_log_sink_close_sibling_slot_va",
+  "isaac_log_sink_close_vtable_slots",
+  "isaac_log_sink_close_raw_occurrences",
+  "isaac_log_sink_close_direct_callsites",
+  "isaac_log_sink_close_dispatch_unconditional",
+  "isaac_log_sink_close_fclose_gate_va",
+  "isaac_log_sink_close_fclose_test_va",
+  "isaac_log_sink_close_fclose_branch_va",
+  "isaac_log_sink_close_fclose_call_va",
+  "isaac_log_sink_close_fclose_null_va",
+  /* v22: the state!=2 getter 0x00a25440 (vtbl+0x30) */
+  "isaac_log_state_getter_neq",
+  "isaac_log_state_getter_body_va",
+  "isaac_log_state_getter_end_va",
+  "isaac_log_state_getter_body_bytes",
+  "isaac_log_state_getter_insn_count",
+  "isaac_log_state_getter_first_ret_va",
+  "isaac_log_state_getter_ret_args",
+  "isaac_log_state_getter_rets",
+  "isaac_log_state_getter_e8_calls",
+  "isaac_log_state_getter_indirect_calls",
+  "isaac_log_state_getter_mem_stores",
+  "isaac_log_state_getter_state_offset",
+  "isaac_log_state_getter_read_width",
+  "isaac_log_state_getter_compare_value",
+  "isaac_log_state_getter_vtable_slots",
+  "isaac_log_state_getter_extra_slot_va",
+  "isaac_log_state_getter_raw_occurrences",
+  "isaac_log_state_getter_direct_callsites",
+  "isaac_log_state_getter_inlined_copies",
+  "isaac_log_state_getter_devirt_cmp_1",
+  "isaac_log_state_getter_devirt_cmp_2",
+  "isaac_log_state_getter_devirt_cmp_3",
+  "isaac_log_state_getter_slot_dtor_base_va",
+  "isaac_log_state_getter_slot_sink_va",
+  "isaac_log_state_getter_slot_sibling_va",
+  "isaac_log_pure_helpers_abi_version",
+  /* v2: lifecycle */
+  "isaac_log_teardown_flush_needed",
+  "isaac_log_teardown_destroy_needed",
+  "isaac_log_teardown_listener_ptr_after",
+  "isaac_log_teardown_listener_mask_after",
+  "isaac_log_teardown_mask_clear_unconditional",
+  "isaac_log_teardown_second_flush_reached",
+  "isaac_log_teardown_engaged",
+  "isaac_log_teardown_critsec_delete_needed",
+  "isaac_log_teardown_critsec_ptr_after",
+  "isaac_log_teardown_holder_flags_after",
+  "isaac_log_teardown_guard_after",
+  "isaac_log_teardown_byte_after",
+  "isaac_log_post_teardown_blocks_all",
+  "isaac_log_teardown_leaves_logger_live",
+  "isaac_log_teardown_critsec_free_size",
+  "isaac_log_installer_prev_destroy_needed",
+  "isaac_log_installer_listener_ptr_after",
+  "isaac_log_installer_listener_mask_after",
+  "isaac_log_installer_mask_unconditional",
+  "isaac_log_installer_mask_set_without_sink",
+  "isaac_log_installer_sink_state",
+  "isaac_log_listener_hit_after_install",
+  "isaac_log_teardown_plan",
+  /* v3: the init 0x00a710a0 + the D-LOG-3 answer */
+  "isaac_log_init_already_initialized",
+  "isaac_log_init_warn_level",
+  "isaac_log_init_warn_vararg_count",
+  "isaac_log_init_args_published",
+  "isaac_log_init_object_allocated",
+  "isaac_log_init_object_after",
+  "isaac_log_init_critsec_init_runs",
+  "isaac_log_init_critsec_flags_after",
+  "isaac_log_init_critsec_ptr_after",
+  "isaac_log_init_critsec_marked_without_critsec",
+  "isaac_log_init_cmd_thread_warns",
+  "isaac_log_init_cmd_thread_creates",
+  "isaac_log_init_cmd_thread_flags_after",
+  "isaac_log_init_lifecycle_byte_after",
+  "isaac_log_init_devirtualizes_to_mutex_init",
+  "isaac_log_init_guard_after",
+  "isaac_log_boot_log_level",
+  "isaac_log_boot_site_dominates_teardown",
+  "isaac_log_guard_after_boot_site",
+  "isaac_log_shipped_guard_at_teardown",
+  "isaac_log_guard_zero_at_teardown_reachable",
+  "isaac_log_shipped_teardown_leaves_logger_live",
+  "isaac_log_shipped_post_teardown_blocks_all",
+  "isaac_log_guard_value_reachable",
+  "isaac_log_lifecycle_byte_after_init_then_teardown",
+  "isaac_log_init_plan",
+  /* v4 */
+  "isaac_log_lock_assert_fires",
+  "isaac_log_unlock_assert_fires",
+  "isaac_log_lock_assert_string_va",
+  "isaac_log_lock_assert_vararg_count",
+  "isaac_log_lock_assert_sets_ready_bit",
+  "isaac_log_lock_assert_is_lazy_init_template",
+  "isaac_log_lock_holder_flags_after",
+  "isaac_log_lock_assert_reachable_from_logger",
+  "isaac_log_lock_timeout_infinite",
+  "isaac_log_lock_timeout_arm",
+  "isaac_log_lock_zero_timeout_tries",
+  "isaac_log_lock_spin_entered",
+  "isaac_log_lock_spin_continues",
+  "isaac_log_lock_spin_sleep_ms",
+  "isaac_log_lock_spin_reloads_critsec",
+  "isaac_log_lock_timed_reloads_critsec",
+  "isaac_log_lock_spin_bounded",
+  "isaac_log_lock_spin_rereads_sleep_pointer",
+  "isaac_log_lock_spin_holds_critsec",
+  "isaac_log_unlock_enters_critsec",
+  "isaac_log_lock_self_reentrant_spins_forever",
+  "isaac_log_lock_spin_iterations",
+  "isaac_log_lock_try_entered",
+  "isaac_log_lock_try_arm",
+  "isaac_log_lock_try_leaves",
+  "isaac_log_lock_retry_sleep_ms",
+  "isaac_log_lock_ticks_to_ms_lo",
+  "isaac_log_lock_ticks_to_ms_hi",
+  "isaac_log_lock_elapsed_expired",
+  "isaac_log_lock_underflow_branch_dead",
+  "isaac_log_lock_start_refetched",
+  "isaac_log_lock_now_refetched",
+  "isaac_log_lock_marks_owned",
+  "isaac_log_lock_owned_byte_after",
+  "isaac_log_timed_success_skips_owned_store",
+  "isaac_log_lock_acquired",
+  "isaac_log_unlock_owned_byte_after",
+  "isaac_log_unlock_clears_before_leave",
+  "isaac_log_unlock_takes_timeout",
+  "isaac_log_lock_null_critsec_reached",
+  "isaac_log_lock_asserts_on_failed_init",
+  "isaac_log_lock_first_null_access_va",
+  "isaac_log_lock_plan",
+  "isaac_log_unlock_plan",
+  /* v5 — the mutex destroy template and the ready-bit lifecycle */
+  "isaac_log_destroy_frees_critsec",
+  "isaac_log_destroy_stores_null_critsec",
+  "isaac_log_destroy_critsec_ptr_after",
+  "isaac_log_destroy_critsec_free_size",
+  "isaac_log_destroy_sized_delete_ignores_size",
+  "isaac_log_destroy_flags_after",
+  "isaac_log_destroy_clears_ready_bit",
+  "isaac_log_destroy_clear_unconditional",
+  "isaac_log_destroy_is_idempotent",
+  "isaac_log_destroy_variants",
+  "isaac_log_destroy_body_va",
+  "isaac_log_destroy_entry_vtable_va",
+  "isaac_log_destroy_exit_vtable_va",
+  "isaac_log_destroy_clear_va",
+  "isaac_log_destroy_stack_bytes_popped",
+  "isaac_log_destroy_returns_this",
+  "isaac_log_destroy_has_delete_flag_gate",
+  "isaac_log_destroy_operates_on_logger_holder",
+  "isaac_log_destroy_body_bytes",
+  "isaac_log_destroy_shared_bytes",
+  "isaac_log_destroy_is_one_template",
+  "isaac_log_dtor_frees_object",
+  "isaac_log_dtor_object_free_size",
+  "isaac_log_dtor_restores_base_vtable_unconditionally",
+  "isaac_log_dtor_vtable_store_preserves_flags",
+  "isaac_log_ready_state",
+  "isaac_log_ready_state_reachable",
+  "isaac_log_ready_state_after_init",
+  "isaac_log_ready_state_after_destroy",
+  "isaac_log_holder_ready_bit_setters",
+  "isaac_log_holder_ready_bit_clearers",
+  "isaac_log_holder_ready_bit_clear_va",
+  "isaac_log_holder_ready_bit_set_va",
+  "isaac_log_lock_null_deref_reached",
+  "isaac_log_destroy_then_lock_asserts",
+  "isaac_log_destroy_then_lock_faults",
+  "isaac_log_destroy_then_lock_fault_va",
+  "isaac_log_post_destroy_lock_dispatch_va",
+  "isaac_log_destroy_holds_lock",
+  "isaac_log_destroy_clears_before_free",
+  "isaac_log_destroy_dangling_window_start_va",
+  "isaac_log_destroy_dangling_window_end_va",
+  "isaac_log_destroy_dangling_window_insns",
+  "isaac_log_destroy_reach_sites",
+  "isaac_log_destroy_total_reach",
+  "isaac_log_unwind_destroy_reach_measured",
+  "isaac_log_unwind_destroy_reach_v4_reported",
+  "isaac_log_unwind_destroy_is_dead_code",
+  "isaac_log_destroy_plan",
+  "isaac_log_destroy_action_count",
+  "isaac_log_destroy_action_at",
+  "isaac_log_destroy_action_is_platform",
+  /* v6 */
+  "isaac_log_write_state_is_open",
+  "isaac_log_write_fwrite_needed",
+  "isaac_log_write_fflush_needed",
+  "isaac_log_write_tests_file_null",
+  "isaac_log_write_fopen_fail_publishes_sink",
+  "isaac_log_write_flush_vcall_is_nop",
+  "isaac_log_write_byte_count",
+  "isaac_log_write_bytes_returned",
+  "isaac_log_write_stack_bytes_popped",
+  "isaac_log_write_vtbl_slot",
+  "isaac_log_write_body_va",
+  "isaac_log_write_body_bytes",
+  "isaac_log_write_logger_size_imm",
+  "isaac_log_write_direct_callsites",
+  "isaac_log_write_raw_occurrences",
+  "isaac_log_write_logger_dispatch_sites",
+  "isaac_log_write_action_count",
+  "isaac_log_write_action_at",
+  "isaac_log_write_action_is_platform",
+  "isaac_log_write_plan",
+  /* v7 */
+  "isaac_log_sibling_write_state_is_open",
+  "isaac_log_sibling_write_fwrite_needed",
+  "isaac_log_sibling_write_fflush_needed",
+  "isaac_log_sibling_write_tests_file_null",
+  "isaac_log_sibling_flush_tests_file_null",
+  "isaac_log_sibling_flush_vcall_is_nop",
+  "isaac_log_sibling_write_byte_count",
+  "isaac_log_sibling_write_bytes_returned",
+  "isaac_log_sibling_write_stack_bytes_popped",
+  "isaac_log_sibling_write_vtbl_slot",
+  "isaac_log_sibling_write_body_va",
+  "isaac_log_sibling_write_body_bytes",
+  "isaac_log_sibling_write_direct_callsites",
+  "isaac_log_sibling_write_raw_occurrences",
+  "isaac_log_sibling_flush_body_va",
+  "isaac_log_sibling_flush_body_bytes",
+  "isaac_log_sibling_write_is_one_template_with_v6",
+  "isaac_log_sibling_write_shared_prefix_bytes",
+  "isaac_log_sibling_fread_is_one_template",
+  "isaac_log_sibling_fread_shared_bytes",
+  "isaac_log_sibling_write_action_count",
+  "isaac_log_sibling_write_action_at",
+  "isaac_log_sibling_write_action_is_platform",
+  "isaac_log_sibling_write_plan",
+  /* v8 */
+  "isaac_log_sibling_fread_state_is_readable",
+  "isaac_log_sibling_fread_needed",
+  "isaac_log_sibling_fread_fflush_needed",
+  "isaac_log_sibling_fread_tests_file_null",
+  "isaac_log_sibling_fread_byte_count",
+  "isaac_log_sibling_fread_bytes_returned",
+  "isaac_log_sibling_fread_stack_bytes_popped",
+  "isaac_log_sibling_fread_vtbl_slot",
+  "isaac_log_sibling_fread_body_va",
+  "isaac_log_sibling_fread_body_bytes",
+  "isaac_log_sibling_fread_direct_callsites",
+  "isaac_log_sibling_fread_raw_occurrences",
+  "isaac_log_sibling_fread_write_sibling_va",
+  "isaac_log_sibling_fread_is_folded_into_v7",
+  "isaac_log_sibling_fread_action_count",
+  "isaac_log_sibling_fread_action_at",
+  "isaac_log_sibling_fread_action_is_platform",
+  "isaac_log_sibling_fread_plan",
+  /* v9: sink/neighbor deleting-dtor island */
+  "isaac_log_dtor_island_variants",
+  "isaac_log_dtor_island_body_va",
+  "isaac_log_dtor_island_body_bytes",
+  "isaac_log_dtor_island_inner_body_va",
+  "isaac_log_dtor_island_free_size",
+  "isaac_log_dtor_island_vtable_va",
+  "isaac_log_dtor_island_wrapper_stores_vtable",
+  "isaac_log_dtor_island_ret_args",
+  "isaac_log_dtor_island_returns_this",
+  "isaac_log_dtor_island_delete_needed",
+  /* v15: the deleting-dtor wrapper bodies */
+  "isaac_log_dtor_island_inner_fires",
+  "isaac_log_dtor_island_sized_delete_size",
+  "isaac_log_dtor_island_wrapper_plan",
+  /* v16: the sibling deleting-dtor wrapper 0x00a523e0 */
+  "isaac_log_dtor_island_inner_call_va",
+  "isaac_log_dtor_island_gate_va",
+  "isaac_log_dtor_island_delete_call_va",
+  "isaac_log_dtor_island_ret_va",
+  "isaac_log_dtor_island_vtable_entry_va",
+  /* v10: the open helpers (vtbl +0x24/+0x28) */
+  "isaac_log_open_read_path_gate",
+  "isaac_log_open_read_mode_va",
+  "isaac_log_open_read_mode_len",
+  "isaac_log_open_read_file_after",
+  "isaac_log_open_read_state_after",
+  "isaac_log_open_read_path_after",
+  "isaac_log_open_read_returns",
+  "isaac_log_open_read_accounting_reached",
+  "isaac_log_open_read_accounting_sites",
+  "isaac_log_open_write_mode_va",
+  "isaac_log_open_write_mode_len",
+  "isaac_log_open_write_fopen_gated",
+  "isaac_log_open_write_file_after",
+  "isaac_log_open_write_state_after",
+  "isaac_log_open_write_path_after",
+  "isaac_log_open_write_returns",
+  "isaac_log_open_write_accounting_reached",
+  "isaac_log_open_write_accounting_sites",
+  "isaac_log_open_read_body_va",
+  "isaac_log_open_read_body_bytes",
+  "isaac_log_open_read_insn_count",
+  "isaac_log_open_read_ret_args",
+  "isaac_log_open_read_vtbl_slot",
+  "isaac_log_open_read_direct_callsites",
+  "isaac_log_open_read_raw_occurrences",
+  "isaac_log_open_write_body_va",
+  "isaac_log_open_write_body_bytes",
+  "isaac_log_open_write_insn_count",
+  "isaac_log_open_write_ret_args",
+  "isaac_log_open_write_vtbl_slot",
+  "isaac_log_open_write_direct_callsites",
+  "isaac_log_open_write_raw_occurrences",
+  "isaac_log_open_read_devirt_call_va",
+  "isaac_log_open_write_devirt_call_va",
+  "isaac_log_open_read_action_count",
+  "isaac_log_open_read_action_at",
+  "isaac_log_open_read_action_is_platform",
+  "isaac_log_open_read_plan",
+  "isaac_log_open_write_action_count",
+  "isaac_log_open_write_action_at",
+  "isaac_log_open_write_action_is_platform",
+  "isaac_log_open_write_plan",
+  /* v11: the dtor inner body 0x00a52410 */
+  "isaac_log_dtor_inner_fclose_gate",
+  "isaac_log_dtor_inner_fclose_iat_va",
+  "isaac_log_dtor_inner_file_after",
+  "isaac_log_dtor_inner_free_gate",
+  "isaac_log_dtor_inner_free_helper_va",
+  "isaac_log_dtor_inner_path_after",
+  "isaac_log_dtor_inner_state_after",
+  "isaac_log_dtor_inner_state_value",
+  "isaac_log_dtor_inner_state_store_count",
+  "isaac_log_dtor_inner_vtable_base",
+  "isaac_log_dtor_inner_vtable_mid",
+  "isaac_log_dtor_inner_vtable_final",
+  "isaac_log_dtor_inner_vtable_mid_stored",
+  "isaac_log_dtor_inner_vtable_after",
+  "isaac_log_dtor_inner_body_va",
+  "isaac_log_dtor_inner_body_bytes",
+  "isaac_log_dtor_inner_insn_count",
+  "isaac_log_dtor_inner_ret_args",
+  "isaac_log_dtor_inner_seh_handler",
+  "isaac_log_dtor_inner_inbound_callsites",
+  "isaac_log_dtor_inner_raw_occurrences",
+  "isaac_log_dtor_inner_fclose_iat_sites",
+  "isaac_log_dtor_inner_action_count",
+  "isaac_log_dtor_inner_action_at",
+  "isaac_log_dtor_inner_action_is_platform",
+  /* v12: the neighbor dtor inner body 0x00a84060 */
+  "isaac_log_neighbor_dtor_inner_free_gate",
+  "isaac_log_neighbor_dtor_inner_free_helper_va",
+  "isaac_log_neighbor_dtor_inner_path_after",
+  "isaac_log_neighbor_dtor_inner_vtable_base",
+  "isaac_log_neighbor_dtor_inner_vtable_final",
+  "isaac_log_neighbor_dtor_inner_vtable_base_stored",
+  "isaac_log_neighbor_dtor_inner_vtable_final_after",
+  "isaac_log_neighbor_dtor_inner_release_unconditional",
+  "isaac_log_neighbor_dtor_inner_release_arg",
+  "isaac_log_neighbor_dtor_inner_lobby_after",
+  "isaac_log_neighbor_dtor_inner_release_iat_va",
+  "isaac_log_neighbor_dtor_inner_sub_dtor_va",
+  "isaac_log_neighbor_dtor_inner_sub_dtor_offset",
+  "isaac_log_neighbor_dtor_inner_body_va",
+  "isaac_log_neighbor_dtor_inner_body_bytes",
+  "isaac_log_neighbor_dtor_inner_insn_count",
+  "isaac_log_neighbor_dtor_inner_ret_args",
+  "isaac_log_neighbor_dtor_inner_seh_handler",
+  "isaac_log_neighbor_dtor_inner_inbound_callsites",
+  "isaac_log_neighbor_dtor_inner_raw_occurrences",
+  "isaac_log_neighbor_dtor_inner_release_iat_sites",
+  "isaac_log_neighbor_dtor_inner_action_count",
+  "isaac_log_neighbor_dtor_inner_action_at",
+  "isaac_log_neighbor_dtor_inner_action_is_platform",
+  /* v13: the sibling vtbl+0x20 flush slot 0x00a52880 */
+  "isaac_log_flush_slot_file_offset",
+  "isaac_log_flush_slot_iat_va",
+  "isaac_log_flush_slot_call_unconditional",
+  "isaac_log_flush_slot_ret_args",
+  "isaac_log_flush_slot_stack_bytes_popped",
+  "isaac_log_flush_slot_ret_is_fflush",
+  "isaac_log_flush_slot_body_va",
+  "isaac_log_flush_slot_body_bytes",
+  "isaac_log_flush_slot_insn_count",
+  "isaac_log_flush_slot_first_ret_va",
+  "isaac_log_flush_slot_vtbl_slot",
+  "isaac_log_flush_slot_vtbl_va",
+  "isaac_log_flush_slot_vtbl_entry_va",
+  "isaac_log_flush_slot_push_va",
+  "isaac_log_flush_slot_call_va",
+  "isaac_log_flush_slot_pop_va",
+  "isaac_log_flush_slot_ret_va",
+  "isaac_log_flush_slot_indirect_calls",
+  "isaac_log_flush_slot_direct_callsites",
+  "isaac_log_flush_slot_inbound",
+  "isaac_log_flush_slot_raw_occurrences",
+  "isaac_log_flush_slot_fflush_iat_sites",
+  "isaac_log_flush_slot_vtbl_is_nop",
+  /* v14: the fd lock/unlock helper 0x00a52890 */
+  "isaac_log_fdlock_body_va",
+  "isaac_log_fdlock_body_bytes",
+  "isaac_log_fdlock_insn_count",
+  "isaac_log_fdlock_first_ret_va",
+  "isaac_log_fdlock_ret_args",
+  "isaac_log_fdlock_direct_callsites",
+  "isaac_log_fdlock_indirect_calls",
+  "isaac_log_fdlock_overlapped_zero_dwords",
+  "isaac_log_fdlock_overlapped_bytes",
+  "isaac_log_fdlock_osfhandle_iat_va",
+  "isaac_log_fdlock_unlock_iat_va",
+  "isaac_log_fdlock_lock_iat_va",
+  "isaac_log_fdlock_errno_iat_va",
+  "isaac_log_fdlock_osfhandle_unconditional",
+  "isaac_log_fdlock_unlock_unconditional",
+  "isaac_log_fdlock_unlock_result_ignored",
+  "isaac_log_fdlock_unlock_reserved",
+  "isaac_log_fdlock_unlock_length_low",
+  "isaac_log_fdlock_unlock_length_high",
+  "isaac_log_fdlock_unlock_uses_overlapped",
+  "isaac_log_fdlock_dispatch",
+  "isaac_log_fdlock_lock_fires",
+  "isaac_log_fdlock_lock_flags",
+  "isaac_log_fdlock_lock_length_low",
+  "isaac_log_fdlock_lock_length_high",
+  "isaac_log_fdlock_lock_overlapped_null",
+  "isaac_log_fdlock_errno_value",
+  "isaac_log_fdlock_fail_return",
+  "isaac_log_fdlock_errno_after",
+  "isaac_log_fdlock_returns",
+  /* v25: base-class table closure (laws land at ABI 23) */
+  "isaac_log_base_flags_after_set1",
+  "isaac_log_base_flags_set1_returns_one",
+  "isaac_log_base_flags_set1_body_va",
+  "isaac_log_base_flags_set1_end_va",
+  "isaac_log_base_flags_set1_body_bytes",
+  "isaac_log_base_flags_set1_insn_count",
+  "isaac_log_base_flags_set1_first_ret_va",
+  "isaac_log_base_flags_set1_ret_args",
+  "isaac_log_base_flags_set1_rets",
+  "isaac_log_base_flags_set1_e8_calls",
+  "isaac_log_base_flags_set1_indirect_calls",
+  "isaac_log_base_flags_set1_mem_stores",
+  "isaac_log_base_flags_set1_state_offset",
+  "isaac_log_base_flags_set1_read_width",
+  "isaac_log_base_flags_set1_vtable_slots",
+  "isaac_log_base_flags_set1_slot_1_va",
+  "isaac_log_base_flags_set1_slot_2_va",
+  "isaac_log_base_flags_set1_slot_3_va",
+  "isaac_log_base_flags_set1_slot_4_va",
+  "isaac_log_base_flags_set1_slot_5_va",
+  "isaac_log_base_flags_set1_raw_occurrences",
+  "isaac_log_base_flags_set1_direct_callsites",
+  "isaac_log_base_flags_set1_sibling_clear_va",
+  /* v27: the base-class flags-CLEAR twin 0xa649c0 (ABI 24 -> 25) */
+  "isaac_log_base_flags_after_clear1",
+  "isaac_log_base_flags_clear1_unconditional",
+  "isaac_log_base_flags_clear1_body_va",
+  "isaac_log_base_flags_clear1_end_va",
+  "isaac_log_base_flags_clear1_body_bytes",
+  "isaac_log_base_flags_clear1_insn_count",
+  "isaac_log_base_flags_clear1_first_ret_va",
+  "isaac_log_base_flags_clear1_ret_args",
+  "isaac_log_base_flags_clear1_rets",
+  "isaac_log_base_flags_clear1_e8_calls",
+  "isaac_log_base_flags_clear1_indirect_calls",
+  "isaac_log_base_flags_clear1_mem_stores",
+  "isaac_log_base_flags_clear1_state_offset",
+  "isaac_log_base_flags_clear1_clear_mask",
+  "isaac_log_base_flags_clear1_byte_mask",
+  "isaac_log_base_flags_clear1_read_width",
+  "isaac_log_base_flags_clear1_vtable_slots",
+  "isaac_log_base_flags_clear1_slot_1_va",
+  "isaac_log_base_flags_clear1_slot_2_va",
+  "isaac_log_base_flags_clear1_slot_3_va",
+  "isaac_log_base_flags_clear1_slot_4_va",
+  "isaac_log_base_flags_clear1_slot_5_va",
+  "isaac_log_base_flags_clear1_slot_6_va",
+  "isaac_log_base_flags_clear1_raw_occurrences",
+  "isaac_log_base_flags_clear1_direct_callsites",
+  "isaac_log_base_flags_clear1_sibling_set_va",
+  "isaac_log_base_flags_set1_to_clear1_pad_bytes",
+  "isaac_log_base_flush_needed",
+  "isaac_log_base_flush_clears_bit0",
+  "isaac_log_base_flush_clear_unconditional",
+  "isaac_log_base_flush_clear_body_va",
+  "isaac_log_base_flush_clear_end_va",
+  "isaac_log_base_flush_clear_body_bytes",
+  "isaac_log_base_flush_clear_insn_count",
+  "isaac_log_base_flush_clear_first_ret_va",
+  "isaac_log_base_flush_clear_ret_args",
+  "isaac_log_base_flush_clear_rets",
+  "isaac_log_base_flush_clear_e8_calls",
+  "isaac_log_base_flush_clear_indirect_calls",
+  "isaac_log_base_flush_clear_mem_stores",
+  "isaac_log_base_flush_clear_listener_global_va",
+  "isaac_log_base_flush_clear_flush_slot",
+  "isaac_log_base_flush_clear_clear_mask",
+  "isaac_log_base_flush_clear_read_width",
+  "isaac_log_base_flush_clear_flush_call_va",
+  "isaac_log_base_flush_clear_clear_va",
+  "isaac_log_base_flush_clear_raw_occurrences",
+  "isaac_log_base_flush_clear_direct_callsites",
+  "isaac_log_base_open0_state_after",
+  "isaac_log_base_open1_state_after",
+  "isaac_log_base_open_combine_base_null",
+  "isaac_log_base_open_combine_flags_zero",
+  "isaac_log_base_open_combine_mode",
+  "isaac_log_base_open_returns_one",
+  "isaac_log_base_open0_ret_args",
+  "isaac_log_base_open1_ret_args",
+  "isaac_log_base_open1_arg2_dead",
+  "isaac_log_base_open0_combine_call_va",
+  "isaac_log_base_open1_combine_call_va",
+  "isaac_log_base_open0_cleanup_va",
+  "isaac_log_base_open1_cleanup_va",
+  "isaac_log_base_open0_state_store_va",
+  "isaac_log_base_open1_state_store_va",
+  "isaac_log_base_open0_body_va",
+  "isaac_log_base_open0_end_va",
+  "isaac_log_base_open0_body_bytes",
+  "isaac_log_base_open0_insn_count",
+  "isaac_log_base_open0_first_ret_va",
+  "isaac_log_base_open0_rets",
+  "isaac_log_base_open0_e8_calls",
+  "isaac_log_base_open0_indirect_calls",
+  "isaac_log_base_open0_mem_stores",
+  "isaac_log_base_open0_state_value",
+  "isaac_log_base_open0_raw_occurrences",
+  "isaac_log_base_open0_direct_callsites",
+  "isaac_log_base_open1_body_va",
+  "isaac_log_base_open1_end_va",
+  "isaac_log_base_open1_body_bytes",
+  "isaac_log_base_open1_insn_count",
+  "isaac_log_base_open1_first_ret_va",
+  "isaac_log_base_open1_rets",
+  "isaac_log_base_open1_e8_calls",
+  "isaac_log_base_open1_indirect_calls",
+  "isaac_log_base_open1_mem_stores",
+  "isaac_log_base_open1_state_value",
+  "isaac_log_base_open1_raw_occurrences",
+  "isaac_log_base_open1_direct_callsites",
+  "isaac_log_base_dtor_wrapper_va",
+  "isaac_log_base_dtor_wrapper_end_va",
+  "isaac_log_base_dtor_wrapper_body_bytes",
+  "isaac_log_base_dtor_wrapper_seh",
+  "isaac_log_base_access_leaf_direct_callsites",
+  "isaac_log_base_access_leaf_callsite_va",
+  "isaac_log_base_getter_18_end_va",
+  "isaac_log_text_insn_count_v25",
+  "isaac_log_text_undecodable_bytes_v25",
+  "isaac_log_mutexbase_set1_after",
+  "isaac_log_mutexbase_set1_returns_one",
+  "isaac_log_mutexbase_clear1_after",
+  "isaac_log_mutexbase_clear1_unconditional",
+  "isaac_log_mutexbase_sdtor_va",
+  "isaac_log_mutexbase_sdtor_free_size",
+  "isaac_log_mutexbase_sdtor_vtable",
+  "isaac_log_mutexbase_object_size",
+  "isaac_log_mutexbase_lock_clock_recheck",
+  "isaac_log_mutexbase_set1_body_va",
+  "isaac_log_mutexbase_set1_end_va",
+  "isaac_log_mutexbase_set1_body_bytes",
+  "isaac_log_mutexbase_set1_insn_count",
+  "isaac_log_mutexbase_set1_first_ret_va",
+  "isaac_log_mutexbase_set1_rets",
+  "isaac_log_mutexbase_set1_mem_stores",
+  "isaac_log_mutexbase_set1_cell_offset",
+  "isaac_log_mutexbase_set1_read_width",
+  "isaac_log_mutexbase_set1_bit",
+  "isaac_log_mutexbase_set1_vtable_ref_rdata",
+  "isaac_log_mutexbase_set1_direct_callsites",
+  "isaac_log_mutexbase_clear1_body_va",
+  "isaac_log_mutexbase_clear1_end_va",
+  "isaac_log_mutexbase_clear1_body_bytes",
+  "isaac_log_mutexbase_clear1_insn_count",
+  "isaac_log_mutexbase_clear1_byte_mask",
+  "isaac_log_mutexbase_clear1_read_width",
+  "isaac_log_mutexbase_clear1_cell_offset",
+  "isaac_log_mutexbase_clear1_vtable_ref_rdata",
+];
+
+function buildWasm() {
+  mkdirSync(outDir, { recursive: true });
+  const emsdk = process.env.EMSDK || join(homedir(), "emsdk");
+  const clang = firstExisting(
+    [
+      process.env.CLANGXX,
+      join(emsdk, "upstream", "bin", "clang++.exe"),
+      join(emsdk, "upstream", "bin", "clang++"),
+    ],
+    "Host clang++",
+  );
+  const emxx = firstExisting(
+    [
+      process.env.EMXX,
+      join(emsdk, "upstream", "emscripten", "em++.exe"),
+      join(emsdk, "upstream", "emscripten", "em++"),
+    ],
+    "Emscripten em++",
+  );
+  const syntax = spawnSync(
+    clang,
+    [
+      source,
+      "-std=c++20",
+      "-I",
+      join(root, "native", "decomp"),
+      "-fsyntax-only",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
+  const exportArgs = EXPORTS.flatMap((name) => [`-Wl,--export=${name}`]);
+  /* The export-flag link line crossed the Windows 32K CreateProcess
+     cap once the v26 names landed — same fix as the sfx family at
+     v40: the flags go into a linker response file. */
+  const rspPath = join(outDir, "exports.rsp").replaceAll("\\", "/");
+  writeFileSync(rspPath, exportArgs.join("\n"), "utf8");
+  const built = spawnSync(
+    emxx,
+    [
+      source,
+      "-std=c++20",
+      "-O2",
+      "-I",
+      join(root, "native", "decomp"),
+      "--no-entry",
+      "-sSTANDALONE_WASM=1",
+      "-sERROR_ON_UNDEFINED_SYMBOLS=1",
+      `@${rspPath}`,
+      "-o",
+      wasmPath,
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(built.status, 0, built.stderr || built.stdout);
+}
+
+function loadExports() {
+  buildWasm();
+  const module = new WebAssembly.Module(readFileSync(wasmPath));
+  assert.equal(
+    WebAssembly.Module.imports(module).length,
+    0,
+    "log pure helpers must be zero-import",
+  );
+  const instance = new WebAssembly.Instance(module, {});
+  const wasm = instance.exports;
+  const exp = (name) => {
+    const fn = wasm[name] ?? wasm[`_${name}`];
+    assert.equal(typeof fn, "function", `missing export ${name}`);
+    return fn;
+  };
+  const out = { memory: wasm.memory };
+  for (const name of EXPORTS) {
+    out[name] = exp(name);
+  }
+  return out;
+}
+
+/* Wasm scratch lives at 0x100000+ (pure-helper static data + shadow stack
+   stay below that, matching the sibling family tests). */
+const SCRATCH = 0x100000;
+
+/* The shared deterministic LCG: seed = seed*1664525 + 1013904223 (mod 2^32).
+   Low bit k has period 2^(k+1), so ALL draws come from the HIGH bits —
+   `% n` on this generator collapses a corpus onto a handful of values. */
+function makeLcg(seed) {
+  let s = seed >>> 0 || 0x9e3779b9;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s;
+  };
+}
+
+function pick(rnd, n) {
+  return Math.floor((rnd() / 0x100000000) * n);
+}
+
+function u(v) {
+  return v >>> 0;
+}
+function s(v) {
+  return v | 0;
+}
+
+/* IsaacLogEmitPlan: 14 x 4 bytes = 56. Layout pinned by a static_assert in
+   the C++ and by every field read below. */
+const PLAN_SIZE = 56;
+const PLAN_OFF = {
+  droppedGuard: 0,
+  listenerPre: 4,
+  emitGate: 8,
+  droppedGate: 12,
+  initNeeded: 16,
+  initFailDrops: 20,
+  guardAfter: 24,
+  lockNeeded: 28,
+  prefixWritten: 32,
+  prefixCase: 36,
+  prefixVa: 40,
+  prefixLen: 44,
+  consoleNeeded: 48,
+  unlockNeeded: 52,
+};
+const PLAN_U32 = new Set(["guardAfter", "prefixVa", "prefixLen"]);
+
+/* IsaacLogTeardownPlan: 12 x 4 bytes = 48. Pinned by a static_assert in the
+   C++ and by every field read below. */
+const TPLAN_SIZE = 48;
+const TPLAN_OFF = {
+  flushNeeded: 0,
+  destroyNeeded: 4,
+  listenerPtrAfter: 8,
+  listenerMaskAfter: 12,
+  secondFlushReached: 16,
+  engaged: 20,
+  critsecDeleteNeeded: 24,
+  critsecPtrAfter: 28,
+  holderFlagsAfter: 32,
+  guardAfter: 36,
+  loggerLiveAfter: 40,
+  teardownByteAfter: 44,
+};
+const TPLAN_U32 = new Set([
+  "listenerPtrAfter",
+  "listenerMaskAfter",
+  "critsecPtrAfter",
+  "holderFlagsAfter",
+  "guardAfter",
+  "teardownByteAfter",
+]);
+
+function readTeardownPlan(view, base) {
+  const out = {};
+  for (const name of Object.keys(TPLAN_OFF)) {
+    out[name] = TPLAN_U32.has(name)
+      ? view.getUint32(base + TPLAN_OFF[name], true)
+      : view.getInt32(base + TPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertTeardownPlan(actual, expected, label) {
+  for (const name of Object.keys(TPLAN_OFF)) {
+    const want = TPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+function readPlan(view, base) {
+  const out = {};
+  for (const name of Object.keys(PLAN_OFF)) {
+    out[name] = PLAN_U32.has(name)
+      ? view.getUint32(base + PLAN_OFF[name], true)
+      : view.getInt32(base + PLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertPlan(actual, expected, label) {
+  for (const name of Object.keys(PLAN_OFF)) {
+    const want = PLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+let wasm;
+let view;
+
+/* IsaacLogInitPlan: 15 x 4 bytes = 60. Pinned by a static_assert in the
+   C++ and by every field read below. */
+const IPLAN_SIZE = 60;
+const IPLAN_OFF = {
+  alreadyInitialized: 0,
+  warnEmitted: 4,
+  argsPublished: 8,
+  objectAllocated: 12,
+  objectAfter: 16,
+  critsecInitRuns: 20,
+  critsecFlagsAfter: 24,
+  critsecPtrAfter: 28,
+  cmdThreadWarns: 32,
+  cmdThreadCreates: 36,
+  cmdThreadFlagsAfter: 40,
+  logSitesTaken: 44,
+  guardAfter: 48,
+  returnsOk: 52,
+  lifecycleByteAfter: 56,
+};
+const IPLAN_U32 = new Set([
+  "objectAfter",
+  "critsecFlagsAfter",
+  "critsecPtrAfter",
+  "cmdThreadFlagsAfter",
+  "guardAfter",
+  "lifecycleByteAfter",
+]);
+
+/* IsaacLogLockPlan: 15 x 4 bytes = 60. Pinned by a static_assert in the C++
+   and by every field read below. */
+const LPLAN_SIZE = 60;
+const LPLAN_OFF = {
+  assertFires: 0,
+  assertStringVa: 4,
+  arm: 8,
+  enterCall: 12,
+  tryCall: 16,
+  leaveCall: 20,
+  spinEntered: 24,
+  sleepMs: 28,
+  returns: 32,
+  acquired: 36,
+  marksOwned: 40,
+  ownedByteAfter: 44,
+  critsecPtr: 48,
+  nullCritsecFault: 52,
+  faultVa: 56,
+};
+const LPLAN_U32 = new Set([
+  "assertStringVa",
+  "sleepMs",
+  "ownedByteAfter",
+  "critsecPtr",
+  "faultVa",
+]);
+
+function readLockPlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(LPLAN_OFF)) {
+    out[name] = LPLAN_U32.has(name)
+      ? v.getUint32(base + LPLAN_OFF[name], true)
+      : v.getInt32(base + LPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertLockPlan(actual, expected, label) {
+  for (const name of Object.keys(LPLAN_OFF)) {
+    const want = LPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+function readInitPlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(IPLAN_OFF)) {
+    out[name] = IPLAN_U32.has(name)
+      ? v.getUint32(base + IPLAN_OFF[name], true)
+      : v.getInt32(base + IPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertInitPlan(actual, expected, label) {
+  for (const name of Object.keys(IPLAN_OFF)) {
+    const want = IPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+/* IsaacLogDestroyPlan: 20 x 4 bytes = 80. Pinned by a static_assert in the
+   C++ and by every field read below. */
+const DPLAN_SIZE = 80;
+const DPLAN_OFF = {
+  variant: 0,
+  bodyVa: 4,
+  entryVtableVa: 8,
+  deleteCriticalSection: 12,
+  freeCritsec: 16,
+  critsecFreeSize: 20,
+  storesNullCritsec: 24,
+  critsecPtrAfter: 28,
+  flagsAfter: 32,
+  clearsReadyBit: 36,
+  exitVtableVa: 40,
+  freesObject: 44,
+  objectFreeSize: 48,
+  returnsThis: 52,
+  stackBytesPopped: 56,
+  readyStateBefore: 60,
+  readyStateAfter: 64,
+  danglingWindowStartVa: 68,
+  danglingWindowEndVa: 72,
+  actionCount: 76,
+};
+const DPLAN_U32 = new Set([
+  "bodyVa",
+  "entryVtableVa",
+  "critsecFreeSize",
+  "critsecPtrAfter",
+  "flagsAfter",
+  "exitVtableVa",
+  "objectFreeSize",
+  "stackBytesPopped",
+  "danglingWindowStartVa",
+  "danglingWindowEndVa",
+  "actionCount",
+]);
+
+function readDestroyPlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(DPLAN_OFF)) {
+    out[name] = DPLAN_U32.has(name)
+      ? v.getUint32(base + DPLAN_OFF[name], true)
+      : v.getInt32(base + DPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertDestroyPlan(actual, expected, label) {
+  for (const name of Object.keys(DPLAN_OFF)) {
+    const want = DPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+/* Read the whole ordered action list back out of the module. */
+function wasmActions(variant, critsecPtr, deleteFlag) {
+  const n = u(
+    wasm.isaac_log_destroy_action_count(variant, critsecPtr, deleteFlag),
+  );
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(u(wasm.isaac_log_destroy_action_at(variant, critsecPtr, deleteFlag, i)));
+  }
+  return out;
+}
+
+function modelActions(variant, critsecPtr, deleteFlag) {
+  const n = logDestroyActionCount(variant, critsecPtr, deleteFlag);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(logDestroyActionAt(variant, critsecPtr, deleteFlag, i));
+  }
+  return out;
+}
+
+/* IsaacLogWritePlan: 11 x 4 bytes = 44. Pinned by a static_assert in the
+   C++ and by every field read below. */
+const WPLAN_SIZE = 44;
+const WPLAN_OFF = {
+  stateIsOpen: 0,
+  fwrite: 4,
+  fflush: 8,
+  testsFileNull: 12,
+  bytesReturned: 16,
+  stackBytesPopped: 20,
+  vtblSlot: 24,
+  bodyVa: 28,
+  fwriteIat: 32,
+  fflushIat: 36,
+  actionCount: 40,
+};
+const WPLAN_U32 = new Set([
+  "bytesReturned",
+  "stackBytesPopped",
+  "vtblSlot",
+  "bodyVa",
+  "fwriteIat",
+  "fflushIat",
+  "actionCount",
+]);
+
+function readWritePlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(WPLAN_OFF)) {
+    out[name] = WPLAN_U32.has(name)
+      ? v.getUint32(base + WPLAN_OFF[name], true)
+      : v.getInt32(base + WPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertWritePlan(actual, expected, label) {
+  for (const name of Object.keys(WPLAN_OFF)) {
+    const want = WPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+function wasmWriteActions(state) {
+  const n = u(wasm.isaac_log_write_action_count(state));
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(u(wasm.isaac_log_write_action_at(state, i)));
+  }
+  return out;
+}
+
+function modelWriteActions(state) {
+  const n = logWriteActionCount(state);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(logWriteActionAt(state, i));
+  }
+  return out;
+}
+
+/* IsaacLogSiblingWritePlan: 11 x 4 bytes = 44. Pinned by a static_assert. */
+const SWPLAN_SIZE = 44;
+const SWPLAN_OFF = {
+  stateIsOpen: 0,
+  fwrite: 4,
+  fflush: 8,
+  testsFileNull: 12,
+  bytesReturned: 16,
+  stackBytesPopped: 20,
+  vtblSlot: 24,
+  bodyVa: 28,
+  fwriteIat: 32,
+  flushBodyVa: 36,
+  actionCount: 40,
+};
+const SWPLAN_U32 = new Set([
+  "bytesReturned",
+  "stackBytesPopped",
+  "vtblSlot",
+  "bodyVa",
+  "fwriteIat",
+  "flushBodyVa",
+  "actionCount",
+]);
+
+function readSiblingWritePlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(SWPLAN_OFF)) {
+    out[name] = SWPLAN_U32.has(name)
+      ? v.getUint32(base + SWPLAN_OFF[name], true)
+      : v.getInt32(base + SWPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertSiblingWritePlan(actual, expected, label) {
+  for (const name of Object.keys(SWPLAN_OFF)) {
+    const want = SWPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+function wasmSiblingWriteActions(state) {
+  const n = u(wasm.isaac_log_sibling_write_action_count(state));
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(u(wasm.isaac_log_sibling_write_action_at(state, i)));
+  }
+  return out;
+}
+
+function modelSiblingWriteActions(state) {
+  const n = logSiblingWriteActionCount(state);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(logSiblingWriteActionAt(state, i));
+  }
+  return out;
+}
+
+/* IsaacLogSiblingFreadPlan: 11 x 4 bytes = 44. Pinned by a static_assert. */
+const SFPLAN_SIZE = 44;
+const SFPLAN_OFF = {
+  stateIsReadable: 0,
+  fread: 4,
+  fflush: 8,
+  testsFileNull: 12,
+  bytesReturned: 16,
+  stackBytesPopped: 20,
+  vtblSlot: 24,
+  bodyVa: 28,
+  freadIat: 32,
+  writeSiblingVa: 36,
+  actionCount: 40,
+};
+const SFPLAN_U32 = new Set([
+  "bytesReturned",
+  "stackBytesPopped",
+  "vtblSlot",
+  "bodyVa",
+  "freadIat",
+  "writeSiblingVa",
+  "actionCount",
+]);
+
+function readSiblingFreadPlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(SFPLAN_OFF)) {
+    out[name] = SFPLAN_U32.has(name)
+      ? v.getUint32(base + SFPLAN_OFF[name], true)
+      : v.getInt32(base + SFPLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertSiblingFreadPlan(actual, expected, label) {
+  for (const name of Object.keys(SFPLAN_OFF)) {
+    const want = SFPLAN_U32.has(name) ? u(expected[name]) : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+function wasmSiblingFreadActions(state) {
+  const n = u(wasm.isaac_log_sibling_fread_action_count(state));
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(u(wasm.isaac_log_sibling_fread_action_at(state, i)));
+  }
+  return out;
+}
+
+function modelSiblingFreadActions(state) {
+  const n = logSiblingFreadActionCount(state);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    out.push(logSiblingFreadActionAt(state, i));
+  }
+  return out;
+}
+
+test("build log pure helpers wasm (zero imports, ABI v13)", () => {
+  wasm = loadExports();
+  view = new DataView(wasm.memory.buffer);
+  if (wasm.memory.buffer.byteLength < SCRATCH + 0x10000) {
+    wasm.memory.grow(
+      Math.ceil((SCRATCH + 0x10000 - wasm.memory.buffer.byteLength) / 65536),
+    );
+    view = new DataView(wasm.memory.buffer);
+  }
+  assert.ok(
+    wasm.memory.buffer.byteLength >= SCRATCH + 0x10000,
+    "linear memory too small for the scratch region",
+  );
+  assert.equal(wasm.isaac_log_pure_helpers_abi_version(), LOG_PURE_ABI_VERSION);
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(logAbiVersion(), 25);
+});
+
+test("wasm module declares no imports", () => {
+  const module = new WebAssembly.Module(readFileSync(wasmPath));
+  assert.deepEqual(WebAssembly.Module.imports(module), []);
+});
+
+test("constants and PE census agree with the header contract", () => {
+  assert.equal(LOG_VA_LOGGER, 0x00a112c0);
+  assert.equal(LOG_VA_MUTEX_INIT, 0x00a15770);
+  assert.equal(LOG_VA_MUTEX_LOCK, 0x00a157f0);
+  assert.equal(LOG_VA_MUTEX_UNLOCK, 0x00a159a0);
+  assert.equal(LOG_VA_SPRINTF_SHIM, 0x00420a80);
+  assert.equal(LOG_VA_VSNPRINTF_SHIM, 0x00709bc0);
+  assert.equal(LOG_VA_STDIO_OPTIONS, 0x0041d4c0);
+  assert.equal(LOG_VA_LISTENER_INSTALLER, 0x00a5f3a0);
+  assert.equal(LOG_VA_LISTENER_WRITE, 0x00a83fd0);
+  assert.equal(LOG_VA_SHUTDOWN_GUARD_STORE, 0x00a71bec);
+  assert.equal(LOG_VA_JUMP_TABLE, 0x00a114a4);
+  assert.equal(LOG_VA_INDEX_TABLE, 0x00a114bc);
+  assert.equal(LOG_IAT_OUTPUT_DEBUG_STRING_A, 0x00b1827c);
+  assert.equal(LOG_IAT_ENTER_CRITICAL_SECTION, 0x00b18270);
+  assert.equal(LOG_IAT_LEAVE_CRITICAL_SECTION, 0x00b18268);
+  assert.equal(LOG_IAT_STDIO_COMMON_VSPRINTF, 0x00b18904);
+  assert.equal(LOG_IAT_FOPEN, 0x00b188fc);
+  assert.equal(LOG_IAT_FWRITE, 0x00b188cc);
+  assert.equal(LOG_IAT_FFLUSH, 0x00b1891c);
+  assert.equal(LOG_GUARD_VA, 0x00c7de48);
+  assert.equal(LOG_LISTENER_PTR_VA, 0x00c79bd8);
+  assert.equal(LOG_LISTENER_MASK_VA, 0x00c79bdc);
+  assert.equal(LOG_AT_LINE_START_VA, 0x00c33911);
+  assert.equal(LOG_BUFFER_VA, 0x00c7b648);
+  assert.equal(LOG_PRE_BUFFER_BYTE_VA, 0x00c7b647);
+  assert.equal(LOG_MUTEX_HOLDER_VA, 0x00c37958);
+  assert.equal(LOG_MUTEX_VTABLE_VA, 0x00b81c0c);
+  assert.equal(LOG_SINK_VTABLE_VA, 0x00ba5184);
+  // layout law: the guard dword sits exactly at buffer end, and the D-LOG-1
+  // byte is buffer[-1]
+  assert.equal(LOG_BUFFER_VA + LOG_BUFFER_CAPACITY, LOG_GUARD_VA);
+  assert.equal(LOG_PRE_BUFFER_BYTE_VA + 1, LOG_BUFFER_VA);
+  assert.equal(LOG_GUARD_UNINIT, 0);
+  assert.equal(LOG_GUARD_BUSY, 1);
+  assert.equal(LOG_GUARD_READY, 2);
+  assert.equal(LOG_BUFFER_CAPACITY, 0x2800);
+  assert.equal(LOG_NEWLINE_BYTE, 0x0a);
+  assert.equal(LOG_INSTALLER_MASK, 0xff);
+  assert.equal(LOG_VA_START_STACK_DISP, 0x10);
+  assert.equal(LOG_PREFIX_INDEX_BOUND, 0xf);
+  assert.equal(LOG_PREFIX_VA_INFO, 0x00b81818);
+  assert.equal(LOG_PREFIX_VA_NET, 0x00b8180c);
+  assert.equal(LOG_PREFIX_VA_WARN, 0x00b81830);
+  assert.equal(LOG_PREFIX_VA_ERROR, 0x00b81824);
+  assert.equal(LOG_PREFIX_VA_ASSERT, 0x00b8183c);
+  assert.equal(LOG_PREFIX_VA_DEFAULT, 0x00b1a4ec);
+  assert.equal(LOG_FMT_S_VA, 0x00b62fdc);
+  // prefix text pins (strlen cross-check against the wasm lens below)
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_INFO], "[INFO] - ");
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_NET], "[NET] - ");
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_WARN], "[WARN] - ");
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_ERROR], "[ERROR] - ");
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_ASSERT], "[ASSERT] - ");
+  assert.equal(LOG_PREFIX_TEXT[LOG_PREFIX_CASE_DEFAULT], "");
+  // whole-.text censuses
+  assert.equal(LOG_CALLSITES, 3286);
+  assert.equal(LOG_ADDRESS_ESCAPES, 0);
+  assert.equal(LOG_RETURN_VALUE_DEPENDENT_SITES, 0);
+  assert.equal(LOG_SITES_LEVEL_INFO, 709);
+  assert.equal(LOG_SITES_LEVEL_NET, 0);
+  assert.equal(LOG_SITES_LEVEL_WARN, 137);
+  assert.equal(LOG_SITES_LEVEL_ERROR, 216);
+  assert.equal(LOG_SITES_LEVEL_ASSERT, 2219);
+  assert.equal(LOG_SITES_LEVEL_REGISTER, 5);
+  assert.equal(
+    LOG_SITES_LEVEL_INFO +
+      LOG_SITES_LEVEL_NET +
+      LOG_SITES_LEVEL_WARN +
+      LOG_SITES_LEVEL_ERROR +
+      LOG_SITES_LEVEL_ASSERT +
+      LOG_SITES_LEVEL_REGISTER,
+    LOG_CALLSITES,
+  );
+  assert.equal(LOG_MAX_VARARG_DWORDS, 14);
+  // cleanup histogram: values sum to the callsite census
+  const histSum = Object.values(LOG_CLEANUP_HISTOGRAM).reduce((a, b) => a + b, 0);
+  assert.equal(histSum, LOG_CALLSITES);
+  assert.equal(LOG_CLEANUP_HISTOGRAM[0x8], 2336);
+  assert.equal(LOG_CLEANUP_HISTOGRAM[0xc], 562);
+  assert.equal(LOG_CLEANUP_HISTOGRAM[0x40], 1);
+  assert.equal(LOG_CLEANUP_HISTOGRAM.split, 8);
+  assert.equal(LOG_CLEANUP_HISTOGRAM.folded, 85);
+  // the biggest cleanup site carries exactly the census max vararg count
+  assert.equal(logVarargDwordCount(0x40), LOG_MAX_VARARG_DWORDS);
+});
+
+test("header records the PE evidence for the log family", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a112c0/);
+  assert.match(h, /0x00a15770/);
+  assert.match(h, /0x00a157f0/);
+  assert.match(h, /0x00a159a0/);
+  assert.match(h, /0x00420a80/);
+  assert.match(h, /0x00709bc0/);
+  assert.match(h, /0x00a5f3a0/);
+  assert.match(h, /0x00a71bec/);
+  assert.match(h, /0x00a114a4/);
+  assert.match(h, /0x00a114bc/);
+  assert.match(h, /OutputDebugStringA/);
+  assert.match(h, /__stdio_common_vsprintf/);
+  assert.match(h, /EnterCriticalSection/);
+  assert.match(h, /test bl, bl/);
+  assert.match(h, /cmp eax, 1/);
+  assert.match(h, /cmp eax, 0xf ; ja/);
+  assert.match(h, /UNSIGNED STRICT/);
+  assert.match(h, /00 01 05 02 05 05 05 03 05 05 05 05 05\s+05 05 04/);
+  assert.match(h, /\[INFO\] - /);
+  assert.match(h, /\[NET\] - /);
+  assert.match(h, /\[WARN\] - /);
+  assert.match(h, /\[ERROR\] - /);
+  assert.match(h, /\[ASSERT\] - /);
+  assert.match(h, /0x00c7b647/);
+  assert.match(h, /D-LOG-1/);
+  assert.match(h, /D-LOG-2/);
+  assert.match(h, /never corrected/i);
+  assert.match(h, /3286/);
+  assert.match(h, /ZERO address escapes/i);
+  assert.match(h, /2,094,686/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /test bl, bl/);
+  assert.match(src, /cmp eax, 1/);
+  assert.match(src, /ja/);
+  assert.match(src, /D-LOG-1/);
+  assert.match(src, /D-LOG-2/);
+  assert.match(src, /REPRODUCED, never corrected/i);
+  assert.match(src, /uint8_t/); // toolchain-defect guard text present
+  assert.match(src, /no export\s+takes a uint8_t\/uint16_t scalar parameter/i);
+  const m = readFileSync(join(root, "scripts", "decomp", "log-pure-model.mjs"), "utf8");
+  // the oracle is its own PE reading, not a C++ transliteration
+  assert.match(m, /NOT transliterated/);
+  assert.match(m, /D-LOG-1/);
+  assert.match(m, /D-LOG-2/);
+  assert.match(m, /test bl,bl|test bl, bl/);
+  assert.match(m, /0x00a114bc/);
+});
+
+test("LA: guard blocks on FULL 32-bit equality with 1 only", () => {
+  // cmp eax, 1 ; je — not a byte test, not an order test.
+  const cases = [
+    [0, 0],
+    [1, 1],
+    [2, 0],
+    [3, 0],
+    [0x100, 0],
+    [0x101, 0], // low byte 1, full word != 1: does NOT block
+    [0x80000000, 0],
+    [0x80000001, 0],
+    [0xffffffff, 0],
+  ];
+  for (const [g, want] of cases) {
+    assert.equal(wasm.isaac_log_guard_blocks(g), want, `guard(${g.toString(16)})`);
+    assert.equal(logGuardBlocks(g), want, `model guard(${g.toString(16)})`);
+  }
+});
+
+test("LA: listener pre-hit is a FULL 32-bit mask AND (wide drives)", () => {
+  const hit = wasm.isaac_log_listener_hit_pre;
+  // null pointer short-circuits regardless of mask
+  assert.equal(hit(0, 0xffffffff, 0xffffffff), 0);
+  assert.equal(logListenerHitPre(0, 0xffffffff, 0xffffffff), 0);
+  // full 32-bit AND: bits ABOVE the low byte participate (no byte narrowing)
+  assert.equal(hit(1, 0x100, 0x100), 1);
+  assert.equal(hit(1, 0x100, 0xff), 0);
+  assert.equal(hit(1, 0xff, 0x100), 0);
+  assert.equal(hit(1, 0x80000000, 0x80000000), 1);
+  assert.equal(hit(1, 0x80000000, 0x7fffffff), 0);
+  assert.equal(hit(0xffffffff, 0xff, 0x10), 1); // shipped: mask 0xff, ASSERT
+  assert.equal(hit(1, 0xff, 0x1ff), 1);
+  assert.equal(logListenerHitPre(1, 0x100, 0x100), 1);
+  assert.equal(logListenerHitPre(1, 0x100, 0xff), 0);
+  assert.equal(logListenerHitPre(1, 0x80000000, 0x80000000), 1);
+});
+
+test("LA: emit gate — low byte of level OR listener hit (unmasked drives)", () => {
+  const gate = wasm.isaac_log_emit_gate;
+  // levels with a nonzero LOW byte always emit
+  for (const lv of [1, 2, 4, 8, 0x10, 0xff, 0x1ff, 0x80000001, 0xffffffff]) {
+    assert.equal(gate(lv, 0, 0), 1, `gate(${lv.toString(16)}) no listener`);
+    assert.equal(logEmitGate(lv, 0, 0), 1, `model gate(${lv.toString(16)})`);
+  }
+  // low byte 0: dropped without a listener hit — the uint8_t defect shape.
+  // 0x100 and 0x80000000 MUST cross the Wasm boundary unmasked.
+  for (const lv of [0, 0x100, 0x200, 0x8000, 0x80000000, 0xffffff00]) {
+    assert.equal(gate(lv, 0, 0), 0, `gate(${lv.toString(16)}) drops`);
+    assert.equal(logEmitGate(lv, 0, 0), 0, `model gate(${lv.toString(16)})`);
+  }
+  // but the SAME wide level emits when the 32-bit mask covers it
+  assert.equal(gate(0x100, 1, 0x1ff), 1);
+  assert.equal(gate(0x100, 1, 0xff), 0); // mask misses bit 8
+  assert.equal(gate(0x80000000, 1, 0x80000000), 1);
+  assert.equal(gate(0, 1, 0xffffffff), 0); // level 0: no bit can match
+  assert.equal(logEmitGate(0x100, 1, 0x1ff), 1);
+  assert.equal(logEmitGate(0x100, 1, 0xff), 0);
+  assert.equal(logEmitGate(0, 1, 0xffffffff), 0);
+  // level low byte helper
+  assert.equal(wasm.isaac_log_level_low_byte(0x1ff), 0xff);
+  assert.equal(wasm.isaac_log_level_low_byte(0x100), 0);
+  assert.equal(wasm.isaac_log_level_low_byte(0xffffff01), 1);
+  assert.equal(logLevelLowByte(0x1ff), 0xff);
+  assert.equal(logLevelLowByte(0x100), 0);
+});
+
+test("LB: guard state machine — transitions and the dead init-fail arm", () => {
+  const after = wasm.isaac_log_guard_after;
+  // guard 1: untouched, message dropped
+  assert.equal(after(1, 0x10, 0, 0, 1), 1);
+  assert.equal(wasm.isaac_log_message_dropped(1, 0x10, 0, 0, 1), 1);
+  // gate drop leaves ANY guard untouched (including 0: init not attempted)
+  assert.equal(after(0, 0x100, 0, 0, 1), 0);
+  assert.equal(after(2, 0x100, 0, 0, 1), 2);
+  assert.equal(u(after(0x80000000, 0x100, 0, 0, 1)), 0x80000000);
+  assert.equal(wasm.isaac_log_init_needed(0, 0x100, 0, 0), 0);
+  // guard 0 + emit: init runs; AL nonzero -> 2
+  assert.equal(wasm.isaac_log_init_needed(0, 1, 0, 0), 1);
+  assert.equal(after(0, 1, 0, 0, 1), 2);
+  // AL low byte 0 -> reset to 0 and drop (D-LOG-2 arm, dead but translated).
+  // 0x100 has AL == 0: drive it UNMASKED.
+  assert.equal(after(0, 1, 0, 0, 0), 0);
+  assert.equal(after(0, 1, 0, 0, 0x100), 0);
+  assert.equal(wasm.isaac_log_guard_after_init(0x100), 0);
+  assert.equal(wasm.isaac_log_guard_after_init(0x1ff), 2);
+  assert.equal(wasm.isaac_log_guard_after_init(1), 2);
+  assert.equal(wasm.isaac_log_guard_after_init(0), 0);
+  assert.equal(wasm.isaac_log_message_dropped(0, 1, 0, 0, 0), 1);
+  assert.equal(wasm.isaac_log_message_dropped(0, 1, 0, 0, 0x100), 1);
+  assert.equal(wasm.isaac_log_message_dropped(0, 1, 0, 0, 1), 0);
+  // nonzero non-1 guards skip init and pass through
+  assert.equal(after(2, 1, 0, 0, 0), 2);
+  assert.equal(after(0x101, 1, 0, 0, 0), 0x101);
+  assert.equal(wasm.isaac_log_init_needed(2, 1, 0, 0), 0);
+  assert.equal(wasm.isaac_log_init_needed(0x101, 1, 0, 0), 0);
+  // D-LOG-2 pin
+  assert.equal(wasm.isaac_log_init_always_succeeds(), 1);
+  assert.equal(logInitAlwaysSucceeds(), 1);
+  // model agreement on the same transitions
+  assert.equal(logGuardAfter(1, 0x10, 0, 0, 1), 1);
+  assert.equal(logGuardAfter(0, 0x100, 0, 0, 1), 0);
+  assert.equal(logGuardAfter(0, 1, 0, 0, 1), 2);
+  assert.equal(logGuardAfter(0, 1, 0, 0, 0x100), 0);
+  assert.equal(logGuardAfter(0x101, 1, 0, 0, 0), 0x101);
+  assert.equal(logGuardAfterInit(0x100), 0);
+  assert.equal(logMessageDropped(0, 1, 0, 0, 0x100), 1);
+  assert.equal(logInitNeeded(0, 0x100, 0, 0), 0);
+});
+
+test("LC: prefix case — unsigned strict bound, byte table, boundary trio", () => {
+  const pc = wasm.isaac_log_prefix_case;
+  // the five named levels
+  assert.equal(pc(1), LOG_PREFIX_CASE_INFO);
+  assert.equal(pc(2), LOG_PREFIX_CASE_NET);
+  assert.equal(pc(4), LOG_PREFIX_CASE_WARN);
+  assert.equal(pc(8), LOG_PREFIX_CASE_ERROR);
+  assert.equal(pc(0x10), LOG_PREFIX_CASE_ASSERT);
+  // every other in-table level maps to the shared default entry 5
+  for (const lv of [3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]) {
+    assert.equal(pc(lv), LOG_PREFIX_CASE_DEFAULT, `table default level ${lv}`);
+    assert.equal(logPrefixCase(lv), LOG_PREFIX_CASE_DEFAULT, `model level ${lv}`);
+  }
+  // BOUNDARY TRIO of the `cmp eax, 0xf ; ja` (idx = level - 1):
+  //   level 0xf  -> idx 0xe: in table, case 5
+  //   level 0x10 -> idx 0xf: in table (ja is STRICT), case 4 — the ASSERT arm
+  //   level 0x11 -> idx 0x10: above the bound, default via the ja
+  assert.equal(pc(0xf), LOG_PREFIX_CASE_DEFAULT);
+  assert.equal(pc(0x10), LOG_PREFIX_CASE_ASSERT);
+  assert.equal(pc(0x11), LOG_PREFIX_CASE_DEFAULT);
+  assert.equal(logPrefixCase(0xf), LOG_PREFIX_CASE_DEFAULT);
+  assert.equal(logPrefixCase(0x10), LOG_PREFIX_CASE_ASSERT);
+  assert.equal(logPrefixCase(0x11), LOG_PREFIX_CASE_DEFAULT);
+  // level 0 wraps: idx 0xffffffff — UNSIGNED above the bound -> default.
+  // A signed reading of the compare would take the table instead.
+  assert.equal(pc(0), LOG_PREFIX_CASE_DEFAULT);
+  assert.equal(logPrefixCase(0), LOG_PREFIX_CASE_DEFAULT);
+  // wide levels (unmasked drives): all above the bound -> default
+  for (const lv of [0x12, 0x20, 0x100, 0x110, 0x1ff, 0x80000000, 0x80000010, 0xffffffff]) {
+    assert.equal(pc(lv), LOG_PREFIX_CASE_DEFAULT, `wide ${lv.toString(16)}`);
+    assert.equal(logPrefixCase(lv), LOG_PREFIX_CASE_DEFAULT, `model wide ${lv.toString(16)}`);
+  }
+  // prefix VA and pinned length follow the case everywhere
+  const expectVa = [
+    [1, LOG_PREFIX_VA_INFO, 9],
+    [2, LOG_PREFIX_VA_NET, 8],
+    [4, LOG_PREFIX_VA_WARN, 9],
+    [8, LOG_PREFIX_VA_ERROR, 10],
+    [0x10, LOG_PREFIX_VA_ASSERT, 11],
+    [0, LOG_PREFIX_VA_DEFAULT, 0],
+    [3, LOG_PREFIX_VA_DEFAULT, 0],
+    [0x11, LOG_PREFIX_VA_DEFAULT, 0],
+    [0x100, LOG_PREFIX_VA_DEFAULT, 0],
+  ];
+  for (const [lv, va, len] of expectVa) {
+    assert.equal(u(wasm.isaac_log_prefix_va(lv)), va, `va(${lv.toString(16)})`);
+    assert.equal(u(wasm.isaac_log_prefix_len(lv)), len, `len(${lv.toString(16)})`);
+    assert.equal(logPrefixVa(lv), va, `model va(${lv.toString(16)})`);
+    assert.equal(logPrefixLen(lv), len, `model len(${lv.toString(16)})`);
+  }
+  // the pinned lengths ARE the strlens of the pinned strings
+  for (const c of [0, 1, 2, 3, 4, 5]) {
+    const lv = [1, 2, 4, 8, 0x10, 3][c];
+    assert.equal(u(wasm.isaac_log_prefix_len(lv)), LOG_PREFIX_TEXT[c].length, `text len case ${c}`);
+  }
+  // prefix_written is a byte test: 0x100 has a ZERO low byte
+  assert.equal(wasm.isaac_log_prefix_written(0), 0);
+  assert.equal(wasm.isaac_log_prefix_written(1), 1);
+  assert.equal(wasm.isaac_log_prefix_written(0x80), 1);
+  assert.equal(wasm.isaac_log_prefix_written(0x100), 0);
+  assert.equal(wasm.isaac_log_prefix_written(0x1ff), 1);
+  assert.equal(logPrefixWritten(0x100), 0);
+  assert.equal(logPrefixWritten(0x1ff), 1);
+});
+
+test("LD: append window — dest offset and 0x2800 capacity, 32-bit wrap", () => {
+  assert.equal(wasm.isaac_log_append_dest_off(0), 0);
+  assert.equal(wasm.isaac_log_append_dest_off(9), 9);
+  assert.equal(u(wasm.isaac_log_append_dest_off(0xffffffff)), 0xffffffff);
+  assert.equal(wasm.isaac_log_append_capacity(0), 0x2800);
+  assert.equal(wasm.isaac_log_append_capacity(9), 0x27f7);
+  assert.equal(wasm.isaac_log_append_capacity(11), 0x27f5);
+  assert.equal(wasm.isaac_log_append_capacity(0x2800), 0);
+  // no clamp: a longer-than-buffer len wraps (reproduced, never corrected)
+  assert.equal(u(wasm.isaac_log_append_capacity(0x2801)), 0xffffffff);
+  assert.equal(u(wasm.isaac_log_append_capacity(0x3000)), 0xfffff800);
+  assert.equal(logAppendDestOff(9), 9);
+  assert.equal(logAppendCapacity(0), 0x2800);
+  assert.equal(logAppendCapacity(0x2801), 0xffffffff);
+});
+
+test("LE: console gate is the LOW byte; listener post gate re-reads", () => {
+  const cg = wasm.isaac_log_console_gate;
+  // the second `test bl, bl`: level 0x100 reaches the file sink (mask
+  // permitting) but NEVER OutputDebugStringA
+  assert.equal(cg(1), 1);
+  assert.equal(cg(0x10), 1);
+  assert.equal(cg(0xff), 1);
+  assert.equal(cg(0x100), 0);
+  assert.equal(cg(0x1ff), 1);
+  assert.equal(cg(0x80000000), 0);
+  assert.equal(cg(0x80000001), 1);
+  assert.equal(cg(0xffffff00), 0);
+  assert.equal(logConsoleGate(0x100), 0);
+  assert.equal(logConsoleGate(0x1ff), 1);
+  assert.equal(logConsoleGate(0x80000000), 0);
+  // the divergence pair with the emit gate: level 0x100 + live listener
+  // emits (gate 1) yet console stays silent (gate 0)
+  assert.equal(wasm.isaac_log_emit_gate(0x100, 1, 0x1ff), 1);
+  assert.equal(cg(0x100), 0);
+  // post gate: stored pre-flag byte AND re-read pointer AND re-read mask
+  const post = wasm.isaac_log_listener_gate_post;
+  assert.equal(post(1, 1, 0xff, 0x10), 1);
+  assert.equal(post(0, 1, 0xff, 0x10), 0); // pre-flag byte 0
+  assert.equal(post(0x100, 1, 0xff, 0x10), 0); // pre-flag LOW byte 0 (wide)
+  assert.equal(post(1, 0, 0xff, 0x10), 0); // pointer re-read: now null
+  assert.equal(post(1, 1, 0, 0x10), 0); // mask re-read: now 0
+  assert.equal(post(1, 1, 0x100, 0x100), 1); // full 32-bit AND again
+  assert.equal(post(1, 1, 0xff, 0x100), 0);
+  assert.equal(logListenerGatePost(0x100, 1, 0xff, 0x10), 0);
+  assert.equal(logListenerGatePost(1, 1, 0x100, 0x100), 1);
+  assert.equal(logListenerGatePost(1, 0, 0xff, 0x10), 0);
+});
+
+test("LF: atLineStart law — newline byte, D-LOG-1 empty-append quirk", () => {
+  const next = wasm.isaac_log_next_at_line_start;
+  assert.equal(next(5, 0x0a), 1);
+  assert.equal(next(5, 0x41), 0);
+  assert.equal(next(1, 0x0a), 1);
+  assert.equal(next(5, 0x00), 0);
+  // the byte parameter is a memory byte: wide drives narrow to the low byte
+  assert.equal(next(5, 0x10a), 1);
+  assert.equal(next(5, 0xa00), 0);
+  assert.equal(next(5, 0xffffff0a), 1);
+  // D-LOG-1: len == 0 reads the never-written pre-buffer byte (0), so the
+  // flag CLEARS no matter what byte the caller supplies
+  assert.equal(next(0, 0x0a), 0);
+  assert.equal(next(0, 0), 0);
+  assert.equal(next(0, 0xffffffff), 0);
+  assert.equal(wasm.isaac_log_empty_append_clears_line_start(), 1);
+  assert.equal(logNextAtLineStart(5, 0x0a), 1);
+  assert.equal(logNextAtLineStart(5, 0x10a), 1);
+  assert.equal(logNextAtLineStart(0, 0x0a), 0);
+  assert.equal(logEmptyAppendClearsLineStart(), 1);
+  // reset byte and initial flag
+  assert.equal(wasm.isaac_log_buffer_reset_byte(), 0);
+  assert.equal(wasm.isaac_log_initial_at_line_start(), 1);
+  assert.equal(logBufferResetByte(), 0);
+  assert.equal(logInitialAtLineStart(), 1);
+});
+
+test("LG: marshalling law — vararg dwords from add esp, N", () => {
+  const n = wasm.isaac_log_vararg_dword_count;
+  // every N value the census found, and the exact count each implies
+  const census = [
+    [0x8, 0],
+    [0xc, 1],
+    [0x10, 2],
+    [0x14, 3],
+    [0x18, 4],
+    [0x1c, 5],
+    [0x20, 6],
+    [0x24, 7],
+    [0x2c, 9],
+    [0x30, 10],
+    [0x34, 11],
+    [0x40, 14],
+  ];
+  for (const [imm, count] of census) {
+    assert.equal(u(n(imm)), count, `varargs(add esp, ${imm.toString(16)})`);
+    assert.equal(logVarargDwordCount(imm), count, `model varargs(${imm.toString(16)})`);
+  }
+  assert.equal(u(n(0x40)), LOG_MAX_VARARG_DWORDS);
+  // off-by-one discriminators: 8 -> 0 (NOT 1), 0xc -> 1 (NOT 0 / NOT 2)
+  assert.notEqual(u(n(0x8)), 1);
+  assert.notEqual(u(n(0xc)), 0);
+  assert.notEqual(u(n(0xc)), 2);
+  assert.equal(wasm.isaac_log_va_start_stack_disp(), 0x10);
+  assert.equal(logVaStartStackDisp(), 0x10);
+});
+
+test("LH: emit plan — every arm, fixed scenarios", () => {
+  const plan = wasm.isaac_log_emit_plan;
+  const base = SCRATCH + 0x100;
+  const run = (scenario) => {
+    plan(
+      scenario.level,
+      scenario.guard,
+      scenario.listenerPtr,
+      scenario.listenerMask,
+      scenario.atLineStartByte,
+      scenario.initOk,
+      base,
+    );
+    return readPlan(view, base);
+  };
+  // guard == 1: total no-op (nothing else computed)
+  assertPlan(
+    run({ level: 0x10, guard: 1, listenerPtr: 1, listenerMask: 0xff, atLineStartByte: 1, initOk: 1 }),
+    {
+      droppedGuard: 1, listenerPre: 0, emitGate: 0, droppedGate: 0,
+      initNeeded: 0, initFailDrops: 0, guardAfter: 1, lockNeeded: 0,
+      prefixWritten: 0, prefixCase: -1, prefixVa: 0, prefixLen: 0,
+      consoleNeeded: 0, unlockNeeded: 0,
+    },
+    "guard drop",
+  );
+  // gate drop: level low byte 0, no listener
+  assertPlan(
+    run({ level: 0x100, guard: 2, listenerPtr: 0, listenerMask: 0, atLineStartByte: 1, initOk: 1 }),
+    {
+      droppedGuard: 0, listenerPre: 0, emitGate: 0, droppedGate: 1,
+      initNeeded: 0, initFailDrops: 0, guardAfter: 2, lockNeeded: 0,
+      prefixWritten: 0, prefixCase: -1, prefixVa: 0, prefixLen: 0,
+      consoleNeeded: 0, unlockNeeded: 0,
+    },
+    "gate drop",
+  );
+  // boot shape: guard 0, listener not yet installed, INFO at line start
+  assertPlan(
+    run({ level: 1, guard: 0, listenerPtr: 0, listenerMask: 0, atLineStartByte: 1, initOk: 1 }),
+    {
+      droppedGuard: 0, listenerPre: 0, emitGate: 1, droppedGate: 0,
+      initNeeded: 1, initFailDrops: 0, guardAfter: 2, lockNeeded: 1,
+      prefixWritten: 1, prefixCase: LOG_PREFIX_CASE_INFO,
+      prefixVa: LOG_PREFIX_VA_INFO, prefixLen: 9,
+      consoleNeeded: 1, unlockNeeded: 1,
+    },
+    "boot INFO",
+  );
+  // steady state: guard 2, log.txt live (mask 0xff), ASSERT mid-line
+  assertPlan(
+    run({ level: 0x10, guard: 2, listenerPtr: 0x1234, listenerMask: 0xff, atLineStartByte: 0, initOk: 1 }),
+    {
+      droppedGuard: 0, listenerPre: 1, emitGate: 1, droppedGate: 0,
+      initNeeded: 0, initFailDrops: 0, guardAfter: 2, lockNeeded: 1,
+      prefixWritten: 0, prefixCase: -1, prefixVa: 0, prefixLen: 0,
+      consoleNeeded: 1, unlockNeeded: 1,
+    },
+    "steady ASSERT mid-line",
+  );
+  // dead init-fail arm (D-LOG-2), driven with AL low byte 0 via 0x100
+  assertPlan(
+    run({ level: 8, guard: 0, listenerPtr: 0, listenerMask: 0, atLineStartByte: 1, initOk: 0x100 }),
+    {
+      droppedGuard: 0, listenerPre: 0, emitGate: 1, droppedGate: 0,
+      initNeeded: 1, initFailDrops: 1, guardAfter: 0, lockNeeded: 0,
+      prefixWritten: 0, prefixCase: -1, prefixVa: 0, prefixLen: 0,
+      consoleNeeded: 0, unlockNeeded: 0,
+    },
+    "init fail (dead arm)",
+  );
+  // wide level via listener only: emits, prefix DEFAULT, console silent
+  assertPlan(
+    run({ level: 0x100, guard: 2, listenerPtr: 1, listenerMask: 0x1ff, atLineStartByte: 1, initOk: 1 }),
+    {
+      droppedGuard: 0, listenerPre: 1, emitGate: 1, droppedGate: 0,
+      initNeeded: 0, initFailDrops: 0, guardAfter: 2, lockNeeded: 1,
+      prefixWritten: 1, prefixCase: LOG_PREFIX_CASE_DEFAULT,
+      prefixVa: LOG_PREFIX_VA_DEFAULT, prefixLen: 0,
+      consoleNeeded: 0, unlockNeeded: 1,
+    },
+    "wide level listener-only",
+  );
+  // atLineStart byte wide drive: 0x100 has a zero low byte -> no prefix
+  assertPlan(
+    run({ level: 4, guard: 2, listenerPtr: 0, listenerMask: 0, atLineStartByte: 0x100, initOk: 1 }),
+    {
+      droppedGuard: 0, listenerPre: 0, emitGate: 1, droppedGate: 0,
+      initNeeded: 0, initFailDrops: 0, guardAfter: 2, lockNeeded: 1,
+      prefixWritten: 0, prefixCase: -1, prefixVa: 0, prefixLen: 0,
+      consoleNeeded: 1, unlockNeeded: 1,
+    },
+    "wide atLineStart byte",
+  );
+  // guard passthrough for nonzero non-1 values
+  const odd = run({ level: 1, guard: 0x101, listenerPtr: 0, listenerMask: 0, atLineStartByte: 0, initOk: 0 });
+  assert.equal(odd.droppedGuard, 0);
+  assert.equal(u(odd.guardAfter), 0x101);
+  assert.equal(odd.initNeeded, 0);
+  assert.equal(odd.lockNeeded, 1);
+});
+
+test("shipped-state laws: what the census says the game actually does", () => {
+  // Every shipped callsite passes level 1, 4, 8 or 0x10 — all nonzero low
+  // byte — so the low-byte drop arm never fires in shipped code...
+  for (const lv of [1, 4, 8, 0x10]) {
+    assert.equal(wasm.isaac_log_emit_gate(lv, 0, 0), 1, `boot level ${lv}`);
+    assert.equal(wasm.isaac_log_emit_gate(lv, 1, 0xff), 1, `steady level ${lv}`);
+    assert.equal(wasm.isaac_log_console_gate(lv), 1, `console level ${lv}`);
+    // installer mask 0xff covers every shipped level
+    assert.equal(wasm.isaac_log_listener_hit_pre(1, LOG_INSTALLER_MASK, lv), 1, `mask 0xff level ${lv}`);
+  }
+  // ...and the live no-op arm is the guard: after the exit teardown stores
+  // 1 (0x00a71bec), ALL 3286 sites drop before any output.
+  for (const lv of [1, 4, 8, 0x10]) {
+    assert.equal(
+      wasm.isaac_log_message_dropped(LOG_GUARD_BUSY, lv, 1, 0xff, 1),
+      1,
+      `post-shutdown level ${lv}`,
+    );
+  }
+  // before the boot installer runs, mask and ptr are BSS zero: the file
+  // edge is dead, the console edge is live
+  for (const lv of [1, 4, 8, 0x10]) {
+    assert.equal(wasm.isaac_log_listener_hit_pre(0, 0, lv), 0, `pre-boot listener ${lv}`);
+    assert.equal(wasm.isaac_log_console_gate(lv), 1, `pre-boot console ${lv}`);
+  }
+  // level 2 (NET) is never passed by any callsite, but its arm is live
+  // logic: pin its prefix anyway
+  assert.equal(LOG_SITES_LEVEL_NET, 0);
+  assert.equal(wasm.isaac_log_prefix_case(2), LOG_PREFIX_CASE_NET);
+});
+
+test("corpus reaches every prefix arm and both sides of the boundary", () => {
+  const seen = new Set();
+  const boundary = new Set();
+  const fixed = [0, 1, 2, 3, 4, 5, 8, 0xf, 0x10, 0x11, 0x100, 0x1ff, 0x80000000, 0xffffffff];
+  const rnd = makeLcg(0x10c0);
+  const draws = fixed.slice();
+  for (let i = 0; i < 400; ++i) {
+    const branch = pick(rnd, 4);
+    if (branch === 0) {
+      draws.push(pick(rnd, 0x14)); // dense small levels
+    } else if (branch === 1) {
+      draws.push(rnd() & 0x1ff); // around the byte edge
+    } else {
+      draws.push(rnd()); // full range
+    }
+  }
+  for (const lv of draws) {
+    const c = wasm.isaac_log_prefix_case(lv);
+    assert.equal(c, logPrefixCase(lv), `case(${u(lv).toString(16)})`);
+    seen.add(c);
+    if (u(lv) === 0xf || u(lv) === 0x10 || u(lv) === 0x11) {
+      boundary.add(u(lv));
+    }
+  }
+  // all six arms reached, including the ASSERT boundary and both sides
+  assert.deepEqual([...seen].sort(), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual([...boundary].sort((a, b) => a - b), [0xf, 0x10, 0x11]);
+});
+
+test("randomized differential: scalar exports vs the JS oracle (LCG high bits)", () => {
+  const rnd = makeLcg(0x10a1);
+  const levelDraw = () => {
+    const branch = pick(rnd, 6);
+    if (branch === 0) return pick(rnd, 0x13); // 0..0x12: table + boundary
+    if (branch === 1) return [0x100, 0x1ff, 0x200, 0x8000, 0xffffff00][pick(rnd, 5)];
+    if (branch === 2) return 0x80000000 + pick(rnd, 3);
+    if (branch === 3) return [1, 2, 4, 8, 0x10][pick(rnd, 5)]; // shipped
+    return rnd();
+  };
+  const guardDraw = () => {
+    const branch = pick(rnd, 4);
+    if (branch === 0) return pick(rnd, 3); // 0/1/2 real states
+    if (branch === 1) return [0x101, 0x100, 0x80000000, 0xffffffff][pick(rnd, 4)];
+    return rnd();
+  };
+  const maskDraw = () => {
+    const branch = pick(rnd, 4);
+    if (branch === 0) return 0;
+    if (branch === 1) return 0xff; // installer value
+    if (branch === 2) return [0x100, 0x1ff, 0x80000000, 0xffffffff][pick(rnd, 4)];
+    return rnd();
+  };
+  const ptrDraw = () => {
+    const branch = pick(rnd, 3);
+    if (branch === 0) return 0;
+    if (branch === 1) return 1;
+    return rnd();
+  };
+  const byteDraw = () => {
+    const branch = pick(rnd, 3);
+    if (branch === 0) return pick(rnd, 2);
+    if (branch === 1) return [0x80, 0xff, 0x100, 0x1ff, 0xffffff00][pick(rnd, 5)];
+    return rnd();
+  };
+  for (let i = 0; i < 1200; ++i) {
+    const level = levelDraw();
+    const guard = guardDraw();
+    const ptr = ptrDraw();
+    const mask = maskDraw();
+    const b = byteDraw();
+    const initOk = byteDraw();
+    assert.equal(s(wasm.isaac_log_guard_blocks(guard)), logGuardBlocks(guard), `guardBlocks(${u(guard).toString(16)})`);
+    assert.equal(
+      s(wasm.isaac_log_listener_hit_pre(ptr, mask, level)),
+      logListenerHitPre(ptr, mask, level),
+      `hitPre(${u(ptr).toString(16)},${u(mask).toString(16)},${u(level).toString(16)})`,
+    );
+    assert.equal(u(wasm.isaac_log_level_low_byte(level)), logLevelLowByte(level), "lowByte");
+    assert.equal(
+      s(wasm.isaac_log_emit_gate(level, ptr, mask)),
+      logEmitGate(level, ptr, mask),
+      `emitGate(${u(level).toString(16)})`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_message_dropped(guard, level, ptr, mask, initOk)),
+      logMessageDropped(guard, level, ptr, mask, initOk),
+      "messageDropped",
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_needed(guard, level, ptr, mask)),
+      logInitNeeded(guard, level, ptr, mask),
+      "initNeeded",
+    );
+    assert.equal(u(wasm.isaac_log_guard_after_init(initOk)), logGuardAfterInit(initOk), "guardAfterInit");
+    assert.equal(
+      u(wasm.isaac_log_guard_after(guard, level, ptr, mask, initOk)),
+      logGuardAfter(guard, level, ptr, mask, initOk),
+      "guardAfter",
+    );
+    assert.equal(s(wasm.isaac_log_prefix_case(level)), logPrefixCase(level), `prefixCase(${u(level).toString(16)})`);
+    assert.equal(u(wasm.isaac_log_prefix_va(level)), logPrefixVa(level), "prefixVa");
+    assert.equal(u(wasm.isaac_log_prefix_len(level)), logPrefixLen(level), "prefixLen");
+    assert.equal(s(wasm.isaac_log_prefix_written(b)), logPrefixWritten(b), "prefixWritten");
+    assert.equal(s(wasm.isaac_log_console_gate(level)), logConsoleGate(level), "consoleGate");
+    assert.equal(
+      s(wasm.isaac_log_listener_gate_post(b, ptr, mask, level)),
+      logListenerGatePost(b, ptr, mask, level),
+      "listenerGatePost",
+    );
+    const len = pick(rnd, 3) === 0 ? pick(rnd, 0x2802) : rnd();
+    assert.equal(u(wasm.isaac_log_append_dest_off(len)), logAppendDestOff(len), "appendDestOff");
+    assert.equal(u(wasm.isaac_log_append_capacity(len)), logAppendCapacity(len), "appendCapacity");
+    const lastByte = byteDraw();
+    const appLen = pick(rnd, 4) === 0 ? 0 : rnd();
+    assert.equal(
+      s(wasm.isaac_log_next_at_line_start(appLen, lastByte)),
+      logNextAtLineStart(appLen, lastByte),
+      `nextAtLineStart(${u(appLen).toString(16)},${u(lastByte).toString(16)})`,
+    );
+    const esp = pick(rnd, 2) === 0 ? 8 + 4 * pick(rnd, 15) : rnd();
+    assert.equal(u(wasm.isaac_log_vararg_dword_count(esp)), logVarargDwordCount(esp), "varargDwordCount");
+  }
+  // constant exports
+  assert.equal(wasm.isaac_log_init_always_succeeds(), logInitAlwaysSucceeds());
+  assert.equal(wasm.isaac_log_empty_append_clears_line_start(), logEmptyAppendClearsLineStart());
+  assert.equal(wasm.isaac_log_buffer_reset_byte(), logBufferResetByte());
+  assert.equal(wasm.isaac_log_initial_at_line_start(), logInitialAtLineStart());
+  assert.equal(wasm.isaac_log_va_start_stack_disp(), logVaStartStackDisp());
+});
+
+test("randomized differential: the emit plan", () => {
+  const rnd = makeLcg(0x10a2);
+  const base = SCRATCH + 0x200;
+  const levelDraw = () => {
+    const branch = pick(rnd, 5);
+    if (branch === 0) return pick(rnd, 0x13);
+    if (branch === 1) return [0x100, 0x1ff, 0x80000000][pick(rnd, 3)];
+    if (branch === 2) return [1, 4, 8, 0x10][pick(rnd, 4)];
+    return rnd();
+  };
+  for (let i = 0; i < 900; ++i) {
+    const scenario = {
+      level: levelDraw(),
+      guard: pick(rnd, 2) === 0 ? pick(rnd, 3) : rnd(),
+      listenerPtr: pick(rnd, 2) === 0 ? pick(rnd, 2) : rnd(),
+      listenerMask: pick(rnd, 3) === 0 ? 0xff : pick(rnd, 3) === 1 ? 0 : rnd(),
+      atLineStartByte: pick(rnd, 2) === 0 ? pick(rnd, 2) : rnd(),
+      initOk: pick(rnd, 3) === 0 ? 0x100 : pick(rnd, 3) === 1 ? pick(rnd, 2) : rnd(),
+    };
+    wasm.isaac_log_emit_plan(
+      scenario.level,
+      scenario.guard,
+      scenario.listenerPtr,
+      scenario.listenerMask,
+      scenario.atLineStartByte,
+      scenario.initOk,
+      base,
+    );
+    assertPlan(readPlan(view, base), logEmitPlan(scenario), `plan ${JSON.stringify(scenario)}`);
+  }
+  // null out pointer is a no-op (does not fault)
+  wasm.isaac_log_emit_plan(1, 0, 0, 0, 1, 1, 0);
+});
+
+test("cross-law coherence: plan fields equal the scalar exports", () => {
+  const rnd = makeLcg(0x10a3);
+  const base = SCRATCH + 0x300;
+  for (let i = 0; i < 300; ++i) {
+    const level = pick(rnd, 2) === 0 ? pick(rnd, 0x13) : rnd();
+    const guard = pick(rnd, 2) === 0 ? pick(rnd, 3) : rnd();
+    const ptr = pick(rnd, 2);
+    const mask = pick(rnd, 2) === 0 ? 0xff : rnd();
+    const als = pick(rnd, 2);
+    const initOk = pick(rnd, 2);
+    wasm.isaac_log_emit_plan(level, guard, ptr, mask, als, initOk, base);
+    const p = readPlan(view, base);
+    assert.equal(p.droppedGuard, s(wasm.isaac_log_guard_blocks(guard)), "plan.droppedGuard");
+    if (!p.droppedGuard) {
+      assert.equal(p.listenerPre, s(wasm.isaac_log_listener_hit_pre(ptr, mask, level)), "plan.listenerPre");
+      assert.equal(p.emitGate, s(wasm.isaac_log_emit_gate(level, ptr, mask)), "plan.emitGate");
+    }
+    assert.equal(u(p.guardAfter), u(wasm.isaac_log_guard_after(guard, level, ptr, mask, initOk)), "plan.guardAfter");
+    if (p.lockNeeded) {
+      assert.equal(p.consoleNeeded, s(wasm.isaac_log_console_gate(level)), "plan.consoleNeeded");
+      assert.equal(p.unlockNeeded, p.lockNeeded, "unlock == lock");
+      if (p.prefixWritten) {
+        assert.equal(p.prefixCase, s(wasm.isaac_log_prefix_case(level)), "plan.prefixCase");
+        assert.equal(u(p.prefixVa), u(wasm.isaac_log_prefix_va(level)), "plan.prefixVa");
+        assert.equal(u(p.prefixLen), u(wasm.isaac_log_prefix_len(level)), "plan.prefixLen");
+      }
+    }
+    assert.equal(
+      p.droppedGuard || p.droppedGate || p.initFailDrops ? 1 : 0,
+      s(wasm.isaac_log_message_dropped(guard, level, ptr, mask, initOk)),
+      "drop coherence",
+    );
+  }
+});
+
+/* ===================== v2: lifecycle constants ===================== */
+
+test("v2 constants and lifecycle censuses agree with the header contract", () => {
+  assert.equal(LOG_VA_TEARDOWN, 0x00a71770);
+  assert.equal(LOG_VA_TEARDOWN_END, 0x00a71c0d);
+  assert.equal(LOG_VA_ISAAC_MAIN, 0x00931050);
+  assert.equal(LOG_VA_INSTALLER_CALLSITE, 0x00931135);
+  assert.equal(LOG_VA_TEARDOWN_CALLSITE, 0x0093140e);
+  assert.equal(LOG_VA_CRT_MAIN_CALLSITE, 0x00aefbb9);
+  assert.equal(LOG_VA_TEARDOWN_PTR_READ_PRE, 0x00a71823);
+  assert.equal(LOG_VA_TEARDOWN_PTR_READ_POST, 0x00a71832);
+  assert.equal(LOG_VA_TEARDOWN_PTR_STORE, 0x00a71842);
+  assert.equal(LOG_VA_TEARDOWN_JOIN, 0x00a7184c);
+  assert.equal(LOG_VA_TEARDOWN_MASK_STORE, 0x00a71852);
+  assert.equal(LOG_VA_TEARDOWN_SECOND_FLUSH, 0x00a71a19);
+  assert.equal(LOG_VA_TEARDOWN_GUARD_TEST, 0x00a71bac);
+  assert.equal(LOG_VA_TEARDOWN_GUARD_BRANCH, 0x00a71bbd);
+  assert.equal(LOG_VA_TEARDOWN_CRITSEC_STORE, 0x00a71bdb);
+  assert.equal(LOG_VA_TEARDOWN_FLAGS_STORE, 0x00a71be5);
+  assert.equal(LOG_VA_TEARDOWN_BYTE_STORE, 0x00a71bf6);
+  assert.equal(LOG_VA_INSTALLER_PTR_STORE, 0x00a5f478);
+  assert.equal(LOG_VA_INSTALLER_PTR_FAIL_STORE, 0x00a5f480);
+  assert.equal(LOG_VA_INSTALLER_MASK_STORE, 0x00a5f48a);
+  assert.equal(LOG_VA_LOCK_ASSERT_SITE, 0x00a1580f);
+  assert.equal(LOG_LOCK_ASSERT_STRING_VA, 0x00b81c58);
+  assert.equal(
+    LOG_LOCK_ASSERT_STRING,
+    "Trying to lock mutex that has not been initialized",
+  );
+  assert.equal(LOG_LOCK_ASSERT_LEVEL, 0x10);
+  assert.equal(LOG_HOLDER_FLAGS_VA, 0x00c3795c);
+  assert.equal(LOG_CRITSEC_PTR_VA, 0x00c37960);
+  assert.equal(LOG_TEARDOWN_BYTE_VA, 0x00c78aad);
+  assert.equal(LOG_TEARDOWN_ENGAGE_VALUE, 2);
+  assert.equal(LOG_CRITSEC_SIZE, 0x1c);
+  assert.equal(LOG_HOLDER_INIT_BIT, 1);
+  assert.equal(LOG_HOLDER_FLAGS_CLEAR_MASK, 0xfe);
+  assert.equal(LOG_SINK_ALLOC_SIZE, 0x10);
+  assert.equal(LOG_SINK_STATE_NO_FILE, 2);
+  assert.equal(LOG_SINK_STATE_OPEN, 1);
+  assert.equal(LOG_SINK_STATE_NONE, -1);
+  assert.equal(LOG_TEXT_INSN_COUNT_V2, 2094319);
+
+  /* holder layout laws (init 0x00a15770 vs teardown 0x00a71bec block) */
+  assert.equal(LOG_HOLDER_FLAGS_VA, LOG_MUTEX_HOLDER_VA + 4);
+  assert.equal(LOG_CRITSEC_PTR_VA, LOG_MUTEX_HOLDER_VA + 8);
+  assert.equal(LOG_HOLDER_FLAGS_CLEAR_MASK & LOG_HOLDER_INIT_BIT, 0);
+  assert.equal(LOG_TEARDOWN_ENGAGE_VALUE, LOG_GUARD_READY);
+  /* the teardown body brackets both log blocks and both stores */
+  assert.ok(LOG_VA_TEARDOWN < LOG_VA_TEARDOWN_PTR_STORE);
+  assert.ok(LOG_VA_TEARDOWN_PTR_STORE < LOG_VA_TEARDOWN_JOIN);
+  assert.ok(LOG_VA_TEARDOWN_JOIN < LOG_VA_TEARDOWN_MASK_STORE);
+  assert.ok(LOG_VA_TEARDOWN_MASK_STORE < LOG_VA_TEARDOWN_SECOND_FLUSH);
+  assert.ok(LOG_VA_TEARDOWN_SECOND_FLUSH < LOG_VA_TEARDOWN_GUARD_TEST);
+  assert.ok(LOG_VA_TEARDOWN_GUARD_TEST < LOG_VA_SHUTDOWN_GUARD_STORE);
+  assert.ok(LOG_VA_SHUTDOWN_GUARD_STORE < LOG_VA_TEARDOWN_BYTE_STORE);
+  assert.ok(LOG_VA_TEARDOWN_BYTE_STORE < LOG_VA_TEARDOWN_END);
+  /* both lifecycle calls live inside the SAME function (IsaacMain) */
+  assert.ok(LOG_VA_ISAAC_MAIN < LOG_VA_INSTALLER_CALLSITE);
+  assert.ok(LOG_VA_INSTALLER_CALLSITE < LOG_VA_TEARDOWN_CALLSITE);
+
+  /* reach-site enumeration: every call form, plus a raw-byte superset scan
+     of the LE target dword across all five PE sections */
+  assert.equal(LOG_TEARDOWN_CALLSITES, 1);
+  assert.equal(LOG_TEARDOWN_ADDRESS_ESCAPES, 0);
+  assert.equal(LOG_INSTALLER_CALLSITES, 1);
+  assert.equal(LOG_INSTALLER_ADDRESS_ESCAPES, 0);
+  assert.equal(LOG_ISAAC_MAIN_CALLSITES, 1);
+  assert.equal(LOG_TEARDOWN_INTERNAL_LOG_SITES, 0);
+
+  /* writer censuses */
+  assert.equal(LOG_GUARD_READERS, 2);
+  assert.equal(LOG_GUARD_WRITERS, 4);
+  assert.equal(Object.keys(LOG_GUARD_WRITER_SITES).length, LOG_GUARD_WRITERS);
+  assert.equal(LOG_GUARD_WRITER_SITES[LOG_VA_SHUTDOWN_GUARD_STORE], 1);
+  assert.equal(LOG_GUARD_WRITER_SITES[0x00a11328], 1);
+  assert.equal(LOG_GUARD_WRITER_SITES[0x00a1133b], 2);
+  assert.equal(LOG_GUARD_WRITER_SITES[0x00a11381], 0);
+  /* the only writers that produce the blocking value are the logger's own
+     init window and the teardown pin */
+  assert.deepEqual(
+    Object.entries(LOG_GUARD_WRITER_SITES)
+      .filter(([, v]) => v === LOG_GUARD_BUSY)
+      .map(([k]) => Number(k))
+      .sort((a, b) => a - b),
+    [0x00a11328, LOG_VA_SHUTDOWN_GUARD_STORE],
+  );
+  assert.equal(LOG_LISTENER_PTR_WRITERS, 6);
+  assert.equal(LOG_LISTENER_PTR_NONZERO_WRITERS, 1);
+  assert.equal(LOG_LISTENER_MASK_WRITERS, 4);
+  assert.equal(LOG_LISTENER_MASK_NONZERO_WRITERS, 1);
+  assert.equal(LOG_CRITSEC_PTR_WRITERS, 2);
+  assert.equal(LOG_HOLDER_FLAGS_WRITERS, 2);
+
+  /* post-teardown reachability, CFG-measured */
+  assert.equal(LOG_POST_TEARDOWN_FUNCTIONS, 154);
+  assert.equal(LOG_POST_TEARDOWN_LOG_SITES, 15);
+  assert.equal(LOG_POST_TEARDOWN_LOG_FUNCTIONS, 8);
+  assert.equal(LOG_POST_TEARDOWN_FAMILY_GAME_LOGIC_EDGES, 0);
+  assert.equal(
+    LOG_POST_TEARDOWN_LOG_FUNCTION_VAS.length,
+    LOG_POST_TEARDOWN_LOG_FUNCTIONS,
+  );
+  /* the logger's own lock is one of them — the re-entrant edge */
+  assert.ok(LOG_POST_TEARDOWN_LOG_FUNCTION_VAS.includes(LOG_VA_MUTEX_LOCK));
+  assert.ok(LOG_POST_TEARDOWN_LOG_SITES < LOG_CALLSITES);
+});
+
+test("header records the v2 lifecycle evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a71770/);
+  assert.match(h, /0x00a71bac/);
+  assert.match(h, /0x00a71852/);
+  assert.match(h, /0x00a71842/);
+  assert.match(h, /0x00a5f48a/);
+  assert.match(h, /0x0093140e/);
+  assert.match(h, /0x00931135/);
+  assert.match(h, /IsaacMain/);
+  assert.match(h, /cmp dword \[0x00c7de48\], 2/);
+  assert.match(h, /UNCONDITIONAL/);
+  assert.match(h, /CONDITIONAL/);
+  assert.match(h, /D-LOG-3/);
+  assert.match(h, /D-LOG-4/);
+  assert.match(h, /D-LOG-5/);
+  assert.match(h, /DeleteCriticalSection/);
+  assert.match(h, /RE-READ/);
+  /* the resync note: a linear decode that halts early is a silent prefix */
+  assert.match(h, /resync|RESYNC/);
+});
+
+/* ===================== v2 LI: listener uninstall ===================== */
+
+test("LI: uninstall — POST re-read gate, conditional ptr, unconditional mask", () => {
+  /* 0x00a71829: the flush vcall needs only the PRE read */
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(0)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(1)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(0xffffffff)), 1);
+  /* a pointer whose LOW byte is zero is still non-null: this is a FULL
+     32-bit test, not one of the logger's byte gates */
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(0x100)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(0x80000000)), 1);
+
+  /* 0x00a71838 tests the RE-READ: pre non-null + post null must NOT destroy */
+  assert.equal(s(wasm.isaac_log_teardown_destroy_needed(0xdead, 0)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_destroy_needed(0, 0xdead)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_destroy_needed(0xdead, 0xdead)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_destroy_needed(0xdead, 0xbeef)), 1);
+  /* the defect-class pin: folding the post read to the pre snapshot would
+     make this case destroy through a pointer the sink already cleared */
+  assert.equal(
+    s(wasm.isaac_log_teardown_destroy_needed(0x100, 0)),
+    0,
+    "post re-read must not be folded to the pre-call snapshot",
+  );
+  assert.equal(s(wasm.isaac_log_teardown_flush_needed(0x100)), 1);
+
+  /* the pointer cell is 0 on ALL THREE arms — derived, not assumed */
+  assert.equal(u(wasm.isaac_log_teardown_listener_ptr_after(0, 0)), 0);
+  assert.equal(u(wasm.isaac_log_teardown_listener_ptr_after(0, 0xdead)), 0);
+  assert.equal(u(wasm.isaac_log_teardown_listener_ptr_after(0xdead, 0)), 0);
+  assert.equal(u(wasm.isaac_log_teardown_listener_ptr_after(0xdead, 0xdead)), 0);
+
+  /* 0x00a71852 is at the join: no prior mask survives it */
+  for (const before of [0, 1, 0xff, 0x100, 0x80000000, 0xffffffff]) {
+    assert.equal(
+      u(wasm.isaac_log_teardown_listener_mask_after(before)),
+      0,
+      `mask clear is unconditional (before=${before.toString(16)})`,
+    );
+    assert.equal(logTeardownListenerMaskAfter(before), 0);
+  }
+  assert.equal(s(wasm.isaac_log_teardown_mask_clear_unconditional()), 1);
+  assert.equal(logTeardownMaskClearUnconditional(), 1);
+
+  /* D-LOG-5: the second flush at 0x00a71a19 is never reached */
+  for (const pre of [0, 1, 0xdead, 0xffffffff]) {
+    for (const post of [0, 1, 0xdead, 0xffffffff]) {
+      assert.equal(
+        s(wasm.isaac_log_teardown_second_flush_reached(pre, post)),
+        0,
+        `second flush dead (${pre.toString(16)},${post.toString(16)})`,
+      );
+    }
+  }
+
+  /* after teardown the listener gate cannot open for ANY level: mask 0 */
+  for (const level of [1, 4, 8, 0x10, 0xff, 0x100, 0xffffffff]) {
+    assert.equal(
+      s(
+        wasm.isaac_log_listener_hit_pre(
+          u(wasm.isaac_log_teardown_listener_ptr_after(0xdead, 0xdead)),
+          u(wasm.isaac_log_teardown_listener_mask_after(0xff)),
+          level,
+        ),
+      ),
+      0,
+      `listener dead post-teardown for level ${level.toString(16)}`,
+    );
+  }
+});
+
+/* ============ v2 LJ: the `== 2` gate and the permanent pin ============ */
+
+test("LJ: teardown gate is a FULL-DWORD == 2, and the guard pin is conditional", () => {
+  /* full-dword equality: only exactly 2 engages */
+  assert.equal(s(wasm.isaac_log_teardown_engaged(2)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(0)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(1)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(3)), 0);
+  /* the byte-narrowing mutants: all of these have low byte 2 */
+  assert.equal(
+    s(wasm.isaac_log_teardown_engaged(0x102)),
+    0,
+    "0x102 must NOT engage — the compare is a full dword",
+  );
+  assert.equal(s(wasm.isaac_log_teardown_engaged(0xff02)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(0x80000002)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(0xffffff02)), 0);
+  /* and it is NOT the logger's `== 1` gate */
+  assert.equal(s(wasm.isaac_log_guard_blocks(1)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(1)), 0);
+  assert.equal(s(wasm.isaac_log_guard_blocks(2)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(2)), 1);
+
+  /* THE store: guard := 1 only from 2 */
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(2)), 1);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(0)), 0);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(1)), 1);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(3)), 3);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(0x102)), 0x102);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(0xffffffff)), 0xffffffff);
+
+  /* the payoff law: are all 3286 sites no-ops afterwards? */
+  assert.equal(s(wasm.isaac_log_post_teardown_blocks_all(2)), 1);
+  assert.equal(s(wasm.isaac_log_post_teardown_blocks_all(1)), 1);
+  assert.equal(
+    s(wasm.isaac_log_post_teardown_blocks_all(0)),
+    0,
+    "D-LOG-3: guard 0 at teardown leaves the logger LIVE",
+  );
+  assert.equal(s(wasm.isaac_log_post_teardown_blocks_all(3)), 0);
+  assert.equal(s(wasm.isaac_log_post_teardown_blocks_all(0x102)), 0);
+  /* D-LOG-3 pin, both directions */
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(0)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(2)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(1)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(0x102)), 1);
+
+  /* critical-section destroy: engaged AND non-null */
+  assert.equal(s(wasm.isaac_log_teardown_critsec_delete_needed(2, 0xcafe)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_critsec_delete_needed(2, 0)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_critsec_delete_needed(0, 0xcafe)), 0);
+  assert.equal(s(wasm.isaac_log_teardown_critsec_delete_needed(1, 0xcafe)), 0);
+  assert.equal(
+    s(wasm.isaac_log_teardown_critsec_delete_needed(0x102, 0xcafe)),
+    0,
+  );
+  assert.equal(u(wasm.isaac_log_teardown_critsec_ptr_after(2, 0xcafe)), 0);
+  assert.equal(
+    u(wasm.isaac_log_teardown_critsec_ptr_after(0, 0xcafe)),
+    0xcafe,
+    "a skipped teardown LEAKS the critical section",
+  );
+  assert.equal(u(wasm.isaac_log_teardown_critsec_free_size()), 0x1c);
+  assert.equal(logTeardownCritsecFreeSize(), LOG_CRITSEC_SIZE);
+
+  /* 0x00a71be5 is a BYTE and: only the low byte of the cell survives, and
+     the mask is applied only when engaged */
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(2, 0x01)), 0x00);
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(2, 0xff)), 0xfe);
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(0, 0xff)), 0xff);
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(0, 0x01)), 0x01);
+  /* wide drives: the cell is ONE byte, so everything above 0xff is dropped */
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(2, 0x1ff)), 0xfe);
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(2, 0x101)), 0x00);
+  assert.equal(u(wasm.isaac_log_teardown_holder_flags_after(0, 0x1ff)), 0xff);
+  assert.equal(
+    u(wasm.isaac_log_teardown_holder_flags_after(2, 0xffffffff)),
+    0xfe,
+  );
+
+  /* the adjacent-store contrast: the byte store runs on BOTH paths */
+  for (const g of [0, 1, 2, 3, 0x102, 0xffffffff]) {
+    assert.equal(
+      u(wasm.isaac_log_teardown_byte_after(g)),
+      0,
+      `0x00a71bf6 is the jne target too (guard=${g.toString(16)})`,
+    );
+  }
+});
+
+/* =================== v2 LK: the boot-side installer =================== */
+
+test("LK: the installer mask store IS unconditional (re-verified)", () => {
+  /* 0x00a5f48a is the join of the success jmp and the failure fallthrough */
+  for (const sink of [0, 1, 0xdead, 0x100, 0x80000000, 0xffffffff]) {
+    assert.equal(
+      u(wasm.isaac_log_installer_listener_mask_after(sink)),
+      0xff,
+      `mask 0xff regardless of the sink (${sink.toString(16)})`,
+    );
+    assert.equal(logInstallerListenerMaskAfter(sink), LOG_INSTALLER_MASK);
+    assert.equal(u(wasm.isaac_log_installer_listener_ptr_after(sink)), u(sink));
+  }
+  assert.equal(s(wasm.isaac_log_installer_mask_unconditional()), 1);
+  /* D-LOG-4: mask armed with NO sink installed */
+  assert.equal(s(wasm.isaac_log_installer_mask_set_without_sink()), 1);
+  assert.equal(u(wasm.isaac_log_installer_listener_ptr_after(0)), 0);
+  assert.equal(u(wasm.isaac_log_installer_listener_mask_after(0)), 0xff);
+
+  /* the previous sink is destroyed first (0x00a5f3cb) */
+  assert.equal(s(wasm.isaac_log_installer_prev_destroy_needed(0)), 0);
+  assert.equal(s(wasm.isaac_log_installer_prev_destroy_needed(0x100)), 1);
+  assert.equal(s(wasm.isaac_log_installer_prev_destroy_needed(0xffffffff)), 1);
+
+  /* [esi+4]: 2 preset, 1 iff fopen returned non-null (FULL 32-bit test) */
+  assert.equal(s(wasm.isaac_log_installer_sink_state(0, 0)), -1);
+  assert.equal(s(wasm.isaac_log_installer_sink_state(0, 0xfeed)), -1);
+  assert.equal(s(wasm.isaac_log_installer_sink_state(0xdead, 0)), 2);
+  assert.equal(s(wasm.isaac_log_installer_sink_state(0xdead, 0xfeed)), 1);
+  assert.equal(s(wasm.isaac_log_installer_sink_state(0xdead, 0x100)), 1);
+
+  /* the composed gate right after boot: mask 0xff sees the LOW byte only */
+  assert.equal(s(wasm.isaac_log_listener_hit_after_install(0xdead, 1)), 1);
+  assert.equal(s(wasm.isaac_log_listener_hit_after_install(0xdead, 0x10)), 1);
+  assert.equal(s(wasm.isaac_log_listener_hit_after_install(0xdead, 0xff)), 1);
+  assert.equal(
+    s(wasm.isaac_log_listener_hit_after_install(0xdead, 0x100)),
+    0,
+    "mask 0xff is NOT a full-width pass-through",
+  );
+  assert.equal(
+    s(wasm.isaac_log_listener_hit_after_install(0xdead, 0x80000000)),
+    0,
+  );
+  assert.equal(s(wasm.isaac_log_listener_hit_after_install(0, 1)), 0);
+  /* install then teardown: the gate that was open is now shut */
+  assert.equal(s(wasm.isaac_log_listener_hit_after_install(0xdead, 1)), 1);
+  assert.equal(
+    s(
+      wasm.isaac_log_listener_hit_pre(
+        u(wasm.isaac_log_teardown_listener_ptr_after(0xdead, 0xdead)),
+        u(wasm.isaac_log_teardown_listener_mask_after(0xff)),
+        1,
+      ),
+    ),
+    0,
+  );
+});
+
+/* ============ v2 LL: the lifecycle plan and its differentials ========== */
+
+test("LL: teardown plan — fixed scenarios across every arm", () => {
+  const base = SCRATCH + 0x400;
+  const run = (sc) => {
+    wasm.isaac_log_teardown_plan(
+      sc.guard,
+      sc.listenerPtrPre,
+      sc.listenerPtrPost,
+      sc.listenerMask,
+      sc.critsecPtr,
+      sc.holderFlags,
+      base,
+    );
+    return readTeardownPlan(view, base);
+  };
+
+  /* the shipped shutdown: a run that logged, with a live sink */
+  const shipped = run({
+    guard: 2,
+    listenerPtrPre: 0xdead,
+    listenerPtrPost: 0xdead,
+    listenerMask: 0xff,
+    critsecPtr: 0xcafe,
+    holderFlags: 0x01,
+  });
+  assert.equal(shipped.flushNeeded, 1);
+  assert.equal(shipped.destroyNeeded, 1);
+  assert.equal(shipped.listenerPtrAfter, 0);
+  assert.equal(shipped.listenerMaskAfter, 0);
+  assert.equal(shipped.secondFlushReached, 0);
+  assert.equal(shipped.engaged, 1);
+  assert.equal(shipped.critsecDeleteNeeded, 1);
+  assert.equal(shipped.critsecPtrAfter, 0);
+  assert.equal(shipped.holderFlagsAfter, 0);
+  assert.equal(shipped.guardAfter, 1);
+  assert.equal(shipped.loggerLiveAfter, 0);
+  assert.equal(shipped.teardownByteAfter, 0);
+
+  /* D-LOG-3: a run that never emitted — the guard block is skipped whole */
+  const silent = run({
+    guard: 0,
+    listenerPtrPre: 0,
+    listenerPtrPost: 0,
+    listenerMask: 0,
+    critsecPtr: 0xcafe,
+    holderFlags: 0x01,
+  });
+  assert.equal(silent.engaged, 0);
+  assert.equal(silent.guardAfter, 0);
+  assert.equal(silent.loggerLiveAfter, 1);
+  assert.equal(silent.critsecDeleteNeeded, 0);
+  assert.equal(silent.critsecPtrAfter, 0xcafe);
+  assert.equal(silent.holderFlagsAfter, 0x01);
+  /* but block (A) still ran: the mask is cleared regardless of the guard */
+  assert.equal(silent.listenerMaskAfter, 0);
+  assert.equal(silent.teardownByteAfter, 0);
+
+  /* the sink nulled itself during the flush vcall */
+  const raced = run({
+    guard: 2,
+    listenerPtrPre: 0xdead,
+    listenerPtrPost: 0,
+    listenerMask: 0xff,
+    critsecPtr: 0,
+    holderFlags: 0xff,
+  });
+  assert.equal(raced.flushNeeded, 1);
+  assert.equal(raced.destroyNeeded, 0);
+  assert.equal(raced.listenerPtrAfter, 0);
+  assert.equal(raced.engaged, 1);
+  assert.equal(raced.critsecDeleteNeeded, 0);
+  assert.equal(raced.holderFlagsAfter, 0xfe);
+  assert.equal(raced.guardAfter, 1);
+
+  /* a second teardown: guard already 1, so nothing engages */
+  const again = run({
+    guard: 1,
+    listenerPtrPre: 0,
+    listenerPtrPost: 0,
+    listenerMask: 0,
+    critsecPtr: 0,
+    holderFlags: 0,
+  });
+  assert.equal(again.engaged, 0);
+  assert.equal(again.guardAfter, 1);
+  assert.equal(again.loggerLiveAfter, 0);
+
+  /* the byte-narrowing trap value */
+  const wide = run({
+    guard: 0x102,
+    listenerPtrPre: 0x100,
+    listenerPtrPost: 0x100,
+    listenerMask: 0xffffffff,
+    critsecPtr: 0xcafe,
+    holderFlags: 0x1ff,
+  });
+  assert.equal(wide.engaged, 0);
+  assert.equal(wide.guardAfter, 0x102);
+  assert.equal(wide.loggerLiveAfter, 1);
+  assert.equal(wide.critsecPtrAfter, 0xcafe);
+  assert.equal(wide.holderFlagsAfter, 0xff);
+  assert.equal(wide.flushNeeded, 1);
+  assert.equal(wide.listenerMaskAfter, 0);
+
+  /* null out pointer is a no-op */
+  wasm.isaac_log_teardown_plan(2, 0, 0, 0, 0, 0, 0);
+});
+
+test("randomized differential: v2 lifecycle scalars (LCG high bits)", () => {
+  const rnd = makeLcg(0x10a4);
+  const guardDraw = () => {
+    const branch = pick(rnd, 4);
+    if (branch === 0) return pick(rnd, 4);
+    if (branch === 1) return [0x102, 0x2, 0xff02, 0x80000002][pick(rnd, 4)];
+    if (branch === 2) return [0x100, 0x1ff, 0xffffffff, 0x80000000][pick(rnd, 4)];
+    return rnd();
+  };
+  const ptrDraw = () => {
+    const branch = pick(rnd, 3);
+    if (branch === 0) return pick(rnd, 2);
+    if (branch === 1) return [0x100, 0x80000000, 0xffffffff][pick(rnd, 3)];
+    return rnd();
+  };
+  const byteDraw = () => {
+    const branch = pick(rnd, 3);
+    if (branch === 0) return pick(rnd, 0x102);
+    if (branch === 1) return [0x100, 0x1ff, 0xff, 0xffffffff][pick(rnd, 4)];
+    return rnd();
+  };
+  for (let i = 0; i < 4000; ++i) {
+    const guard = guardDraw();
+    const pre = ptrDraw();
+    const post = ptrDraw();
+    const mask = ptrDraw();
+    const critsec = ptrDraw();
+    const flags = byteDraw();
+    const level = byteDraw();
+    const sink = ptrDraw();
+    const file = ptrDraw();
+
+    assert.equal(
+      s(wasm.isaac_log_teardown_flush_needed(pre)),
+      logTeardownFlushNeeded(pre),
+      `flushNeeded(${u(pre).toString(16)})`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_teardown_destroy_needed(pre, post)),
+      logTeardownDestroyNeeded(pre, post),
+      `destroyNeeded(${u(pre).toString(16)},${u(post).toString(16)})`,
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_listener_ptr_after(pre, post)),
+      logTeardownListenerPtrAfter(pre, post),
+      "listenerPtrAfter",
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_listener_mask_after(mask)),
+      logTeardownListenerMaskAfter(mask),
+      "listenerMaskAfter",
+    );
+    assert.equal(
+      s(wasm.isaac_log_teardown_second_flush_reached(pre, post)),
+      logTeardownSecondFlushReached(pre, post),
+      "secondFlushReached",
+    );
+    assert.equal(
+      s(wasm.isaac_log_teardown_engaged(guard)),
+      logTeardownEngaged(guard),
+      `engaged(${u(guard).toString(16)})`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_teardown_critsec_delete_needed(guard, critsec)),
+      logTeardownCritsecDeleteNeeded(guard, critsec),
+      "critsecDeleteNeeded",
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_critsec_ptr_after(guard, critsec)),
+      logTeardownCritsecPtrAfter(guard, critsec),
+      "critsecPtrAfter",
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_holder_flags_after(guard, flags)),
+      logTeardownHolderFlagsAfter(guard, flags),
+      `holderFlagsAfter(${u(guard).toString(16)},${u(flags).toString(16)})`,
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_guard_after(guard)),
+      logTeardownGuardAfter(guard),
+      `guardAfter(${u(guard).toString(16)})`,
+    );
+    assert.equal(
+      u(wasm.isaac_log_teardown_byte_after(guard)),
+      logTeardownByteAfter(guard),
+      "teardownByteAfter",
+    );
+    assert.equal(
+      s(wasm.isaac_log_post_teardown_blocks_all(guard)),
+      logPostTeardownBlocksAll(guard),
+      `postTeardownBlocksAll(${u(guard).toString(16)})`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_teardown_leaves_logger_live(guard)),
+      logTeardownLeavesLoggerLive(guard),
+      "leavesLoggerLive",
+    );
+    assert.equal(
+      s(wasm.isaac_log_installer_prev_destroy_needed(pre)),
+      logInstallerPrevDestroyNeeded(pre),
+      "prevDestroyNeeded",
+    );
+    assert.equal(
+      u(wasm.isaac_log_installer_listener_ptr_after(sink)),
+      logInstallerListenerPtrAfter(sink),
+      "installerPtrAfter",
+    );
+    assert.equal(
+      u(wasm.isaac_log_installer_listener_mask_after(sink)),
+      logInstallerListenerMaskAfter(sink),
+      "installerMaskAfter",
+    );
+    assert.equal(
+      s(wasm.isaac_log_installer_sink_state(sink, file)),
+      logInstallerSinkState(sink, file),
+      "sinkState",
+    );
+    assert.equal(
+      s(wasm.isaac_log_listener_hit_after_install(sink, level)),
+      logListenerHitAfterInstall(sink, level),
+      `hitAfterInstall(${u(sink).toString(16)},${u(level).toString(16)})`,
+    );
+  }
+  assert.equal(
+    s(wasm.isaac_log_teardown_mask_clear_unconditional()),
+    logTeardownMaskClearUnconditional(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_installer_mask_unconditional()),
+    logInstallerMaskUnconditional(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_installer_mask_set_without_sink()),
+    logInstallerMaskSetWithoutSink(),
+  );
+  assert.equal(
+    u(wasm.isaac_log_teardown_critsec_free_size()),
+    logTeardownCritsecFreeSize(),
+  );
+});
+
+test("randomized differential: the teardown plan", () => {
+  const rnd = makeLcg(0x10a5);
+  const base = SCRATCH + 0x500;
+  const draw = () => {
+    const branch = pick(rnd, 4);
+    if (branch === 0) return pick(rnd, 4);
+    if (branch === 1) return [0, 1, 2, 0x102, 0x100][pick(rnd, 5)];
+    if (branch === 2) return [0xff, 0x1ff, 0x80000000, 0xffffffff][pick(rnd, 4)];
+    return rnd();
+  };
+  const seen = {
+    engaged: new Set(),
+    guardAfter: new Set(),
+    destroy: new Set(),
+    live: new Set(),
+  };
+  for (let i = 0; i < 1500; ++i) {
+    const sc = {
+      guard: draw(),
+      listenerPtrPre: draw(),
+      listenerPtrPost: draw(),
+      listenerMask: draw(),
+      critsecPtr: draw(),
+      holderFlags: draw(),
+    };
+    wasm.isaac_log_teardown_plan(
+      sc.guard,
+      sc.listenerPtrPre,
+      sc.listenerPtrPost,
+      sc.listenerMask,
+      sc.critsecPtr,
+      sc.holderFlags,
+      base,
+    );
+    const actual = readTeardownPlan(view, base);
+    assertTeardownPlan(actual, logTeardownPlan(sc), `tplan ${i}`);
+    seen.engaged.add(actual.engaged);
+    seen.guardAfter.add(actual.guardAfter === 1 ? "pinned" : "kept");
+    seen.destroy.add(actual.destroyNeeded);
+    seen.live.add(actual.loggerLiveAfter);
+
+    /* cross-law coherence with the scalar exports */
+    assert.equal(
+      actual.engaged,
+      s(wasm.isaac_log_teardown_engaged(sc.guard)),
+      "plan.engaged",
+    );
+    assert.equal(
+      actual.guardAfter,
+      u(wasm.isaac_log_teardown_guard_after(sc.guard)),
+      "plan.guardAfter",
+    );
+    /* every path clears the mask and the byte, whatever the guard did */
+    assert.equal(actual.listenerMaskAfter, 0, "mask always cleared");
+    assert.equal(actual.teardownByteAfter, 0, "byte always cleared");
+    assert.equal(actual.listenerPtrAfter, 0, "ptr null on every arm");
+    assert.equal(actual.secondFlushReached, 0, "D-LOG-5");
+    /* the guard store and the critsec destroy share ONE predicate */
+    if (actual.engaged) {
+      assert.equal(actual.guardAfter, 1, "engaged => pinned");
+    } else {
+      assert.equal(actual.guardAfter, u(sc.guard), "not engaged => untouched");
+      assert.equal(actual.critsecDeleteNeeded, 0, "not engaged => no destroy");
+    }
+    /* cross-family composition: the v1 entry gate over the v2 result */
+    assert.equal(
+      actual.loggerLiveAfter,
+      s(wasm.isaac_log_guard_blocks(actual.guardAfter)) ? 0 : 1,
+      "loggerLiveAfter == !guardBlocks(guardAfter)",
+    );
+  }
+  /* corpus reach: both gate outcomes, both guard fates, both destroy arms */
+  assert.deepEqual([...seen.engaged].sort(), [0, 1]);
+  assert.deepEqual([...seen.guardAfter].sort(), ["kept", "pinned"]);
+  assert.deepEqual([...seen.destroy].sort(), [0, 1]);
+  assert.deepEqual([...seen.live].sort(), [0, 1]);
+});
+
+test("corpus reaches every guard state and both teardown paths", () => {
+  /* the four guard states the machine can present at 0x00a71bac, plus a
+     nonzero non-1/2 value, driven through the WHOLE lifecycle */
+  const states = [0, 1, 2, 7, 0x102, 0x100, 0x80000000, 0xffffffff];
+  const engaged = new Set();
+  const blocked = new Set();
+  for (const g of states) {
+    const e = s(wasm.isaac_log_teardown_engaged(g));
+    engaged.add(e);
+    blocked.add(s(wasm.isaac_log_post_teardown_blocks_all(g)));
+    /* the v1 emit gate before and after the teardown, same level */
+    const before = s(wasm.isaac_log_guard_blocks(g));
+    const after = s(
+      wasm.isaac_log_guard_blocks(u(wasm.isaac_log_teardown_guard_after(g))),
+    );
+    /* the teardown can only ever ADD blocking, never remove it */
+    assert.ok(after >= before, `teardown never unblocks (guard=${g})`);
+    if (g === 2) {
+      assert.equal(before, 0);
+      assert.equal(after, 1);
+    }
+    if (g === 0 || g === 7 || g === 0x102) {
+      assert.equal(after, 0, `guard ${g} survives the teardown unblocked`);
+    }
+  }
+  assert.deepEqual([...engaged].sort(), [0, 1], "both gate outcomes reached");
+  assert.deepEqual([...blocked].sort(), [0, 1], "both block outcomes reached");
+  /* guard 0 -> 1 -> 2 (v1 machine) then 2 -> 1 (v2 teardown): the full loop */
+  assert.equal(u(wasm.isaac_log_guard_after(0, 1, 0, 0, 1)), 2);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(2)), 1);
+  assert.equal(s(wasm.isaac_log_guard_blocks(1)), 1);
+  /* and the 3286 sites are then no-ops for every shipped level */
+  for (const level of [1, 4, 8, 0x10]) {
+    assert.equal(
+      s(wasm.isaac_log_message_dropped(1, level, 0xdead, 0xff, 1)),
+      1,
+      `level ${level} dropped post-teardown`,
+    );
+  }
+});
+
+/* =================== v3: the init 0x00a710a0 =================== */
+
+test("v3 constants and init censuses agree with the header contract", () => {
+  /* Every new literal is pinned here AND cross-checked against the model
+     export, so a drift on either side is a failure rather than a silent
+     divergence. */
+  const pins = {
+    LOG_VA_INIT: [LOG_VA_INIT, 0x00a710a0],
+    LOG_VA_INIT_RET_OK: [LOG_VA_INIT_RET_OK, 0x00a714c8],
+    LOG_VA_INIT_RET_FAIL: [LOG_VA_INIT_RET_FAIL, 0x00a714db],
+    LOG_VA_INIT_FAIL_LABEL: [LOG_VA_INIT_FAIL_LABEL, 0x00a714c9],
+    LOG_VA_INIT_CALLER: [LOG_VA_INIT_CALLER, 0x00a5f0e0],
+    LOG_VA_INIT_CALLSITE: [LOG_VA_INIT_CALLSITE, 0x00a5f18c],
+    LOG_VA_INIT_SEH_HANDLER: [LOG_VA_INIT_SEH_HANDLER, 0x00b13685],
+    LOG_VA_INIT_ARG0_STORE: [LOG_VA_INIT_ARG0_STORE, 0x00a710e5],
+    LOG_VA_INIT_ARG1_STORE: [LOG_VA_INIT_ARG1_STORE, 0x00a710eb],
+    LOG_INIT_ARG0_VA: [LOG_INIT_ARG0_VA, 0x00c78d98],
+    LOG_INIT_ARG1_VA: [LOG_INIT_ARG1_VA, 0x00c78d94],
+    LOG_VA_INIT_LIFECYCLE_TEST: [LOG_VA_INIT_LIFECYCLE_TEST, 0x00a710cb],
+    LOG_VA_INIT_LIFECYCLE_BRANCH: [LOG_VA_INIT_LIFECYCLE_BRANCH, 0x00a710d2],
+    LOG_VA_INIT_WARN_SITE: [LOG_VA_INIT_WARN_SITE, 0x00a710db],
+    LOG_VA_INIT_WARN_CLEANUP: [LOG_VA_INIT_WARN_CLEANUP, 0x00a710e0],
+    LOG_INIT_WARN_STRING_VA: [LOG_INIT_WARN_STRING_VA, 0x00ba21f0],
+    LOG_VA_INIT_LIFECYCLE_STORE: [LOG_VA_INIT_LIFECYCLE_STORE, 0x00a714af],
+    LOG_VA_LIFECYCLE_OTHER_READER: [LOG_VA_LIFECYCLE_OTHER_READER, 0x00430c3b],
+    LOG_VA_LIFECYCLE_OTHER_LOG_SITE: [
+      LOG_VA_LIFECYCLE_OTHER_LOG_SITE,
+      0x00430c4b,
+    ],
+    LOG_LIFECYCLE_OTHER_STRING_VA: [LOG_LIFECYCLE_OTHER_STRING_VA, 0x00b82ee8],
+    LOG_VA_INIT_OBJECT_ALLOC_TEST: [LOG_VA_INIT_OBJECT_ALLOC_TEST, 0x00a71105],
+    LOG_VA_INIT_OBJECT_FAIL_LABEL: [LOG_VA_INIT_OBJECT_FAIL_LABEL, 0x00a711e2],
+    LOG_VA_INIT_OBJECT_PUBLISH: [LOG_VA_INIT_OBJECT_PUBLISH, 0x00a711da],
+    LOG_INIT_OBJECT_VA: [LOG_INIT_OBJECT_VA, 0x00c7de78],
+    LOG_INIT_OBJECT_SIZE: [LOG_INIT_OBJECT_SIZE, 0x40],
+    LOG_VA_INIT_OBJECT_MAGIC_STORE: [LOG_VA_INIT_OBJECT_MAGIC_STORE, 0x00a71113],
+    LOG_INIT_OBJECT_MAGIC: [LOG_INIT_OBJECT_MAGIC, 0x7fcb9dd6],
+    LOG_VA_INIT_MUTEX_VTABLE_STORE: [LOG_VA_INIT_MUTEX_VTABLE_STORE, 0x00a71122],
+    LOG_INIT_HOLDER_OFFSET: [LOG_INIT_HOLDER_OFFSET, 0x10],
+    LOG_VA_INIT_DEVIRT_TEST: [LOG_VA_INIT_DEVIRT_TEST, 0x00a711a5],
+    LOG_VA_INIT_DEVIRT_DIRECT: [LOG_VA_INIT_DEVIRT_DIRECT, 0x00a711ac],
+    LOG_VA_INIT_DEVIRT_INDIRECT: [LOG_VA_INIT_DEVIRT_INDIRECT, 0x00a711b3],
+    LOG_VA_INIT_CRITSEC_TEST: [LOG_VA_INIT_CRITSEC_TEST, 0x00a7139a],
+    LOG_VA_INIT_CRITSEC_FAIL_LABEL: [LOG_VA_INIT_CRITSEC_FAIL_LABEL, 0x00a713c3],
+    LOG_VA_INIT_CRITSEC_TAIL: [LOG_VA_INIT_CRITSEC_TAIL, 0x00a713c5],
+    LOG_VA_INIT_CRITSEC_BTS: [LOG_VA_INIT_CRITSEC_BTS, 0x00a713cc],
+    LOG_VA_INIT_CRITSEC_PTR_STORE: [LOG_VA_INIT_CRITSEC_PTR_STORE, 0x00a713d0],
+    LOG_VA_INIT_CRITSEC_FLAGS_STORE: [
+      LOG_VA_INIT_CRITSEC_FLAGS_STORE,
+      0x00a713d6,
+    ],
+    LOG_INIT_CRITSEC_FLAGS_VA: [LOG_INIT_CRITSEC_FLAGS_VA, 0x00c5ab48],
+    LOG_INIT_CRITSEC_PTR_VA: [LOG_INIT_CRITSEC_PTR_VA, 0x00c5ab4c],
+    LOG_INIT_CRITSEC_READY_BIT: [LOG_INIT_CRITSEC_READY_BIT, 1],
+    LOG_INIT_CRITSEC_ZERO_OFFSET: [LOG_INIT_CRITSEC_ZERO_OFFSET, 0x18],
+    LOG_VA_INIT_CMD_THREAD_TEST: [LOG_VA_INIT_CMD_THREAD_TEST, 0x00a713f8],
+    LOG_VA_INIT_CMD_THREAD_WARN_SITE: [
+      LOG_VA_INIT_CMD_THREAD_WARN_SITE,
+      0x00a71408,
+    ],
+    LOG_VA_INIT_CMD_THREAD_SKIP: [LOG_VA_INIT_CMD_THREAD_SKIP, 0x00a71410],
+    LOG_VA_INIT_CMD_THREAD_BTS: [LOG_VA_INIT_CMD_THREAD_BTS, 0x00a71456],
+    LOG_VA_INIT_CMD_THREAD_FLAGS_STORE: [
+      LOG_VA_INIT_CMD_THREAD_FLAGS_STORE,
+      0x00a7145a,
+    ],
+    LOG_VA_INIT_CMD_THREAD_JOIN: [LOG_VA_INIT_CMD_THREAD_JOIN, 0x00a7145f],
+    LOG_INIT_CMD_THREAD_FLAGS_VA: [LOG_INIT_CMD_THREAD_FLAGS_VA, 0x00c79a7c],
+    LOG_INIT_CMD_THREAD_STRING_VA: [LOG_INIT_CMD_THREAD_STRING_VA, 0x00ba82b0],
+    LOG_INIT_CMD_THREAD_READY_BIT: [LOG_INIT_CMD_THREAD_READY_BIT, 1],
+    LOG_VA_INIT_FAIL_BRANCH_0: [LOG_VA_INIT_FAIL_BRANCH_0, 0x00a7128b],
+    LOG_VA_INIT_FAIL_BRANCH_1: [LOG_VA_INIT_FAIL_BRANCH_1, 0x00a71357],
+    LOG_VA_INIT_FAIL_BRANCH_2: [LOG_VA_INIT_FAIL_BRANCH_2, 0x00a71369],
+    LOG_INIT_FAIL_PREDECESSORS: [LOG_INIT_FAIL_PREDECESSORS, 3],
+    LOG_INIT_WARN_LEVEL: [LOG_INIT_WARN_LEVEL, 0x10],
+    LOG_INIT_WARN_CLEANUP_IMM: [LOG_INIT_WARN_CLEANUP_IMM, 8],
+    LOG_INIT_LOG_SITES: [LOG_INIT_LOG_SITES, 2],
+    LOG_INIT_CALLSITES: [LOG_INIT_CALLSITES, 1],
+    LOG_INIT_ADDRESS_ESCAPES: [LOG_INIT_ADDRESS_ESCAPES, 0],
+    LOG_INIT_INBOUND_TRANSFERS: [LOG_INIT_INBOUND_TRANSFERS, 0],
+    LOG_INIT_INSN_COUNT: [LOG_INIT_INSN_COUNT, 271],
+    LOG_INIT_UNDECODABLE_BYTES: [LOG_INIT_UNDECODABLE_BYTES, 0],
+    LOG_INIT_ORPHAN_BLOCKS: [LOG_INIT_ORPHAN_BLOCKS, 0],
+    LOG_LIFECYCLE_BYTE_READERS: [LOG_LIFECYCLE_BYTE_READERS, 2],
+    LOG_LIFECYCLE_BYTE_WRITERS: [LOG_LIFECYCLE_BYTE_WRITERS, 2],
+    LOG_INIT_ARG0_WRITERS: [LOG_INIT_ARG0_WRITERS, 1],
+    LOG_INIT_ARG1_WRITERS: [LOG_INIT_ARG1_WRITERS, 1],
+    LOG_VA_BOOT_LOG_SITE: [LOG_VA_BOOT_LOG_SITE, 0x00931172],
+    LOG_VA_BOOT_LOG_LEVEL_PUSH: [LOG_VA_BOOT_LOG_LEVEL_PUSH, 0x00931170],
+    LOG_BOOT_LOG_LEVEL: [LOG_BOOT_LOG_LEVEL, 1],
+    LOG_BOOT_LOG_STRING_VA: [LOG_BOOT_LOG_STRING_VA, 0x00b7b3f8],
+    LOG_VA_ISAAC_MAIN_SCOPE_TABLE: [LOG_VA_ISAAC_MAIN_SCOPE_TABLE, 0x00bcc178],
+    LOG_VA_ISAAC_MAIN_UNWIND_FUNCLET: [
+      LOG_VA_ISAAC_MAIN_UNWIND_FUNCLET,
+      0x00931458,
+    ],
+    LOG_VA_ISAAC_MAIN_EXCEPT_HANDLER: [
+      LOG_VA_ISAAC_MAIN_EXCEPT_HANDLER,
+      0x00931461,
+    ],
+    LOG_ISAAC_MAIN_SCOPE_ENTRIES: [LOG_ISAAC_MAIN_SCOPE_ENTRIES, 1],
+    LOG_ISAAC_MAIN_INSN_COUNT: [LOG_ISAAC_MAIN_INSN_COUNT, 259],
+    LOG_ISAAC_MAIN_UNDECODABLE_BYTES: [LOG_ISAAC_MAIN_UNDECODABLE_BYTES, 0],
+    LOG_ISAAC_MAIN_ORPHAN_BLOCKS: [LOG_ISAAC_MAIN_ORPHAN_BLOCKS, 1],
+    LOG_GUARD_ADDRESS_ESCAPES: [LOG_GUARD_ADDRESS_ESCAPES, 0],
+    LOG_GUARD_DISTINCT_VALUES: [LOG_GUARD_DISTINCT_VALUES, 3],
+    LOG_TEARDOWN_CALLSITES_V3: [LOG_TEARDOWN_CALLSITES_V3, 1],
+    LOG_TEXT_INSN_COUNT_V3: [LOG_TEXT_INSN_COUNT_V3, 2094319],
+    LOG_TEXT_UNDECODABLE_BYTES_V3: [LOG_TEXT_UNDECODABLE_BYTES_V3, 469],
+  };
+  for (const [name, [actual, expected]] of Object.entries(pins)) {
+    assert.equal(actual, expected, `model export ${name}`);
+  }
+  /* strings read through the SECTION TABLE, never a .text-only formula */
+  assert.equal(LOG_INIT_WARN_STRING, "KAGE has already been initialized\n");
+  assert.equal(LOG_INIT_WARN_STRING.length, 34);
+  assert.equal(LOG_INIT_CMD_THREAD_STRING, "Command thread is already initialized\n");
+  assert.equal(LOG_INIT_CMD_THREAD_STRING.length, 38);
+  assert.equal(LOG_BOOT_LOG_STRING, "Command Line: \n");
+  assert.equal(LOG_BOOT_LOG_STRING.length, 15);
+  assert.equal(
+    LOG_LIFECYCLE_OTHER_STRING,
+    "SetEngineParameters must be called before calling KAGE::Initialize\n",
+  );
+  /* the v3 decode configuration is the v2 one, NOT the v1 figure */
+  assert.equal(LOG_TEXT_INSN_COUNT_V3, LOG_TEXT_INSN_COUNT_V2);
+  assert.notEqual(LOG_TEXT_INSN_COUNT_V3, LOG_TEXT_INSN_COUNT);
+  /* the teardown reach-site count was RE-VERIFIED, not inherited */
+  assert.equal(LOG_TEARDOWN_CALLSITES_V3, LOG_TEARDOWN_CALLSITES);
+  /* both lifecycle-byte writers, enumerated with their stored values */
+  assert.deepEqual(
+    Object.keys(LOG_LIFECYCLE_BYTE_WRITER_SITES)
+      .map(Number)
+      .sort((a, b) => a - b),
+    [0x00a714af, 0x00a71bf6],
+  );
+  assert.equal(LOG_LIFECYCLE_BYTE_WRITER_SITES[0x00a714af], 1);
+  assert.equal(LOG_LIFECYCLE_BYTE_WRITER_SITES[0x00a71bf6], 0);
+  assert.equal(
+    Object.keys(LOG_LIFECYCLE_BYTE_WRITER_SITES).length,
+    LOG_LIFECYCLE_BYTE_WRITERS,
+  );
+  assert.deepEqual([...LOG_GUARD_REACHABLE_VALUES], [0, 1, 2]);
+  assert.equal(LOG_GUARD_REACHABLE_VALUES.length, LOG_GUARD_DISTINCT_VALUES);
+  /* the init's warn level is the ASSERT level, the boot site's is INFO */
+  assert.equal(LOG_INIT_WARN_LEVEL, 0x10);
+  assert.notEqual(LOG_INIT_WARN_LEVEL, LOG_BOOT_LOG_LEVEL);
+  /* the init's embedded holder gets the SAME vtable as the global one */
+  assert.equal(LOG_MUTEX_VTABLE_VA, 0x00b81c0c);
+});
+
+test("header records the v3 init evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a710a0/);
+  assert.match(h, /0x00a710cb/);
+  assert.match(h, /0x00a714af/);
+  assert.match(h, /0x00a7139a/);
+  assert.match(h, /0x00a713f8/);
+  assert.match(h, /0x00931172/);
+  assert.match(h, /0x00931461/);
+  assert.match(h, /0x00931458/);
+  assert.match(h, /0x00bcc178/);
+  assert.match(h, /0x00430c3b/);
+  assert.match(h, /D-LOG-6/);
+  /* the three byte gates must be described as DIFFERENT gates */
+  assert.match(h, /cmp byte \[0x00c78aad\], 0/);
+  assert.match(h, /test byte \[0x00c5ab48\], 1/);
+  assert.match(h, /test byte \[0x00c79a7c\], 1/);
+  assert.match(h, /do not homogenise/i);
+  /* the D-LOG-3 answer and its proof shape */
+  assert.match(h, /D-LOG-3 IS ANSWERED/);
+  assert.match(h, /DOMINATES/);
+  assert.match(h, /NEVER 0/);
+  assert.match(h, /address escapes/i);
+  /* the decode discipline */
+  assert.match(h, /resync|RESYNC/);
+  assert.match(h, /271 instructions/);
+  assert.match(h, /259 instructions/);
+});
+
+test("LM: the init's THREE byte gates are NOT the same gate", () => {
+  /* 0x00a710cb is `cmp Eb, 0` — ANY nonzero byte warns.
+     0x00a7139a and 0x00a713f8 are `test Eb, 1` — only BIT 0 counts.
+     Value 2 is the discriminator, and 0x100 proves none of them is a dword
+     op. Every argument is driven UNMASKED across the Wasm boundary. */
+  const wide = [0, 1, 2, 3, 0x7f, 0x80, 0xfe, 0xff, 0x100, 0x101, 0x1ff,
+    0x80000000, 0xfffffffe, 0xffffffff];
+  for (const v of wide) {
+    const low = v & 0xff;
+    assert.equal(
+      s(wasm.isaac_log_init_already_initialized(v)),
+      low !== 0 ? 1 : 0,
+      `lifecycle gate ${v}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_critsec_init_runs(v)),
+      (low & 1) === 0 ? 1 : 0,
+      `critsec gate ${v}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_cmd_thread_warns(v)),
+      (low & 1) !== 0 ? 1 : 0,
+      `cmd-thread gate ${v}`,
+    );
+    /* JS oracle agrees on all three */
+    assert.equal(
+      s(wasm.isaac_log_init_already_initialized(v)),
+      logInitAlreadyInitialized(v),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_critsec_init_runs(v)),
+      logInitCritsecInitRuns(v),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_cmd_thread_warns(v)),
+      logInitCmdThreadWarns(v),
+    );
+  }
+  /* THE discriminator: 2 warns on the nonzero gate but is "not ready" on
+     both bit-0 gates. Homogenising any pair of them breaks exactly this. */
+  assert.equal(s(wasm.isaac_log_init_already_initialized(2)), 1);
+  assert.equal(s(wasm.isaac_log_init_critsec_init_runs(2)), 1);
+  assert.equal(s(wasm.isaac_log_init_cmd_thread_warns(2)), 0);
+  /* and 0x100: a dword-wide gate would see a nonzero value; every byte gate
+     here sees 0 */
+  assert.equal(s(wasm.isaac_log_init_already_initialized(0x100)), 0);
+  assert.equal(s(wasm.isaac_log_init_critsec_init_runs(0x100)), 1);
+  assert.equal(s(wasm.isaac_log_init_cmd_thread_warns(0x100)), 0);
+  /* none of the three is the teardown's FULL-DWORD `cmp [0xc7de48], 2` */
+  assert.equal(s(wasm.isaac_log_teardown_engaged(2)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(0x102)), 0);
+  assert.equal(s(wasm.isaac_log_init_already_initialized(0x102)), 1);
+  /* warns and creates partition the cmd-thread gate */
+  for (const v of wide) {
+    assert.equal(
+      s(wasm.isaac_log_init_cmd_thread_warns(v)) +
+        s(wasm.isaac_log_init_cmd_thread_creates(v)),
+      1,
+      `cmd-thread arms partition (${v})`,
+    );
+  }
+  /* both internal edges push level 0x10 and clean 8 bytes -> 0 varargs */
+  assert.equal(u(wasm.isaac_log_init_warn_level()), 0x10);
+  assert.equal(u(wasm.isaac_log_init_warn_vararg_count()), 0);
+  assert.equal(u(wasm.isaac_log_init_warn_level()), logInitWarnLevel());
+  assert.equal(
+    u(wasm.isaac_log_init_warn_vararg_count()),
+    logInitWarnVarargCount(),
+  );
+  /* derived through the v1 marshalling law, not restated */
+  assert.equal(
+    u(wasm.isaac_log_init_warn_vararg_count()),
+    u(wasm.isaac_log_vararg_dword_count(LOG_INIT_WARN_CLEANUP_IMM)),
+  );
+});
+
+test("LM: object publish is success-only; the critsec tail is SHARED (D-LOG-6)", () => {
+  /* 0x00a711da is the last instruction of the construct arm; the failure
+     arm joins one instruction later, so a failed alloc leaves the previous
+     pointer standing rather than clearing it. */
+  assert.equal(u(wasm.isaac_log_init_object_after(0xcafe, 0)), 0xcafe);
+  assert.equal(u(wasm.isaac_log_init_object_after(0xcafe, 0xbeef)), 0xbeef);
+  assert.equal(u(wasm.isaac_log_init_object_after(0, 0)), 0);
+  assert.equal(s(wasm.isaac_log_init_object_allocated(0)), 0);
+  assert.equal(s(wasm.isaac_log_init_object_allocated(1)), 1);
+  /* FULL 32-bit test: a pointer whose low byte is zero is still non-null */
+  assert.equal(s(wasm.isaac_log_init_object_allocated(0x100)), 1);
+  assert.equal(u(wasm.isaac_log_init_object_after(7, 0x100)), 0x100);
+
+  /* D-LOG-6: the ready bit is set even when the 0x1c allocation failed and
+     the stored CRITICAL_SECTION* is NULL — the bts/store tail is reached
+     from BOTH the InitializeCriticalSection arm and the `xor esi,esi` arm. */
+  assert.equal(s(wasm.isaac_log_init_critsec_marked_without_critsec()), 1);
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0)), 1);
+  assert.equal(u(wasm.isaac_log_init_critsec_ptr_after(0, 0x11, 0)), 0);
+  assert.equal(
+    u(wasm.isaac_log_init_critsec_flags_after(0)) &
+      LOG_INIT_CRITSEC_READY_BIT,
+    1,
+    "flag says ready...",
+  );
+  assert.equal(
+    u(wasm.isaac_log_init_critsec_ptr_after(0, 0x11, 0)),
+    0,
+    "...while the pointer is NULL (D-LOG-6)",
+  );
+  /* the already-ready arm writes NEITHER cell */
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0x81)), 0x81);
+  assert.equal(u(wasm.isaac_log_init_critsec_ptr_after(0x81, 0x11, 0x99)), 0x11);
+  /* the running arm stores the raw allocation result */
+  assert.equal(u(wasm.isaac_log_init_critsec_ptr_after(0x80, 0x11, 0x99)), 0x99);
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0x80)), 0x81);
+  /* the byte store keeps only 8 bits, whatever width the caller passes */
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0xff00)), 1);
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0xffffffff)), 0xff);
+  /* same law shape for the command-thread flags, create arm only */
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(0)), 1);
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(2)), 3);
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(1)), 1);
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(0x81)), 0x81);
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(0x100)), 1);
+  assert.equal(u(wasm.isaac_log_init_cmd_thread_flags_after(0xffffffff)), 0xff);
+  /* the devirtualised holder init targets the logger's own body */
+  assert.equal(s(wasm.isaac_log_init_devirtualizes_to_mutex_init()), 1);
+  assert.equal(LOG_VA_MUTEX_INIT, 0x00a15770);
+  /* the args are published on both arms of the lifecycle gate */
+  assert.equal(s(wasm.isaac_log_init_args_published()), 1);
+  assert.equal(logInitArgsPublished(), 1);
+});
+
+test("LM: the lifecycle byte — init sets on SUCCESS only, teardown clears ALWAYS", () => {
+  /* 0x00a714af dominates the AL=1 ret and is unreachable from the fail
+     label; 0x00a71bf6 is the `jne` target and always runs. That asymmetry
+     is the point — a mutant making either match the other fails here. */
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0, 1)), 1);
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(1, 1)), 1);
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0, 0)), 0);
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(1, 0)), 1);
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0x5a, 0)), 0x5a);
+  /* the init_ok test is on AL — a LOW BYTE */
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0x5a, 0x100)), 0x5a);
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0x5a, 0x101)), 1);
+  /* the previous value is narrowed to a byte on the no-store path */
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0x1ff, 0)), 0xff);
+  /* teardown: unconditional, for every guard */
+  for (const g of [0, 1, 2, 7, 0x102, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_teardown_byte_after(g)), 0, `guard ${g}`);
+  }
+  /* the triangle: whatever init did, the teardown ends at 0 */
+  for (const before of [0, 1, 2, 0xff, 0x100]) {
+    for (const ok of [0, 1, 0x100, 0xff]) {
+      assert.equal(
+        u(wasm.isaac_log_lifecycle_byte_after_init_then_teardown(before, ok)),
+        0,
+        `triangle ${before}/${ok}`,
+      );
+      assert.equal(
+        u(wasm.isaac_log_lifecycle_byte_after_init_then_teardown(before, ok)),
+        logLifecycleByteAfterInitThenTeardown(before, ok),
+      );
+    }
+  }
+  /* and re-entering the init after a teardown does NOT warn (byte is 0),
+     while re-entering after a successful init DOES */
+  assert.equal(
+    s(
+      wasm.isaac_log_init_already_initialized(
+        u(wasm.isaac_log_lifecycle_byte_after_init_then_teardown(0, 1)),
+      ),
+    ),
+    0,
+    "post-teardown re-init is silent",
+  );
+  assert.equal(
+    s(
+      wasm.isaac_log_init_already_initialized(
+        u(wasm.isaac_log_init_lifecycle_byte_after(0, 1)),
+      ),
+    ),
+    1,
+    "double init warns",
+  );
+});
+
+test("LN: D-LOG-3 ANSWERED — the guard can NEVER be 0 at 0x00a71bac", () => {
+  /* The chain: 0x00931172 (level 1, immediate) dominates 0x0093140e, the
+     teardown's only callsite; the guard has four writers and zero address
+     escapes; nothing between the two can store 0 (0x00a11381 is dead). */
+  assert.equal(s(wasm.isaac_log_boot_site_dominates_teardown()), 1);
+  assert.equal(u(wasm.isaac_log_boot_log_level()), 1);
+  assert.equal(u(wasm.isaac_log_boot_log_level()), logBootLogLevel());
+  assert.equal(logBootSiteDominatesTeardown(), 1);
+
+  /* THE ANSWER */
+  assert.equal(s(wasm.isaac_log_guard_zero_at_teardown_reachable()), 0);
+  assert.equal(logGuardZeroAtTeardownReachable(), 0);
+
+  /* ...and it is not merely a constant: drive the transition over a wide
+     corpus and show the result is never 0 for ANY input. */
+  const drives = [0, 1, 2, 3, 7, 0xff, 0x100, 0x101, 0x102, 0x1ff,
+    0x80000000, 0xfffffffe, 0xffffffff];
+  for (const g of drives) {
+    const after = u(wasm.isaac_log_shipped_guard_at_teardown(g));
+    assert.notEqual(after, 0, `shipped guard at teardown is never 0 (${g})`);
+    assert.equal(after, logShippedGuardAtTeardown(g), `oracle agrees (${g})`);
+    assert.equal(after, u(wasm.isaac_log_guard_after_boot_site(g)));
+    /* derived from the v1 law with the pinned level, not restated */
+    assert.equal(after, u(wasm.isaac_log_guard_after(g, 1, 0, 0, 1)));
+  }
+  /* the shipped boot state is guard 0 at load -> 2 at the teardown gate */
+  assert.equal(u(wasm.isaac_log_shipped_guard_at_teardown(LOG_GUARD_UNINIT)), 2);
+  assert.equal(s(wasm.isaac_log_teardown_engaged(2)), 1);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(2)), 1);
+  assert.equal(s(wasm.isaac_log_guard_blocks(1)), 1);
+
+  /* the D-LOG-3 consequence — logger left live after shutdown — is NOT
+     reachable on the shipped path */
+  assert.equal(s(wasm.isaac_log_shipped_teardown_leaves_logger_live()), 0);
+  assert.equal(logShippedTeardownLeavesLoggerLive(), 0);
+  /* while the raw, function-local D-LOG-3 fact still holds: the guard store
+     IS conditional, so a hypothetical guard 0 at the gate leaves it live */
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(0)), 1);
+  assert.equal(s(wasm.isaac_log_teardown_leaves_logger_live(2)), 0);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(0)), 0);
+
+  /* over the guard's COMPLETE reachable value set, the shipped composition
+     blocks all 3286 sites — the v1 claim, antecedent now proven */
+  for (const g of LOG_GUARD_REACHABLE_VALUES) {
+    assert.equal(s(wasm.isaac_log_guard_value_reachable(g)), 1, `reachable ${g}`);
+    assert.equal(
+      s(wasm.isaac_log_shipped_post_teardown_blocks_all(g)),
+      1,
+      `shipped blocks-all from guard ${g}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_shipped_post_teardown_blocks_all(g)),
+      logShippedPostTeardownBlocksAll(g),
+    );
+  }
+  /* values the four writers can never produce are reported UNREACHABLE, and
+     the composition is honest about them rather than pretending */
+  for (const g of [3, 7, 0x102, 0x100, 0xffffffff]) {
+    assert.equal(s(wasm.isaac_log_guard_value_reachable(g)), 0, `unreachable ${g}`);
+    assert.equal(s(wasm.isaac_log_guard_value_reachable(g)), logGuardValueReachable(g));
+  }
+  assert.equal(s(wasm.isaac_log_shipped_post_teardown_blocks_all(0x102)), 0);
+
+  /* the init's own two edges are level 0x10, so they ALSO take the guard
+     off 0 whenever either fires — a second, independent route */
+  assert.equal(u(wasm.isaac_log_init_guard_after(0, 1, 0)), 2);
+  assert.equal(u(wasm.isaac_log_init_guard_after(0, 0, 1)), 2);
+  assert.equal(u(wasm.isaac_log_init_guard_after(0, 1, 1)), 2);
+  assert.equal(u(wasm.isaac_log_init_guard_after(0, 0, 0)), 0);
+  assert.equal(u(wasm.isaac_log_init_guard_after(1, 1, 1)), 1);
+  assert.equal(u(wasm.isaac_log_init_guard_after(2, 1, 1)), 2);
+  /* level 0x10's low byte is nonzero, so the listener pair cannot matter:
+     the model passes 0/0 and that is provably the same answer */
+  for (const ptr of [0, 0xdead]) {
+    for (const mask of [0, 1, 0xff, 0xffffffff]) {
+      assert.equal(
+        u(wasm.isaac_log_guard_after(0, LOG_INIT_WARN_LEVEL, ptr, mask, 1)),
+        u(wasm.isaac_log_init_guard_after(0, 1, 0)),
+        `level 0x10 guard transition is listener-independent (${ptr}/${mask})`,
+      );
+    }
+  }
+});
+
+test("LO: init plan — fixed scenarios across every arm", () => {
+  const base = {
+    lifecycleByte: 0,
+    guard: 0,
+    objectBefore: 0,
+    objectAlloc: 0x2000,
+    critsecFlags: 0,
+    critsecPtrBefore: 0,
+    critsecAlloc: 0x3000,
+    cmdThreadFlags: 0,
+    initOk: 1,
+  };
+  const cases = [
+    ["cold boot, everything fresh", {}],
+    ["double init (lifecycle byte set)", { lifecycleByte: 1 }],
+    ["lifecycle byte 2 still warns (cmp Eb,0)", { lifecycleByte: 2 }],
+    ["lifecycle byte 0x100 does NOT warn (byte gate)", { lifecycleByte: 0x100 }],
+    ["object allocation failed", { objectAlloc: 0, objectBefore: 0x1234 }],
+    ["critsec already ready", { critsecFlags: 1 }],
+    ["critsec alloc failed -> D-LOG-6", { critsecAlloc: 0 }],
+    ["cmd thread already up", { cmdThreadFlags: 1 }],
+    ["cmd thread flags 2 -> creates", { cmdThreadFlags: 2 }],
+    ["both warn edges fire", { lifecycleByte: 1, cmdThreadFlags: 1 }],
+    ["init fails late", { initOk: 0, lifecycleByte: 0x7f }],
+    ["init fails, AL low byte zero", { initOk: 0x100 }],
+    ["guard already ready", { guard: 2, lifecycleByte: 1 }],
+    ["guard busy blocks both edges", { guard: 1, lifecycleByte: 1, cmdThreadFlags: 1 }],
+    ["wide drives", {
+      lifecycleByte: 0xffffffff,
+      guard: 0xffffffff,
+      objectAlloc: 0x80000000,
+      critsecFlags: 0x1fe,
+      critsecAlloc: 0xffffffff,
+      cmdThreadFlags: 0x1ff,
+      initOk: 0xffffffff,
+    }],
+  ];
+  for (const [label, over] of cases) {
+    const sc = { ...base, ...over };
+    wasm.isaac_log_init_plan(
+      sc.lifecycleByte,
+      sc.guard,
+      sc.objectBefore,
+      sc.objectAlloc,
+      sc.critsecFlags,
+      sc.critsecPtrBefore,
+      sc.critsecAlloc,
+      sc.cmdThreadFlags,
+      sc.initOk,
+      SCRATCH,
+    );
+    const actual = readInitPlan(view, SCRATCH);
+    assertInitPlan(actual, logInitPlan(sc), label);
+    /* cross-law coherence with the scalar exports */
+    assert.equal(
+      actual.alreadyInitialized,
+      s(wasm.isaac_log_init_already_initialized(sc.lifecycleByte)),
+      `${label}: alreadyInitialized`,
+    );
+    assert.equal(actual.warnEmitted, actual.alreadyInitialized, label);
+    assert.equal(
+      actual.logSitesTaken,
+      actual.alreadyInitialized + actual.cmdThreadWarns,
+      `${label}: log sites`,
+    );
+    assert.ok(actual.logSitesTaken <= LOG_INIT_LOG_SITES, label);
+    assert.equal(
+      actual.guardAfter,
+      u(
+        wasm.isaac_log_init_guard_after(
+          sc.guard,
+          sc.lifecycleByte,
+          sc.cmdThreadFlags,
+        ),
+      ),
+      `${label}: guardAfter`,
+    );
+    /* the two lazy-init flags always end with bit 0 set once their block
+       has run, and never lose a bit that was already there */
+    assert.equal(
+      actual.critsecFlagsAfter & LOG_INIT_CRITSEC_READY_BIT,
+      1,
+      `${label}: critsec ready bit set either way`,
+    );
+    assert.ok(
+      (actual.cmdThreadFlagsAfter & (sc.cmdThreadFlags & 0xff)) ===
+        (sc.cmdThreadFlags & 0xff),
+      `${label}: cmd-thread flags never lose a bit`,
+    );
+    /* the lifecycle byte is 1 exactly when the init reported success */
+    assert.equal(
+      actual.lifecycleByteAfter === 1 || actual.returnsOk === 0,
+      true,
+      `${label}: byte set => success`,
+    );
+    if (actual.returnsOk) {
+      assert.equal(actual.lifecycleByteAfter, 1, `${label}: success sets byte`);
+    }
+  }
+});
+
+test("randomized differential: v3 init scalars (LCG high bits)", () => {
+  const rnd = makeLcg(0x5e17c0de);
+  /* deliberately UNMASKED: every draw is a full 32-bit value, and the
+     interesting byte-boundary values are injected explicitly */
+  const edge = [0, 1, 2, 3, 0xfe, 0xff, 0x100, 0x101, 0x1ff, 0x7fffffff,
+    0x80000000, 0xfffffffe, 0xffffffff];
+  const draw = () => {
+    const r = rnd();
+    return r >>> 24 < 96 ? edge[pick(rnd, edge.length)] : r >>> 0;
+  };
+  for (let i = 0; i < 4000; i += 1) {
+    const a = draw();
+    const b = draw();
+    const c = draw();
+    assert.equal(
+      s(wasm.isaac_log_init_already_initialized(a)),
+      logInitAlreadyInitialized(a),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_object_allocated(a)),
+      logInitObjectAllocated(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_object_after(a, b)),
+      logInitObjectAfter(a, b),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_critsec_init_runs(a)),
+      logInitCritsecInitRuns(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_critsec_flags_after(a)),
+      logInitCritsecFlagsAfter(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_critsec_ptr_after(a, b, c)),
+      logInitCritsecPtrAfter(a, b, c),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_cmd_thread_warns(a)),
+      logInitCmdThreadWarns(a),
+    );
+    assert.equal(
+      s(wasm.isaac_log_init_cmd_thread_creates(a)),
+      logInitCmdThreadCreates(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_cmd_thread_flags_after(a)),
+      logInitCmdThreadFlagsAfter(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_lifecycle_byte_after(a, b)),
+      logInitLifecycleByteAfter(a, b),
+    );
+    assert.equal(
+      u(wasm.isaac_log_init_guard_after(a, b, c)),
+      logInitGuardAfter(a, b, c),
+    );
+    assert.equal(
+      u(wasm.isaac_log_guard_after_boot_site(a)),
+      logGuardAfterBootSite(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_shipped_guard_at_teardown(a)),
+      logShippedGuardAtTeardown(a),
+    );
+    assert.equal(
+      s(wasm.isaac_log_shipped_post_teardown_blocks_all(a)),
+      logShippedPostTeardownBlocksAll(a),
+    );
+    assert.equal(
+      s(wasm.isaac_log_guard_value_reachable(a)),
+      logGuardValueReachable(a),
+    );
+    assert.equal(
+      u(wasm.isaac_log_lifecycle_byte_after_init_then_teardown(a, b)),
+      logLifecycleByteAfterInitThenTeardown(a, b),
+    );
+    /* the invariant this whole unit exists to establish */
+    assert.notEqual(
+      u(wasm.isaac_log_shipped_guard_at_teardown(a)),
+      0,
+      `guard 0 at teardown from ${a}`,
+    );
+  }
+  /* nullary pins */
+  assert.equal(s(wasm.isaac_log_init_args_published()), logInitArgsPublished());
+  assert.equal(u(wasm.isaac_log_init_warn_level()), logInitWarnLevel());
+  assert.equal(
+    u(wasm.isaac_log_init_warn_vararg_count()),
+    logInitWarnVarargCount(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_init_critsec_marked_without_critsec()),
+    logInitCritsecMarkedWithoutCritsec(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_init_devirtualizes_to_mutex_init()),
+    logInitDevirtualizesToMutexInit(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_boot_site_dominates_teardown()),
+    logBootSiteDominatesTeardown(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_guard_zero_at_teardown_reachable()),
+    logGuardZeroAtTeardownReachable(),
+  );
+  assert.equal(
+    s(wasm.isaac_log_shipped_teardown_leaves_logger_live()),
+    logShippedTeardownLeavesLoggerLive(),
+  );
+});
+
+test("randomized differential: the init plan", () => {
+  const rnd = makeLcg(0x1a17c0de);
+  const edge = [0, 1, 2, 3, 0xff, 0x100, 0x101, 0x1ff, 0x80000000, 0xffffffff];
+  const draw = () => {
+    const r = rnd();
+    return r >>> 24 < 128 ? edge[pick(rnd, edge.length)] : r >>> 0;
+  };
+  const seen = {
+    warn: new Set(),
+    critsec: new Set(),
+    cmd: new Set(),
+    alloc: new Set(),
+    sites: new Set(),
+    guard: new Set(),
+    byte: new Set(),
+    ok: new Set(),
+  };
+  for (let i = 0; i < 1500; i += 1) {
+    const sc = {
+      lifecycleByte: draw(),
+      guard: draw(),
+      objectBefore: draw(),
+      objectAlloc: draw(),
+      critsecFlags: draw(),
+      critsecPtrBefore: draw(),
+      critsecAlloc: draw(),
+      cmdThreadFlags: draw(),
+      initOk: draw(),
+    };
+    wasm.isaac_log_init_plan(
+      sc.lifecycleByte,
+      sc.guard,
+      sc.objectBefore,
+      sc.objectAlloc,
+      sc.critsecFlags,
+      sc.critsecPtrBefore,
+      sc.critsecAlloc,
+      sc.cmdThreadFlags,
+      sc.initOk,
+      SCRATCH,
+    );
+    const actual = readInitPlan(view, SCRATCH);
+    assertInitPlan(actual, logInitPlan(sc), `iplan ${i}`);
+    seen.warn.add(actual.alreadyInitialized);
+    seen.critsec.add(actual.critsecInitRuns);
+    seen.cmd.add(actual.cmdThreadWarns);
+    seen.alloc.add(actual.objectAllocated);
+    seen.sites.add(actual.logSitesTaken);
+    seen.guard.add(actual.guardAfter === u(sc.guard) ? "kept" : "moved");
+    seen.byte.add(actual.lifecycleByteAfter === 1 ? "set" : "kept");
+    seen.ok.add(actual.returnsOk);
+
+    /* structural invariants that no single field assertion would catch */
+    assert.equal(
+      actual.cmdThreadWarns + actual.cmdThreadCreates,
+      1,
+      `iplan ${i}: cmd arms partition`,
+    );
+    assert.equal(actual.warnEmitted, actual.alreadyInitialized, `iplan ${i}`);
+    assert.equal(actual.argsPublished, 1, `iplan ${i}: args always published`);
+    if (!actual.objectAllocated) {
+      assert.equal(
+        actual.objectAfter,
+        u(sc.objectBefore),
+        `iplan ${i}: failed alloc does not clear the object`,
+      );
+    }
+    if (!actual.critsecInitRuns) {
+      assert.equal(
+        actual.critsecPtrAfter,
+        u(sc.critsecPtrBefore),
+        `iplan ${i}: skipped critsec leaves the pointer`,
+      );
+    } else {
+      assert.equal(
+        actual.critsecPtrAfter,
+        u(sc.critsecAlloc),
+        `iplan ${i}: critsec pointer is the raw alloc result`,
+      );
+    }
+    /* the guard can only move UP off 0, never back to it */
+    if (u(sc.guard) !== 0) {
+      assert.notEqual(actual.guardAfter, 0, `iplan ${i}: guard never reset`);
+    }
+  }
+  assert.deepEqual([...seen.warn].sort(), [0, 1]);
+  assert.deepEqual([...seen.critsec].sort(), [0, 1]);
+  assert.deepEqual([...seen.cmd].sort(), [0, 1]);
+  assert.deepEqual([...seen.alloc].sort(), [0, 1]);
+  assert.deepEqual([...seen.sites].sort(), [0, 1, 2], "0, 1 and 2 edges taken");
+  assert.deepEqual([...seen.guard].sort(), ["kept", "moved"]);
+  assert.deepEqual([...seen.byte].sort(), ["kept", "set"]);
+  assert.deepEqual([...seen.ok].sort(), [0, 1]);
+});
+
+test("corpus reaches every guard state and BOTH init paths", () => {
+  /* Rule: the corpus must reach guard 0, 1, 2 AND a nonzero non-1/2 value,
+     and both init paths (first init / re-init). */
+  const guards = new Set();
+  const initPaths = new Set();
+  for (const g of [0, 1, 2, 7]) {
+    guards.add(g);
+    /* every guard state driven through the whole lifecycle triangle */
+    const atTeardown = u(wasm.isaac_log_shipped_guard_at_teardown(g));
+    assert.notEqual(atTeardown, 0, `shipped guard from ${g}`);
+    const afterTeardown = u(wasm.isaac_log_teardown_guard_after(atTeardown));
+    assert.equal(
+      s(wasm.isaac_log_guard_blocks(afterTeardown)),
+      g === 7 ? 0 : 1,
+      `blocks-all from guard ${g}`,
+    );
+  }
+  assert.deepEqual([...guards].sort((a, b) => a - b), [0, 1, 2, 7]);
+  for (const byte of [0, 1]) {
+    initPaths.add(s(wasm.isaac_log_init_already_initialized(byte)));
+  }
+  assert.deepEqual([...initPaths].sort(), [0, 1], "both init paths reached");
+
+  /* guard 7 is exactly the "unreachable value" case the pin names: the
+     composition honestly reports it does NOT block, and the reachability
+     helper says the machine cannot produce it. */
+  assert.equal(s(wasm.isaac_log_guard_value_reachable(7)), 0);
+  assert.equal(s(wasm.isaac_log_shipped_post_teardown_blocks_all(7)), 0);
+  for (const g of [0, 1, 2]) {
+    assert.equal(s(wasm.isaac_log_guard_value_reachable(g)), 1);
+    assert.equal(s(wasm.isaac_log_shipped_post_teardown_blocks_all(g)), 1);
+  }
+
+  /* the FULL triangle, end to end: byte 0 -> init(ok) -> 1 -> teardown -> 0,
+     while the guard goes 0 -> (boot log) 2 -> (teardown) 1 -> blocks. */
+  assert.equal(u(wasm.isaac_log_init_lifecycle_byte_after(0, 1)), 1);
+  assert.equal(u(wasm.isaac_log_teardown_byte_after(1)), 0);
+  assert.equal(u(wasm.isaac_log_shipped_guard_at_teardown(0)), 2);
+  assert.equal(u(wasm.isaac_log_teardown_guard_after(2)), 1);
+  assert.equal(s(wasm.isaac_log_guard_blocks(1)), 1);
+  for (const level of [1, 4, 8, 0x10]) {
+    assert.equal(
+      s(wasm.isaac_log_message_dropped(1, level, 0xdead, 0xff, 1)),
+      1,
+      `level ${level} dropped after the PROVEN-reachable teardown pin`,
+    );
+  }
+});
+
+/* ==================== v4: the mutex lock / unlock pair ==================== */
+
+test("LP: v4 constants and the reach-site census agree with the header", () => {
+  assert.equal(LOG_VA_LOCK, 0x00a157f0);
+  assert.equal(LOG_VA_UNLOCK, 0x00a159a0);
+  assert.equal(LOG_VA_LOCK, LOG_VA_MUTEX_LOCK);
+  assert.equal(LOG_VA_UNLOCK, LOG_VA_MUTEX_UNLOCK);
+  assert.equal(LOG_VA_LOCK_RET_TRUE, 0x00a15850);
+  assert.equal(LOG_VA_LOCK_RET_FALSE, 0x00a15996);
+  assert.equal(LOG_VA_UNLOCK_RET, 0x00a159c7);
+  assert.equal(LOG_VA_MUTEX_DTOR, 0x00a156e0);
+  assert.equal(LOG_VA_MUTEX_DESTROY, 0x00a157c0);
+  assert.equal(LOG_MUTEX_VTABLE_SLOTS, 5);
+  /* the two roots are exactly vtbl+0xc and vtbl+0x10 */
+  assert.equal(LOG_MUTEX_VTBL_SLOT_LOCK, 0x0c);
+  assert.equal(LOG_MUTEX_VTBL_SLOT_UNLOCK, 0x10);
+  assert.equal(LOG_VA_VTBL_LOCK_ENTRY, LOG_MUTEX_VTABLE_VA + 0x0c);
+  assert.equal(LOG_VA_VTBL_UNLOCK_ENTRY, LOG_MUTEX_VTABLE_VA + 0x10);
+  assert.equal(LOG_VA_VTBL_LOCK_ENTRY, 0x00b81c18);
+  assert.equal(LOG_VA_VTBL_UNLOCK_ENTRY, 0x00b81c1c);
+  /* holder layout, and the file-backed load-time state */
+  assert.equal(LOG_HOLDER_FLAGS_VA, LOG_MUTEX_HOLDER_VA + LOG_HOLDER_FLAGS_OFFSET);
+  assert.equal(
+    LOG_CRITSEC_PTR_VA,
+    LOG_MUTEX_HOLDER_VA + LOG_HOLDER_CRITSEC_OFFSET,
+  );
+  assert.equal(LOG_HOLDER_LOAD_TIME_FLAGS, 0);
+  assert.equal(LOG_HOLDER_LOAD_TIME_CRITSEC, 0);
+  /* assert-guard sites and strings */
+  assert.equal(LOG_VA_LOCK_ASSERT_TEST_V4, 0x00a157fe);
+  assert.equal(LOG_VA_LOCK_ASSERT_BRANCH, 0x00a15806);
+  assert.equal(LOG_VA_LOCK_ASSERT_CLEANUP, 0x00a15818);
+  assert.equal(LOG_VA_UNLOCK_ASSERT_TEST, 0x00a159a3);
+  assert.equal(LOG_VA_UNLOCK_ASSERT_SITE, 0x00a159b0);
+  assert.equal(LOG_LOCK_ASSERT_STRING_VA, 0x00b81c58);
+  assert.equal(LOG_UNLOCK_ASSERT_STRING_VA, 0x00b81c20);
+  assert.equal(
+    LOG_LOCK_ASSERT_STRING,
+    "Trying to lock mutex that has not been initialized",
+  );
+  assert.equal(
+    LOG_UNLOCK_ASSERT_STRING,
+    "Trying to unlock mutex that has not been initialized",
+  );
+  assert.equal(LOG_LOCK_ASSERT_STRING.length, LOG_LOCK_ASSERT_STRING_LEN);
+  assert.equal(LOG_UNLOCK_ASSERT_STRING.length, LOG_UNLOCK_ASSERT_STRING_LEN);
+  /* the unlock string starts exactly one byte after the 5-slot vtable */
+  assert.equal(LOG_UNLOCK_ASSERT_STRING_VA, LOG_MUTEX_VTABLE_VA + 0x14);
+  assert.equal(LOG_LOCK_ASSERT_LEVEL, 0x10);
+  assert.equal(LOG_LOCK_ASSERT_CLEANUP_IMM, 8);
+  assert.equal(LOG_LOCK_READY_BIT, LOG_HOLDER_INIT_BIT);
+  assert.equal(LOG_LOCK_READY_BIT, LOG_INIT_CRITSEC_READY_BIT);
+  /* timing constants */
+  assert.equal(LOG_LOCK_TIMEOUT_INFINITE, 0xffffffff);
+  assert.equal(LOG_LOCK_SPIN_SLEEP_MS, 0x3e8);
+  assert.equal(LOG_LOCK_RETRY_SLEEP_MS, 0xa);
+  assert.equal(LOG_LOCK_MS_DIVISOR, 1000000);
+  assert.equal(LOG_LOCK_MS_MAGIC_LO, 0xd7b634db);
+  assert.equal(LOG_LOCK_MS_MAGIC_HI, 0x431bde82);
+  assert.equal(LOG_LOCK_MS_SHIFT, 0x12);
+  /* the magic constant IS ceil(2^82 / 1000000) — an arithmetic identity,
+     not a transcription */
+  const magic = (BigInt(LOG_LOCK_MS_MAGIC_HI) << 32n) | BigInt(LOG_LOCK_MS_MAGIC_LO);
+  const shift = 64n + BigInt(LOG_LOCK_MS_SHIFT);
+  const d = BigInt(LOG_LOCK_MS_DIVISOR);
+  assert.equal(magic, (1n << shift) / d + (((1n << shift) % d) === 0n ? 0n : 1n));
+  /* IAT identities, from the PE import directory */
+  assert.equal(LOG_IAT_ENTER_CRITICAL_SECTION, 0x00b18270);
+  assert.equal(LOG_IAT_TRY_ENTER_CRITICAL_SECTION, 0x00b1826c);
+  assert.equal(LOG_IAT_LEAVE_CRITICAL_SECTION, 0x00b18268);
+  assert.equal(LOG_IAT_QPC, 0x00b18238);
+  assert.equal(LOG_IAT_QPF, 0x00b18234);
+  assert.equal(LOG_VA_LOCK_CLOCK, 0x00a68490);
+  assert.equal(LOG_VA_CLOCK_NS_SCALE, 0x00baa8b0);
+  /* THE reach-site census: the vtable slot is the only channel */
+  assert.equal(LOG_LOCK_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_UNLOCK_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_LOCK_TAIL_JUMPS, 0);
+  assert.equal(LOG_UNLOCK_TAIL_JUMPS, 0);
+  assert.equal(LOG_LOCK_IMMEDIATE_SITES, 0);
+  assert.equal(LOG_UNLOCK_IMMEDIATE_SITES, 0);
+  assert.equal(LOG_LOCK_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_UNLOCK_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_MUTEX_VTABLE_RAW_OCCURRENCES, 41);
+  assert.equal(
+    LOG_MUTEX_VTABLE_RAW_OCCURRENCES,
+    LOG_MUTEX_VTABLE_TEXT_STORES + LOG_MUTEX_VTABLE_DATA_INSTANCES,
+  );
+  assert.equal(LOG_MUTEX_VTABLE_TEXT_STORES, 37);
+  assert.equal(LOG_MUTEX_VTABLE_DATA_INSTANCES, 4);
+  assert.equal(
+    LOG_MUTEX_GLOBAL_DISPATCH_SITES,
+    2 * LOG_MUTEX_GLOBAL_LOCK_SITES,
+  );
+  assert.equal(LOG_MUTEX_GLOBAL_LOCK_SITES, 16);
+  assert.equal(LOG_MUTEX_GLOBAL_INFINITE_SITES, LOG_MUTEX_GLOBAL_LOCK_SITES);
+  assert.equal(LOG_MUTEX_GLOBAL_FINITE_SITES, 0);
+  /* the v2 absolute census stands; the two real readers are indirect */
+  assert.equal(LOG_HOLDER_FLAGS_READERS, 0);
+  assert.equal(LOG_HOLDER_FLAGS_INDIRECT_READERS, 2);
+  /* decode configuration reproduced */
+  assert.equal(LOG_TEXT_INSN_COUNT_V4, LOG_TEXT_INSN_COUNT_V3);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V4, LOG_TEXT_UNDECODABLE_BYTES_V3);
+  assert.equal(LOG_TEXT_INSN_COUNT_V4, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V4, 469);
+  assert.notEqual(LOG_TEXT_INSN_COUNT_V4, LOG_TEXT_INSN_COUNT);
+  /* identity pass: one batched invocation, one exact match (IsaacMain) */
+  assert.equal(LOG_V4_BATCHED_VAS, 27);
+  assert.equal(LOG_V4_EXACT_ZHL_MATCHES, 1);
+  assert.equal(LOG_VA_ISAAC_MAIN, 0x00931050);
+  /* neither root is named from its assert string */
+  assert.notEqual(LOG_VA_LOCK, LOG_VA_ISAAC_MAIN);
+  assert.notEqual(LOG_VA_UNLOCK, LOG_VA_ISAAC_MAIN);
+});
+
+test("LP: the assert guard is NOT a fourth lazy-init instance (byte diff)", () => {
+  /* THE v4 FINDING. Five sites share the predicate `F6 /0 ib` with imm8 = 1;
+     the guarded bodies are three different shapes. */
+  assert.equal(LOG_READY_BIT_PREDICATE_SITES, 5);
+  assert.equal(LOG_READY_BIT_PREDICATE_VAS.length, 5);
+  assert.deepEqual(LOG_READY_BIT_PREDICATE_VAS, [
+    0x00a1577a, 0x00a7139a, 0x00a713f8, 0x00a157fe, 0x00a159a3,
+  ]);
+  assert.equal(LOG_LAZY_INIT_TEMPLATE_INSTANCES, 2);
+  assert.deepEqual(LOG_LAZY_INIT_TEMPLATE_VAS, [0x00a1577a, 0x00a7139a]);
+  assert.equal(LOG_LAZY_INIT_TEMPLATE_INSNS, 18);
+  assert.equal(LOG_ASSERT_GUARD_TEMPLATE_INSTANCES, 2);
+  assert.deepEqual(LOG_ASSERT_GUARD_TEMPLATE_VAS, [0x00a157fe, 0x00a159a3]);
+  /* 5 = 2 lazy-init + 2 assert-guard + the one warn-or-create at 0x00a713f8 */
+  assert.equal(
+    LOG_LAZY_INIT_TEMPLATE_INSTANCES + LOG_ASSERT_GUARD_TEMPLATE_INSTANCES + 1,
+    LOG_READY_BIT_PREDICATE_SITES,
+  );
+  /* the byte diff itself: same opcode F6, same imm8 01, differing ModRM */
+  for (const va of LOG_READY_BIT_PREDICATE_VAS) {
+    const bytes = LOG_READY_BIT_PREDICATE_BYTES[va].split(" ");
+    assert.equal(bytes[0], "f6", `0x${va.toString(16)} opcode`);
+    /* imm8 is the byte just before the jcc; ModRM 05 carries a disp32 */
+    const immIndex = bytes[1] === "05" ? 6 : 3;
+    assert.equal(bytes[immIndex], "01", `0x${va.toString(16)} imm8`);
+    const jcc = bytes[immIndex + 1];
+    /* 0x00a713f8 is the ONLY one whose arms are swapped (74 not 75) */
+    if (va === 0x00a713f8) {
+      assert.equal(jcc, "74");
+    } else if (va === 0x00a157fe) {
+      /* the lock interleaves the `this` spill between test and jcc */
+      assert.equal(bytes.length, 4);
+    } else {
+      assert.equal(jcc, "75");
+    }
+  }
+  /* the four ModRM forms are genuinely different operand encodings */
+  const modrms = LOG_READY_BIT_PREDICATE_VAS.map(
+    (va) => LOG_READY_BIT_PREDICATE_BYTES[va].split(" ")[1],
+  );
+  assert.deepEqual(modrms, ["47", "05", "05", "40", "46"]);
+
+  /* and the behavioural consequence, on both sides */
+  assert.equal(s(wasm.isaac_log_lock_assert_is_lazy_init_template()), 0);
+  assert.equal(logLockAssertIsLazyInitTemplate(), 0);
+  assert.equal(s(wasm.isaac_log_lock_assert_sets_ready_bit()), 0);
+  assert.equal(logLockAssertSetsReadyBit(), 0);
+  /* the lazy-init template DOES set it — the two are opposites */
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0)), 1);
+  assert.equal(u(wasm.isaac_log_lock_holder_flags_after(0)), 0);
+  for (const flags of [0, 1, 2, 0xfe, 0xff, 0x100, 0x101, 0xffffffff]) {
+    assert.equal(
+      u(wasm.isaac_log_lock_holder_flags_after(flags)),
+      u(flags) & 0xff,
+      `flags ${flags} survive the lock unchanged`,
+    );
+    assert.equal(logLockHolderFlagsAfter(flags), u(flags) & 0xff);
+  }
+});
+
+test("LP: the assert guard is bit 0 of the low byte, both operand forms", () => {
+  /* Driven UNMASKED across the byte boundary — no `& 0xff` on the wasm side. */
+  const cases = [
+    [0, 1],
+    [1, 0],
+    [2, 1],
+    [3, 0],
+    [0x7f, 0],
+    [0x80, 1],
+    [0xfe, 1],
+    [0xff, 0],
+    [0x100, 1],
+    [0x101, 0],
+    [0x1ff, 0],
+    [0x80000000, 1],
+    [0x80000001, 0],
+    [0xfffffffe, 1],
+    [0xffffffff, 0],
+  ];
+  for (const [flags, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_lock_assert_fires(flags)),
+      want,
+      `lock assert on flags 0x${u(flags).toString(16)}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_unlock_assert_fires(flags)),
+      want,
+      `unlock assert on flags 0x${u(flags).toString(16)}`,
+    );
+    assert.equal(logLockAssertFires(flags), want);
+    assert.equal(logUnlockAssertFires(flags), want);
+    /* the two strings are selected by which wrapper is running */
+    assert.equal(
+      u(wasm.isaac_log_lock_assert_string_va(0, flags)),
+      want ? LOG_LOCK_ASSERT_STRING_VA : 0,
+    );
+    assert.equal(
+      u(wasm.isaac_log_lock_assert_string_va(1, flags)),
+      want ? LOG_UNLOCK_ASSERT_STRING_VA : 0,
+    );
+    assert.equal(
+      logLockAssertStringVa(0, flags),
+      want ? LOG_LOCK_ASSERT_STRING_VA : 0,
+    );
+    assert.equal(
+      logLockAssertStringVa(1, flags),
+      want ? LOG_UNLOCK_ASSERT_STRING_VA : 0,
+    );
+  }
+  /* both assert sites push level 0x10 and clean 8 bytes -> zero varargs */
+  assert.equal(u(wasm.isaac_log_lock_assert_vararg_count()), 0);
+  assert.equal(logLockAssertVarargCount(), 0);
+  assert.equal(u(wasm.isaac_log_vararg_dword_count(LOG_LOCK_ASSERT_CLEANUP_IMM)), 0);
+  /* level 0x10's low byte is nonzero, so the v1 emit gate always passes and
+     the re-entrant assert is only silenced by the guard */
+  assert.equal(s(wasm.isaac_log_emit_gate(LOG_LOCK_ASSERT_LEVEL, 0, 0)), 1);
+  assert.equal(s(wasm.isaac_log_prefix_case(LOG_LOCK_ASSERT_LEVEL)), LOG_PREFIX_CASE_ASSERT);
+  /* ...but guard 1 drops it, which is why the assert cannot fire from the
+     logger's own lock callsite after the teardown pin */
+  assert.equal(s(wasm.isaac_log_message_dropped(1, LOG_LOCK_ASSERT_LEVEL, 0, 0, 1)), 1);
+  assert.equal(s(wasm.isaac_log_lock_assert_reachable_from_logger()), 0);
+  assert.equal(logLockAssertReachableFromLogger(), 0);
+});
+
+test("LQ: the timeout discriminator is a FULL 32-bit -1 and an UNSIGNED 0", () => {
+  const cases = [
+    [0xffffffff, LOG_LOCK_ARM_INFINITE],
+    [0, LOG_LOCK_ARM_ZERO_TIMEOUT],
+    [1, LOG_LOCK_ARM_TIMED],
+    [0xa, LOG_LOCK_ARM_TIMED],
+    [0x3e8, LOG_LOCK_ARM_TIMED],
+    [0x7fffffff, LOG_LOCK_ARM_TIMED],
+    /* a SIGNED reading of `cmp ..,-1 ; jne` would call this INFINITE, and a
+       `jle` reading of 0x00a158cb would call it a zero timeout. Both wrong. */
+    [0x80000000, LOG_LOCK_ARM_TIMED],
+    [0xfffffffe, LOG_LOCK_ARM_TIMED],
+  ];
+  for (const [timeout, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_lock_timeout_arm(timeout)),
+      want,
+      `arm for timeout 0x${u(timeout).toString(16)}`,
+    );
+    assert.equal(logLockTimeoutArm(timeout), want);
+    assert.equal(
+      s(wasm.isaac_log_lock_timeout_infinite(timeout)),
+      want === LOG_LOCK_ARM_INFINITE ? 1 : 0,
+    );
+    assert.equal(
+      logLockTimeoutInfinite(timeout),
+      want === LOG_LOCK_ARM_INFINITE ? 1 : 0,
+    );
+  }
+  /* the zero-timeout arm never calls TryEnterCriticalSection */
+  assert.equal(s(wasm.isaac_log_lock_zero_timeout_tries()), 0);
+  assert.equal(logLockZeroTimeoutTries(), 0);
+  /* the logger's own site pushes -1: 0x00a1134f push -1 ; 0x00a11358 call
+     [eax+0xc] */
+  assert.equal(s(wasm.isaac_log_lock_timeout_infinite(LOG_LOCK_TIMEOUT_INFINITE)), 1);
+  assert.ok(LOG_VA_LOCK_TIMEOUT_TEST < LOG_VA_LOCK_TIMED_ENTRY);
+  assert.ok(LOG_VA_LOCK_ZERO_BRANCH < LOG_VA_LOCK_RETRY_HEAD);
+});
+
+test("LR: the INFINITE spin re-reads ONE byte, has no bound, and holds the CS", () => {
+  /* the spin gate is the low byte only: 0x100 does NOT spin */
+  for (const [owned, want] of [
+    [0, 0],
+    [1, 1],
+    [2, 1],
+    [0x7f, 1],
+    [0x80, 1],
+    [0xff, 1],
+    [0x100, 0],
+    [0x101, 1],
+    [0x1ff, 1],
+    [0xffffff00, 0],
+    [0xffffffff, 1],
+    [0x80000000, 0],
+  ]) {
+    assert.equal(
+      s(wasm.isaac_log_lock_spin_entered(owned)),
+      want,
+      `spin entered for owned 0x${u(owned).toString(16)}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_spin_continues(owned)),
+      want,
+      `spin continues for owned 0x${u(owned).toString(16)}`,
+    );
+    assert.equal(logLockSpinEntered(owned), want);
+    assert.equal(logLockSpinContinues(owned), want);
+  }
+  /* exact spin semantics */
+  assert.equal(u(wasm.isaac_log_lock_spin_sleep_ms()), 0x3e8);
+  assert.equal(logLockSpinSleepMs(), 0x3e8);
+  assert.equal(s(wasm.isaac_log_lock_spin_reloads_critsec()), 0);
+  assert.equal(logLockSpinReloadsCritsec(), 0);
+  assert.equal(s(wasm.isaac_log_lock_spin_rereads_sleep_pointer()), 0);
+  assert.equal(logLockSpinReadsSleepPointerPerIteration(), 0);
+  assert.equal(s(wasm.isaac_log_lock_spin_bounded()), 0);
+  assert.equal(logLockSpinBounded(), 0);
+  assert.equal(s(wasm.isaac_log_lock_spin_holds_critsec()), 1);
+  assert.equal(logLockSpinHoldsCritsec(), 1);
+  assert.equal(s(wasm.isaac_log_unlock_enters_critsec()), 0);
+  assert.equal(logUnlockEntersCritsec(), 0);
+  assert.equal(s(wasm.isaac_log_lock_self_reentrant_spins_forever()), 1);
+  assert.equal(logLockSelfReentrantSpinsForever(), 1);
+  /* the timed arm is the OPPOSITE on the reload question */
+  assert.equal(s(wasm.isaac_log_lock_timed_reloads_critsec()), 1);
+  assert.equal(logLockTimedReloadsCritsec(), 1);
+  /* VA ordering: the IAT load is hoisted above the loop head, and the back
+     edge targets the push, not the load */
+  assert.ok(LOG_VA_LOCK_CRITSEC_READ < LOG_VA_LOCK_ENTER_CALL);
+  assert.ok(LOG_VA_LOCK_SLEEP_PTR_LOAD < LOG_VA_LOCK_SPIN_HEAD);
+  assert.ok(LOG_VA_LOCK_SPIN_HEAD < LOG_VA_LOCK_SPIN_RETEST);
+  assert.ok(LOG_VA_LOCK_SPIN_RETEST < LOG_VA_LOCK_SPIN_BACK_EDGE);
+  assert.ok(LOG_VA_LOCK_SPIN_BACK_EDGE < LOG_VA_LOCK_OWNED_STORE);
+  /* the byte the spin re-reads is the one BOTH lazy inits zero */
+  assert.equal(LOG_INIT_CRITSEC_ZERO_OFFSET, 0x18);
+  /* iteration counts, including the never-satisfied path */
+  assert.equal(u(wasm.isaac_log_lock_spin_iterations(0, 5, 1)), 0);
+  assert.equal(logLockSpinIterations(0, 5, 1), 0);
+  assert.equal(u(wasm.isaac_log_lock_spin_iterations(0x100, 5, 1)), 0);
+  assert.equal(logLockSpinIterations(0x100, 5, 1), 0);
+  for (const n of [1, 2, 7, 1000]) {
+    assert.equal(u(wasm.isaac_log_lock_spin_iterations(1, n, 1)), n);
+    assert.equal(logLockSpinIterations(1, n, 1), n);
+  }
+  assert.equal(u(wasm.isaac_log_lock_spin_iterations(1, 0, 1)), 1);
+  assert.equal(logLockSpinIterations(1, 0, 1), 1);
+  /* THE never-satisfied path: no bound, no return */
+  assert.equal(
+    u(wasm.isaac_log_lock_spin_iterations(1, 0, 0)),
+    LOG_LOCK_SPIN_NEVER_RETURNS,
+  );
+  assert.equal(logLockSpinIterations(1, 0, 0), LOG_LOCK_SPIN_NEVER_RETURNS);
+  assert.equal(
+    u(wasm.isaac_log_lock_spin_iterations(0xff, 0xffff, 0)),
+    LOG_LOCK_SPIN_NEVER_RETURNS,
+  );
+});
+
+test("LS: the timed arm — try/leave/sleep, the clock unit, and the 64-bit bound", () => {
+  for (const [tryResult, owned, want] of [
+    [0, 0, LOG_LOCK_TRY_ARM_SLEEP],
+    [0, 1, LOG_LOCK_TRY_ARM_SLEEP],
+    [0, 0x100, LOG_LOCK_TRY_ARM_SLEEP],
+    [1, 0, LOG_LOCK_TRY_ARM_SUCCESS],
+    [1, 1, LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP],
+    /* the owned test is a LOW BYTE compare: 0x100 reads as free */
+    [1, 0x100, LOG_LOCK_TRY_ARM_SUCCESS],
+    [1, 0x101, LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP],
+    /* the try test is a FULL 32-bit test */
+    [0x80000000, 0, LOG_LOCK_TRY_ARM_SUCCESS],
+    [0x100, 0, LOG_LOCK_TRY_ARM_SUCCESS],
+    [0xffffffff, 0xff, LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP],
+  ]) {
+    assert.equal(
+      s(wasm.isaac_log_lock_try_arm(tryResult, owned)),
+      want,
+      `try arm (0x${u(tryResult).toString(16)}, 0x${u(owned).toString(16)})`,
+    );
+    assert.equal(logLockTryArm(tryResult, owned), want);
+    assert.equal(
+      s(wasm.isaac_log_lock_try_leaves(tryResult, owned)),
+      want === LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP ? 1 : 0,
+    );
+    assert.equal(
+      logLockTryLeaves(tryResult, owned),
+      want === LOG_LOCK_TRY_ARM_LEAVE_AND_SLEEP ? 1 : 0,
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_try_entered(tryResult)),
+      u(tryResult) === 0 ? 0 : 1,
+    );
+    assert.equal(logLockTryEntered(tryResult), u(tryResult) === 0 ? 0 : 1);
+  }
+  assert.equal(u(wasm.isaac_log_lock_retry_sleep_ms()), 0xa);
+  assert.equal(logLockRetrySleepMs(), 0xa);
+  assert.equal(s(wasm.isaac_log_lock_start_refetched()), 0);
+  assert.equal(logLockStartRefetched(), 0);
+  assert.equal(s(wasm.isaac_log_lock_now_refetched()), 1);
+  assert.equal(logLockNowRefetched(), 1);
+  assert.equal(s(wasm.isaac_log_lock_underflow_branch_dead()), 1);
+  assert.equal(logLockUnderflowBranchDead(), 1);
+  assert.ok(LOG_VA_LOCK_TIMED_ENTRY < LOG_VA_LOCK_RETRY_HEAD);
+  assert.ok(LOG_VA_LOCK_RETRY_HEAD < LOG_VA_LOCK_NOW_READ);
+  assert.ok(LOG_VA_LOCK_ELAPSED_DEAD_JB < LOG_VA_LOCK_FAIL);
+
+  /* the clock unit: ns -> ms, exactly, including the 32-bit boundaries */
+  const fixed = [
+    [0, 0],
+    [0, 1],
+    [0, 999999],
+    [0, 1000000],
+    [0, 1000001],
+    [0, 0xffffffff],
+    [1, 0],
+    [1, 0xffffffff],
+    [0x3b9aca00, 0],
+    [0xffffffff, 0xffffffff],
+  ];
+  for (const [hi, lo] of fixed) {
+    const ns = (BigInt(u(hi)) << 32n) | BigInt(u(lo));
+    const want = ns / BigInt(LOG_LOCK_MS_DIVISOR);
+    const gotLo = u(wasm.isaac_log_lock_ticks_to_ms_lo(hi, lo));
+    const gotHi = u(wasm.isaac_log_lock_ticks_to_ms_hi(hi, lo));
+    const got = (BigInt(gotHi) << 32n) | BigInt(gotLo);
+    assert.equal(got, want, `ns ${ns} -> ms`);
+    /* the JS oracle computes the same thing as one 128-bit product */
+    assert.equal(logLockTicksToMs(hi, lo), want);
+    assert.equal(logLockTicksToMsLo(hi, lo), gotLo);
+    assert.equal(logLockTicksToMsHi(hi, lo), gotHi);
+  }
+
+  /* the 64-bit elapsed compare: `test edx,edx` kills the `jb`, so a nonzero
+     high dword can only EXPIRE, and the low compare is UNSIGNED and STRICT */
+  const elapsedCases = [
+    [0, 0, 0, 1],
+    [0, 0, 1, 0],
+    [0, 4, 5, 0],
+    [0, 5, 5, 1],
+    [0, 6, 5, 1],
+    [0, 0x7fffffff, 0x80000000, 0],
+    [0, 0x80000000, 0x7fffffff, 1],
+    [0, 0xffffffff, 0xffffffff, 1],
+    [0, 0xfffffffe, 0xffffffff, 0],
+    /* high dword set: expired even against the largest timeout */
+    [1, 0, 0xffffffff, 1],
+    [0xffffffff, 0xffffffff, 0xffffffff, 1],
+    [0x80000000, 0, 0xffffffff, 1],
+  ];
+  for (const [hi, lo, timeout, want] of elapsedCases) {
+    assert.equal(
+      s(wasm.isaac_log_lock_elapsed_expired(hi, lo, timeout)),
+      want,
+      `expired(0x${u(hi).toString(16)}:0x${u(lo).toString(16)}, 0x${u(timeout).toString(16)})`,
+    );
+    assert.equal(logLockElapsedExpired(hi, lo, timeout), want);
+  }
+});
+
+test("LT: D-LOG-7 — a TIMED success never marks the mutex owned", () => {
+  /* 0x00a15844 is on the INFINITE arm alone. Reproduced, never corrected. */
+  assert.equal(s(wasm.isaac_log_timed_success_skips_owned_store()), 1);
+  assert.equal(logTimedSuccessSkipsOwnedStore(), 1);
+  assert.ok(LOG_VA_LOCK_OWNED_STORE < LOG_VA_LOCK_SUCCESS);
+  assert.ok(LOG_VA_LOCK_TIMED_SUCCESS_BRANCH > LOG_VA_LOCK_SUCCESS);
+
+  /* INFINITE: marks owned on both the free path and the spin exit */
+  for (const owned of [0, 1, 0xff, 0x100]) {
+    assert.equal(s(wasm.isaac_log_lock_marks_owned(0xffffffff, 0, owned)), 1);
+    assert.equal(logLockMarksOwned(0xffffffff, 0, owned), 1);
+    assert.equal(u(wasm.isaac_log_lock_owned_byte_after(0xffffffff, 0, owned)), 1);
+    assert.equal(logLockOwnedByteAfter(0xffffffff, 0, owned), 1);
+  }
+  /* TIMED success: acquired, but the byte is UNCHANGED */
+  assert.equal(s(wasm.isaac_log_lock_marks_owned(1000, 1, 0)), 0);
+  assert.equal(logLockMarksOwned(1000, 1, 0), 0);
+  assert.equal(u(wasm.isaac_log_lock_owned_byte_after(1000, 1, 0)), 0);
+  assert.equal(logLockOwnedByteAfter(1000, 1, 0), 0);
+  assert.equal(s(wasm.isaac_log_lock_acquired(1000, 1, 0, 0, 0)), 1);
+  assert.equal(logLockAcquired(1000, 1, 0, 0, 0), 1);
+  /* ...and 0x100 reads as free on the low byte, so the same holds there,
+     with the byte kept as 0 (the store the PE skips would have written 1) */
+  assert.equal(u(wasm.isaac_log_lock_owned_byte_after(1000, 1, 0x100)), 0);
+  assert.equal(logLockOwnedByteAfter(1000, 1, 0x100), 0);
+  /* zero timeout: no try, no store, AL = 0 */
+  assert.equal(s(wasm.isaac_log_lock_marks_owned(0, 1, 0)), 0);
+  assert.equal(s(wasm.isaac_log_lock_acquired(0, 1, 0, 0, 0)), 0);
+  assert.equal(logLockAcquired(0, 1, 0, 0, 0), 0);
+  /* timed, not acquired, not yet expired -> the loop takes another pass */
+  assert.equal(s(wasm.isaac_log_lock_acquired(1000, 0, 0, 0, 10)), -1);
+  assert.equal(logLockAcquired(1000, 0, 0, 0, 10), -1);
+  assert.equal(s(wasm.isaac_log_lock_acquired(1000, 0, 0, 0, 1000)), 0);
+  assert.equal(logLockAcquired(1000, 0, 0, 0, 1000), 0);
+});
+
+test("LU: the unlock clears the byte unconditionally and takes no argument", () => {
+  for (const owned of [0, 1, 2, 0xff, 0x100, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_unlock_owned_byte_after(owned)), 0);
+    assert.equal(logUnlockOwnedByteAfter(owned), 0);
+  }
+  assert.equal(s(wasm.isaac_log_unlock_clears_before_leave()), 1);
+  assert.equal(logUnlockClearsBeforeLeave(), 1);
+  assert.ok(LOG_VA_UNLOCK_CRITSEC_READ < LOG_VA_UNLOCK_OWNED_STORE);
+  assert.ok(LOG_VA_UNLOCK_OWNED_STORE < LOG_VA_UNLOCK_LEAVE_CALL);
+  assert.equal(s(wasm.isaac_log_unlock_takes_timeout()), 0);
+  assert.equal(logUnlockTakesTimeout(), 0);
+  /* it clears even on the arm that just asserted the mutex is uninitialised */
+  assert.equal(s(wasm.isaac_log_unlock_assert_fires(0)), 1);
+  assert.equal(u(wasm.isaac_log_unlock_owned_byte_after(1)), 0);
+});
+
+test("LV: D-LOG-6 is observable from the lock path (the assert is disarmed)", () => {
+  /* The D-LOG-6 state produced by 0x00a15770's failure arm: ready bit SET,
+     CRITICAL_SECTION* NULL. The v3 helper that models the store agrees. */
+  assert.equal(s(wasm.isaac_log_init_critsec_marked_without_critsec()), 1);
+  assert.equal(u(wasm.isaac_log_init_critsec_flags_after(0)), 1);
+  assert.equal(u(wasm.isaac_log_init_critsec_ptr_after(0, 0xdead, 0)), 0);
+  /* ...and the lock guard reads ONLY that bit, so it is suppressed exactly
+     in the case it exists to catch */
+  assert.equal(s(wasm.isaac_log_lock_assert_fires(1)), 0);
+  assert.equal(s(wasm.isaac_log_lock_null_critsec_reached(1, 0)), 1);
+  assert.equal(logLockNullCritsecReached(1, 0), 1);
+  assert.equal(s(wasm.isaac_log_lock_asserts_on_failed_init()), 0);
+  assert.equal(logLockAssertsOnFailedInit(), 0);
+  /* every other combination is NOT the D-LOG-6 cell */
+  for (const [flags, ptr, want] of [
+    [0, 0, 0], /* never initialised: the assert DOES fire */
+    [1, 0x1000, 0], /* healthy */
+    [0, 0x1000, 0],
+    [3, 0, 1],
+    [0xff, 0, 1],
+    [0x101, 0, 1],
+    [0x100, 0, 0], /* low byte bit 0 clear -> assert fires, not D-LOG-6 */
+    [0xffffffff, 0, 1],
+    [1, 1, 0],
+  ]) {
+    assert.equal(
+      s(wasm.isaac_log_lock_null_critsec_reached(flags, ptr)),
+      want,
+      `null-critsec (0x${u(flags).toString(16)}, 0x${u(ptr).toString(16)})`,
+    );
+    assert.equal(logLockNullCritsecReached(flags, ptr), want);
+  }
+  /* the first NULL-derived access, per entry and per arm */
+  assert.equal(
+    u(wasm.isaac_log_lock_first_null_access_va(0, 0xffffffff)),
+    LOG_VA_LOCK_ENTER_CALL,
+  );
+  assert.equal(
+    u(wasm.isaac_log_lock_first_null_access_va(0, 1000)),
+    LOG_VA_LOCK_TRY_CALL,
+  );
+  assert.equal(
+    u(wasm.isaac_log_lock_first_null_access_va(1, 0)),
+    LOG_VA_UNLOCK_OWNED_STORE,
+  );
+  assert.equal(logLockFirstNullAccessVa(0, 0xffffffff), LOG_VA_LOCK_ENTER_CALL);
+  assert.equal(logLockFirstNullAccessVa(0, 1000), LOG_VA_LOCK_TRY_CALL);
+  assert.equal(logLockFirstNullAccessVa(1, 0), LOG_VA_UNLOCK_OWNED_STORE);
+  /* the unlock's first NULL access is a STORE and precedes its API call */
+  assert.ok(LOG_VA_UNLOCK_OWNED_STORE < LOG_VA_UNLOCK_LEAVE_CALL);
+  /* and the logger reaches this state: guard 0 -> init -> AL=1 (D-LOG-2)
+     -> guard 2 -> the lock, with the alloc having failed */
+  assert.equal(s(wasm.isaac_log_init_always_succeeds()), 1);
+  assert.equal(u(wasm.isaac_log_guard_after_init(1)), LOG_GUARD_READY);
+});
+
+test("LW: the lock and unlock plans, fixed scenarios", () => {
+  const base = SCRATCH + 0x7000;
+  const scenarios = [
+    [
+      "logger INFINITE, healthy, free",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 0xffffffff,
+        ownedByte: 0,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "logger INFINITE, held, released later",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 0xffffffff,
+        ownedByte: 1,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "INFINITE self-reentrant: spins forever, never returns",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 0xffffffff,
+        ownedByte: 1,
+        tryResult: 0,
+        spinEverClears: 0,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "uninitialised holder: the re-entrant assert fires",
+      {
+        holderFlags: 0,
+        critsecPtr: 0x00200000,
+        timeout: 0xffffffff,
+        ownedByte: 0,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "D-LOG-6: marked initialised with a NULL critsec",
+      {
+        holderFlags: 1,
+        critsecPtr: 0,
+        timeout: 0xffffffff,
+        ownedByte: 0,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "zero timeout: immediate failure, no TryEnter",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 0,
+        ownedByte: 0,
+        tryResult: 1,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "timed success (D-LOG-7: owned byte NOT set)",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 1000,
+        ownedByte: 0,
+        tryResult: 1,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 0,
+      },
+    ],
+    [
+      "timed, entered but owned -> give the CS back and sleep 10",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 1000,
+        ownedByte: 1,
+        tryResult: 1,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 500,
+      },
+    ],
+    [
+      "timed, not entered, elapsed >= timeout -> fail",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 1000,
+        ownedByte: 0,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 0,
+        elapsedLo: 1000,
+      },
+    ],
+    [
+      "timed, high dword of elapsed set -> expired",
+      {
+        holderFlags: 1,
+        critsecPtr: 0x00200000,
+        timeout: 0xffffffff,
+        ownedByte: 0,
+        tryResult: 0,
+        spinEverClears: 1,
+        elapsedHi: 1,
+        elapsedLo: 0,
+      },
+    ],
+  ];
+  const seenArms = new Set();
+  const seenAcquired = new Set();
+  for (const [label, sc] of scenarios) {
+    wasm.isaac_log_lock_plan(
+      sc.holderFlags,
+      sc.critsecPtr,
+      sc.timeout,
+      sc.ownedByte,
+      sc.tryResult,
+      sc.spinEverClears,
+      sc.elapsedHi,
+      sc.elapsedLo,
+      base,
+    );
+    const got = readLockPlan(view, base);
+    assertLockPlan(got, logLockPlan(sc), label);
+    seenArms.add(got.arm);
+    seenAcquired.add(got.acquired);
+  }
+  /* every arm reached, including the never-returning spin */
+  assert.deepEqual(
+    [...seenArms].sort((a, b) => a - b),
+    [LOG_LOCK_ARM_INFINITE, LOG_LOCK_ARM_ZERO_TIMEOUT, LOG_LOCK_ARM_TIMED],
+  );
+  assert.deepEqual([...seenAcquired].sort((a, b) => a - b), [-1, 0, 1]);
+
+  /* the named scenarios, spelled out */
+  wasm.isaac_log_lock_plan(1, 0x00200000, 1000, 0, 1, 1, 0, 0, base);
+  const timedOk = readLockPlan(view, base);
+  assert.equal(timedOk.acquired, 1);
+  assert.equal(timedOk.marksOwned, 0, "D-LOG-7 in the plan");
+  assert.equal(timedOk.ownedByteAfter, 0);
+  assert.equal(timedOk.tryCall, 1);
+  assert.equal(timedOk.enterCall, 0);
+  assert.equal(timedOk.sleepMs, 0);
+
+  wasm.isaac_log_lock_plan(1, 0x00200000, 0xffffffff, 1, 0, 0, 0, 0, base);
+  const forever = readLockPlan(view, base);
+  assert.equal(forever.spinEntered, 1);
+  assert.equal(forever.returns, 0, "the never-satisfied spin never returns");
+  assert.equal(forever.acquired, 0);
+  assert.equal(forever.marksOwned, 0);
+  assert.equal(forever.sleepMs, LOG_LOCK_SPIN_SLEEP_MS);
+  assert.equal(forever.ownedByteAfter, 1);
+
+  wasm.isaac_log_lock_plan(1, 0, 0xffffffff, 0, 0, 1, 0, 0, base);
+  const dlog6 = readLockPlan(view, base);
+  assert.equal(dlog6.assertFires, 0, "D-LOG-6 disarms the assert");
+  assert.equal(dlog6.nullCritsecFault, 1);
+  assert.equal(dlog6.faultVa, LOG_VA_LOCK_ENTER_CALL);
+
+  /* the unlock plan */
+  wasm.isaac_log_unlock_plan(1, 0x00200000, 1, base);
+  const unlockOk = readLockPlan(view, base);
+  assertLockPlan(
+    unlockOk,
+    logUnlockPlan({ holderFlags: 1, critsecPtr: 0x00200000, ownedByte: 1 }),
+    "unlock healthy",
+  );
+  assert.equal(unlockOk.arm, -1);
+  assert.equal(unlockOk.leaveCall, 1);
+  assert.equal(unlockOk.enterCall, 0);
+  assert.equal(unlockOk.ownedByteAfter, 0);
+
+  wasm.isaac_log_unlock_plan(0, 0, 1, base);
+  const unlockBad = readLockPlan(view, base);
+  assertLockPlan(
+    unlockBad,
+    logUnlockPlan({ holderFlags: 0, critsecPtr: 0, ownedByte: 1 }),
+    "unlock uninitialised + NULL",
+  );
+  assert.equal(unlockBad.assertFires, 1);
+  assert.equal(unlockBad.assertStringVa, LOG_UNLOCK_ASSERT_STRING_VA);
+  assert.equal(unlockBad.nullCritsecFault, 0, "bit 0 clear is not D-LOG-6");
+  assert.equal(unlockBad.ownedByteAfter, 0, "cleared anyway");
+});
+
+test("LW: randomized lock/unlock differential (HIGH-bit LCG, unmasked)", () => {
+  const rnd = makeLcg(0x10c4b17d);
+  const base = SCRATCH + 0x7800;
+  /* Wide, deliberately UNMASKED byte-gate inputs. */
+  const FLAGS = [
+    0, 1, 2, 3, 0x7f, 0x80, 0xfe, 0xff, 0x100, 0x101, 0x1ff, 0x8000,
+    0x80000000, 0x80000001, 0xfffffffe, 0xffffffff,
+  ];
+  const PTRS = [0, 1, 0x18, 0x1000, 0x00200000, 0xffffffff];
+  const TIMEOUTS = [
+    0xffffffff, 0, 1, 2, 0xa, 0x3e8, 0xffff, 0x7fffffff, 0x80000000,
+    0xfffffffe,
+  ];
+  const OWNED = [0, 1, 2, 0x7f, 0x80, 0xff, 0x100, 0x101, 0x1ff, 0xffffff00,
+                 0xffffffff];
+  const TRIES = [0, 1, 2, 0x100, 0x80000000, 0xffffffff];
+  const ELAPSED_HI = [0, 1, 0x80000000, 0xffffffff];
+  const ELAPSED_LO = [0, 1, 9, 0xa, 0x3e7, 0x3e8, 0x7fffffff, 0x80000000,
+                      0xfffffffe, 0xffffffff];
+
+  const seen = {
+    arm: new Set(),
+    assert: new Set(),
+    spin: new Set(),
+    tryArm: new Set(),
+    acquired: new Set(),
+    marks: new Set(),
+    fault: new Set(),
+    returns: new Set(),
+    expired: new Set(),
+  };
+
+  for (let i = 0; i < 4000; i += 1) {
+    const sc = {
+      holderFlags: FLAGS[pick(rnd, FLAGS.length)],
+      critsecPtr: PTRS[pick(rnd, PTRS.length)],
+      timeout: TIMEOUTS[pick(rnd, TIMEOUTS.length)],
+      ownedByte: OWNED[pick(rnd, OWNED.length)],
+      tryResult: TRIES[pick(rnd, TRIES.length)],
+      spinEverClears: pick(rnd, 2),
+      elapsedHi: ELAPSED_HI[pick(rnd, ELAPSED_HI.length)],
+      elapsedLo: ELAPSED_LO[pick(rnd, ELAPSED_LO.length)],
+    };
+    wasm.isaac_log_lock_plan(
+      sc.holderFlags,
+      sc.critsecPtr,
+      sc.timeout,
+      sc.ownedByte,
+      sc.tryResult,
+      sc.spinEverClears,
+      sc.elapsedHi,
+      sc.elapsedLo,
+      base,
+    );
+    const got = readLockPlan(view, base);
+    assertLockPlan(got, logLockPlan(sc), `lplan ${i}`);
+
+    /* per-export differentials on the same draw, all unmasked */
+    assert.equal(
+      s(wasm.isaac_log_lock_assert_fires(sc.holderFlags)),
+      logLockAssertFires(sc.holderFlags),
+    );
+    assert.equal(
+      s(wasm.isaac_log_unlock_assert_fires(sc.holderFlags)),
+      logUnlockAssertFires(sc.holderFlags),
+    );
+    /* cross-helper: the two operand forms are ONE law */
+    assert.equal(
+      s(wasm.isaac_log_lock_assert_fires(sc.holderFlags)),
+      s(wasm.isaac_log_unlock_assert_fires(sc.holderFlags)),
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_timeout_arm(sc.timeout)),
+      logLockTimeoutArm(sc.timeout),
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_spin_entered(sc.ownedByte)),
+      logLockSpinEntered(sc.ownedByte),
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_try_arm(sc.tryResult, sc.ownedByte)),
+      logLockTryArm(sc.tryResult, sc.ownedByte),
+    );
+    const expired = s(
+      wasm.isaac_log_lock_elapsed_expired(sc.elapsedHi, sc.elapsedLo, sc.timeout),
+    );
+    assert.equal(
+      expired,
+      logLockElapsedExpired(sc.elapsedHi, sc.elapsedLo, sc.timeout),
+    );
+    assert.equal(
+      u(wasm.isaac_log_lock_ticks_to_ms_lo(sc.elapsedHi, sc.elapsedLo)),
+      logLockTicksToMsLo(sc.elapsedHi, sc.elapsedLo),
+    );
+    assert.equal(
+      u(wasm.isaac_log_lock_ticks_to_ms_hi(sc.elapsedHi, sc.elapsedLo)),
+      logLockTicksToMsHi(sc.elapsedHi, sc.elapsedLo),
+    );
+    assert.equal(
+      u(wasm.isaac_log_unlock_owned_byte_after(sc.ownedByte)),
+      logUnlockOwnedByteAfter(sc.ownedByte),
+    );
+
+    wasm.isaac_log_unlock_plan(sc.holderFlags, sc.critsecPtr, sc.ownedByte, base);
+    assertLockPlan(readLockPlan(view, base), logUnlockPlan(sc), `uplan ${i}`);
+
+    seen.arm.add(got.arm);
+    seen.assert.add(got.assertFires);
+    seen.spin.add(got.spinEntered);
+    seen.tryArm.add(s(wasm.isaac_log_lock_try_arm(sc.tryResult, sc.ownedByte)));
+    seen.acquired.add(got.acquired);
+    seen.marks.add(got.marksOwned);
+    seen.fault.add(got.nullCritsecFault);
+    seen.returns.add(got.returns);
+    seen.expired.add(expired);
+  }
+
+  /* the corpus must reach EVERY arm, not merely be green */
+  assert.deepEqual([...seen.arm].sort((a, b) => a - b), [0, 1, 2]);
+  assert.deepEqual([...seen.assert].sort(), [0, 1], "the re-entrant assert path");
+  assert.deepEqual([...seen.spin].sort(), [0, 1], "the spin loop");
+  assert.deepEqual([...seen.tryArm].sort(), [0, 1, 2], "try/leave/sleep");
+  assert.deepEqual([...seen.acquired].sort((a, b) => a - b), [-1, 0, 1]);
+  assert.deepEqual([...seen.marks].sort(), [0, 1], "D-LOG-7 both ways");
+  assert.deepEqual([...seen.fault].sort(), [0, 1], "D-LOG-6 both ways");
+  assert.deepEqual([...seen.returns].sort(), [0, 1], "spin-never-returns hit");
+  assert.deepEqual([...seen.expired].sort(), [0, 1], "finite timeout both ways");
+});
+
+test("LW: v4 header and source record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00b81c18/);
+  assert.match(h, /0x00b81c1c/);
+  assert.match(h, /test byte \[eax\+4\], 1/);
+  assert.match(h, /test byte \[esi\+4\], 1/);
+  assert.match(h, /cmp dword \[ebp\+8\], -1/);
+  assert.match(h, /TryEnterCriticalSection/);
+  assert.match(h, /QueryPerformanceCounter/);
+  assert.match(h, /QueryPerformanceFrequency/);
+  assert.match(h, /0x3e8/);
+  assert.match(h, /Trying to unlock mutex that has not been initialized/);
+  assert.match(h, /f6 47 04 01/);
+  assert.match(h, /f6 40 04 01/);
+  assert.match(h, /f6 46 04 01/);
+  assert.match(h, /D-LOG-6/);
+  assert.match(h, /D-LOG-7/);
+  assert.match(h, /D-LOG-8/);
+  assert.match(h, /2094319 instructions \/ 469 undecodable/);
+  assert.match(h, /platform primitive/i);
+  assert.match(h, /never corrected/i);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /D-LOG-7/);
+  assert.match(src, /D-LOG-8/);
+  assert.match(src, /0x00a157f0/);
+  assert.match(src, /0x00a159a0/);
+  assert.match(src, /statically dead/);
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /D-LOG-7/);
+  assert.match(model, /D-LOG-8/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+});
+
+test("LX: v5 constants and the destroy reach census agree with the header", () => {
+  const h = readFileSync(header, "utf8");
+  const pin = (name, value) => {
+    assert.match(
+      h,
+      new RegExp(`${name}\\s*=\\s*${value}\\b`, "i"),
+      `${name} missing from the header`,
+    );
+  };
+  assert.equal(LOG_VA_MUTEX_UNWIND_DESTROY, 0x00a15730);
+  assert.equal(LOG_VA_MUTEX_DESTROY_END, 0x00a157eb);
+  assert.equal(LOG_VA_MUTEX_UNWIND_DESTROY_END, 0x00a15767);
+  assert.equal(LOG_VA_MUTEX_DTOR_END, 0x00a15730);
+  assert.equal(LOG_VA_VTBL_DTOR_ENTRY, 0x00b81c0c);
+  assert.equal(LOG_VA_VTBL_DESTROY_ENTRY, 0x00b81c14);
+  assert.equal(LOG_VA_MUTEX_BASE_VTABLE, 0x00ba04b4);
+  assert.equal(LOG_VA_MUTEX_BASE_PURECALL, 0x00af05d3);
+  assert.equal(LOG_VA_DESTROY_CRITSEC_TEST, 0x00a157c7);
+  assert.equal(LOG_VA_DESTROY_DELETE_CALL, 0x00a157cc);
+  assert.equal(LOG_VA_DESTROY_FREE_CALL, 0x00a157d5);
+  assert.equal(LOG_VA_DESTROY_NULL_STORE, 0x00a157dd);
+  assert.equal(LOG_VA_DESTROY_CLEAR, 0x00a157e4);
+  assert.equal(LOG_VA_DTOR_CLEAR, 0x00a1570d);
+  assert.equal(LOG_VA_DTOR_DELETE_FLAG_TEST, 0x00a15711);
+  assert.equal(LOG_VA_DTOR_EXIT_VTABLE_STORE, 0x00a15715);
+  assert.equal(LOG_VA_UNWIND_CLEAR, 0x00a1575a);
+  assert.equal(LOG_VA_TEARDOWN_INLINE_DESTROY, 0x00a71bbf);
+  assert.equal(LOG_VA_TEARDOWN_DELETE_CALL, 0x00a71bca);
+  assert.equal(LOG_VA_TEARDOWN_CLEAR, 0x00a71be5);
+  assert.equal(LOG_VA_STATIC_DTOR_DELETE_CALL, 0x00b16b36);
+  assert.equal(LOG_VA_STATIC_DTOR_CLEAR, 0x00b16b51);
+  assert.equal(LOG_VA_STATIC_DTOR_ATEXIT_SITE, 0x00402080);
+  assert.equal(LOG_VA_ATEXIT, 0x00aef5af);
+  assert.equal(LOG_VA_RAW_FREE, 0x00a0f500);
+  assert.equal(LOG_VA_SHARED_ALLOCATOR, 0x00a648b0);
+  assert.equal(LOG_VA_HOLDER_READY_BIT_SET, 0x00a157ad);
+  assert.equal(LOG_MUTEX_CRITSEC_SIZE, 0x1c);
+  assert.equal(LOG_MUTEX_OBJECT_SIZE, 0x0c);
+  assert.equal(LOG_MUTEX_OWNED_OFFSET, 0x18);
+
+  /* every literal above must also appear in the header enum */
+  pin("ISAAC_LOG_VA_MUTEX_UNWIND_DESTROY", "0x00a15730u");
+  pin("ISAAC_LOG_VA_MUTEX_DESTROY_END", "0x00a157ebu");
+  pin("ISAAC_LOG_VA_MUTEX_UNWIND_DESTROY_END", "0x00a15767u");
+  pin("ISAAC_LOG_VA_VTBL_DESTROY_ENTRY", "0x00b81c14u");
+  pin("ISAAC_LOG_VA_MUTEX_BASE_VTABLE", "0x00ba04b4u");
+  pin("ISAAC_LOG_VA_MUTEX_BASE_PURECALL", "0x00af05d3u");
+  pin("ISAAC_LOG_VA_DESTROY_CRITSEC_TEST", "0x00a157c7u");
+  pin("ISAAC_LOG_VA_DESTROY_DELETE_CALL", "0x00a157ccu");
+  pin("ISAAC_LOG_VA_DESTROY_FREE_CALL", "0x00a157d5u");
+  pin("ISAAC_LOG_VA_DESTROY_NULL_STORE", "0x00a157ddu");
+  pin("ISAAC_LOG_VA_DESTROY_CLEAR", "0x00a157e4u");
+  pin("ISAAC_LOG_VA_DTOR_DELETE_FLAG_TEST", "0x00a15711u");
+  pin("ISAAC_LOG_VA_DTOR_EXIT_VTABLE_STORE", "0x00a15715u");
+  pin("ISAAC_LOG_VA_TEARDOWN_INLINE_DESTROY", "0x00a71bbfu");
+  pin("ISAAC_LOG_VA_TEARDOWN_CLEAR", "0x00a71be5u");
+  pin("ISAAC_LOG_VA_STATIC_DTOR_CLEAR", "0x00b16b51u");
+  pin("ISAAC_LOG_VA_STATIC_DTOR_ATEXIT_SITE", "0x00402080u");
+  pin("ISAAC_LOG_VA_ATEXIT", "0x00aef5afu");
+  pin("ISAAC_LOG_VA_RAW_FREE", "0x00a0f500u");
+  pin("ISAAC_LOG_VA_SHARED_ALLOCATOR", "0x00a648b0u");
+  pin("ISAAC_LOG_VA_HOLDER_READY_BIT_SET", "0x00a157adu");
+  pin("ISAAC_LOG_MUTEX_CRITSEC_SIZE", "0x1c");
+  pin("ISAAC_LOG_MUTEX_OBJECT_SIZE", "0x0c");
+  pin("ISAAC_LOG_UNWIND_DESTROY_TAIL_JUMPS", "10");
+  pin("ISAAC_LOG_DESTROY_TEMPLATE_INSTANCES", "27");
+  pin("ISAAC_LOG_DELETE_CRITICAL_SECTION_SITES", "37");
+  pin("ISAAC_LOG_BASE_RELOCATIONS_HIGHLOW", "180939");
+  pin("ISAAC_LOG_TEXT_INSN_COUNT_V5", "2094319");
+  pin("ISAAC_LOG_TEXT_UNDECODABLE_BYTES_V5", "469");
+
+  /* the reach census, channel by channel, both sides */
+  const channels = [
+    [LOG_DESTROY_VARIANT_DESTROY, [0, 0, 0, 0, 0, 1, 0]],
+    [LOG_DESTROY_VARIANT_UNWIND, [0, 10, 0, 0, 0, 0, 0]],
+    [LOG_DESTROY_VARIANT_DTOR, [0, 0, 0, 0, 0, 1, 0]],
+    [LOG_DESTROY_VARIANT_TEARDOWN, [0, 0, 0, 0, 0, 0, 0]],
+    [LOG_DESTROY_VARIANT_STATIC, [0, 0, 0, 0, 0, 0, 0]],
+  ];
+  for (const [variant, want] of channels) {
+    for (let c = 0; c < LOG_REACH_CHANNELS; c += 1) {
+      assert.equal(
+        u(wasm.isaac_log_destroy_reach_sites(variant, c)),
+        want[c],
+        `reach v${variant} channel ${c}`,
+      );
+      assert.equal(logDestroyReachSites(variant, c), want[c]);
+    }
+    const total = want.reduce((a, b) => a + b, 0);
+    assert.equal(u(wasm.isaac_log_destroy_total_reach(variant)), total);
+    assert.equal(logDestroyTotalReach(variant), total);
+  }
+  /* an out-of-range channel must not silently fold into a real one */
+  assert.equal(
+    u(wasm.isaac_log_destroy_reach_sites(LOG_DESTROY_VARIANT_UNWIND, LOG_REACH_CHANNELS)),
+    0,
+  );
+
+  /* THE CORRECTION: 0x00a15730 is reached, and it is reached only by jmp */
+  assert.equal(u(wasm.isaac_log_unwind_destroy_reach_measured()), 10);
+  assert.equal(logUnwindDestroyReachMeasured(), 10);
+  assert.equal(LOG_UNWIND_DESTROY_TAIL_JUMPS, 10);
+  assert.equal(LOG_UNWIND_DESTROY_TAIL_JUMP_SITES.length, 10);
+  assert.equal(
+    new Set(LOG_UNWIND_DESTROY_TAIL_JUMP_SITES).size,
+    10,
+    "the ten tail entries are ten distinct VAs",
+  );
+  assert.deepEqual(
+    [...LOG_UNWIND_DESTROY_TAIL_JUMP_SITES].sort((a, b) => a - b),
+    [
+      0x00af0d76, 0x00b0bd2a, 0x00b11739, 0x00b118e5, 0x00b12134,
+      0x00b123f9, 0x00b13655, 0x00b14071, 0x00b14087, 0x00b1409d,
+    ],
+  );
+  assert.equal(
+    LOG_UNWIND_DESTROY_FRAME_FUNCLETS + LOG_UNWIND_DESTROY_ABSOLUTE_THUNKS,
+    LOG_UNWIND_DESTROY_TAIL_JUMPS,
+  );
+  assert.equal(u(wasm.isaac_log_unwind_destroy_is_dead_code()), 0);
+  assert.equal(logUnwindDestroyIsDeadCode(), 0);
+  /* and the superseded inherited claim is recorded, not silently replaced */
+  assert.equal(u(wasm.isaac_log_unwind_destroy_reach_v4_reported()), 0);
+  assert.equal(logUnwindDestroyReachV4Reported(), 0);
+  assert.notEqual(
+    LOG_UNWIND_DESTROY_REACH_V4_REPORTED,
+    LOG_UNWIND_DESTROY_TAIL_JUMPS,
+  );
+  /* multi-line aware: the header wraps at 78 columns, and a single-line
+     grep is exactly how a sibling audit missed six live matches. */
+  assert.match(h, /v4 claim of "zero references of\s+any\s+kind"/);
+  assert.match(h, /jmp rel32/);
+
+  /* template census sums */
+  assert.equal(
+    LOG_DESTROY_TEMPLATE_OUT_OF_LINE + LOG_DESTROY_TEMPLATE_INLINED,
+    LOG_DESTROY_TEMPLATE_INSTANCES,
+  );
+  assert.ok(LOG_DESTROY_TEMPLATE_INSTANCES < LOG_DELETE_CRITICAL_SECTION_SITES);
+  assert.equal(LOG_HOLDER_DESTROY_SITES, 2);
+  assert.equal(LOG_TEXT_INSN_COUNT_V5, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V5, 469);
+  assert.equal(LOG_V5_EXACT_ZHL_MATCHES, 0);
+  assert.equal(LOG_BASE_RELOCATIONS_HIGHLOW, 180939);
+});
+
+test("LX: the destroy body — a FULL 32-bit pointer test, wide drives", () => {
+  /* 0x00a157c7 `test edi, edi` is on the whole pointer: every nonzero
+     value frees, including ones whose low byte is 0. */
+  const ptrs = [
+    0x00000000, 0x00000001, 0x00000100, 0x000000ff, 0x0000ff00, 0x7fffffff,
+    0x80000000, 0xffffff00, 0xffffffff, 0x00c37960,
+  ];
+  for (const p of ptrs) {
+    const want = p !== 0 ? 1 : 0;
+    assert.equal(s(wasm.isaac_log_destroy_frees_critsec(p)), want, `frees ${p}`);
+    assert.equal(logDestroyFreesCritsec(p), want);
+    assert.equal(s(wasm.isaac_log_destroy_stores_null_critsec(p)), want);
+    assert.equal(logDestroyStoresNullCritsec(p), want);
+    /* the observable pointer is 0 afterwards on BOTH arms */
+    assert.equal(u(wasm.isaac_log_destroy_critsec_ptr_after(p)), 0);
+    assert.equal(logDestroyCritsecPtrAfter(p), 0);
+  }
+  assert.equal(u(wasm.isaac_log_destroy_critsec_free_size()), 0x1c);
+  assert.equal(logDestroyCritsecFreeSize(), 0x1c);
+  assert.equal(s(wasm.isaac_log_destroy_sized_delete_ignores_size()), 1);
+  assert.equal(logDestroySizedDeleteIgnoresSize(), 1);
+  assert.equal(s(wasm.isaac_log_destroy_clears_ready_bit()), 1);
+  assert.equal(s(wasm.isaac_log_destroy_clear_unconditional()), 1);
+  assert.equal(logDestroyClearUnconditional(), 1);
+  assert.equal(s(wasm.isaac_log_destroy_is_idempotent()), 1);
+  assert.equal(logDestroyIsIdempotent(), 1);
+});
+
+test("LX: the ready-bit clear is a BYTE and (0x100 discriminator, unmasked)", () => {
+  /* 0x00a157e4 is `80 66 04 fe` — Grp1 Eb,Ib. Bits 8..31 survive. The wide
+     drives here are exactly the shape that hid the uint8_t defect for 28
+     versions elsewhere; nothing is pre-masked. */
+  const cases = [
+    [0x00000000, 0x00000000],
+    [0x00000001, 0x00000000],
+    [0x000000ff, 0x000000fe],
+    [0x00000100, 0x00000100], // bit 0 already clear, high bits kept
+    [0x00000101, 0x00000100], // the discriminator: a BYTE and, not a dword
+    [0x000001ff, 0x000001fe],
+    [0x80000001, 0x80000000],
+    [0xffffffff, 0xfffffffe],
+    [0xffffff01, 0xffffff00],
+  ];
+  for (const [before, after] of cases) {
+    assert.equal(
+      u(wasm.isaac_log_destroy_flags_after(before)),
+      after >>> 0,
+      `flags 0x${before.toString(16)}`,
+    );
+    assert.equal(logDestroyFlagsAfter(before), after >>> 0);
+    /* cross-helper: after a destroy the v4 lock assert must fire */
+    assert.equal(s(wasm.isaac_log_lock_assert_fires(after >>> 0)), 1);
+    assert.equal(s(wasm.isaac_log_unlock_assert_fires(after >>> 0)), 1);
+  }
+  /* a dword `and 0xfffffffe` — the sibling form at 0x00a71ba5 on a
+     DIFFERENT holder — would also clear bit 8..31; it must NOT be what
+     this instruction does. Kept as an explicit discriminator. */
+  assert.notEqual(
+    u(wasm.isaac_log_destroy_flags_after(0x00000101)),
+    0x00000101 & 0xfffffffe & 0xff,
+  );
+});
+
+test("LY: five instances of one template, per-variant deltas", () => {
+  assert.equal(u(wasm.isaac_log_destroy_variants()), 5);
+  assert.equal(logDestroyVariants(), 5);
+  assert.equal(LOG_DESTROY_VARIANTS, 5);
+  const table = [
+    // variant, bodyVa, entryVtbl, exitVtbl, clearVa, retPops, returnsThis,
+    // deleteFlagGate, logger
+    [0, 0x00a157c0, 0, 0, 0x00a157e4, 0, 0, 0, 0],
+    [1, 0x00a15730, 0x00b81c0c, 0x00ba04b4, 0x00a1575a, 0, 0, 0, 0],
+    [2, 0x00a156e0, 0x00b81c0c, 0x00ba04b4, 0x00a1570d, 4, 1, 1, 0],
+    [3, 0x00a71bbf, 0, 0, 0x00a71be5, 0, 0, 0, 1],
+    [4, 0x00b16b20, 0x00b81c0c, 0x00ba04b4, 0x00b16b51, 0, 0, 0, 1],
+  ];
+  for (const [v, body, entry, exit, clear, pops, ret, gate, logger] of table) {
+    assert.equal(u(wasm.isaac_log_destroy_body_va(v)), body, `body v${v}`);
+    assert.equal(logDestroyBodyVa(v), body);
+    assert.equal(u(wasm.isaac_log_destroy_entry_vtable_va(v)), entry);
+    assert.equal(logDestroyEntryVtableVa(v), entry);
+    assert.equal(u(wasm.isaac_log_destroy_exit_vtable_va(v)), exit);
+    assert.equal(logDestroyExitVtableVa(v), exit);
+    assert.equal(u(wasm.isaac_log_destroy_clear_va(v)), clear);
+    assert.equal(logDestroyClearVa(v), clear);
+    assert.equal(u(wasm.isaac_log_destroy_stack_bytes_popped(v)), pops);
+    assert.equal(logDestroyStackBytesPopped(v), pops);
+    assert.equal(s(wasm.isaac_log_destroy_returns_this(v)), ret);
+    assert.equal(logDestroyReturnsThis(v), ret);
+    assert.equal(s(wasm.isaac_log_destroy_has_delete_flag_gate(v)), gate);
+    assert.equal(logDestroyHasDeleteFlagGate(v), gate);
+    assert.equal(s(wasm.isaac_log_destroy_operates_on_logger_holder(v)), logger);
+    assert.equal(logDestroyOperatesOnLoggerHolder(v), logger);
+  }
+  /* an unknown variant must be inert, never fold onto variant 0 */
+  for (const bad of [5, 6, 0xff, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_destroy_body_va(bad)), 0, `bad ${bad}`);
+    assert.equal(logDestroyBodyVa(bad), 0);
+    assert.equal(u(wasm.isaac_log_destroy_action_count(bad, 0x2000, 1)), 0);
+    assert.equal(logDestroyActionCount(bad, 0x2000, 1), 0);
+  }
+
+  /* the byte-diff evidence for the ONE-template claim */
+  assert.equal(u(wasm.isaac_log_destroy_body_bytes(0)), 43);
+  assert.equal(u(wasm.isaac_log_destroy_body_bytes(1)), 55);
+  assert.equal(u(wasm.isaac_log_destroy_body_bytes(2)), 80);
+  assert.equal(logDestroyBodyBytes(0), 43);
+  assert.equal(logDestroyBodyBytes(1), 55);
+  assert.equal(logDestroyBodyBytes(2), 80);
+  assert.equal(u(wasm.isaac_log_destroy_shared_bytes(0, 1)), 41);
+  assert.equal(u(wasm.isaac_log_destroy_shared_bytes(1, 0)), 41);
+  assert.equal(u(wasm.isaac_log_destroy_shared_bytes(1, 2)), 52);
+  assert.equal(u(wasm.isaac_log_destroy_shared_bytes(0, 2)), 40);
+  assert.equal(logDestroySharedBytes(0, 1), 41);
+  assert.equal(logDestroySharedBytes(1, 2), 52);
+  assert.equal(logDestroySharedBytes(0, 2), 40);
+  /* the whole 0->1 delta is exactly two 6-byte vtable stores plus the
+     forced rel32 half — nothing unexplained is being merged */
+  assert.equal(
+    LOG_DESTROY_SHARED_BYTES_0_1 + LOG_DESTROY_FORCED_REL32_DELTA_BYTES,
+    LOG_DESTROY_BODY_BYTES,
+  );
+  assert.equal(
+    LOG_DESTROY_BODY_BYTES + 2 * LOG_DESTROY_VTABLE_STORE_BYTES,
+    LOG_UNWIND_DESTROY_BODY_BYTES,
+  );
+  assert.ok(LOG_DESTROY_SHARED_BYTES_1_2 / LOG_UNWIND_DESTROY_BODY_BYTES > 0.9);
+  assert.equal(s(wasm.isaac_log_destroy_is_one_template()), 1);
+  assert.equal(logDestroyIsOneTemplate(), 1);
+  /* extents agree with lengths */
+  assert.equal(
+    LOG_VA_MUTEX_DESTROY_END - LOG_VA_MUTEX_DESTROY,
+    LOG_DESTROY_BODY_BYTES,
+  );
+  assert.equal(
+    LOG_VA_MUTEX_UNWIND_DESTROY_END - LOG_VA_MUTEX_UNWIND_DESTROY,
+    LOG_UNWIND_DESTROY_BODY_BYTES,
+  );
+  assert.equal(LOG_VA_MUTEX_DTOR_END - LOG_VA_MUTEX_DTOR, LOG_DTOR_BODY_BYTES);
+  assert.equal(LOG_VA_MUTEX_DTOR_END, LOG_VA_MUTEX_UNWIND_DESTROY);
+});
+
+test("LZ: the dtor delete flag is bit 0 of the LOW byte (0x100 both ways)", () => {
+  const cases = [
+    [0x00000000, 0],
+    [0x00000001, 1],
+    [0x00000002, 0],
+    [0x000000ff, 1],
+    [0x00000100, 0], // wide value with a clear low byte — must NOT free
+    [0x00000101, 1],
+    [0x000001fe, 0],
+    [0x80000000, 0],
+    [0x80000001, 1],
+    [0xffffffff, 1],
+    [0xffffff00, 0],
+  ];
+  for (const [flag, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_dtor_frees_object(flag)),
+      want,
+      `delete flag 0x${flag.toString(16)}`,
+    );
+    assert.equal(logDtorFreesObject(flag), want);
+  }
+  assert.equal(u(wasm.isaac_log_dtor_object_free_size()), 0x0c);
+  assert.equal(logDtorObjectFreeSize(), 0x0c);
+  /* the object free is 0xc, the critsec free is 0x1c — never confused */
+  assert.notEqual(
+    u(wasm.isaac_log_dtor_object_free_size()),
+    u(wasm.isaac_log_destroy_critsec_free_size()),
+  );
+  assert.equal(
+    s(wasm.isaac_log_dtor_restores_base_vtable_unconditionally()),
+    1,
+  );
+  assert.equal(logDtorRestoresBaseVtableUnconditionally(), 1);
+  assert.equal(s(wasm.isaac_log_dtor_vtable_store_preserves_flags()), 1);
+  assert.equal(logDtorVtableStorePreservesFlags(), 1);
+  /* the exit vtable store is above the branch, so BOTH gate arms leave the
+     base vtable behind */
+  for (const flag of [0, 1, 0x100, 0x101]) {
+    const p = logDestroyPlan({
+      variant: LOG_DESTROY_VARIANT_DTOR,
+      holderFlags: 0x01,
+      critsecPtr: 0x2000,
+      deleteFlag: flag,
+    });
+    assert.equal(p.exitVtableVa, LOG_VA_MUTEX_BASE_VTABLE);
+    assert.equal(p.freesObject, (flag & 1) !== 0 ? 1 : 0);
+  }
+  assert.ok(LOG_VA_DTOR_DELETE_FLAG_TEST < LOG_VA_DTOR_EXIT_VTABLE_STORE);
+  assert.ok(LOG_VA_DTOR_EXIT_VTABLE_STORE < 0x00a1571b);
+});
+
+test("LAA: the ready-bit lifecycle — three reachable states, one impossible", () => {
+  const states = [
+    [0x00, 0x00000000, LOG_READY_STATE_DOWN],
+    [0x01, 0x00002000, LOG_READY_STATE_LIVE],
+    [0x01, 0x00000000, LOG_READY_STATE_FAILED],
+    [0x00, 0x00002000, LOG_READY_STATE_IMPOSSIBLE],
+    [0x100, 0x00000000, LOG_READY_STATE_DOWN], // low-byte read, not dword
+    [0x101, 0x00000000, LOG_READY_STATE_FAILED],
+    [0xfffffffe, 0x00002000, LOG_READY_STATE_IMPOSSIBLE],
+    [0xffffffff, 0x00002000, LOG_READY_STATE_LIVE],
+  ];
+  for (const [flags, ptr, want] of states) {
+    assert.equal(
+      s(wasm.isaac_log_ready_state(flags, ptr)),
+      want,
+      `state(0x${flags.toString(16)}, 0x${ptr.toString(16)})`,
+    );
+    assert.equal(logReadyState(flags, ptr), want);
+  }
+  assert.equal(s(wasm.isaac_log_ready_state_reachable(LOG_READY_STATE_DOWN)), 1);
+  assert.equal(s(wasm.isaac_log_ready_state_reachable(LOG_READY_STATE_LIVE)), 1);
+  assert.equal(s(wasm.isaac_log_ready_state_reachable(LOG_READY_STATE_FAILED)), 1);
+  assert.equal(
+    s(wasm.isaac_log_ready_state_reachable(LOG_READY_STATE_IMPOSSIBLE)),
+    0,
+    "(0, non-NULL) has no producer in this image",
+  );
+  for (const st of [LOG_READY_STATE_DOWN, LOG_READY_STATE_LIVE, LOG_READY_STATE_FAILED, LOG_READY_STATE_IMPOSSIBLE, 4, 99]) {
+    assert.equal(
+      s(wasm.isaac_log_ready_state_reachable(st)),
+      logReadyStateReachable(st),
+    );
+  }
+  assert.equal(LOG_READY_STATES_REACHABLE, 3);
+
+  /* init: (0,*) -> LIVE on a successful alloc, FAILED on D-LOG-6; an
+     already-ready holder is a no-op on BOTH sides of the bit. */
+  assert.equal(
+    s(wasm.isaac_log_ready_state_after_init(0x00, 0, 0x3000)),
+    LOG_READY_STATE_LIVE,
+  );
+  assert.equal(
+    s(wasm.isaac_log_ready_state_after_init(0x00, 0, 0)),
+    LOG_READY_STATE_FAILED,
+    "D-LOG-6: the bit is published with a NULL critsec",
+  );
+  assert.equal(
+    s(wasm.isaac_log_ready_state_after_init(0x01, 0x2000, 0)),
+    LOG_READY_STATE_LIVE,
+    "already ready -> 0x00a1577a jne skips the whole body",
+  );
+  assert.equal(
+    s(wasm.isaac_log_ready_state_after_init(0x101, 0, 0x3000)),
+    LOG_READY_STATE_FAILED,
+    "low-byte bit 0 set with a NULL pointer stays FAILED",
+  );
+
+  /* destroy always lands in DOWN, from every reachable predecessor */
+  for (const [flags, ptr] of [
+    [0x00, 0x00000000],
+    [0x01, 0x00002000],
+    [0x01, 0x00000000],
+    [0x1ff, 0x00002000],
+    [0xffffffff, 0xffffffff],
+  ]) {
+    assert.equal(
+      s(wasm.isaac_log_ready_state_after_destroy(flags, ptr)),
+      LOG_READY_STATE_DOWN,
+      `destroy from (0x${flags.toString(16)}, 0x${ptr.toString(16)})`,
+    );
+    assert.equal(logReadyStateAfterDestroy(flags, ptr), LOG_READY_STATE_DOWN);
+  }
+
+  /* the writer census, bounded to 0x00c3795c */
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_setters()), 1);
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_clearers()), 2);
+  assert.equal(logHolderReadyBitSetters(), 1);
+  assert.equal(logHolderReadyBitClearers(), 2);
+  assert.equal(LOG_HOLDER_READY_BIT_ABSOLUTE_SETTERS, 0);
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_set_va()), 0x00a157ad);
+  assert.equal(logHolderReadyBitSetVa(), 0x00a157ad);
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_clear_va(0)), 0x00a71be5);
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_clear_va(1)), 0x00b16b51);
+  assert.equal(u(wasm.isaac_log_holder_ready_bit_clear_va(2)), 0);
+  assert.equal(logHolderReadyBitClearVa(0), 0x00a71be5);
+  assert.equal(logHolderReadyBitClearVa(1), 0x00b16b51);
+  assert.equal(logHolderReadyBitClearVa(2), 0);
+  /* each logger destroy site is exactly one clear */
+  assert.equal(LOG_HOLDER_DESTROY_SITES, LOG_HOLDER_READY_BIT_CLEARERS);
+});
+
+test("LAA: destroy-then-lock reaches the SAME NULL fault D-LOG-6 does", () => {
+  /* The assert arm is not an early return: 0x00a15818 falls into
+     0x00a1581b, 0x00a159b5 falls into 0x00a159b8. */
+  for (const flags of [0x00, 0x01, 0xff, 0x100, 0x101, 0xffffffff]) {
+    assert.equal(
+      s(wasm.isaac_log_lock_null_deref_reached(flags, 0)),
+      1,
+      `a NULL critsec always dereferences, flags 0x${flags.toString(16)}`,
+    );
+    assert.equal(logLockNullDerefReached(flags, 0), 1);
+    assert.equal(s(wasm.isaac_log_lock_null_deref_reached(flags, 0x2000)), 0);
+    assert.equal(logLockNullDerefReached(flags, 0x2000), 0);
+  }
+  /* where the v5 control-flow fact and the v4 D-LOG-6-scoped helper agree,
+     and the ONE state where they must not. Pinning the divergence means a
+     future edit cannot quietly re-scope either of them. */
+  assert.equal(s(wasm.isaac_log_lock_null_critsec_reached(0x01, 0)), 1);
+  assert.equal(s(wasm.isaac_log_lock_null_deref_reached(0x01, 0)), 1);
+  assert.equal(
+    s(wasm.isaac_log_lock_null_critsec_reached(0x00, 0)),
+    0,
+    "v4's helper additionally requires the ready bit",
+  );
+  assert.equal(
+    s(wasm.isaac_log_lock_null_deref_reached(0x00, 0)),
+    1,
+    "the machine dereferences anyway — the post-destroy state S0",
+  );
+  for (const ptr of [0x2000, 0xffffffff]) {
+    for (const flags of [0x00, 0x01, 0x100, 0x101]) {
+      assert.equal(
+        s(wasm.isaac_log_lock_null_critsec_reached(flags, ptr)),
+        s(wasm.isaac_log_lock_null_deref_reached(flags, ptr)),
+        "with a live pointer the two helpers must agree",
+      );
+    }
+  }
+
+  /* the post-destroy composite: assert fires AND the fault is reached */
+  for (const [flags, ptr] of [
+    [0x01, 0x2000],
+    [0x01, 0x0000],
+    [0xff, 0x2000],
+    [0x1ff, 0x2000],
+    [0x00, 0x0000],
+  ]) {
+    assert.equal(
+      s(wasm.isaac_log_destroy_then_lock_asserts(flags, ptr)),
+      1,
+      `destroy re-arms the assert from (0x${flags.toString(16)})`,
+    );
+    assert.equal(logDestroyThenLockAsserts(flags, ptr), 1);
+    assert.equal(s(wasm.isaac_log_destroy_then_lock_faults(flags, ptr)), 1);
+    assert.equal(logDestroyThenLockFaults(flags, ptr), 1);
+  }
+  /* D-LOG-6 is the mirror image: assert SUPPRESSED, same fault */
+  assert.equal(s(wasm.isaac_log_lock_assert_fires(0x01)), 0);
+  assert.equal(s(wasm.isaac_log_lock_null_deref_reached(0x01, 0)), 1);
+
+  /* the fault VA follows the timeout arm, exactly as at v4 */
+  assert.equal(
+    u(wasm.isaac_log_destroy_then_lock_fault_va(0x01, 0x2000, 0xffffffff)),
+    0x00a15825,
+  );
+  assert.equal(logDestroyThenLockFaultVa(0x01, 0x2000, 0xffffffff), 0x00a15825);
+  assert.equal(
+    u(wasm.isaac_log_destroy_then_lock_fault_va(0x01, 0x2000, 5)),
+    0x00a158d9,
+  );
+  assert.equal(logDestroyThenLockFaultVa(0x01, 0x2000, 5), 0x00a158d9);
+  assert.equal(
+    u(wasm.isaac_log_destroy_then_lock_fault_va(0x01, 0x2000, 0)),
+    0x00a158d9,
+    "a zero timeout still selects the timed arm's VA",
+  );
+});
+
+test("LAA: D-LOG-10 — the two logger destroy sites disagree about the vptr", () => {
+  const want = [
+    [LOG_DESTROY_VARIANT_DESTROY, LOG_VA_MUTEX_LOCK],
+    [LOG_DESTROY_VARIANT_UNWIND, LOG_VA_MUTEX_BASE_PURECALL],
+    [LOG_DESTROY_VARIANT_DTOR, LOG_VA_MUTEX_BASE_PURECALL],
+    [LOG_DESTROY_VARIANT_TEARDOWN, LOG_VA_MUTEX_LOCK],
+    [LOG_DESTROY_VARIANT_STATIC, LOG_VA_MUTEX_BASE_PURECALL],
+  ];
+  for (const [v, va] of want) {
+    assert.equal(
+      u(wasm.isaac_log_post_destroy_lock_dispatch_va(v)),
+      va,
+      `post-destroy dispatch v${v}`,
+    );
+    assert.equal(logPostDestroyLockDispatchVa(v), va);
+  }
+  assert.equal(u(wasm.isaac_log_post_destroy_lock_dispatch_va(9)), 0);
+  assert.equal(logPostDestroyLockDispatchVa(9), 0);
+  /* the two sites that touch the LOGGER's holder are the ones that differ */
+  assert.notEqual(
+    u(wasm.isaac_log_post_destroy_lock_dispatch_va(LOG_DESTROY_VARIANT_TEARDOWN)),
+    u(wasm.isaac_log_post_destroy_lock_dispatch_va(LOG_DESTROY_VARIANT_STATIC)),
+  );
+  assert.equal(
+    s(wasm.isaac_log_destroy_operates_on_logger_holder(LOG_DESTROY_VARIANT_TEARDOWN)),
+    1,
+  );
+  assert.equal(
+    s(wasm.isaac_log_destroy_operates_on_logger_holder(LOG_DESTROY_VARIANT_STATIC)),
+    1,
+  );
+});
+
+test("LAB: D-LOG-9 — delete and free happen BEFORE the clear, unlocked", () => {
+  assert.equal(s(wasm.isaac_log_destroy_holds_lock()), 0);
+  assert.equal(logDestroyHoldsLock(), 0);
+  assert.equal(
+    s(wasm.isaac_log_destroy_clears_before_free()),
+    0,
+    "the correct order would be clear-then-free; the PE does the opposite",
+  );
+  assert.equal(logDestroyClearsBeforeFree(), 0);
+  const windows = [
+    [0, 0x00a157cc, 0x00a157e4],
+    [1, 0x00a15742, 0x00a1575a],
+    [2, 0x00a156f5, 0x00a1570d],
+    [3, 0x00a71bca, 0x00a71be5],
+    [4, 0x00b16b36, 0x00b16b51],
+  ];
+  for (const [v, start, end] of windows) {
+    assert.equal(u(wasm.isaac_log_destroy_dangling_window_start_va(v)), start);
+    assert.equal(logDestroyDanglingWindowStartVa(v), start);
+    assert.equal(u(wasm.isaac_log_destroy_dangling_window_end_va(v)), end);
+    assert.equal(logDestroyDanglingWindowEndVa(v), end);
+    assert.ok(start < end, `v${v} window is forward`);
+    assert.equal(u(wasm.isaac_log_destroy_dangling_window_insns(v)), 6);
+    assert.equal(logDestroyDanglingWindowInsns(v), 6);
+  }
+  assert.equal(u(wasm.isaac_log_destroy_dangling_window_start_va(7)), 0);
+  assert.equal(u(wasm.isaac_log_destroy_dangling_window_insns(7)), 0);
+  assert.equal(LOG_DESTROY_DANGLING_WINDOW_INSNS, 6);
+  /* the ordered action list is the proof: free strictly precedes clear */
+  const acts = wasmActions(LOG_DESTROY_VARIANT_DESTROY, 0x2000, 0);
+  assert.ok(
+    acts.indexOf(LOG_DESTROY_ACTION_FREE_CRITSEC) <
+      acts.indexOf(LOG_DESTROY_ACTION_CLEAR_READY_BIT),
+  );
+});
+
+test("LAD: the ordered typed host-action plan, every arm", () => {
+  const scenarios = [
+    /* variant, critsec, deleteFlag, expected ordered actions */
+    [0, 0x2000, 0, [2, 3, 4, 5]],
+    [0, 0x0000, 0, [5]],
+    [1, 0x2000, 0, [1, 2, 3, 4, 5, 6]],
+    [1, 0x0000, 0, [1, 5, 6]],
+    [2, 0x2000, 1, [1, 2, 3, 4, 5, 6, 7]],
+    [2, 0x2000, 0, [1, 2, 3, 4, 5, 6]],
+    [2, 0x0000, 1, [1, 5, 6, 7]],
+    [2, 0x0000, 0, [1, 5, 6]],
+    [2, 0x2000, 0x100, [1, 2, 3, 4, 5, 6]], // wide flag, low byte clear
+    [2, 0x0100, 0x101, [1, 2, 3, 4, 5, 6, 7]],
+    [3, 0x2000, 1, [2, 3, 4, 5]],
+    [3, 0x0000, 1, [5]],
+    [4, 0x2000, 1, [1, 2, 3, 4, 5, 6]],
+    [4, 0x0000, 1, [1, 5, 6]],
+  ];
+  for (const [v, ptr, flag, want] of scenarios) {
+    const label = `v${v} ptr=0x${ptr.toString(16)} flag=0x${flag.toString(16)}`;
+    assert.deepEqual(wasmActions(v, ptr, flag), want, `wasm ${label}`);
+    assert.deepEqual(modelActions(v, ptr, flag), want, `model ${label}`);
+    assert.equal(u(wasm.isaac_log_destroy_action_count(v, ptr, flag)), want.length);
+    assert.equal(logDestroyActionCount(v, ptr, flag), want.length);
+    /* out-of-range index is NONE, never a wrapped read */
+    assert.equal(
+      u(wasm.isaac_log_destroy_action_at(v, ptr, flag, want.length)),
+      LOG_DESTROY_ACTION_NONE,
+    );
+    assert.equal(
+      logDestroyActionAt(v, ptr, flag, want.length),
+      LOG_DESTROY_ACTION_NONE,
+    );
+    assert.ok(want.length <= LOG_DESTROY_ACTIONS_MAX);
+    /* the clear appears exactly once, always */
+    assert.equal(
+      want.filter((a) => a === LOG_DESTROY_ACTION_CLEAR_READY_BIT).length,
+      1,
+      `${label}: exactly one ready-bit clear`,
+    );
+  }
+  /* platform vs game-logic classification */
+  const platform = [
+    LOG_DESTROY_ACTION_DELETE_CRITICAL_SECTION,
+    LOG_DESTROY_ACTION_FREE_CRITSEC,
+    LOG_DESTROY_ACTION_FREE_OBJECT,
+  ];
+  const pure = [
+    LOG_DESTROY_ACTION_NONE,
+    LOG_DESTROY_ACTION_STORE_ENTRY_VTABLE,
+    LOG_DESTROY_ACTION_STORE_NULL_CRITSEC,
+    LOG_DESTROY_ACTION_CLEAR_READY_BIT,
+    LOG_DESTROY_ACTION_STORE_EXIT_VTABLE,
+  ];
+  for (const a of platform) {
+    assert.equal(s(wasm.isaac_log_destroy_action_is_platform(a)), 1, `platform ${a}`);
+    assert.equal(logDestroyActionIsPlatform(a), 1);
+  }
+  for (const a of pure) {
+    assert.equal(s(wasm.isaac_log_destroy_action_is_platform(a)), 0, `pure ${a}`);
+    assert.equal(logDestroyActionIsPlatform(a), 0);
+  }
+});
+
+test("LAD: the destroy plan, fixed scenarios across every variant and arm", () => {
+  const base = SCRATCH + 0x900;
+  const scenarios = [
+    { variant: 0, holderFlags: 0x01, critsecPtr: 0x2000, deleteFlag: 0 },
+    { variant: 0, holderFlags: 0x01, critsecPtr: 0x0000, deleteFlag: 0 },
+    { variant: 0, holderFlags: 0x1ff, critsecPtr: 0xffffffff, deleteFlag: 0 },
+    { variant: 0, holderFlags: 0x00, critsecPtr: 0x0000, deleteFlag: 0 },
+    { variant: 1, holderFlags: 0x01, critsecPtr: 0x2000, deleteFlag: 0 },
+    { variant: 1, holderFlags: 0x100, critsecPtr: 0x0000, deleteFlag: 0 },
+    { variant: 2, holderFlags: 0x01, critsecPtr: 0x2000, deleteFlag: 1 },
+    { variant: 2, holderFlags: 0x01, critsecPtr: 0x2000, deleteFlag: 0 },
+    { variant: 2, holderFlags: 0xff, critsecPtr: 0x0000, deleteFlag: 0x100 },
+    { variant: 2, holderFlags: 0xff, critsecPtr: 0x0000, deleteFlag: 0x101 },
+    { variant: 3, holderFlags: 0x01, critsecPtr: 0x00c37960, deleteFlag: 0 },
+    { variant: 3, holderFlags: 0x01, critsecPtr: 0x00000000, deleteFlag: 0 },
+    { variant: 4, holderFlags: 0x01, critsecPtr: 0x00c37960, deleteFlag: 0 },
+    { variant: 4, holderFlags: 0x00, critsecPtr: 0x00000000, deleteFlag: 0 },
+    { variant: 9, holderFlags: 0x01, critsecPtr: 0x2000, deleteFlag: 1 },
+  ];
+  for (let i = 0; i < scenarios.length; i += 1) {
+    const sc = scenarios[i];
+    new Uint8Array(wasm.memory.buffer, base, DPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_destroy_plan(
+      sc.variant,
+      sc.holderFlags,
+      sc.critsecPtr,
+      sc.deleteFlag,
+      base,
+    );
+    assertDestroyPlan(readDestroyPlan(view, base), logDestroyPlan(sc), `dplan ${i}`);
+  }
+  /* the always-true post-conditions of a known variant */
+  for (const sc of scenarios.filter((x) => x.variant < LOG_DESTROY_VARIANTS)) {
+    const p = logDestroyPlan(sc);
+    assert.equal(p.clearsReadyBit, 1);
+    assert.equal(p.critsecPtrAfter, 0);
+    assert.equal(p.readyStateAfter, LOG_READY_STATE_DOWN);
+    assert.equal(p.flagsAfter, (sc.holderFlags & 0xfffffffe) >>> 0);
+    assert.equal(p.actionCount, modelActions(sc.variant, sc.critsecPtr, sc.deleteFlag).length);
+  }
+});
+
+test("LAD: randomized destroy differential (HIGH-bit LCG, unmasked drives)", () => {
+  const base = SCRATCH + 0xa00;
+  const rnd = makeLcg(0x5c0f7e21);
+  /* Every draw is a WIDE value. Nothing is pre-masked to a byte — that is
+     the exact blind spot that hid the uint8_t defect for 28 versions. */
+  const FLAGS = [
+    0x00000000, 0x00000001, 0x000000fe, 0x000000ff, 0x00000100, 0x00000101,
+    0x000001ff, 0x7fffffff, 0x80000000, 0x80000001, 0xfffffffe, 0xffffffff,
+  ];
+  const PTRS = [
+    0x00000000, 0x00000001, 0x00000100, 0x0000ff00, 0x00c37960, 0x7fffffff,
+    0x80000000, 0xffffffff,
+  ];
+  const FLAG_ARGS = [
+    0x00000000, 0x00000001, 0x00000002, 0x000000ff, 0x00000100, 0x00000101,
+    0x80000000, 0xffffffff,
+  ];
+  const TIMEOUTS = [0xffffffff, 0, 1, 5, 0x7fffffff, 0x80000000];
+  const seen = {
+    variant: new Set(),
+    frees: new Set(),
+    freesObject: new Set(),
+    stateBefore: new Set(),
+    stateAfter: new Set(),
+    actionCount: new Set(),
+    actions: new Set(),
+    faultVa: new Set(),
+  };
+  for (let i = 0; i < 6000; i += 1) {
+    const sc = {
+      variant: pick(rnd, LOG_DESTROY_VARIANTS + 1), // includes one bad index
+      holderFlags: FLAGS[pick(rnd, FLAGS.length)],
+      critsecPtr: PTRS[pick(rnd, PTRS.length)],
+      deleteFlag: FLAG_ARGS[pick(rnd, FLAG_ARGS.length)],
+    };
+    const timeout = TIMEOUTS[pick(rnd, TIMEOUTS.length)];
+    new Uint8Array(wasm.memory.buffer, base, DPLAN_SIZE).fill(0x5a);
+    wasm.isaac_log_destroy_plan(
+      sc.variant,
+      sc.holderFlags,
+      sc.critsecPtr,
+      sc.deleteFlag,
+      base,
+    );
+    const got = readDestroyPlan(view, base);
+    const want = logDestroyPlan(sc);
+    assertDestroyPlan(got, want, `rand dplan ${i}`);
+
+    /* per-export differentials on the same wide draw */
+    assert.equal(
+      s(wasm.isaac_log_destroy_frees_critsec(sc.critsecPtr)),
+      logDestroyFreesCritsec(sc.critsecPtr),
+    );
+    assert.equal(
+      u(wasm.isaac_log_destroy_flags_after(sc.holderFlags)),
+      logDestroyFlagsAfter(sc.holderFlags),
+    );
+    assert.equal(
+      s(wasm.isaac_log_dtor_frees_object(sc.deleteFlag)),
+      logDtorFreesObject(sc.deleteFlag),
+    );
+    assert.equal(
+      s(wasm.isaac_log_ready_state(sc.holderFlags, sc.critsecPtr)),
+      logReadyState(sc.holderFlags, sc.critsecPtr),
+    );
+    assert.equal(
+      s(wasm.isaac_log_ready_state_after_destroy(sc.holderFlags, sc.critsecPtr)),
+      logReadyStateAfterDestroy(sc.holderFlags, sc.critsecPtr),
+    );
+    assert.equal(
+      s(wasm.isaac_log_lock_null_deref_reached(sc.holderFlags, sc.critsecPtr)),
+      logLockNullDerefReached(sc.holderFlags, sc.critsecPtr),
+    );
+    const faultVa = u(
+      wasm.isaac_log_destroy_then_lock_fault_va(
+        sc.holderFlags,
+        sc.critsecPtr,
+        timeout,
+      ),
+    );
+    assert.equal(
+      faultVa,
+      logDestroyThenLockFaultVa(sc.holderFlags, sc.critsecPtr, timeout),
+    );
+    assert.deepEqual(
+      wasmActions(sc.variant, sc.critsecPtr, sc.deleteFlag),
+      modelActions(sc.variant, sc.critsecPtr, sc.deleteFlag),
+      `actions ${i}`,
+    );
+
+    /* cross-helper laws that no single expectation can catch */
+    if (sc.variant < LOG_DESTROY_VARIANTS) {
+      assert.equal(got.clearsReadyBit, 1);
+      assert.equal(got.critsecPtrAfter, 0);
+      assert.equal(got.readyStateAfter, LOG_READY_STATE_DOWN);
+      /* the clear is a BYTE and: the high 24 bits must be untouched */
+      assert.equal(got.flagsAfter >>> 8, sc.holderFlags >>> 8);
+      /* a second destroy is a fixed point */
+      assert.equal(
+        logDestroyPlan({ ...sc, holderFlags: got.flagsAfter, critsecPtr: 0 })
+          .flagsAfter,
+        got.flagsAfter,
+      );
+      /* every destroy re-arms the v4 assert */
+      assert.equal(s(wasm.isaac_log_lock_assert_fires(got.flagsAfter)), 1);
+      seen.variant.add(got.variant);
+      seen.frees.add(got.freeCritsec);
+      seen.freesObject.add(got.freesObject);
+      seen.actionCount.add(got.actionCount);
+      seen.actions.add(
+        wasmActions(sc.variant, sc.critsecPtr, sc.deleteFlag).join(","),
+      );
+      /* only a KNOWN variant actually runs a body; the bad index must leave
+         the state alone, which the plan differential above already pins. */
+      seen.stateAfter.add(got.readyStateAfter);
+    } else {
+      assert.equal(got.variant, -1, "an unknown variant is inert");
+      assert.equal(got.readyStateAfter, got.readyStateBefore);
+    }
+    seen.stateBefore.add(s(wasm.isaac_log_ready_state(sc.holderFlags, sc.critsecPtr)));
+    seen.faultVa.add(faultVa);
+  }
+  /* the corpus must REACH every arm, not merely be green */
+  assert.deepEqual([...seen.variant].sort((a, b) => a - b), [0, 1, 2, 3, 4]);
+  assert.deepEqual([...seen.frees].sort(), [0, 1], "both critsec arms");
+  assert.deepEqual([...seen.freesObject].sort(), [0, 1], "the delete flag both ways");
+  assert.deepEqual(
+    [...seen.stateBefore].sort((a, b) => a - b),
+    [
+      LOG_READY_STATE_DOWN,
+      LOG_READY_STATE_LIVE,
+      LOG_READY_STATE_FAILED,
+      LOG_READY_STATE_IMPOSSIBLE,
+    ].sort((a, b) => a - b),
+    "the corpus presents the already-destroyed state and the impossible one",
+  );
+  assert.deepEqual([...seen.stateAfter], [LOG_READY_STATE_DOWN]);
+  assert.deepEqual(
+    [...seen.actionCount].sort((a, b) => a - b),
+    [1, 3, 4, 6, 7],
+    "every action-list length the template can produce",
+  );
+  /* Six distinct ordered lists, not eight: variants 0/3 share one shape and
+     variants 1/4 share the other, and variant 2 with the delete flag clear
+     reproduces variant 1's list exactly. Pinned as the SET, so a mutant that
+     reorders or drops an action changes the membership, not just a count. */
+  assert.deepEqual(
+    [...seen.actions].sort(),
+    [
+      "1,2,3,4,5,6",
+      "1,2,3,4,5,6,7",
+      "1,5,6",
+      "1,5,6,7",
+      "2,3,4,5",
+      "5",
+    ].sort(),
+    "every ordered action list the template can produce",
+  );
+  /* Never 0: destroy zeroes the pointer on BOTH arms, so a post-destroy
+     lock reaches the NULL-derived access unconditionally — only WHICH
+     access it is depends on the timeout arm. */
+  assert.deepEqual(
+    [...seen.faultVa].sort((a, b) => a - b),
+    [0x00a15825, 0x00a158d9],
+    "post-destroy the fault is unconditional; only the arm varies",
+  );
+});
+
+test("LAD: v5 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a157c0/);
+  assert.match(h, /0x00a15730/);
+  assert.match(h, /0x00a156e0/);
+  assert.match(h, /0x00b16b20/);
+  assert.match(h, /0x00a71bbf/);
+  assert.match(h, /and byte \[esi\+4\], 0xfe/);
+  assert.match(h, /test byte \[ebp\+8\], 1/);
+  assert.match(h, /test edi, edi/);
+  assert.match(h, /DeleteCriticalSection/);
+  assert.match(h, /platform primitive/i);
+  assert.match(h, /D-LOG-6/);
+  assert.match(h, /D-LOG-9/);
+  assert.match(h, /D-LOG-10/);
+  assert.match(h, /REPRODUCED and never corrected|never corrected/i);
+  assert.match(h, /2094319 instructions \/ 469 undecodable/);
+  assert.match(h, /SECTION TABLE/);
+  assert.match(h, /\.reloc/);
+  assert.match(h, /41 bytes EQUAL/);
+  assert.match(h, /52 of 55 bytes EQUAL/);
+  assert.match(h, /\.\?AVMutex@KAGE@@/);
+  assert.match(h, /_purecall/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /D-LOG-9/);
+  assert.match(src, /D-LOG-10/);
+  assert.match(src, /REPRODUCED, never corrected/);
+  assert.match(src, /0x00a157c0/);
+  assert.match(src, /0x00a15730/);
+  assert.match(src, /isaac_log_destroy_plan/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_destroy_flags_after\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_dtor_frees_object\)/);
+  /* the byte gates must be spelled with an explicit narrow, never taken
+     as a uint8_t — a grep that a single line could hide from */
+  assert.doesNotMatch(src, /\buint8_t\s+\w+\s*[,)]/m);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /D-LOG-9/);
+  assert.match(model, /D-LOG-10/);
+  assert.match(model, /DELIBERATELY A DIFFERENT SHAPE FROM THE C\+\+/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  /* the oracle is a trace interpreter, not a copy of the predicates */
+  assert.match(model, /DESTROY_TRACES/);
+  assert.match(model, /runDestroy/);
+  assert.doesNotMatch(model, /isaac_log_destroy_frees_critsec/);
+});
+
+
+test("LAE: v6 constants and the write reach census agree with the header", () => {
+  const h = readFileSync(header, "utf8");
+  const pin = (name, value) => {
+    assert.match(
+      h,
+      new RegExp(`${name}\\s*=\\s*${value}\\b`, "i"),
+      `${name} missing from the header`,
+    );
+  };
+  assert.equal(h.startsWith("#pragma once"), true);
+  assert.equal(LOG_VA_WRITE, 0x00a83fd0);
+  assert.equal(LOG_VA_LISTENER_WRITE, LOG_VA_WRITE);
+  assert.equal(LOG_VA_WRITE_END, 0x00a84022);
+  assert.equal(LOG_VA_WRITE_STATE_TEST, 0x00a83fd7);
+  assert.equal(LOG_VA_WRITE_STATE_BRANCH, 0x00a83fdb);
+  assert.equal(LOG_VA_WRITE_SKIP_FFLUSH, 0x00a83fe2);
+  assert.equal(LOG_VA_WRITE_FWRITE, 0x00a83fff);
+  assert.equal(LOG_VA_WRITE_IMUL, 0x00a8400a);
+  assert.equal(LOG_VA_WRITE_OK_FFLUSH, 0x00a84011);
+  assert.equal(LOG_VA_WRITE_LOGGER_SLOT_LOAD, 0x00a11433);
+  assert.equal(LOG_VA_WRITE_LOGGER_CALL, 0x00a11451);
+  assert.equal(LOG_VA_SINK_DTOR, 0x00a83fa0);
+  assert.equal(LOG_VA_SINK_FLUSH, 0x0040c200);
+  assert.equal(LOG_VA_WRITE_SIBLING, 0x00a52850);
+  assert.equal(LOG_VA_VTBL_WRITE_ENTRY, LOG_SINK_VTABLE_VA + LOG_SINK_VTBL_SLOT_WRITE);
+  assert.equal(LOG_VA_VTBL_FLUSH_ENTRY, LOG_SINK_VTABLE_VA + LOG_SINK_VTBL_SLOT_FLUSH);
+  assert.equal(LOG_SINK_VTBL_SLOT_WRITE, 0x1c);
+  assert.equal(LOG_SINK_VTBL_SLOT_FLUSH, 0x20);
+  assert.equal(LOG_SINK_STATE_OFFSET, 4);
+  assert.equal(LOG_SINK_FILE_OFFSET, 0x0c);
+  assert.equal(LOG_WRITE_STACK_BYTES, 0x0c);
+  assert.equal(LOG_WRITE_ARG_COUNT, 3);
+  assert.equal(LOG_WRITE_BODY_BYTES, 0x52);
+  assert.equal(LOG_WRITE_INSN_COUNT, 32);
+  assert.equal(LOG_WRITE_SIBLING_BODY_BYTES, 0x2c);
+  assert.equal(LOG_LOGGER_WRITE_SIZE_IMM, 1);
+  assert.equal(LOG_FOPEN_MODE_VA, 0x00b9e938);
+  assert.equal(LOG_WRITE_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_WRITE_TAIL_JUMPS, 0);
+  assert.equal(LOG_WRITE_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_WRITE_LOGGER_DISPATCH_SITES, 1);
+  assert.equal(LOG_WRITE_INBOUND_EXTERIOR, 0);
+  assert.equal(LOG_FWRITE_SITES, 5);
+  assert.equal(LOG_FFLUSH_SITES, 5);
+  assert.equal(LOG_FOPEN_SITES, 5);
+  assert.equal(LOG_WRITE_FWRITE_SITES_IN_BODY, 1);
+  assert.equal(LOG_WRITE_FFLUSH_SITES_IN_BODY, 2);
+  assert.equal(LOG_SINK_VTABLE_TEXT_STORES, 2);
+  assert.equal(LOG_TEXT_INSN_COUNT_V6, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V6, 469);
+  assert.equal(LOG_V6_EXACT_ZHL_MATCHES, 0);
+
+  pin("ISAAC_LOG_VA_WRITE", "0x00a83fd0u");
+  pin("ISAAC_LOG_VA_WRITE_END", "0x00a84022u");
+  pin("ISAAC_LOG_VA_WRITE_STATE_TEST", "0x00a83fd7u");
+  pin("ISAAC_LOG_VA_SINK_FLUSH", "0x0040c200u");
+  pin("ISAAC_LOG_VA_VTBL_WRITE_ENTRY", "0x00ba51a0u");
+  pin("ISAAC_LOG_SINK_VTBL_SLOT_WRITE", "0x1c");
+  pin("ISAAC_LOG_WRITE_BODY_BYTES", "0x52");
+  pin("ISAAC_LOG_WRITE_RAW_OCCURRENCES", "1");
+  pin("ISAAC_LOG_TEXT_INSN_COUNT_V6", "2094319");
+
+  assert.equal(u(wasm.isaac_log_write_body_va()), LOG_VA_WRITE);
+  assert.equal(logWriteBodyVa(), LOG_VA_WRITE);
+  assert.equal(u(wasm.isaac_log_write_body_bytes()), 0x52);
+  assert.equal(logWriteBodyBytes(), 0x52);
+  assert.equal(u(wasm.isaac_log_write_vtbl_slot()), 0x1c);
+  assert.equal(logWriteVtblSlot(), 0x1c);
+  assert.equal(u(wasm.isaac_log_write_stack_bytes_popped()), 0x0c);
+  assert.equal(logWriteStackBytesPopped(), 0x0c);
+  assert.equal(u(wasm.isaac_log_write_logger_size_imm()), 1);
+  assert.equal(logWriteLoggerSizeImm(), 1);
+  assert.equal(u(wasm.isaac_log_write_direct_callsites()), 0);
+  assert.equal(logWriteDirectCallsites(), 0);
+  assert.equal(u(wasm.isaac_log_write_raw_occurrences()), 1);
+  assert.equal(logWriteRawOccurrences(), 1);
+  assert.equal(u(wasm.isaac_log_write_logger_dispatch_sites()), 1);
+  assert.equal(logWriteLoggerDispatchSites(), 1);
+  assert.equal(s(wasm.isaac_log_write_flush_vcall_is_nop()), 1);
+  assert.equal(logWriteFlushVcallIsNop(), 1);
+  assert.equal(s(wasm.isaac_log_write_fopen_fail_publishes_sink()), 1);
+  assert.equal(logWriteFopenFailPublishesSink(), 1);
+  assert.notEqual(LOG_WRITE_BODY_BYTES, LOG_WRITE_SIBLING_BODY_BYTES);
+});
+
+test("LAE: the state gate is a FULL 32-bit == 1 (0x101 discriminator)", () => {
+  /* 0x00a83fd7 is `83 7f 04 01` — Grp1 Ev,Ib, no operand-size prefix.
+     A BYTE compare would treat 0x101 as open; this instruction does not. */
+  const cases = [
+    [0x00000000, 0],
+    [0x00000001, 1],
+    [0x00000002, 0], // NO_FILE, the fopen-fail shipped state
+    [LOG_SINK_STATE_OPEN, 1],
+    [LOG_SINK_STATE_NO_FILE, 0],
+    [0x000000ff, 0],
+    [0x00000100, 0],
+    [0x00000101, 0], // THE discriminator: byte==1, dword!=1
+    [0xffffff01, 0],
+    [0xffffffff, 0],
+    [0x80000001, 0],
+    [0x7fffffff, 0],
+  ];
+  for (const [state, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_write_state_is_open(state)),
+      want,
+      `open 0x${state.toString(16)}`,
+    );
+    assert.equal(logWriteStateIsOpen(state), want);
+    assert.equal(s(wasm.isaac_log_write_fwrite_needed(state)), want);
+    assert.equal(logWriteFwriteNeeded(state), want);
+  }
+  /* a mutant that narrows to the low byte before comparing would fire on
+     0x101; the PE does not. Kept as an explicit discriminator. */
+  assert.notEqual(s(wasm.isaac_log_write_state_is_open(0x00000101)), 1);
+  assert.notEqual((0x00000101 & 0xff) === 1 ? 1 : 0, logWriteStateIsOpen(0x101));
+});
+
+test("LAF: fflush is unconditional; FILE* is never tested (unmasked drives)", () => {
+  const states = [
+    0, 1, 2, 0xff, 0x100, 0x101, 0x80000000, 0xffffffff,
+  ];
+  const files = [
+    0, 1, 0x100, 0xffffffff, 0x00c79bd8,
+  ];
+  for (const state of states) {
+    assert.equal(s(wasm.isaac_log_write_fflush_needed(state)), 1, `fflush ${state}`);
+    assert.equal(logWriteFflushNeeded(state), 1);
+  }
+  for (const fp of files) {
+    assert.equal(s(wasm.isaac_log_write_tests_file_null(fp)), 0, `null ${fp}`);
+    assert.equal(logWriteTestsFileNull(fp), 0);
+  }
+  /* D-LOG-11: fopen-fail publishes the sink, so state==2 + FILE*==0 is live */
+  assert.equal(s(wasm.isaac_log_write_fwrite_needed(LOG_SINK_STATE_NO_FILE)), 0);
+  assert.equal(s(wasm.isaac_log_write_fflush_needed(LOG_SINK_STATE_NO_FILE)), 1);
+  assert.equal(s(wasm.isaac_log_write_tests_file_null(0)), 0);
+});
+
+test("LAG: skip returns 0; open returns items*size with 32-bit wrap", () => {
+  const sizes = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const counts = [0, 1, 2, 5, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  /* fixed scenarios including the logger's shipped (count=N, size=1) */
+  const fixed = [
+    [1, 0, 1, 0],
+    [1, 9, 1, 9], // logger: strlen * 1
+    [1, 3, 2, 6],
+    [2, 3, 2, 0], // skip arm ignores the multiply
+    [0x101, 3, 2, 0], // 0x101 is NOT open
+    [1, 0x80000000, 2, 0], // wrap: 0x80000000 * 2 = 0
+    [1, 0xffffffff, 0xffffffff, 1], // (-1)*(-1) low 32 = 1
+    [1, 0, 0, 0],
+  ];
+  for (const [state, count, size, want] of fixed) {
+    assert.equal(
+      u(wasm.isaac_log_write_bytes_returned(state, count, size)),
+      want >>> 0,
+      `ret state=${state} ${count}*${size}`,
+    );
+    assert.equal(logWriteBytesReturned(state, count, size), want >>> 0);
+    assert.equal(
+      u(wasm.isaac_log_write_byte_count(count, size)),
+      Math.imul(count >>> 0, size >>> 0) >>> 0,
+    );
+    assert.equal(logWriteByteCount(count, size), Math.imul(count >>> 0, size >>> 0) >>> 0);
+  }
+  /* skip arm never returns the imul, even when the product is nonzero */
+  assert.equal(u(wasm.isaac_log_write_bytes_returned(2, 4, 5)), 0);
+  assert.notEqual(u(wasm.isaac_log_write_byte_count(4, 5)), 0);
+  for (const size of sizes) {
+    for (const count of counts) {
+      const product = Math.imul(count >>> 0, size >>> 0) >>> 0;
+      assert.equal(u(wasm.isaac_log_write_byte_count(count, size)), product);
+      assert.equal(logWriteByteCount(count, size), product);
+      assert.equal(u(wasm.isaac_log_write_bytes_returned(1, count, size)), product);
+      assert.equal(u(wasm.isaac_log_write_bytes_returned(0, count, size)), 0);
+      assert.equal(u(wasm.isaac_log_write_bytes_returned(0x101, count, size)), 0);
+    }
+  }
+});
+
+test("LAI: the ordered typed host-action list, every arm", () => {
+  const open = [1, [LOG_WRITE_ACTION_FWRITE, LOG_WRITE_ACTION_FFLUSH]];
+  const skip = [2, [LOG_WRITE_ACTION_FFLUSH]];
+  const extra = [
+    [0, [LOG_WRITE_ACTION_FFLUSH]],
+    [0x101, [LOG_WRITE_ACTION_FFLUSH]],
+    [0x100, [LOG_WRITE_ACTION_FFLUSH]],
+    [0xffffffff, [LOG_WRITE_ACTION_FFLUSH]],
+  ];
+  for (const [state, want] of [open, skip, ...extra]) {
+    assert.deepEqual(wasmWriteActions(state), want, `wasm state=${state}`);
+    assert.deepEqual(modelWriteActions(state), want, `model state=${state}`);
+    assert.equal(u(wasm.isaac_log_write_action_count(state)), want.length);
+    assert.equal(logWriteActionCount(state), want.length);
+    assert.equal(
+      u(wasm.isaac_log_write_action_at(state, want.length)),
+      LOG_WRITE_ACTION_NONE,
+    );
+    assert.equal(logWriteActionAt(state, want.length), LOG_WRITE_ACTION_NONE);
+    assert.ok(want.length <= LOG_WRITE_ACTIONS_MAX);
+  }
+  assert.equal(s(wasm.isaac_log_write_action_is_platform(LOG_WRITE_ACTION_FWRITE)), 1);
+  assert.equal(s(wasm.isaac_log_write_action_is_platform(LOG_WRITE_ACTION_FFLUSH)), 1);
+  assert.equal(s(wasm.isaac_log_write_action_is_platform(LOG_WRITE_ACTION_NONE)), 0);
+  assert.equal(logWriteActionIsPlatform(LOG_WRITE_ACTION_FWRITE), 1);
+  assert.equal(logWriteActionIsPlatform(LOG_WRITE_ACTION_NONE), 0);
+});
+
+test("LAI: the write plan, fixed scenarios across every arm", () => {
+  const base = SCRATCH + 0xb00;
+  const scenarios = [
+    { state: 1, filePtr: 0x2000, fwriteCount: 9, size: 1 },
+    { state: 1, filePtr: 0x0000, fwriteCount: 4, size: 2 },
+    { state: 2, filePtr: 0x0000, fwriteCount: 4, size: 2 }, // D-LOG-11
+    { state: 0, filePtr: 0x2000, fwriteCount: 1, size: 1 },
+    { state: 0x101, filePtr: 0x2000, fwriteCount: 3, size: 5 },
+    { state: 0x100, filePtr: 0xffffffff, fwriteCount: 0, size: 1 },
+    { state: 1, filePtr: 1, fwriteCount: 0x80000000, size: 2 },
+    { state: 0xffffffff, filePtr: 0, fwriteCount: 7, size: 3 },
+  ];
+  for (let i = 0; i < scenarios.length; i += 1) {
+    const sc = scenarios[i];
+    new Uint8Array(wasm.memory.buffer, base, WPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_write_plan(sc.state, sc.filePtr, sc.fwriteCount, sc.size, base);
+    assertWritePlan(readWritePlan(view, base), logWritePlan(sc), `wplan ${i}`);
+  }
+  for (const sc of scenarios) {
+    const p = logWritePlan(sc);
+    assert.equal(p.fflush, 1);
+    assert.equal(p.testsFileNull, 0);
+    assert.equal(p.stackBytesPopped, 0x0c);
+    assert.equal(p.vtblSlot, 0x1c);
+    assert.equal(p.bodyVa, 0x00a83fd0);
+    assert.equal(p.fwriteIat, LOG_IAT_FWRITE);
+    assert.equal(p.fflushIat, LOG_IAT_FFLUSH);
+    assert.equal(p.fwrite, p.stateIsOpen);
+    assert.equal(p.actionCount, p.stateIsOpen ? 2 : 1);
+  }
+});
+
+test("LAI: randomized write differential (HIGH-bit LCG, unmasked drives)", () => {
+  const base = SCRATCH + 0xc00;
+  const rnd = makeLcg(0x00a83fd0);
+  const STATES = [
+    0, 1, 2, 0xff, 0x100, 0x101, 0x1ff, 0x7fffffff, 0x80000000, 0x80000001,
+    0xfffffffe, 0xffffffff,
+  ];
+  const PTRS = [0, 1, 0x100, 0x00c79bd8, 0x7fffffff, 0x80000000, 0xffffffff];
+  const COUNTS = [0, 1, 2, 9, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const SIZES = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const seen = {
+    open: new Set(),
+    fwrite: new Set(),
+    bytes: new Set(),
+    actions: new Set(),
+  };
+  for (let n = 0; n < 400; n += 1) {
+    const sc = {
+      state: STATES[pick(rnd, STATES.length)] ^ (n % 2 === 0 ? 0 : rnd()),
+      filePtr: PTRS[pick(rnd, PTRS.length)],
+      fwriteCount: COUNTS[pick(rnd, COUNTS.length)] ^ (n % 3 === 0 ? 0 : rnd()),
+      size: SIZES[pick(rnd, SIZES.length)] ^ (n % 5 === 0 ? 0 : rnd()),
+    };
+    /* every 8th draw is a fully unmasked LCG dword, no table at all */
+    if (n % 8 === 0) {
+      sc.state = rnd();
+      sc.filePtr = rnd();
+      sc.fwriteCount = rnd();
+      sc.size = rnd();
+    }
+    new Uint8Array(wasm.memory.buffer, base, WPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_write_plan(sc.state, sc.filePtr, sc.fwriteCount, sc.size, base);
+    const actual = readWritePlan(view, base);
+    const expected = logWritePlan(sc);
+    assertWritePlan(actual, expected, `rnd ${n}`);
+    /* scalars vs plan vs wasm */
+    assert.equal(s(wasm.isaac_log_write_state_is_open(sc.state)), expected.stateIsOpen);
+    assert.equal(s(wasm.isaac_log_write_fwrite_needed(sc.state)), expected.fwrite);
+    assert.equal(s(wasm.isaac_log_write_fflush_needed(sc.state)), 1);
+    assert.equal(s(wasm.isaac_log_write_tests_file_null(sc.filePtr)), 0);
+    assert.equal(
+      u(wasm.isaac_log_write_bytes_returned(sc.state, sc.fwriteCount, sc.size)),
+      expected.bytesReturned,
+    );
+    assert.deepEqual(wasmWriteActions(sc.state), modelWriteActions(sc.state));
+    seen.open.add(expected.stateIsOpen);
+    seen.fwrite.add(expected.fwrite);
+    seen.bytes.add(expected.bytesReturned === 0 ? 0 : 1);
+    seen.actions.add(modelWriteActions(sc.state).join(","));
+  }
+  assert.deepEqual([...seen.open].sort(), [0, 1], "both gate arms");
+  assert.deepEqual([...seen.fwrite].sort(), [0, 1], "fwrite both arms");
+  assert.deepEqual([...seen.bytes].sort(), [0, 1], "zero and nonzero returns");
+  assert.deepEqual(
+    [...seen.actions].sort(),
+    ["1,2", "2"].sort(),
+    "open is fwrite then fflush; skip is fflush alone",
+  );
+});
+
+test("LAI: v6 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /#pragma once/);
+  assert.match(h, /0x00a83fd0/);
+  assert.match(h, /cmp dword \[edi\+4\], 1/);
+  assert.match(h, /imul ebx, dword \[ebp\+0xc\]/);
+  assert.match(h, /xor ebx, ebx/);
+  assert.match(h, /call \[0x00b188cc\]/);
+  assert.match(h, /call \[0x00b1891c\]/);
+  assert.match(h, /mov esi, \[eax\+0x1c\]/);
+  assert.match(h, /D-LOG-11/);
+  assert.match(h, /NEVER null-tested/);
+  assert.match(h, /ret 0xc/);
+  assert.match(h, /0x0040c200/);
+  assert.match(h, /0x00a52850/);
+  assert.match(h, /fwrite/);
+  assert.match(h, /fflush/);
+  assert.match(h, /failed fopen still PUBLISHES/);
+  assert.match(h, /empty list as\s+"unreferenced"/);
+  assert.match(h, /2094319 instructions \/ 469 undecodable/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /D-LOG-11/);
+  assert.match(src, /0x00a83fd7/);
+  assert.match(src, /isaac_log_write_plan/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_write_state_is_open\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_write_bytes_returned\)/);
+  assert.doesNotMatch(src, /\buint8_t\s+\w+\s*[,)]/m);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /D-LOG-11/);
+  assert.match(model, /0x00a83fd0/);
+  assert.match(model, /Math\.imul/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.doesNotMatch(model, /isaac_log_write_state_is_open/);
+});
+
+test("LAJ: v7 constants and the sibling-write reach census agree with the header", () => {
+  const h = readFileSync(header, "utf8");
+  const pin = (name, value) => {
+    assert.match(
+      h,
+      new RegExp(`${name}\\s*=\\s*${value}\\b`, "i"),
+      `${name} missing from the header`,
+    );
+  };
+  assert.equal(h.startsWith("#pragma once"), true);
+  assert.equal(LOG_VA_SIBLING_WRITE, 0x00a52850);
+  assert.equal(LOG_VA_WRITE_SIBLING, LOG_VA_SIBLING_WRITE);
+  assert.equal(LOG_VA_SIBLING_WRITE_END, 0x00a5287c);
+  assert.equal(LOG_VA_SIBLING_WRITE_STATE_TEST, 0x00a52853);
+  assert.equal(LOG_VA_SIBLING_WRITE_STATE_BRANCH, 0x00a52857);
+  assert.equal(LOG_VA_SIBLING_WRITE_FWRITE, 0x00a5286b);
+  assert.equal(LOG_VA_SIBLING_WRITE_IMUL, 0x00a52874);
+  assert.equal(LOG_VA_SIBLING_FLUSH, 0x00a52880);
+  assert.equal(LOG_VA_SIBLING_FLUSH_END, 0x00a5288b);
+  assert.equal(LOG_VA_SIBLING_FREAD, 0x00a52820);
+  assert.equal(LOG_VA_SIBLING_DTOR, 0x00a523e0);
+  assert.equal(LOG_VA_SIBLING_OPEN_WRITE, 0x00a52610);
+  assert.equal(LOG_VA_NEXT_ISLAND, 0x00a84030);
+  assert.equal(LOG_SIBLING_VTABLE_VA, 0x00b9e940);
+  assert.equal(
+    LOG_VA_SIBLING_VTBL_WRITE_ENTRY,
+    LOG_SIBLING_VTABLE_VA + LOG_SINK_VTBL_SLOT_WRITE,
+  );
+  assert.equal(
+    LOG_VA_SIBLING_VTBL_FLUSH_ENTRY,
+    LOG_SIBLING_VTABLE_VA + LOG_SINK_VTBL_SLOT_FLUSH,
+  );
+  assert.equal(LOG_IAT_FREAD, 0x00b188c8);
+  assert.equal(LOG_IAT_FREAD + 4, LOG_IAT_FWRITE);
+  assert.equal(LOG_FOPEN_MODE_AB_VA, 0x00b6d104);
+  assert.equal(LOG_FOPEN_MODE_RB_VA, 0x00b6d108);
+  assert.equal(LOG_SIBLING_WRITE_BODY_BYTES, 0x2c);
+  assert.equal(LOG_WRITE_SIBLING_BODY_BYTES, 0x2c);
+  assert.equal(LOG_SIBLING_WRITE_INSN_COUNT, 16);
+  assert.equal(LOG_SIBLING_FLUSH_BODY_BYTES, 0x0b);
+  assert.equal(LOG_SIBLING_SHARED_PREFIX_BYTES, 3);
+  assert.equal(LOG_SIBLING_FREAD_SHARED_BYTES, 42);
+  assert.equal(LOG_SIBLING_FREAD_DIFF_BYTES, 2);
+  assert.equal(
+    LOG_SIBLING_FREAD_SHARED_BYTES + LOG_SIBLING_FREAD_DIFF_BYTES,
+    LOG_SIBLING_WRITE_BODY_BYTES,
+  );
+  assert.equal(LOG_SIBLING_WRITE_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_SIBLING_WRITE_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_SIBLING_FLUSH_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_SIBLING_FREAD_RAW_OCCURRENCES, 2);
+  assert.equal(LOG_SIBLING_WRITE_INBOUND_EXTERIOR, 0);
+  assert.equal(LOG_SIBLING_VTABLE_TEXT_STORES, 14);
+  assert.equal(LOG_SIBLING_WRITE_FWRITE_SITES_IN_BODY, 1);
+  assert.equal(LOG_SIBLING_WRITE_FFLUSH_SITES_IN_BODY, 0);
+  assert.equal(LOG_SIBLING_FLUSH_FFLUSH_SITES_IN_BODY, 1);
+  assert.equal(LOG_FREAD_SITES, 1);
+  assert.equal(LOG_TEXT_INSN_COUNT_V7, LOG_TEXT_INSN_COUNT_V6);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V7, LOG_TEXT_UNDECODABLE_BYTES_V6);
+  assert.equal(LOG_V7_EXACT_ZHL_MATCHES, 0);
+
+  pin("ISAAC_LOG_VA_SIBLING_WRITE", "0x00a52850u");
+  pin("ISAAC_LOG_VA_SIBLING_WRITE_END", "0x00a5287cu");
+  pin("ISAAC_LOG_VA_SIBLING_FLUSH", "0x00a52880u");
+  pin("ISAAC_LOG_VA_SIBLING_VTBL_WRITE_ENTRY", "0x00b9e95cu");
+  pin("ISAAC_LOG_SIBLING_WRITE_BODY_BYTES", "0x2c");
+  pin("ISAAC_LOG_SIBLING_WRITE_RAW_OCCURRENCES", "1");
+  pin("ISAAC_LOG_TEXT_INSN_COUNT_V7", "2094319");
+
+  assert.equal(u(wasm.isaac_log_sibling_write_body_va()), LOG_VA_SIBLING_WRITE);
+  assert.equal(logSiblingWriteBodyVa(), LOG_VA_SIBLING_WRITE);
+  assert.equal(u(wasm.isaac_log_sibling_write_body_bytes()), 0x2c);
+  assert.equal(logSiblingWriteBodyBytes(), 0x2c);
+  assert.equal(u(wasm.isaac_log_sibling_write_vtbl_slot()), 0x1c);
+  assert.equal(logSiblingWriteVtblSlot(), 0x1c);
+  assert.equal(u(wasm.isaac_log_sibling_write_stack_bytes_popped()), 0x0c);
+  assert.equal(logSiblingWriteStackBytesPopped(), 0x0c);
+  assert.equal(u(wasm.isaac_log_sibling_write_direct_callsites()), 0);
+  assert.equal(logSiblingWriteDirectCallsites(), 0);
+  assert.equal(u(wasm.isaac_log_sibling_write_raw_occurrences()), 1);
+  assert.equal(logSiblingWriteRawOccurrences(), 1);
+  assert.equal(u(wasm.isaac_log_sibling_flush_body_va()), 0x00a52880);
+  assert.equal(logSiblingFlushBodyVa(), 0x00a52880);
+  assert.equal(u(wasm.isaac_log_sibling_flush_body_bytes()), 0x0b);
+  assert.equal(logSiblingFlushBodyBytes(), 0x0b);
+  assert.equal(s(wasm.isaac_log_sibling_flush_vcall_is_nop()), 0);
+  assert.equal(logSiblingFlushVcallIsNop(), 0);
+  assert.equal(s(wasm.isaac_log_write_flush_vcall_is_nop()), 1);
+  assert.equal(s(wasm.isaac_log_sibling_write_is_one_template_with_v6()), 0);
+  assert.equal(logSiblingWriteIsOneTemplateWithV6(), 0);
+  assert.equal(u(wasm.isaac_log_sibling_write_shared_prefix_bytes()), 3);
+  assert.equal(logSiblingWriteSharedPrefixBytes(), 3);
+  assert.equal(s(wasm.isaac_log_sibling_fread_is_one_template()), 1);
+  assert.equal(logSiblingFreadIsOneTemplate(), 1);
+  assert.equal(u(wasm.isaac_log_sibling_fread_shared_bytes()), 42);
+  assert.equal(logSiblingFreadSharedBytes(), 42);
+  assert.notEqual(LOG_WRITE_BODY_BYTES, LOG_SIBLING_WRITE_BODY_BYTES);
+  /* D-LOG-11 is the log sink, reproduced, never corrected */
+  assert.equal(s(wasm.isaac_log_write_fopen_fail_publishes_sink()), 1);
+  assert.equal(logWriteFopenFailPublishesSink(), 1);
+});
+
+test("LAJ: the sibling state gate is a FULL 32-bit == 1 (0x101 discriminator)", () => {
+  const cases = [
+    [0x00000000, 0],
+    [0x00000001, 1],
+    [0x00000002, 0],
+    [LOG_SINK_STATE_OPEN, 1],
+    [LOG_SINK_STATE_NO_FILE, 0],
+    [0x000000ff, 0],
+    [0x00000100, 0],
+    [0x00000101, 0],
+    [0xffffff01, 0],
+    [0xffffffff, 0],
+    [0x80000001, 0],
+    [0x7fffffff, 0],
+  ];
+  for (const [state, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_sibling_write_state_is_open(state)),
+      want,
+      `open 0x${state.toString(16)}`,
+    );
+    assert.equal(logSiblingWriteStateIsOpen(state), want);
+    assert.equal(s(wasm.isaac_log_sibling_write_fwrite_needed(state)), want);
+    assert.equal(logSiblingWriteFwriteNeeded(state), want);
+  }
+  assert.notEqual(s(wasm.isaac_log_sibling_write_state_is_open(0x00000101)), 1);
+  assert.notEqual(
+    (0x00000101 & 0xff) === 1 ? 1 : 0,
+    logSiblingWriteStateIsOpen(0x101),
+  );
+});
+
+test("LAK: sibling fflush is never in this body; FILE* is never tested", () => {
+  const states = [0, 1, 2, 0xff, 0x100, 0x101, 0x80000000, 0xffffffff];
+  const files = [0, 1, 0x100, 0xffffffff, 0x00c79bd8];
+  for (const state of states) {
+    assert.equal(
+      s(wasm.isaac_log_sibling_write_fflush_needed(state)),
+      0,
+      `fflush ${state}`,
+    );
+    assert.equal(logSiblingWriteFflushNeeded(state), 0);
+    /* v6 contrast: the log sink fflushs both arms */
+    assert.equal(s(wasm.isaac_log_write_fflush_needed(state)), 1);
+  }
+  for (const fp of files) {
+    assert.equal(s(wasm.isaac_log_sibling_write_tests_file_null(fp)), 0);
+    assert.equal(logSiblingWriteTestsFileNull(fp), 0);
+    assert.equal(s(wasm.isaac_log_sibling_flush_tests_file_null(fp)), 0);
+    assert.equal(logSiblingFlushTestsFileNull(fp), 0);
+  }
+  assert.equal(s(wasm.isaac_log_sibling_write_fwrite_needed(LOG_SINK_STATE_NO_FILE)), 0);
+  assert.equal(s(wasm.isaac_log_sibling_write_fflush_needed(LOG_SINK_STATE_NO_FILE)), 0);
+});
+
+test("LAL: sibling skip returns 0; open returns items*size with 32-bit wrap", () => {
+  const sizes = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const counts = [0, 1, 2, 5, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const fixed = [
+    [1, 0, 1, 0],
+    [1, 9, 1, 9],
+    [1, 3, 2, 6],
+    [2, 3, 2, 0],
+    [0x101, 3, 2, 0],
+    [1, 0x80000000, 2, 0],
+    [1, 0xffffffff, 0xffffffff, 1],
+    [1, 0, 0, 0],
+  ];
+  for (const [state, count, size, want] of fixed) {
+    assert.equal(
+      u(wasm.isaac_log_sibling_write_bytes_returned(state, count, size)),
+      want >>> 0,
+      `ret state=${state} ${count}*${size}`,
+    );
+    assert.equal(logSiblingWriteBytesReturned(state, count, size), want >>> 0);
+    assert.equal(
+      u(wasm.isaac_log_sibling_write_byte_count(count, size)),
+      Math.imul(count >>> 0, size >>> 0) >>> 0,
+    );
+    assert.equal(
+      logSiblingWriteByteCount(count, size),
+      Math.imul(count >>> 0, size >>> 0) >>> 0,
+    );
+  }
+  assert.equal(u(wasm.isaac_log_sibling_write_bytes_returned(2, 4, 5)), 0);
+  assert.notEqual(u(wasm.isaac_log_sibling_write_byte_count(4, 5)), 0);
+  for (const size of sizes) {
+    for (const count of counts) {
+      const product = Math.imul(count >>> 0, size >>> 0) >>> 0;
+      assert.equal(u(wasm.isaac_log_sibling_write_byte_count(count, size)), product);
+      assert.equal(logSiblingWriteByteCount(count, size), product);
+      assert.equal(u(wasm.isaac_log_sibling_write_bytes_returned(1, count, size)), product);
+      assert.equal(u(wasm.isaac_log_sibling_write_bytes_returned(0, count, size)), 0);
+      assert.equal(u(wasm.isaac_log_sibling_write_bytes_returned(0x101, count, size)), 0);
+    }
+  }
+});
+
+test("LAN: the sibling ordered host-action list, every arm", () => {
+  const open = [1, [LOG_SIBLING_WRITE_ACTION_FWRITE]];
+  const skip = [2, []];
+  const extra = [
+    [0, []],
+    [0x101, []],
+    [0x100, []],
+    [0xffffffff, []],
+  ];
+  for (const [state, want] of [open, skip, ...extra]) {
+    assert.deepEqual(wasmSiblingWriteActions(state), want, `wasm state=${state}`);
+    assert.deepEqual(modelSiblingWriteActions(state), want, `model state=${state}`);
+    assert.equal(u(wasm.isaac_log_sibling_write_action_count(state)), want.length);
+    assert.equal(logSiblingWriteActionCount(state), want.length);
+    assert.equal(
+      u(wasm.isaac_log_sibling_write_action_at(state, want.length)),
+      LOG_SIBLING_WRITE_ACTION_NONE,
+    );
+    assert.equal(
+      logSiblingWriteActionAt(state, want.length),
+      LOG_SIBLING_WRITE_ACTION_NONE,
+    );
+    assert.ok(want.length <= LOG_SIBLING_WRITE_ACTIONS_MAX);
+  }
+  assert.equal(
+    s(wasm.isaac_log_sibling_write_action_is_platform(LOG_SIBLING_WRITE_ACTION_FWRITE)),
+    1,
+  );
+  assert.equal(
+    s(wasm.isaac_log_sibling_write_action_is_platform(LOG_SIBLING_WRITE_ACTION_NONE)),
+    0,
+  );
+  assert.equal(logSiblingWriteActionIsPlatform(LOG_SIBLING_WRITE_ACTION_FWRITE), 1);
+  assert.equal(logSiblingWriteActionIsPlatform(LOG_SIBLING_WRITE_ACTION_NONE), 0);
+});
+
+test("LAN: the sibling write plan, fixed scenarios across every arm", () => {
+  const base = SCRATCH + 0xd00;
+  const scenarios = [
+    { state: 1, filePtr: 0x2000, fwriteCount: 9, size: 1 },
+    { state: 1, filePtr: 0x0000, fwriteCount: 4, size: 2 },
+    { state: 2, filePtr: 0x0000, fwriteCount: 4, size: 2 },
+    { state: 0, filePtr: 0x2000, fwriteCount: 1, size: 1 },
+    { state: 0x101, filePtr: 0x2000, fwriteCount: 3, size: 5 },
+    { state: 0x100, filePtr: 0xffffffff, fwriteCount: 0, size: 1 },
+    { state: 1, filePtr: 1, fwriteCount: 0x80000000, size: 2 },
+    { state: 0xffffffff, filePtr: 0, fwriteCount: 7, size: 3 },
+  ];
+  for (let i = 0; i < scenarios.length; i += 1) {
+    const sc = scenarios[i];
+    new Uint8Array(wasm.memory.buffer, base, SWPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_sibling_write_plan(
+      sc.state,
+      sc.filePtr,
+      sc.fwriteCount,
+      sc.size,
+      base,
+    );
+    assertSiblingWritePlan(
+      readSiblingWritePlan(view, base),
+      logSiblingWritePlan(sc),
+      `swplan ${i}`,
+    );
+  }
+  for (const sc of scenarios) {
+    const p = logSiblingWritePlan(sc);
+    assert.equal(p.fflush, 0);
+    assert.equal(p.testsFileNull, 0);
+    assert.equal(p.stackBytesPopped, 0x0c);
+    assert.equal(p.vtblSlot, 0x1c);
+    assert.equal(p.bodyVa, 0x00a52850);
+    assert.equal(p.fwriteIat, LOG_IAT_FWRITE);
+    assert.equal(p.flushBodyVa, 0x00a52880);
+    assert.equal(p.fwrite, p.stateIsOpen);
+    assert.equal(p.actionCount, p.stateIsOpen ? 1 : 0);
+  }
+});
+
+test("LAN: randomized sibling-write differential (HIGH-bit LCG, unmasked drives)", () => {
+  const base = SCRATCH + 0xe00;
+  const rnd = makeLcg(0x00a52850);
+  const STATES = [
+    0, 1, 2, 0xff, 0x100, 0x101, 0x1ff, 0x7fffffff, 0x80000000, 0x80000001,
+    0xfffffffe, 0xffffffff,
+  ];
+  const PTRS = [0, 1, 0x100, 0x00c79bd8, 0x7fffffff, 0x80000000, 0xffffffff];
+  const COUNTS = [0, 1, 2, 9, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const SIZES = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const seen = {
+    open: new Set(),
+    fwrite: new Set(),
+    bytes: new Set(),
+    actions: new Set(),
+  };
+  for (let n = 0; n < 400; n += 1) {
+    const sc = {
+      state: STATES[pick(rnd, STATES.length)] ^ (n % 2 === 0 ? 0 : rnd()),
+      filePtr: PTRS[pick(rnd, PTRS.length)],
+      fwriteCount: COUNTS[pick(rnd, COUNTS.length)] ^ (n % 3 === 0 ? 0 : rnd()),
+      size: SIZES[pick(rnd, SIZES.length)] ^ (n % 5 === 0 ? 0 : rnd()),
+    };
+    if (n % 8 === 0) {
+      sc.state = rnd();
+      sc.filePtr = rnd();
+      sc.fwriteCount = rnd();
+      sc.size = rnd();
+    }
+    new Uint8Array(wasm.memory.buffer, base, SWPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_sibling_write_plan(
+      sc.state,
+      sc.filePtr,
+      sc.fwriteCount,
+      sc.size,
+      base,
+    );
+    const actual = readSiblingWritePlan(view, base);
+    const expected = logSiblingWritePlan(sc);
+    assertSiblingWritePlan(actual, expected, `rnd ${n}`);
+    assert.equal(
+      s(wasm.isaac_log_sibling_write_state_is_open(sc.state)),
+      expected.stateIsOpen,
+    );
+    assert.equal(s(wasm.isaac_log_sibling_write_fwrite_needed(sc.state)), expected.fwrite);
+    assert.equal(s(wasm.isaac_log_sibling_write_fflush_needed(sc.state)), 0);
+    assert.equal(s(wasm.isaac_log_sibling_write_tests_file_null(sc.filePtr)), 0);
+    assert.equal(
+      u(wasm.isaac_log_sibling_write_bytes_returned(sc.state, sc.fwriteCount, sc.size)),
+      expected.bytesReturned,
+    );
+    assert.deepEqual(wasmSiblingWriteActions(sc.state), modelSiblingWriteActions(sc.state));
+    seen.open.add(expected.stateIsOpen);
+    seen.fwrite.add(expected.fwrite);
+    seen.bytes.add(expected.bytesReturned === 0 ? 0 : 1);
+    seen.actions.add(modelSiblingWriteActions(sc.state).join(","));
+  }
+  assert.deepEqual([...seen.open].sort(), [0, 1], "both gate arms");
+  assert.deepEqual([...seen.fwrite].sort(), [0, 1], "fwrite both arms");
+  assert.deepEqual([...seen.bytes].sort(), [0, 1], "zero and nonzero returns");
+  assert.deepEqual(
+    [...seen.actions].sort(),
+    ["", "1"].sort(),
+    "open is fwrite alone; skip is empty",
+  );
+});
+
+test("LAN: v7 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /#pragma once/);
+  assert.match(h, /0x00a52850/);
+  assert.match(h, /cmp dword \[ecx\+4\], 1/);
+  assert.match(h, /imul eax, dword \[ebp\+0xc\]/);
+  assert.match(h, /xor eax, eax/);
+  assert.match(h, /call \[0x00b188cc\]/);
+  assert.match(h, /0x00a52880/);
+  assert.match(h, /0x00b9e95c/);
+  assert.match(h, /0x00a52820/);
+  assert.match(h, /42\/44 identical/);
+  assert.match(h, /not one template/i);
+  assert.match(h, /D-LOG-11/);
+  assert.match(h, /ret 0xc/);
+  assert.match(h, /0x00a84030/);
+  assert.match(h, /empty list as "unreferenced"/);
+  assert.match(h, /2094319 instructions \/ 469 undecodable/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /0x00a52853/);
+  assert.match(src, /isaac_log_sibling_write_plan/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sibling_write_state_is_open\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sibling_write_bytes_returned\)/);
+  assert.doesNotMatch(src, /\buint8_t\s+\w+\s*[,)]/m);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /0x00a52850/);
+  assert.match(model, /Math\.imul/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.doesNotMatch(model, /isaac_log_sibling_write_state_is_open/);
+});
+
+
+
+test("LAO: v8 constants and the fread reach census agree with the header", () => {
+  const h = readFileSync(header, "utf8");
+  const pin = (name, value) => {
+    assert.match(
+      h,
+      new RegExp(`${name}\\s*=\\s*${value}\\b`, "i"),
+      `${name} missing from the header`,
+    );
+  };
+  assert.equal(h.startsWith("#pragma once"), true);
+  assert.equal(LOG_VA_SIBLING_FREAD, 0x00a52820);
+  assert.equal(LOG_VA_SIBLING_FREAD_END, 0x00a5284c);
+  assert.equal(LOG_VA_SIBLING_FREAD_STATE_TEST, 0x00a52823);
+  assert.equal(LOG_VA_SIBLING_FREAD_STATE_BRANCH, 0x00a52827);
+  assert.equal(LOG_VA_SIBLING_FREAD_FREAD, 0x00a5283b);
+  assert.equal(LOG_VA_SIBLING_FREAD_IMUL, 0x00a52844);
+  assert.equal(LOG_VA_SINK_VTBL_FREAD_ENTRY, 0x00ba5198);
+  assert.equal(LOG_SINK_VTBL_SLOT_FREAD, 0x14);
+  assert.equal(
+    LOG_VA_SIBLING_VTBL_FREAD_ENTRY,
+    LOG_SIBLING_VTABLE_VA + LOG_SINK_VTBL_SLOT_FREAD,
+  );
+  assert.equal(
+    LOG_VA_SINK_VTBL_FREAD_ENTRY,
+    LOG_SINK_VTABLE_VA + LOG_SINK_VTBL_SLOT_FREAD,
+  );
+  assert.equal(LOG_SINK_STATE_OPEN_READ, 0);
+  assert.notEqual(LOG_SINK_STATE_OPEN_READ, LOG_SINK_STATE_OPEN);
+  assert.equal(LOG_SIBLING_FREAD_BODY_BYTES, 0x2c);
+  assert.equal(LOG_SIBLING_FREAD_BODY_BYTES, LOG_SIBLING_WRITE_BODY_BYTES);
+  assert.equal(LOG_SIBLING_FREAD_INSN_COUNT, 16);
+  assert.equal(LOG_SIBLING_FREAD_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_SIBLING_FREAD_RAW_OCCURRENCES, 2);
+  assert.equal(LOG_SIBLING_FREAD_FREAD_SITES_IN_BODY, 1);
+  assert.equal(LOG_SIBLING_FREAD_FFLUSH_SITES_IN_BODY, 0);
+  assert.equal(LOG_FREAD_SITES, 1);
+  assert.equal(LOG_TEXT_INSN_COUNT_V8, LOG_TEXT_INSN_COUNT_V7);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V8, LOG_TEXT_UNDECODABLE_BYTES_V7);
+  assert.equal(LOG_V8_EXACT_ZHL_MATCHES, 0);
+  pin("ISAAC_LOG_VA_SIBLING_FREAD", "0x00a52820u");
+  pin("ISAAC_LOG_VA_SIBLING_FREAD_END", "0x00a5284cu");
+  pin("ISAAC_LOG_SINK_VTBL_SLOT_FREAD", "0x14");
+  pin("ISAAC_LOG_SIBLING_FREAD_BODY_BYTES", "0x2c");
+  pin("ISAAC_LOG_TEXT_INSN_COUNT_V8", "2094319");
+
+  assert.equal(u(wasm.isaac_log_sibling_fread_body_va()), LOG_VA_SIBLING_FREAD);
+  assert.equal(logSiblingFreadBodyVa(), LOG_VA_SIBLING_FREAD);
+  assert.equal(u(wasm.isaac_log_sibling_fread_body_bytes()), 0x2c);
+  assert.equal(logSiblingFreadBodyBytes(), 0x2c);
+  assert.equal(u(wasm.isaac_log_sibling_fread_vtbl_slot()), 0x14);
+  assert.equal(logSiblingFreadVtblSlot(), 0x14);
+  assert.equal(u(wasm.isaac_log_sibling_fread_stack_bytes_popped()), 0x0c);
+  assert.equal(logSiblingFreadStackBytesPopped(), 0x0c);
+  assert.equal(u(wasm.isaac_log_sibling_fread_direct_callsites()), 0);
+  assert.equal(logSiblingFreadDirectCallsites(), 0);
+  assert.equal(u(wasm.isaac_log_sibling_fread_raw_occurrences()), 2);
+  assert.equal(logSiblingFreadRawOccurrences(), 2);
+  assert.equal(u(wasm.isaac_log_sibling_fread_write_sibling_va()), 0x00a52850);
+  assert.equal(logSiblingFreadWriteSiblingVa(), 0x00a52850);
+  assert.equal(s(wasm.isaac_log_sibling_fread_is_folded_into_v7()), 0);
+  assert.equal(logSiblingFreadIsFoldedIntoV7(), 0);
+  assert.equal(s(wasm.isaac_log_sibling_fread_is_one_template()), 1);
+  assert.equal(u(wasm.isaac_log_sibling_fread_shared_bytes()), 42);
+  assert.equal(s(wasm.isaac_log_write_fopen_fail_publishes_sink()), 1);
+});
+
+test("LAO: the fread state gate is a FULL 32-bit == 0 (0x100/0x101 discriminator)", () => {
+  const cases = [
+    [0x00000000, 1],
+    [LOG_SINK_STATE_OPEN_READ, 1],
+    [0x00000001, 0],
+    [LOG_SINK_STATE_OPEN, 0],
+    [0x00000002, 0],
+    [LOG_SINK_STATE_NO_FILE, 0],
+    [0x000000ff, 0],
+    [0x00000100, 0],
+    [0x00000101, 0],
+    [0xffffff00, 0],
+    [0xffffff01, 0],
+    [0xffffffff, 0],
+    [0x80000000, 0],
+    [0x7fffffff, 0],
+  ];
+  for (const [state, want] of cases) {
+    assert.equal(
+      s(wasm.isaac_log_sibling_fread_state_is_readable(state)),
+      want,
+      `readable 0x${state.toString(16)}`,
+    );
+    assert.equal(logSiblingFreadStateIsReadable(state), want);
+    assert.equal(s(wasm.isaac_log_sibling_fread_needed(state)), want);
+    assert.equal(logSiblingFreadNeeded(state), want);
+  }
+  /* Do not fold into v7 write: state 0 fread's and does not fwrite. */
+  assert.equal(s(wasm.isaac_log_sibling_fread_state_is_readable(0)), 1);
+  assert.equal(s(wasm.isaac_log_sibling_write_state_is_open(0)), 0);
+  assert.equal(s(wasm.isaac_log_sibling_fread_state_is_readable(1)), 0);
+  assert.equal(s(wasm.isaac_log_sibling_write_state_is_open(1)), 1);
+  /* Low-byte / signed mutants */
+  assert.notEqual(
+    (0x00000100 & 0xff) === 0 ? 1 : 0,
+    logSiblingFreadStateIsReadable(0x100),
+  );
+  assert.equal(s(wasm.isaac_log_sibling_fread_state_is_readable(0x80000000)), 0);
+  assert.notEqual(
+    (0x80000000 | 0) <= 0 ? 1 : 0,
+    logSiblingFreadStateIsReadable(0x80000000),
+  );
+});
+
+test("LAP: fread fflush is never in this body; FILE* is never tested", () => {
+  const states = [0, 1, 2, 0xff, 0x100, 0x101, 0x80000000, 0xffffffff];
+  const files = [0, 1, 0x100, 0xffffffff, 0x00c79bd8];
+  for (const state of states) {
+    assert.equal(
+      s(wasm.isaac_log_sibling_fread_fflush_needed(state)),
+      0,
+      `fflush ${state}`,
+    );
+    assert.equal(logSiblingFreadFflushNeeded(state), 0);
+    /* v6 contrast: the log sink fflushs both arms */
+    assert.equal(s(wasm.isaac_log_write_fflush_needed(state)), 1);
+    /* v7 write also 0, but this is transcribed from the fread body */
+    assert.equal(s(wasm.isaac_log_sibling_write_fflush_needed(state)), 0);
+  }
+  for (const fp of files) {
+    assert.equal(s(wasm.isaac_log_sibling_fread_tests_file_null(fp)), 0);
+    assert.equal(logSiblingFreadTestsFileNull(fp), 0);
+  }
+  assert.equal(s(wasm.isaac_log_sibling_fread_needed(LOG_SINK_STATE_OPEN)), 0);
+  assert.equal(s(wasm.isaac_log_sibling_fread_fflush_needed(LOG_SINK_STATE_OPEN)), 0);
+});
+
+test("LAQ: fread skip returns 0; readable returns items*size with 32-bit wrap", () => {
+  const sizes = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const counts = [0, 1, 2, 5, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const fixed = [
+    [0, 0, 1, 0],
+    [0, 9, 1, 9],
+    [0, 3, 2, 6],
+    [1, 3, 2, 0],
+    [0x101, 3, 2, 0],
+    [0, 0x80000000, 2, 0],
+    [0, 0xffffffff, 0xffffffff, 1],
+    [0, 0, 0, 0],
+  ];
+  for (const [state, count, size, want] of fixed) {
+    assert.equal(
+      u(wasm.isaac_log_sibling_fread_bytes_returned(state, count, size)),
+      want >>> 0,
+      `ret state=${state} ${count}*${size}`,
+    );
+    assert.equal(logSiblingFreadBytesReturned(state, count, size), want >>> 0);
+    assert.equal(
+      u(wasm.isaac_log_sibling_fread_byte_count(count, size)),
+      Math.imul(count >>> 0, size >>> 0) >>> 0,
+    );
+    assert.equal(
+      logSiblingFreadByteCount(count, size),
+      Math.imul(count >>> 0, size >>> 0) >>> 0,
+    );
+  }
+  assert.equal(u(wasm.isaac_log_sibling_fread_bytes_returned(1, 4, 5)), 0);
+  assert.notEqual(u(wasm.isaac_log_sibling_fread_byte_count(4, 5)), 0);
+  for (const size of sizes) {
+    for (const count of counts) {
+      const product = Math.imul(count >>> 0, size >>> 0) >>> 0;
+      assert.equal(u(wasm.isaac_log_sibling_fread_byte_count(count, size)), product);
+      assert.equal(logSiblingFreadByteCount(count, size), product);
+      assert.equal(u(wasm.isaac_log_sibling_fread_bytes_returned(0, count, size)), product);
+      assert.equal(u(wasm.isaac_log_sibling_fread_bytes_returned(1, count, size)), 0);
+      assert.equal(u(wasm.isaac_log_sibling_fread_bytes_returned(0x100, count, size)), 0);
+      assert.equal(u(wasm.isaac_log_sibling_fread_bytes_returned(0x101, count, size)), 0);
+    }
+  }
+});
+
+test("LAS: the fread ordered host-action list, every arm", () => {
+  const readable = [0, [LOG_SIBLING_FREAD_ACTION_FREAD]];
+  const skip = [1, []];
+  const extra = [
+    [2, []],
+    [0x101, []],
+    [0x100, []],
+    [0xffffffff, []],
+  ];
+  for (const [state, want] of [readable, skip, ...extra]) {
+    assert.deepEqual(wasmSiblingFreadActions(state), want, `wasm state=${state}`);
+    assert.deepEqual(modelSiblingFreadActions(state), want, `model state=${state}`);
+    assert.equal(u(wasm.isaac_log_sibling_fread_action_count(state)), want.length);
+    assert.equal(logSiblingFreadActionCount(state), want.length);
+    assert.equal(
+      u(wasm.isaac_log_sibling_fread_action_at(state, want.length)),
+      LOG_SIBLING_FREAD_ACTION_NONE,
+    );
+    assert.equal(
+      logSiblingFreadActionAt(state, want.length),
+      LOG_SIBLING_FREAD_ACTION_NONE,
+    );
+    assert.ok(want.length <= LOG_SIBLING_FREAD_ACTIONS_MAX);
+  }
+  assert.equal(
+    s(wasm.isaac_log_sibling_fread_action_is_platform(LOG_SIBLING_FREAD_ACTION_FREAD)),
+    1,
+  );
+  assert.equal(
+    s(wasm.isaac_log_sibling_fread_action_is_platform(LOG_SIBLING_FREAD_ACTION_NONE)),
+    0,
+  );
+  assert.equal(logSiblingFreadActionIsPlatform(LOG_SIBLING_FREAD_ACTION_FREAD), 1);
+  assert.equal(logSiblingFreadActionIsPlatform(LOG_SIBLING_FREAD_ACTION_NONE), 0);
+});
+
+test("LAS: the fread plan, fixed scenarios across every arm", () => {
+  const base = SCRATCH + 0xf00;
+  const scenarios = [
+    { state: 0, filePtr: 0x2000, freadCount: 9, size: 1 },
+    { state: 0, filePtr: 0x0000, freadCount: 4, size: 2 },
+    { state: 1, filePtr: 0x0000, freadCount: 4, size: 2 },
+    { state: 2, filePtr: 0x2000, freadCount: 1, size: 1 },
+    { state: 0x101, filePtr: 0x2000, freadCount: 3, size: 5 },
+    { state: 0x100, filePtr: 0xffffffff, freadCount: 0, size: 1 },
+    { state: 0, filePtr: 1, freadCount: 0x80000000, size: 2 },
+    { state: 0xffffffff, filePtr: 0, freadCount: 7, size: 3 },
+  ];
+  for (let i = 0; i < scenarios.length; i += 1) {
+    const sc = scenarios[i];
+    new Uint8Array(wasm.memory.buffer, base, SFPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_sibling_fread_plan(
+      sc.state,
+      sc.filePtr,
+      sc.freadCount,
+      sc.size,
+      base,
+    );
+    assertSiblingFreadPlan(
+      readSiblingFreadPlan(view, base),
+      logSiblingFreadPlan(sc),
+      `sfplan ${i}`,
+    );
+  }
+  for (const sc of scenarios) {
+    const p = logSiblingFreadPlan(sc);
+    assert.equal(p.fflush, 0);
+    assert.equal(p.testsFileNull, 0);
+    assert.equal(p.stackBytesPopped, 0x0c);
+    assert.equal(p.vtblSlot, 0x14);
+    assert.equal(p.bodyVa, 0x00a52820);
+    assert.equal(p.freadIat, LOG_IAT_FREAD);
+    assert.equal(p.writeSiblingVa, 0x00a52850);
+    assert.equal(p.fread, p.stateIsReadable);
+    assert.equal(p.actionCount, p.stateIsReadable ? 1 : 0);
+  }
+});
+
+test("LAS: randomized fread differential (HIGH-bit LCG, unmasked drives)", () => {
+  const base = SCRATCH + 0x1000;
+  const rnd = makeLcg(0x00a52820);
+  const STATES = [
+    0, 1, 2, 0xff, 0x100, 0x101, 0x1ff, 0x7fffffff, 0x80000000, 0x80000001,
+    0xfffffffe, 0xffffffff,
+  ];
+  const PTRS = [0, 1, 0x100, 0x00c79bd8, 0x7fffffff, 0x80000000, 0xffffffff];
+  const COUNTS = [0, 1, 2, 9, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const SIZES = [0, 1, 2, 3, 0x10, 0x100, 0x7fffffff, 0x80000000, 0xffffffff];
+  const seen = {
+    readable: new Set(),
+    fread: new Set(),
+    bytes: new Set(),
+    actions: new Set(),
+  };
+  for (let n = 0; n < 400; n += 1) {
+    const sc = {
+      state: STATES[pick(rnd, STATES.length)] ^ (n % 2 === 0 ? 0 : rnd()),
+      filePtr: PTRS[pick(rnd, PTRS.length)],
+      freadCount: COUNTS[pick(rnd, COUNTS.length)] ^ (n % 3 === 0 ? 0 : rnd()),
+      size: SIZES[pick(rnd, SIZES.length)] ^ (n % 5 === 0 ? 0 : rnd()),
+    };
+    if (n % 8 === 0) {
+      sc.state = rnd();
+      sc.filePtr = rnd();
+      sc.freadCount = rnd();
+      sc.size = rnd();
+    }
+    new Uint8Array(wasm.memory.buffer, base, SFPLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_sibling_fread_plan(
+      sc.state,
+      sc.filePtr,
+      sc.freadCount,
+      sc.size,
+      base,
+    );
+    const actual = readSiblingFreadPlan(view, base);
+    const expected = logSiblingFreadPlan(sc);
+    assertSiblingFreadPlan(actual, expected, `rnd ${n}`);
+    assert.equal(
+      s(wasm.isaac_log_sibling_fread_state_is_readable(sc.state)),
+      expected.stateIsReadable,
+    );
+    assert.equal(s(wasm.isaac_log_sibling_fread_needed(sc.state)), expected.fread);
+    assert.equal(s(wasm.isaac_log_sibling_fread_fflush_needed(sc.state)), 0);
+    assert.equal(s(wasm.isaac_log_sibling_fread_tests_file_null(sc.filePtr)), 0);
+    assert.equal(
+      u(wasm.isaac_log_sibling_fread_bytes_returned(sc.state, sc.freadCount, sc.size)),
+      expected.bytesReturned,
+    );
+    assert.deepEqual(wasmSiblingFreadActions(sc.state), modelSiblingFreadActions(sc.state));
+    seen.readable.add(expected.stateIsReadable);
+    seen.fread.add(expected.fread);
+    seen.bytes.add(expected.bytesReturned === 0 ? 0 : 1);
+    seen.actions.add(modelSiblingFreadActions(sc.state).join(","));
+  }
+  assert.deepEqual([...seen.readable].sort(), [0, 1], "both gate arms");
+  assert.deepEqual([...seen.fread].sort(), [0, 1], "fread both arms");
+  assert.deepEqual([...seen.bytes].sort(), [0, 1], "zero and nonzero returns");
+  assert.deepEqual(
+    [...seen.actions].sort(),
+    ["", "1"].sort(),
+    "readable is fread alone; skip is empty",
+  );
+});
+
+test("LAS: v8 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /#pragma once/);
+  assert.match(h, /0x00a52820/);
+  assert.match(h, /cmp dword \[ecx\+4\], 0/);
+  assert.match(h, /imul eax, dword \[ebp\+0xc\]/);
+  assert.match(h, /xor eax, eax/);
+  assert.match(h, /call \[0x00b188c8\]/);
+  assert.match(h, /0x00a52850/);
+  assert.match(h, /0x00b9e954/);
+  assert.match(h, /42 identical \/ 2 differing/);
+  assert.match(h, /Do NOT fold/);
+  assert.match(h, /ret 0xc/);
+  assert.match(h, /0x00a52880/);
+  assert.match(h, /empty list as "unreferenced"/);
+  assert.match(h, /2094319 instructions \/ 469 undecodable/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /0x00a52823/);
+  assert.match(src, /isaac_log_sibling_fread_plan/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sibling_fread_state_is_readable\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sibling_fread_bytes_returned\)/);
+  assert.doesNotMatch(src, /\buint8_t\s+\w+\s*[,)]/m);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /0x00a52820/);
+  assert.match(model, /cmp dword \[ecx\+4\], 0/);
+  assert.match(model, /Math\.imul/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.doesNotMatch(model, /isaac_log_sibling_fread_state_is_readable/);
+  assert.doesNotMatch(model, /^\s*\[log-pure-model/);
+  assert.doesNotMatch(model, /artifact:\/\//);
+});
+
+
+/* ==================== v9: sink/neighbor deleting-dtor island ==================== */
+
+test("LAU: v9 constants and the dtor-island census agree with the header contract", () => {
+  assert.equal(LOG_DTOR_ISLAND_VARIANTS, 3);
+  assert.equal(LOG_DTOR_ISLAND_VARIANT_SINK, 0);
+  assert.equal(LOG_DTOR_ISLAND_VARIANT_NEIGHBOR, 1);
+  assert.equal(LOG_VA_SINK_DTOR, 0x00a83fa0);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR, 0x00a84030);
+  assert.equal(LOG_SINK_DTOR_BODY_BYTES, 0x26);
+  assert.equal(LOG_NEIGHBOR_DTOR_BODY_BYTES, 0x20);
+  assert.equal(LOG_VA_SINK_DTOR_INNER, 0x00a52410);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER, 0x00a84060);
+  assert.equal(LOG_SINK_DTOR_FREE_SIZE, 0x10);
+  assert.equal(LOG_NEIGHBOR_DTOR_FREE_SIZE, 0x30);
+  assert.equal(LOG_VA_SINK_DTOR_VTABLE_STORE, 0x00a83fa6);
+  assert.equal(LOG_VA_SINK_DTOR_GATE, 0x00a83fb1);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_GATE, 0x00a8403b);
+  assert.equal(LOG_SINK_VTABLE_VA, 0x00ba5184);
+  assert.equal(LOG_NEIGHBOR_DTOR_VTABLE, 0x00ba5520);
+  assert.equal(LOG_DTOR_ISLAND_RET_ARGS, 4);
+  assert.equal(LOG_DTOR_ISLAND_FLAG_BIT, 1);
+  assert.equal(LOG_DTOR_ISLAND_SIZED_DELETE_VA, 0x00aef15c);
+  // wasm + model agree on the shared laws
+  assert.equal(wasm.isaac_log_dtor_island_variants(), 3);
+  assert.equal(logDtorIslandVariants(), 3);
+  assert.equal(u(wasm.isaac_log_dtor_island_ret_args()), 4);
+  assert.equal(logDtorIslandRetArgs(), 4);
+  assert.equal(wasm.isaac_log_dtor_island_returns_this(), 1);
+  assert.equal(logDtorIslandReturnsThis(), 1);
+});
+
+test("LAU: the delete gate is bit 0 of the LOW BYTE (wide, unmasked drives)", () => {
+  // test byte ptr [ebp + 8], 1 ; je — the delete flag is bit 0 of the LOW
+  // BYTE ONLY. 0x2 / 0x102 / 0xfffffffe (bit 1 or high bits set, bit 0
+  // clear) must NOT delete; any low-byte-nonzero reading would delete them.
+  const cases = [
+    [0x0, 0],
+    [0x1, 1],
+    [0x2, 0],
+    [0x3, 1],
+    [0x100, 0],
+    [0x101, 1],
+    [0x102, 0],
+    [0x1ff, 1],
+    [0x80000000, 0],
+    [0x80000001, 1],
+    [0xfffffffe, 0],
+    [0xffffffff, 1],
+  ];
+  for (const [flag, want] of cases) {
+    assert.equal(
+      wasm.isaac_log_dtor_island_delete_needed(flag),
+      want,
+      `wasm flag=${flag.toString(16)}`,
+    );
+    assert.equal(
+      logDtorIslandDeleteNeeded(flag),
+      want,
+      `model flag=${flag.toString(16)}`,
+    );
+  }
+  // the SAME flag byte gates all three instances (one template)
+  for (const v of [LOG_DTOR_ISLAND_VARIANT_SINK, LOG_DTOR_ISLAND_VARIANT_NEIGHBOR, LOG_DTOR_ISLAND_VARIANT_SIBLING]) {
+    assert.equal(wasm.isaac_log_dtor_island_delete_needed(0x2), 0, `variant ${v} bit-1-only`);
+    assert.equal(wasm.isaac_log_dtor_island_delete_needed(0x101), 1, `variant ${v} bit-0-set`);
+  }
+});
+
+test("LAU: three instances of one template — per-variant deltas", () => {
+  const want = {
+    [LOG_DTOR_ISLAND_VARIANT_SINK]: {
+      bodyVa: LOG_VA_SINK_DTOR,
+      bodyBytes: LOG_SINK_DTOR_BODY_BYTES,
+      inner: LOG_VA_SINK_DTOR_INNER,
+      innerCall: LOG_VA_SINK_DTOR_INNER_CALL,
+      gate: LOG_VA_SINK_DTOR_GATE,
+      deleteCall: LOG_VA_SINK_DTOR_DELETE_CALL,
+      ret: LOG_SINK_DTOR_RET_VA,
+      freeSize: LOG_SINK_DTOR_FREE_SIZE,
+      vtable: LOG_SINK_VTABLE_VA,
+      stores: 1,
+    },
+    [LOG_DTOR_ISLAND_VARIANT_NEIGHBOR]: {
+      bodyVa: LOG_VA_NEIGHBOR_DTOR,
+      bodyBytes: LOG_NEIGHBOR_DTOR_BODY_BYTES,
+      inner: LOG_VA_NEIGHBOR_DTOR_INNER,
+      innerCall: LOG_VA_NEIGHBOR_DTOR_INNER_CALL,
+      gate: LOG_VA_NEIGHBOR_DTOR_GATE,
+      deleteCall: LOG_VA_NEIGHBOR_DTOR_DELETE_CALL,
+      ret: LOG_NEIGHBOR_DTOR_RET_VA,
+      freeSize: LOG_NEIGHBOR_DTOR_FREE_SIZE,
+      vtable: LOG_NEIGHBOR_DTOR_VTABLE,
+      stores: 0,
+    },
+    [LOG_DTOR_ISLAND_VARIANT_SIBLING]: {
+      bodyVa: LOG_VA_SIBLING_DTOR,
+      bodyBytes: LOG_SIBLING_DTOR_BODY_BYTES,
+      inner: LOG_VA_SIBLING_DTOR_INNER,
+      innerCall: LOG_SIBLING_DTOR_INNER_CALL,
+      gate: LOG_VA_SIBLING_DTOR_GATE,
+      deleteCall: LOG_SIBLING_DTOR_DELETE_CALL,
+      ret: LOG_SIBLING_DTOR_RET_VA,
+      freeSize: LOG_SIBLING_DTOR_FREE_SIZE,
+      vtable: LOG_SIBLING_DTOR_VTABLE,
+      stores: 0,
+    },
+  };
+  // the deltas are deliberate: do not homogenise the three instances
+  assert.notEqual(LOG_SINK_DTOR_FREE_SIZE, LOG_NEIGHBOR_DTOR_FREE_SIZE);
+  assert.notEqual(LOG_SINK_DTOR_BODY_BYTES, LOG_NEIGHBOR_DTOR_BODY_BYTES);
+  assert.notEqual(LOG_VA_SINK_DTOR_INNER, LOG_VA_NEIGHBOR_DTOR_INNER);
+  assert.notEqual(LOG_SINK_VTABLE_VA, LOG_NEIGHBOR_DTOR_VTABLE);
+  // the sibling shares the sink's inner + free size, but NOT the sink's
+  // wrapper vtable store (the v11 inner stores the SIBLING vtable itself)
+  assert.equal(LOG_VA_SIBLING_DTOR_INNER, LOG_VA_SINK_DTOR_INNER);
+  assert.equal(LOG_SIBLING_DTOR_FREE_SIZE, LOG_SINK_DTOR_FREE_SIZE);
+  assert.notEqual(LOG_SIBLING_DTOR_VTABLE, LOG_SINK_VTABLE_VA);
+  assert.notEqual(LOG_SIBLING_DTOR_VTABLE, LOG_NEIGHBOR_DTOR_VTABLE);
+  assert.notEqual(LOG_SIBLING_DTOR_BODY_BYTES, LOG_SINK_DTOR_BODY_BYTES);
+  // drive every selector with ALL THREE named variants and WIDE values
+  // (variant select must narrow: 0x100 / 0xffffffff -> SINK, 2 -> SIBLING)
+  for (const v of [0, 1, 2, 0x100, 0xffffffff]) {
+    const w = want[v === 1 ? 1 : (v === 2 ? 2 : 0)];
+    assert.equal(u(wasm.isaac_log_dtor_island_body_va(v)), w.bodyVa, `bodyVa(${v})`);
+    assert.equal(logDtorIslandBodyVa(v), w.bodyVa, `model bodyVa(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_body_bytes(v)), w.bodyBytes, `bodyBytes(${v})`);
+    assert.equal(logDtorIslandBodyBytes(v), w.bodyBytes, `model bodyBytes(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_inner_body_va(v)), w.inner, `inner(${v})`);
+    assert.equal(logDtorIslandInnerBodyVa(v), w.inner, `model inner(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_free_size(v)), w.freeSize, `freeSize(${v})`);
+    assert.equal(logDtorIslandFreeSize(v), w.freeSize, `model freeSize(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_vtable_va(v)), w.vtable, `vtable(${v})`);
+    assert.equal(logDtorIslandVtableVa(v), w.vtable, `model vtable(${v})`);
+    assert.equal(wasm.isaac_log_dtor_island_wrapper_stores_vtable(v), w.stores, `stores(${v})`);
+    assert.equal(logDtorIslandWrapperStoresVtable(v), w.stores, `model stores(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_inner_call_va(v)), w.innerCall, `innerCall(${v})`);
+    assert.equal(logDtorIslandInnerCallVa(v), w.innerCall, `model innerCall(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_gate_va(v)), w.gate, `gate(${v})`);
+    assert.equal(logDtorIslandGateVa(v), w.gate, `model gate(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_delete_call_va(v)), w.deleteCall, `delCall(${v})`);
+    assert.equal(logDtorIslandDeleteCallVa(v), w.deleteCall, `model delCall(${v})`);
+    assert.equal(u(wasm.isaac_log_dtor_island_ret_va(v)), w.ret, `ret(${v})`);
+    assert.equal(logDtorIslandRetVa(v), w.ret, `model ret(${v})`);
+  }
+});
+
+test("LAU: v9 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a83fa0/);
+  assert.match(h, /0x00a84030/);
+  assert.match(h, /0x00a52410/);
+  assert.match(h, /0x00a84060/);
+  assert.match(h, /0x00ba5520/);
+  assert.match(h, /test byte ptr \[ebp \+ 8\], 1/);
+  assert.match(h, /ret 4/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_dtor_island_delete_needed/);
+  assert.match(src, /test byte ptr \[ebp \+ 8\], 1/);
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logDtorIslandDeleteNeeded/);
+  assert.match(model, /0x00a83fa0/);
+  assert.match(model, /0x00a84030/);
+  assert.equal(u(wasm.isaac_log_pure_helpers_abi_version()), 25);
+});
+
+test("LAU: mutation — a wrong delete gate / size fold fails the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  /* Every mutant rebuilds the wasm with ONE flipped term and re-runs the
+     PE-truth law; the assertion must throw, proving the pin discriminates.
+     The source is restored byte-identically in a finally. */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: delete gate narrowed to ANY nonzero low byte",
+      (b) => b.replace(
+        "return (delete_flag & static_cast<uint32_t>(ISAAC_LOG_DTOR_ISLAND_FLAG_BIT)) !=",
+        "return (delete_flag & 0xffu) !="),
+      () => {
+        // bit 1 set / bit 0 clear: the PE does NOT delete; the mutant does
+        assert.equal(wasm.isaac_log_dtor_island_delete_needed(0x2), 0, "M1: 0x2 must not delete");
+        assert.equal(wasm.isaac_log_dtor_island_delete_needed(0x102), 0, "M1: 0x102 must not delete");
+      });
+
+    withMutant("M2: sink free size folded to the neighbor's 0x30",
+      (b) => b.replace(
+        ": static_cast<uint32_t>(ISAAC_LOG_SINK_DTOR_FREE_SIZE);",
+        ": static_cast<uint32_t>(ISAAC_LOG_NEIGHBOR_DTOR_FREE_SIZE);"),
+      () => {
+        assert.equal(u(wasm.isaac_log_dtor_island_free_size(0)), 0x10, "M2: sink sized-delete is 0x10");
+        assert.equal(u(wasm.isaac_log_dtor_island_free_size(1)), 0x30, "M2: neighbor stays 0x30");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+/* ==================== v10: the open helpers (vtbl +0x24/+0x28) ==================== */
+
+/* IsaacLogOpenReadPlan: 13 x 4 bytes = 52. Pinned by a static_assert in
+   the C++ and by every field read below. */
+const OPEN_READ_PLAN_SIZE = 52;
+const OPEN_READ_PLAN_OFF = {
+  pathOk: 0,
+  modeVa: 4,
+  fopen: 8,
+  fileAfter: 12,
+  stateAfter: 16,
+  pathStored: 20,
+  pathAfter: 24,
+  result: 28,
+  accountingReached: 32,
+  accountingSites: 36,
+  retArgs: 40,
+  bodyVa: 44,
+  actionCount: 48,
+};
+const OPEN_READ_PLAN_U32 = new Set([
+  "modeVa", "fileAfter", "stateAfter", "pathAfter", "accountingSites",
+  "retArgs", "bodyVa", "actionCount",
+]);
+
+function readOpenReadPlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(OPEN_READ_PLAN_OFF)) {
+    out[name] = OPEN_READ_PLAN_U32.has(name)
+      ? v.getUint32(base + OPEN_READ_PLAN_OFF[name], true)
+      : v.getInt32(base + OPEN_READ_PLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertOpenReadPlan(actual, expected, label) {
+  for (const name of Object.keys(OPEN_READ_PLAN_OFF)) {
+    const want = OPEN_READ_PLAN_U32.has(name)
+      ? u(expected[name])
+      : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+/* IsaacLogOpenWritePlan: 12 x 4 bytes = 48. Pinned above. */
+const OPEN_WRITE_PLAN_SIZE = 48;
+const OPEN_WRITE_PLAN_OFF = {
+  modeVa: 0,
+  fopen: 4,
+  fileAfter: 8,
+  stateAfter: 12,
+  pathStored: 16,
+  pathAfter: 20,
+  result: 24,
+  accountingReached: 28,
+  accountingSites: 32,
+  retArgs: 36,
+  bodyVa: 40,
+  actionCount: 44,
+};
+const OPEN_WRITE_PLAN_U32 = new Set([
+  "modeVa", "fileAfter", "stateAfter", "pathAfter", "accountingSites",
+  "retArgs", "bodyVa", "actionCount",
+]);
+
+function readOpenWritePlan(v, base) {
+  const out = {};
+  for (const name of Object.keys(OPEN_WRITE_PLAN_OFF)) {
+    out[name] = OPEN_WRITE_PLAN_U32.has(name)
+      ? v.getUint32(base + OPEN_WRITE_PLAN_OFF[name], true)
+      : v.getInt32(base + OPEN_WRITE_PLAN_OFF[name], true);
+  }
+  return out;
+}
+
+function assertOpenWritePlan(actual, expected, label) {
+  for (const name of Object.keys(OPEN_WRITE_PLAN_OFF)) {
+    const want = OPEN_WRITE_PLAN_U32.has(name)
+      ? u(expected[name])
+      : s(expected[name]);
+    assert.equal(actual[name], want, `${label}.${name}`);
+  }
+}
+
+test("LAV: v10 constants and the open-helper reach census agree with the header", () => {
+  /* bodies */
+  assert.equal(LOG_VA_OPEN_READ, 0x00a52540);
+  assert.equal(LOG_VA_OPEN_READ_END, 0x00a525ff);
+  assert.equal(LOG_VA_OPEN_WRITE, 0x00a52610);
+  assert.equal(LOG_VA_OPEN_WRITE_END, 0x00a526bc);
+  assert.equal(LOG_OPEN_READ_BODY_BYTES, 0xc0);
+  assert.equal(LOG_OPEN_WRITE_BODY_BYTES, 0xac);
+  assert.equal(LOG_OPEN_READ_INSN_COUNT, 68);
+  assert.equal(LOG_OPEN_WRITE_INSN_COUNT, 61);
+  assert.equal(LOG_OPEN_READ_RET_ARGS, 4);
+  assert.equal(LOG_OPEN_WRITE_RET_ARGS, 8);
+  /* modes */
+  assert.equal(LOG_OPEN_MODE_WB_VA, 0x00b9e938);
+  assert.equal(LOG_OPEN_MODE_AB_VA, 0x00b6d104);
+  assert.equal(LOG_OPEN_MODE_RB_VA, 0x00b6d108);
+  assert.equal(LOG_OPEN_MODE_LEN, 2);
+  /* state polarities — read 0 (v8 fread's constant), write 1 (v6/v7) */
+  assert.equal(LOG_OPEN_READ_STATE, 0);
+  assert.equal(LOG_OPEN_WRITE_STATE, 1);
+  assert.notEqual(LOG_OPEN_READ_STATE, LOG_OPEN_WRITE_STATE);
+  /* key sites */
+  assert.equal(LOG_VA_OPEN_READ_PATH_GATE, 0x00a52579);
+  assert.equal(LOG_VA_OPEN_READ_FOPEN, 0x00a52583);
+  assert.equal(LOG_VA_OPEN_READ_FILE_STORE, 0x00a5258c);
+  assert.equal(LOG_VA_OPEN_READ_STATE_STORE, 0x00a52599);
+  assert.equal(LOG_VA_OPEN_READ_RET_OK, 0x00a525c1);
+  assert.equal(LOG_VA_OPEN_READ_RET_FAIL, 0x00a525ed);
+  assert.equal(LOG_VA_OPEN_WRITE_MODE_TEST, 0x00a52649);
+  assert.equal(LOG_VA_OPEN_WRITE_MODE_SELECT, 0x00a52659);
+  assert.equal(LOG_VA_OPEN_WRITE_FOPEN, 0x00a5265e);
+  assert.equal(LOG_VA_OPEN_WRITE_FILE_STORE, 0x00a52667);
+  assert.equal(LOG_VA_OPEN_WRITE_STATE_STORE, 0x00a52678);
+  assert.equal(LOG_VA_OPEN_WRITE_RET, 0x00a526a9);
+  /* accounting reach: read has TWO sites (per fopen arm), write ONE (join) */
+  assert.equal(LOG_OPEN_READ_ACCOUNTING_SITES, 2);
+  assert.equal(LOG_OPEN_WRITE_ACCOUNTING_SITES, 1);
+  assert.equal(LOG_VA_OPEN_READ_ACCOUNTING_OK_SITE, 0x00a525b9);
+  assert.equal(LOG_VA_OPEN_READ_ACCOUNTING_FAIL_SITE, 0x00a525e5);
+  assert.equal(LOG_VA_OPEN_WRITE_ACCOUNTING_SITE, 0x00a526a1);
+  /* the write combine reads [0xc5aa98]; the read passes edx = 0 */
+  assert.equal(LOG_OPEN_READ_COMBINE_BASE, 0);
+  assert.equal(LOG_OPEN_WRITE_COMBINE_BASE_VA, 0x00c5aa98);
+  /* vtable slots — both vtables hold both bodies */
+  assert.equal(LOG_OPEN_VTABLE_SLOT_READ, 0x24);
+  assert.equal(LOG_OPEN_VTABLE_SLOT_WRITE, 0x28);
+  assert.equal(LOG_VA_SIBLING_VTBL_OPEN_READ_ENTRY, 0x00b9e964);
+  assert.equal(LOG_VA_SIBLING_VTBL_OPEN_WRITE_ENTRY, 0x00b9e968);
+  assert.equal(LOG_VA_SINK_VTBL_OPEN_READ_ENTRY, 0x00ba51a8);
+  assert.equal(LOG_VA_SINK_VTBL_OPEN_WRITE_ENTRY, 0x00ba51ac);
+  /* reach: 9 direct calls to the read, 1 to the write (devirt compares) */
+  assert.equal(LOG_OPEN_READ_DIRECT_CALLSITES, 9);
+  assert.equal(LOG_OPEN_WRITE_DIRECT_CALLSITES, 1);
+  assert.equal(LOG_OPEN_READ_RAW_OCCURRENCES, 11); /* 2 vtbl slots + 9 cmp */
+  assert.equal(LOG_OPEN_WRITE_RAW_OCCURRENCES, 3);  /* 2 vtbl slots + 1 cmp */
+  assert.equal(LOG_VA_OPEN_READ_DEVIRT_COMPARE, 0x00a25053);
+  assert.equal(LOG_VA_OPEN_READ_DEVIRT_CALL, 0x00a2505a);
+  assert.equal(LOG_VA_OPEN_WRITE_DEVIRT_COMPARE, 0x00a25100);
+  assert.equal(LOG_VA_OPEN_WRITE_DEVIRT_CALL, 0x00a25107);
+  /* decode census unchanged */
+  assert.equal(LOG_TEXT_INSN_COUNT_V10, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V10, 469);
+  assert.equal(LOG_V10_BATCHED_VAS, 2);
+  assert.equal(LOG_V10_EXACT_ZHL_MATCHES, 0);
+  /* action enum */
+  assert.equal(LOG_OPEN_ACTION_NONE, 0);
+  assert.equal(LOG_OPEN_ACTION_FOPEN, 1);
+  assert.equal(LOG_OPEN_ACTIONS_MAX, 1);
+  /* the C++ / wasm constants echo the model */
+  assert.equal(u(wasm.isaac_log_open_read_body_va()), LOG_VA_OPEN_READ);
+  assert.equal(u(wasm.isaac_log_open_read_body_bytes()), LOG_OPEN_READ_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_open_read_insn_count()), LOG_OPEN_READ_INSN_COUNT);
+  assert.equal(u(wasm.isaac_log_open_read_ret_args()), 4);
+  assert.equal(u(wasm.isaac_log_open_read_vtbl_slot()), 0x24);
+  assert.equal(u(wasm.isaac_log_open_read_direct_callsites()), 9);
+  assert.equal(u(wasm.isaac_log_open_read_raw_occurrences()), 11);
+  assert.equal(u(wasm.isaac_log_open_write_body_va()), LOG_VA_OPEN_WRITE);
+  assert.equal(u(wasm.isaac_log_open_write_body_bytes()), LOG_OPEN_WRITE_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_open_write_insn_count()), LOG_OPEN_WRITE_INSN_COUNT);
+  assert.equal(u(wasm.isaac_log_open_write_ret_args()), 8);
+  assert.equal(u(wasm.isaac_log_open_write_vtbl_slot()), 0x28);
+  assert.equal(u(wasm.isaac_log_open_write_direct_callsites()), 1);
+  assert.equal(u(wasm.isaac_log_open_write_raw_occurrences()), 3);
+  assert.equal(u(wasm.isaac_log_open_read_devirt_call_va()), 0x00a2505a);
+  assert.equal(u(wasm.isaac_log_open_write_devirt_call_va()), 0x00a25107);
+  /* the JS oracles echo the same numbers */
+  assert.equal(logOpenReadBodyVa(), LOG_VA_OPEN_READ);
+  assert.equal(logOpenReadBodyBytes(), LOG_OPEN_READ_BODY_BYTES);
+  assert.equal(logOpenReadInsnCount(), 68);
+  assert.equal(logOpenReadRetArgs(), 4);
+  assert.equal(logOpenReadVtblSlot(), 0x24);
+  assert.equal(logOpenReadDirectCallsites(), 9);
+  assert.equal(logOpenReadRawOccurrences(), 11);
+  assert.equal(logOpenWriteBodyVa(), LOG_VA_OPEN_WRITE);
+  assert.equal(logOpenWriteBodyBytes(), LOG_OPEN_WRITE_BODY_BYTES);
+  assert.equal(logOpenWriteInsnCount(), 61);
+  assert.equal(logOpenWriteRetArgs(), 8);
+  assert.equal(logOpenWriteVtblSlot(), 0x28);
+  assert.equal(logOpenWriteDirectCallsites(), 1);
+  assert.equal(logOpenWriteRawOccurrences(), 3);
+  assert.equal(logOpenReadDevirtCallVa(), 0x00a2505a);
+  assert.equal(logOpenWriteDevirtCallVa(), 0x00a25107);
+});
+
+test("LAW: v10 open-helper laws behave like the transcribed PE control flow", () => {
+  /* ---- the wb/ab mode select: LOW BYTE ONLY, cmove on ZF ----
+     Wide drives UNMASKED: 0x100 has low byte 0 -> "wb" even though the
+     full word is nonzero. A pre-masked or dword-compare mutant fails. */
+  for (const flag of [0, 0x100, 0x10000, 0xffff0000]) {
+    assert.equal(u(wasm.isaac_log_open_write_mode_va(flag)), LOG_OPEN_MODE_WB_VA,
+      `write mode: 0x${flag.toString(16)} selects "wb"`);
+    assert.equal(logOpenWriteModeVa(flag), LOG_OPEN_MODE_WB_VA,
+      `oracle: 0x${flag.toString(16)} selects "wb"`);
+  }
+  for (const flag of [1, 0xff, 0x101, 0x1ff, 0xffffffff, 0x80000001]) {
+    assert.equal(u(wasm.isaac_log_open_write_mode_va(flag)), LOG_OPEN_MODE_AB_VA,
+      `write mode: 0x${flag.toString(16)} selects "ab"`);
+    assert.equal(logOpenWriteModeVa(flag), LOG_OPEN_MODE_AB_VA,
+      `oracle: 0x${flag.toString(16)} selects "ab"`);
+  }
+  assert.equal(u(wasm.isaac_log_open_write_mode_len(0x1ff)), 2);
+  assert.equal(logOpenWriteModeLen(0x1ff), 2);
+  /* the read has ONE mode, no flag byte in the signature */
+  assert.equal(u(wasm.isaac_log_open_read_mode_va()), LOG_OPEN_MODE_RB_VA);
+  assert.equal(logOpenReadModeVa(), LOG_OPEN_MODE_RB_VA);
+  assert.equal(u(wasm.isaac_log_open_read_mode_len()), 2);
+  assert.equal(logOpenReadModeLen(), 2);
+
+  /* ---- the read's PATH GATE: test esi, esi; je 0xa525ed ----
+     combine NULL -> no stores at all, return 0. fopen's outcome cannot
+     rescue a NULL combine (the return is a strict &&). */
+  assert.equal(wasm.isaac_log_open_read_path_gate(0), 0);
+  assert.equal(wasm.isaac_log_open_read_path_gate(1), 1);
+  assert.equal(wasm.isaac_log_open_read_path_gate(0xffffffff), 1);
+  assert.equal(logOpenReadPathGate(0), 0);
+  assert.equal(logOpenReadPathGate(0x100), 1);
+  assert.equal(logOpenReadPathGate(0xffffffff), 1);
+  assert.equal(wasm.isaac_log_open_read_returns(0, 1), 0, "gate blocks a NULL combine even when fopen succeeded");
+  assert.equal(wasm.isaac_log_open_read_returns(0, 0), 0);
+  assert.equal(wasm.isaac_log_open_read_returns(1, 0), 0, "fopen fail returns 0 even with a good path");
+  assert.equal(wasm.isaac_log_open_read_returns(1, 1), 1);
+  assert.equal(wasm.isaac_log_open_read_returns(0xffffffff, 1), 1);
+  assert.equal(logOpenReadReturns(0, 1), 0);
+  assert.equal(logOpenReadReturns(1, 0), 0);
+  assert.equal(logOpenReadReturns(1, 1), 1);
+  assert.equal(logOpenReadReturns(0xffffffff, 0xffffffff), 1);
+
+  /* ---- the write does NOT gate fopen: no path param in the law at all ----
+     `mov al, bl` — bl comes ONLY from the fopen test. */
+  assert.equal(wasm.isaac_log_open_write_fopen_gated(1), 0, "write never gates fopen");
+  assert.equal(wasm.isaac_log_open_write_fopen_gated(0), 0);
+  assert.equal(logOpenWriteFopenGated(0xffffffff), 0);
+  assert.equal(wasm.isaac_log_open_write_returns(1), 1);
+  assert.equal(wasm.isaac_log_open_write_returns(0), 0);
+  assert.equal(wasm.isaac_log_open_write_returns(0xffffffff), 1);
+  assert.equal(logOpenWriteReturns(1), 1);
+  assert.equal(logOpenWriteReturns(0), 0);
+  /* the contrast is the whole point: read is &&, write is fopen-only */
+  assert.equal(wasm.isaac_log_open_read_returns(0, 1), 0);
+  assert.equal(wasm.isaac_log_open_write_returns(1), 1);
+
+  /* ---- FILE* store UNCONDITIONAL (0x00a5258c / 0x00a52667) ----
+     A failed fopen still OVERWRITES the cell with the NULL result, so a
+     previous non-NULL handle is clobbered. */
+  assert.equal(u(wasm.isaac_log_open_read_file_after(0x1234, 0)), 0,
+    "failed re-open clobbers the previous FILE*");
+  assert.equal(u(wasm.isaac_log_open_read_file_after(0x0000, 0x5678)), 0x5678);
+  assert.equal(u(wasm.isaac_log_open_read_file_after(0x1234, 0xffffffff)), 0xffffffff);
+  assert.equal(logOpenReadFileAfter(0x1234, 0), 0);
+  assert.equal(logOpenReadFileAfter(0x1234, 0x5678), 0x5678);
+  assert.equal(u(wasm.isaac_log_open_write_file_after(0x1234, 0)), 0);
+  assert.equal(u(wasm.isaac_log_open_write_file_after(0x0000, 0x5678)), 0x5678);
+  assert.equal(logOpenWriteFileAfter(0x1234, 0), 0);
+  assert.equal(logOpenWriteFileAfter(0x1234, 0x5678), 0x5678);
+
+  /* ---- state store SUCCESS-ONLY, polarities 0 (read) vs 1 (write) ---- */
+  assert.equal(u(wasm.isaac_log_open_read_state_after(5, 1)), 0, "read success stores 0");
+  assert.equal(u(wasm.isaac_log_open_read_state_after(5, 0)), 5, "read fail preserves the cell");
+  assert.equal(u(wasm.isaac_log_open_read_state_after(0xffffffff, 0)), 0xffffffff);
+  assert.equal(logOpenReadStateAfter(5, 1), 0);
+  assert.equal(logOpenReadStateAfter(5, 0), 5);
+  assert.equal(u(wasm.isaac_log_open_write_state_after(5, 1)), 1, "write success stores 1");
+  assert.equal(u(wasm.isaac_log_open_write_state_after(5, 0)), 5, "write fail preserves the cell");
+  assert.equal(logOpenWriteStateAfter(5, 1), 1);
+  assert.equal(logOpenWriteStateAfter(5, 0), 5);
+
+  /* ---- path store SUCCESS-ONLY (second combine result) ---- */
+  assert.equal(u(wasm.isaac_log_open_read_path_after(0x1111, 1, 0x2222)), 0x2222);
+  assert.equal(u(wasm.isaac_log_open_read_path_after(0x1111, 0, 0x2222)), 0x1111);
+  assert.equal(logOpenReadPathAfter(0x1111, 1, 0x2222), 0x2222);
+  assert.equal(logOpenReadPathAfter(0x1111, 0, 0x2222), 0x1111);
+  assert.equal(u(wasm.isaac_log_open_write_path_after(0x1111, 1, 0x2222)), 0x2222);
+  assert.equal(u(wasm.isaac_log_open_write_path_after(0x1111, 0, 0x2222)), 0x1111);
+  assert.equal(logOpenWritePathAfter(0x1111, 1, 0x2222), 0x2222);
+  assert.equal(logOpenWritePathAfter(0x1111, 0, 0x2222), 0x1111);
+
+  /* ---- accounting reach: read = path gate (BOTH fopen arms), write =
+     path gate (the join). site counts differ 2 vs 1. ---- */
+  assert.equal(wasm.isaac_log_open_read_accounting_reached(0), 0);
+  assert.equal(wasm.isaac_log_open_read_accounting_reached(1), 1);
+  assert.equal(wasm.isaac_log_open_read_accounting_reached(0xffffffff), 1);
+  assert.equal(logOpenReadAccountingReached(0), 0);
+  assert.equal(logOpenReadAccountingReached(1), 1);
+  assert.equal(wasm.isaac_log_open_write_accounting_reached(0), 0);
+  assert.equal(wasm.isaac_log_open_write_accounting_reached(1), 1);
+  assert.equal(logOpenWriteAccountingReached(0), 0);
+  assert.equal(logOpenWriteAccountingReached(1), 1);
+  assert.equal(u(wasm.isaac_log_open_read_accounting_sites()), 2);
+  assert.equal(u(wasm.isaac_log_open_write_accounting_sites()), 1);
+  assert.equal(logOpenReadAccountingSites(), 2);
+  assert.equal(logOpenWriteAccountingSites(), 1);
+
+  /* ---- host-action list: read gates fopen on the path, write always ---- */
+  assert.equal(u(wasm.isaac_log_open_read_action_count(1)), 1);
+  assert.equal(u(wasm.isaac_log_open_read_action_count(0)), 0);
+  assert.equal(u(wasm.isaac_log_open_read_action_at(1, 0)), LOG_OPEN_ACTION_FOPEN);
+  assert.equal(u(wasm.isaac_log_open_read_action_at(0, 0)), LOG_OPEN_ACTION_NONE);
+  assert.equal(u(wasm.isaac_log_open_read_action_at(1, 1)), LOG_OPEN_ACTION_NONE);
+  assert.equal(wasm.isaac_log_open_read_action_is_platform(LOG_OPEN_ACTION_FOPEN), 1);
+  assert.equal(wasm.isaac_log_open_read_action_is_platform(LOG_OPEN_ACTION_NONE), 0);
+  assert.equal(logOpenReadActionCount(1), 1);
+  assert.equal(logOpenReadActionCount(0), 0);
+  assert.equal(logOpenReadActionAt(1, 0), LOG_OPEN_ACTION_FOPEN);
+  assert.equal(logOpenReadActionAt(0, 0), LOG_OPEN_ACTION_NONE);
+  assert.equal(logOpenReadActionIsPlatform(LOG_OPEN_ACTION_FOPEN), 1);
+  assert.equal(u(wasm.isaac_log_open_write_action_count()), 1);
+  assert.equal(u(wasm.isaac_log_open_write_action_at(0)), LOG_OPEN_ACTION_FOPEN);
+  assert.equal(u(wasm.isaac_log_open_write_action_at(1)), LOG_OPEN_ACTION_NONE);
+  assert.equal(wasm.isaac_log_open_write_action_is_platform(LOG_OPEN_ACTION_FOPEN), 1);
+  assert.equal(logOpenWriteActionCount(), 1);
+  assert.equal(logOpenWriteActionAt(0), LOG_OPEN_ACTION_FOPEN);
+  assert.equal(logOpenWriteActionAt(1), LOG_OPEN_ACTION_NONE);
+  assert.equal(logOpenWriteActionIsPlatform(LOG_OPEN_ACTION_FOPEN), 1);
+});
+
+test("LAW: v10 randomized open-helper differential (HIGH-bit LCG, unmasked drives)", () => {
+  const base = SCRATCH + 0x1100;
+  const rnd = makeLcg(0x00a52540);
+  /* Every draw is a WIDE value; nothing is pre-masked. The byte-gate and
+     full-dword tests are exactly where a narrowing mutant would hide. */
+  for (let i = 0; i < 250; i += 1) {
+    const pathCombineOk = rnd();
+    const fopenOk = rnd();
+    const fileBefore = rnd();
+    const fopenResult = rnd();
+    const stateBefore = rnd();
+    const pathBefore = rnd();
+    const combine2Result = rnd();
+    /* scalars, wasm vs oracle */
+    assert.equal(wasm.isaac_log_open_read_path_gate(pathCombineOk), logOpenReadPathGate(pathCombineOk), `read gate ${i}`);
+    assert.equal(wasm.isaac_log_open_read_returns(pathCombineOk, fopenOk), logOpenReadReturns(pathCombineOk, fopenOk), `read ret ${i}`);
+    assert.equal(u(wasm.isaac_log_open_read_file_after(fileBefore, fopenResult)), u(logOpenReadFileAfter(fileBefore, fopenResult)), `read file ${i}`);
+    assert.equal(u(wasm.isaac_log_open_read_state_after(stateBefore, fopenOk)), u(logOpenReadStateAfter(stateBefore, fopenOk)), `read state ${i}`);
+    assert.equal(u(wasm.isaac_log_open_read_path_after(pathBefore, fopenOk, combine2Result)), u(logOpenReadPathAfter(pathBefore, fopenOk, combine2Result)), `read path ${i}`);
+    assert.equal(wasm.isaac_log_open_read_accounting_reached(pathCombineOk), logOpenReadAccountingReached(pathCombineOk), `read acct ${i}`);
+    const appendFlag = rnd();
+    assert.equal(u(wasm.isaac_log_open_write_mode_va(appendFlag)), u(logOpenWriteModeVa(appendFlag)), `write mode ${i}`);
+    assert.equal(wasm.isaac_log_open_write_fopen_gated(pathCombineOk), logOpenWriteFopenGated(pathCombineOk), `write gate ${i}`);
+    assert.equal(wasm.isaac_log_open_write_returns(fopenOk), logOpenWriteReturns(fopenOk), `write ret ${i}`);
+    assert.equal(u(wasm.isaac_log_open_write_file_after(fileBefore, fopenResult)), u(logOpenWriteFileAfter(fileBefore, fopenResult)), `write file ${i}`);
+    assert.equal(u(wasm.isaac_log_open_write_state_after(stateBefore, fopenOk)), u(logOpenWriteStateAfter(stateBefore, fopenOk)), `write state ${i}`);
+    assert.equal(u(wasm.isaac_log_open_write_path_after(pathBefore, fopenOk, combine2Result)), u(logOpenWritePathAfter(pathBefore, fopenOk, combine2Result)), `write path ${i}`);
+    assert.equal(wasm.isaac_log_open_write_accounting_reached(pathCombineOk), logOpenWriteAccountingReached(pathCombineOk), `write acct ${i}`);
+  }
+  for (let i = 0; i < 120; i += 1) {
+    /* plans: wasm memory struct vs the oracle object */
+    const sc = {
+      pathCombineOk: rnd(),
+      fopenOk: rnd(),
+      fileBefore: rnd(),
+      fopenResult: rnd(),
+      stateBefore: rnd(),
+      pathBefore: rnd(),
+      combine2Result: rnd(),
+      appendFlag: rnd(),
+    };
+    new Uint8Array(wasm.memory.buffer, base, OPEN_READ_PLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_open_read_plan(
+      sc.pathCombineOk, sc.fopenOk, sc.fileBefore, sc.fopenResult,
+      sc.stateBefore, sc.pathBefore, sc.combine2Result, base,
+    );
+    assertOpenReadPlan(readOpenReadPlan(view, base), logOpenReadPlan(sc), `rplan ${i}`);
+    new Uint8Array(wasm.memory.buffer, base, OPEN_WRITE_PLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_open_write_plan(
+      sc.appendFlag, sc.pathCombineOk, sc.fopenOk, sc.fileBefore,
+      sc.fopenResult, sc.stateBefore, sc.pathBefore, sc.combine2Result, base,
+    );
+    assertOpenWritePlan(readOpenWritePlan(view, base), logOpenWritePlan(sc), `wplan ${i}`);
+  }
+});
+
+test("LAW: v10 the open plans, fixed scenarios across every arm", () => {
+  const base = SCRATCH + 0x1200;
+  const scenarios = [
+    /* read: gate blocked — nothing can rescue it */
+    { pathCombineOk: 0, fopenOk: 1, fileBefore: 0x1234, fopenResult: 0, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+    /* read: gate passed, fopen failed — FILE* clobbered, state/path kept */
+    { pathCombineOk: 1, fopenOk: 0, fileBefore: 0x1234, fopenResult: 0, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+    /* read: full success */
+    { pathCombineOk: 0xffffffff, fopenOk: 0xffffffff, fileBefore: 0x0000, fopenResult: 0x5678, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+    /* write: mode select on the byte, no path gate */
+    { appendFlag: 0, pathCombineOk: 0, fopenOk: 1, fileBefore: 0x1234, fopenResult: 0x0000, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+    { appendFlag: 0x100, pathCombineOk: 1, fopenOk: 0, fileBefore: 0x1234, fopenResult: 0, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+    { appendFlag: 0x1ff, pathCombineOk: 0xffffffff, fopenOk: 1, fileBefore: 0x0000, fopenResult: 0x5678, stateBefore: 5, pathBefore: 0x1111, combine2Result: 0x2222 },
+  ];
+  for (const sc of scenarios) {
+    new Uint8Array(wasm.memory.buffer, base, OPEN_READ_PLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_open_read_plan(
+      sc.pathCombineOk ?? 0, sc.fopenOk, sc.fileBefore ?? 0, sc.fopenResult ?? 0,
+      sc.stateBefore ?? 0, sc.pathBefore ?? 0, sc.combine2Result ?? 0, base,
+    );
+    assertOpenReadPlan(readOpenReadPlan(view, base), logOpenReadPlan(sc), `read ${JSON.stringify(sc)}`);
+    new Uint8Array(wasm.memory.buffer, base, OPEN_WRITE_PLAN_SIZE).fill(0xa5);
+    wasm.isaac_log_open_write_plan(
+      sc.appendFlag ?? 0, sc.pathCombineOk ?? 0, sc.fopenOk, sc.fileBefore ?? 0,
+      sc.fopenResult ?? 0, sc.stateBefore ?? 0, sc.pathBefore ?? 0,
+      sc.combine2Result ?? 0, base,
+    );
+    const expected = logOpenWritePlan(sc);
+    assertOpenWritePlan(readOpenWritePlan(view, base), expected, `write ${JSON.stringify(sc)}`);
+  }
+  /* a null out pointer is a no-op (does not fault) */
+  wasm.isaac_log_open_read_plan(1, 1, 0, 0, 0, 0, 0, 0);
+  wasm.isaac_log_open_write_plan(0, 1, 1, 0, 0, 0, 0, 0, 0);
+});
+
+test("LAX: v10 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a52540/);
+  assert.match(h, /0x00a52610/);
+  assert.match(h, /cmp byte ptr \[ebp \+ 0xc\], 0/);
+  assert.match(h, /cmove edx, eax/);
+  assert.match(h, /mov \[edi\+0xc\], eax/);
+  assert.match(h, /UNCONDITIONAL/);
+  assert.match(h, /0x00a2505a/);
+  assert.match(h, /0x00a25107/);
+  assert.match(h, /0x00b9e964/);
+  assert.match(h, /0x00ba51ac/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_open_read_path_gate/);
+  assert.match(src, /open_write_mode_va_impl/);
+  assert.match(src, /0x00a5258c/);
+  assert.match(src, /0x00a52667/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_open_read_path_gate\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_open_write_mode_va\)/);
+  assert.doesNotMatch(src, /\buint8_t\s+\w+\s*[,)]/m);
+
+  const model = readFileSync(join(root, "scripts", "decomp", "log-pure-model.mjs"), "utf8");
+  assert.match(model, /logOpenWriteModeVa/);
+  assert.match(model, /LOG_OPEN_READ_STATE/);
+  assert.match(model, /openReadReturnsImpl/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.doesNotMatch(model, /^\s*\[log-pure-model/);
+  assert.doesNotMatch(model, /artifact:\/\//);
+});
+
+test("LAY: v10 mutation — mode select, state polarity, FILE* store and path gates fail the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  /* Every mutant rebuilds the wasm with ONE flipped term and re-runs the
+     PE-truth law; the assertion must throw, proving the pin discriminates.
+     The source is restored byte-identically in a finally. */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: wb/ab mode select inverted",
+      (b) => b
+        .replace(
+          "? static_cast<uint32_t>(ISAAC_LOG_OPEN_MODE_WB_VA)",
+          "? static_cast<uint32_t>(ISAAC_LOG_OPEN_MODE_AB_VA)")
+        .replace(
+          ": static_cast<uint32_t>(ISAAC_LOG_OPEN_MODE_AB_VA);",
+          ": static_cast<uint32_t>(ISAAC_LOG_OPEN_MODE_WB_VA);"),
+      () => {
+        // flag 0 (append) must select "wb", any nonzero low byte "ab"
+        assert.equal(u(wasm.isaac_log_open_write_mode_va(0)), 0xb9e938, "M1: flag 0 must select \"wb\"");
+        assert.equal(u(wasm.isaac_log_open_write_mode_va(0x1ff)), 0xb6d104, "M1: 0x1ff must select \"ab\"");
+      });
+
+    withMutant("M2: read state polarity flipped to the write's 1",
+      (b) => b.replace(
+        "? static_cast<uint32_t>(ISAAC_LOG_OPEN_READ_STATE)",
+        "? static_cast<uint32_t>(ISAAC_LOG_OPEN_WRITE_STATE)"),
+      () => {
+        // 0x00a52599 stores 0 on success; the v8 fread gate needs 0
+        assert.equal(u(wasm.isaac_log_open_read_state_after(5, 1)), 0, "M2: read success must store state 0");
+        assert.equal(u(wasm.isaac_log_open_write_state_after(5, 1)), 1, "M2: write success keeps 1");
+      });
+
+    withMutant("M3: FILE* store gated on success (keeps old handle on NULL)",
+      (b) => b.replace(
+        "  (void)file_before;\n  return fopen_result;",
+        "  return fopen_result != 0u ? fopen_result : file_before;"),
+      () => {
+        // 0x00a5258c/0x00a52667 OVERWRITE the cell even when fopen failed
+        assert.equal(u(wasm.isaac_log_open_read_file_after(0x1234, 0)), 0, "M3: failed fopen still overwrites the FILE* cell");
+        assert.equal(u(wasm.isaac_log_open_write_file_after(0x1234, 0)), 0, "M3: write body same law");
+      });
+
+    withMutant("M4: read null-path gate dropped (return = fopen only)",
+      (b) => b.replace(
+        "return (path_combine_ok != 0u && fopen_ok != 0u) ? 1 : 0;",
+        "return fopen_ok != 0u ? 1 : 0;"),
+      () => {
+        // a NULL combine must return 0 even when fopen succeeded
+        assert.equal(wasm.isaac_log_open_read_returns(0, 1), 0, "M4: the path gate blocks a NULL combine");
+        assert.equal(wasm.isaac_log_open_read_returns(1, 1), 1, "M4: good path + fopen still returns 1");
+      });
+
+    withMutant("M5: write fopen gated on the combine (copies the read's gate)",
+      (b) => b.replace(
+        "  (void)path_combine_ok;\n  return 0;\n}",
+        "  return path_combine_ok != 0u ? 1 : 0;\n}"),
+      () => {
+        // the write body NEVER gates fopen on the path combine result
+        assert.equal(wasm.isaac_log_open_write_fopen_gated(1), 0, "M5: write fopen never gates on the combine");
+        assert.equal(wasm.isaac_log_open_write_fopen_gated(0xffffffff), 0, "M5: even a wide nonzero combine does not gate");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+
+/* ==================== v11: the dtor inner body 0x00a52410 ==================== */
+
+test("LBE: v11 constants and the dtor-inner census agree with the header contract", () => {
+  /* bodies + identity */
+  assert.equal(LOG_VA_DTOR_INNER, 0x00a52410);
+  assert.equal(LOG_VA_DTOR_INNER_END, 0x00a524a2);
+  assert.equal(LOG_DTOR_INNER_BODY_BYTES, 0x92);
+  assert.equal(LOG_DTOR_INNER_INSN_COUNT, 58);
+  assert.equal(LOG_DTOR_INNER_RET_ARGS, 0);      /* plain `ret` */
+  assert.equal(LOG_DTOR_INNER_SEH_HANDLER, 0x00b12420);
+  /* vtable chain — the base IS the sibling vtable; do not homogenise */
+  assert.equal(LOG_DTOR_INNER_VTABLE_BASE, LOG_SIBLING_VTABLE_VA);
+  assert.equal(LOG_DTOR_INNER_VTABLE_BASE, 0x00b9e940);
+  assert.equal(LOG_DTOR_INNER_VTABLE_MID, 0x00b833d8);
+  assert.equal(LOG_DTOR_INNER_VTABLE_FINAL, 0x00b9c15c);
+  assert.notEqual(LOG_DTOR_INNER_VTABLE_BASE, LOG_DTOR_INNER_VTABLE_MID);
+  assert.notEqual(LOG_DTOR_INNER_VTABLE_MID, LOG_DTOR_INNER_VTABLE_FINAL);
+  /* state: 2, both stores, == the sink's NO_FILE polar value */
+  assert.equal(LOG_DTOR_INNER_STATE_VALUE, 2);
+  assert.equal(LOG_DTOR_INNER_STATE_VALUE, LOG_SINK_STATE_NO_FILE);
+  assert.equal(LOG_DTOR_INNER_STATE_STORES, 2);
+  /* key sites in program order */
+  assert.equal(LOG_VA_DTOR_INNER_VTABLE_STORE1, 0x00a52438);
+  assert.equal(LOG_VA_DTOR_INNER_FCLOSE_GATE, 0x00a5243e);
+  assert.equal(LOG_VA_DTOR_INNER_FCLOSE_CALL, 0x00a52443);
+  assert.equal(LOG_VA_DTOR_INNER_FILE_NULL, 0x00a5244c);
+  assert.equal(LOG_VA_DTOR_INNER_STATE_STORE1, 0x00a52456);
+  assert.equal(LOG_VA_DTOR_INNER_FREE_GATE, 0x00a5245d);
+  assert.equal(LOG_VA_DTOR_INNER_FREE_CALL, 0x00a5246e);
+  assert.equal(LOG_VA_DTOR_INNER_PATH_NULL, 0x00a52476);
+  assert.equal(LOG_VA_DTOR_INNER_STATE_STORE2, 0x00a5247d);
+  assert.equal(LOG_VA_DTOR_INNER_VTABLE_STORE2, 0x00a52486);
+  assert.equal(LOG_VA_DTOR_INNER_VTABLE_STORE3, 0x00a5248c);
+  /* reach + census */
+  assert.equal(LOG_DTOR_INNER_INBOUND_CALLSITES, 3);
+  assert.equal(LOG_DTOR_INNER_RAW_OCCURRENCES, 0);
+  assert.equal(LOG_DTOR_INNER_FCLOSE_IAT_SITES, 8);
+  assert.equal(LOG_IAT_FCLOSE, 0x00b1890c);
+  /* action enum */
+  assert.equal(LOG_DTOR_INNER_ACTION_NONE, 0);
+  assert.equal(LOG_DTOR_INNER_ACTION_FCLOSE, 1);
+  assert.equal(LOG_DTOR_INNER_ACTION_FREE, 2);
+  assert.equal(LOG_DTOR_INNER_ACTIONS_MAX, 2);
+  /* decode census unchanged */
+  assert.equal(LOG_TEXT_INSN_COUNT_V11, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V11, 469);
+  assert.equal(LOG_V11_BATCHED_VAS, 4);
+  assert.equal(LOG_V11_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model */
+  assert.equal(u(wasm.isaac_log_dtor_inner_body_va()), LOG_VA_DTOR_INNER);
+  assert.equal(u(wasm.isaac_log_dtor_inner_body_bytes()), LOG_DTOR_INNER_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_dtor_inner_insn_count()), 58);
+  assert.equal(u(wasm.isaac_log_dtor_inner_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_dtor_inner_seh_handler()), 0xb12420);
+  assert.equal(u(wasm.isaac_log_dtor_inner_inbound_callsites()), 3);
+  assert.equal(u(wasm.isaac_log_dtor_inner_raw_occurrences()), 0);
+  assert.equal(u(wasm.isaac_log_dtor_inner_fclose_iat_sites()), 8);
+  assert.equal(u(wasm.isaac_log_dtor_inner_fclose_iat_va()), 0xb1890c);
+  assert.equal(u(wasm.isaac_log_dtor_inner_free_helper_va()), 0xa648b0);
+  /* JS oracles echo the same numbers */
+  assert.equal(logDtorInnerBodyVa(), LOG_VA_DTOR_INNER);
+  assert.equal(logDtorInnerBodyBytes(), LOG_DTOR_INNER_BODY_BYTES);
+  assert.equal(logDtorInnerInsnCount(), 58);
+  assert.equal(logDtorInnerRetArgs(), 0);
+  assert.equal(logDtorInnerSehHandler(), 0xb12420);
+  assert.equal(logDtorInnerInboundCallsites(), 3);
+  assert.equal(logDtorInnerRawOccurrences(), 0);
+  assert.equal(logDtorInnerFcloseIatSites(), 8);
+  assert.equal(logDtorInnerFcloseIatVa(), 0xb1890c);
+  assert.equal(logDtorInnerFreeHelperVa(), 0xa648b0);
+});
+
+test("LBE: the fclose gate and guest-free gate are FULL-DWORD (wide drives, no pre-mask)", () => {
+  /* 0x00a5243e test eax,eax ; je 0xa52453 and 0x00a5245d test edx,edx ;
+     je 0xa52486 — BOTH read the FULL 32-bit cell. 0x100 (low byte 0)
+     MUST fire both; a low-byte reading would misfire on it. */
+  const cases = [
+    [0x0, 0],
+    [0x1, 1],
+    [0x2, 1],
+    [0x100, 1],
+    [0x1ff, 1],
+    [0x80000000, 1],
+    [0xffffffff, 1],
+  ];
+  for (const [ptr, want] of cases) {
+    assert.equal(
+      wasm.isaac_log_dtor_inner_fclose_gate(ptr),
+      want,
+      `wasm fclose ${ptr.toString(16)}`,
+    );
+    assert.equal(
+      logDtorInnerFcloseGate(ptr),
+      want,
+      `model fclose ${ptr.toString(16)}`,
+    );
+    assert.equal(
+      wasm.isaac_log_dtor_inner_free_gate(ptr),
+      want,
+      `wasm free ${ptr.toString(16)}`,
+    );
+    assert.equal(
+      logDtorInnerFreeGate(ptr),
+      want,
+      `model free ${ptr.toString(16)}`,
+    );
+  }
+  /* the gates drive the ordered host actions: fclose fires FIRST (0xa52443,
+     before the state=2 store), free second (0xa5246e). */
+  assert.equal(wasm.isaac_log_dtor_inner_action_at(0x100, 0, 0), 1, "fclose first, wide file");
+  assert.equal(wasm.isaac_log_dtor_inner_action_at(0x100, 0, 1), 0, "no free");
+  assert.equal(wasm.isaac_log_dtor_inner_action_at(0, 0x100, 0), 0, "no fclose");
+  assert.equal(wasm.isaac_log_dtor_inner_action_at(0, 0x100, 1), 2, "free second, wide path");
+  assert.equal(wasm.isaac_log_dtor_inner_action_count(0x100, 0x1ff), 2, "both fire");
+  assert.equal(wasm.isaac_log_dtor_inner_action_count(0, 0), 0, "neither fires");
+  assert.equal(wasm.isaac_log_dtor_inner_action_is_platform(2), 1, "free is platform");
+  assert.equal(wasm.isaac_log_dtor_inner_action_is_platform(1), 1, "fclose is platform");
+  assert.equal(wasm.isaac_log_dtor_inner_action_is_platform(0), 0, "none is not platform");
+  assert.equal(logDtorInnerActionAt(0x100, 0, 0), 1);
+  assert.equal(logDtorInnerActionAt(0, 0x100, 1), 2);
+  assert.equal(logDtorInnerActionCount(0x100, 0x1ff), 2);
+  assert.equal(logDtorInnerActionCount(0, 0), 0);
+  assert.equal(logDtorInnerActionIsPlatform(2), 1);
+  assert.equal(logDtorInnerActionIsPlatform(0), 0);
+});
+
+test("LBE: the FILE* and path cells are NULLed ONLY on their fire arm", () => {
+  /* mov [esi+0xc], 0 at 0x00a5244c sits INSIDE the fclose arm; mov
+     [esi+8], 0 at 0x00a52476 inside the free arm. A null-everywhere or
+     keep-everywhere mutant changes an observable. */
+  const fileCases = [
+    [0x1234, 0, 0x1234],   /* gate blocked: cell untouched */
+    [0x1234, 1, 0],        /* fclose fired: cell NULLed */
+    [0x0, 1, 0],
+    [0xffffffff, 1, 0],
+    [0xffffffff, 0, 0xffffffff],
+  ];
+  for (const [before, fired, want] of fileCases) {
+    assert.equal(u(wasm.isaac_log_dtor_inner_file_after(before, fired)), want, `wasm file ${before.toString(16)},${fired}`);
+    assert.equal(logDtorInnerFileAfter(before, fired), want, `model file ${before.toString(16)},${fired}`);
+  }
+  const pathCases = [
+    [0xabcd, 0, 0xabcd],
+    [0xabcd, 1, 0],
+    [0x100, 1, 0],
+    [0xffffffff, 0, 0xffffffff],
+  ];
+  for (const [before, fired, want] of pathCases) {
+    assert.equal(u(wasm.isaac_log_dtor_inner_path_after(before, fired)), want, `wasm path ${before.toString(16)},${fired}`);
+    assert.equal(logDtorInnerPathAfter(before, fired), want, `model path ${before.toString(16)},${fired}`);
+  }
+});
+
+test("LBE: BOTH state stores write 2 — the skip arm also gets the store", () => {
+  /* 0x00a52456 mov [esi+4], 2 is UNCONDITIONAL (before the free gate);
+     0x00a5247d re-stores 2 on the free arm. So state_after == 2 for every
+     input; the parameter exists so a keep-old-state mutant is visible. */
+  for (const before of [0, 1, 2, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_dtor_inner_state_after(before)), 2, `wasm state ${before.toString(16)}`);
+    assert.equal(logDtorInnerStateAfter(before), 2, `model state ${before.toString(16)}`);
+  }
+  assert.equal(wasm.isaac_log_dtor_inner_state_value(), 2);
+  assert.equal(logDtorInnerStateValue(), 2);
+  assert.equal(wasm.isaac_log_dtor_inner_state_store_count(), 2);
+  assert.equal(logDtorInnerStateStoreCount(), 2);
+});
+
+test("LBE: vtable chain — base always, mid iff path==0, final always", () => {
+  /* #1 0xb9e940 (0x00a52438) ALWAYS; #2 0xb833d8 (0x00a52486) IFF path==0;
+     #3 0xb9c15c (0x00a5248c) ALWAYS in both arms. */
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_base(), 0xb9e940);
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_mid(), 0xb833d8);
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_final(), 0xb9c15c);
+  assert.equal(logDtorInnerVtableBase(), 0xb9e940);
+  assert.equal(logDtorInnerVtableMid(), 0xb833d8);
+  assert.equal(logDtorInnerVtableFinal(), 0xb9c15c);
+  /* the mid store is the no-free arm: path==0 stores it, ANY nonzero path
+     skips straight to 0xb9c15c */
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0), 1, "path==0 stores the mid vtable");
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0x100), 0, "0x100 skips the mid vtable");
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0x1ff), 0);
+  assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0xffffffff), 0);
+  assert.equal(logDtorInnerVtableMidStored(0), 1);
+  assert.equal(logDtorInnerVtableMidStored(0x100), 0);
+  /* the FINAL store is unconditional: vtable_after is constant */
+  for (const path of [0, 1, 0x100, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_dtor_inner_vtable_after(path)), 0xb9c15c, `wasm vtable_after ${path.toString(16)}`);
+    assert.equal(logDtorInnerVtableAfter(path), 0xb9c15c, `model vtable_after ${path.toString(16)}`);
+  }
+});
+
+test("LBE: v11 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a52410/);
+  assert.match(h, /0x00b833d8/);
+  assert.match(h, /0x00b9c15c/);
+  assert.match(h, /test eax, eax/);
+  assert.match(h, /GUEST-FREE GATE/);
+  assert.match(h, /0x00b12420/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_dtor_inner_fclose_gate/);
+  assert.match(src, /isaac_log_dtor_inner_vtable_mid_stored/);
+  assert.match(src, /dtor_inner_free_gate_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_dtor_inner_fclose_gate\)/);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logDtorInnerFcloseGate/);
+  assert.match(model, /0x00a5243e/);
+  assert.match(model, /0xb833d8/);
+  assert.match(model, /LOG_IAT_FCLOSE/);
+});
+
+test("LBE: mutation — gate width, state polarity, vtable chain and cell-null arms fail the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  /* Every mutant rebuilds the wasm with ONE flipped term and re-runs the
+     PE-truth law; the assertion must throw, proving the pin discriminates.
+     The source is restored byte-identically in a finally. */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: fclose gate narrowed to the LOW BYTE",
+      (b) => b.replace(
+        "  return file_ptr != 0u ? 1 : 0;",
+        "  return (file_ptr & 0xffu) != 0u ? 1 : 0;"),
+      () => {
+        // 0x100 has a zero low byte but the FULL dword fires fclose
+        assert.equal(wasm.isaac_log_dtor_inner_fclose_gate(0x100), 1, "M1: 0x100 must fclose");
+        assert.equal(wasm.isaac_log_dtor_inner_fclose_gate(0xffffffff), 1, "M1: 0xffffffff must fclose");
+      });
+
+    withMutant("M2: guest-free gate narrowed to the LOW BYTE",
+      (b) => b.replace(
+        "  return path_ptr != 0u ? 1 : 0;",
+        "  return (path_ptr & 0xffu) != 0u ? 1 : 0;"),
+      () => {
+        assert.equal(wasm.isaac_log_dtor_inner_free_gate(0x100), 1, "M2: 0x100 must free");
+        assert.equal(wasm.isaac_log_dtor_inner_free_gate(0x80000000), 1, "M2: 0x80000000 must free");
+      });
+
+    withMutant("M3: state polarity flipped to 1 (open) on ALL arms",
+      (b) => b.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_DTOR_INNER_STATE_VALUE);\n}",
+        "  return 1u;\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_dtor_inner_state_after(0)), 2, "M3: dtor closes the state machine to 2");
+        assert.equal(u(wasm.isaac_log_dtor_inner_state_after(1)), 2, "M3: 2, never 1");
+      });
+
+    withMutant("M4: mid vtable stored on the FREE arm instead of path==0",
+      (b) => b.replace(
+        "  return path_ptr == 0u ? 1 : 0;",
+        "  return path_ptr != 0u ? 1 : 0;"),
+      () => {
+        assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0), 1, "M4: path==0 stores the mid vtable");
+        assert.equal(wasm.isaac_log_dtor_inner_vtable_mid_stored(0x100), 0, "M4: 0x100 must skip the mid vtable");
+      });
+
+    withMutant("M5: final vtable folded to the MID vtable on path==0",
+      (b) => b.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_DTOR_INNER_VTABLE_FINAL);\n}",
+        "  return static_cast<uint32_t>(ISAAC_LOG_DTOR_INNER_VTABLE_MID);\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_dtor_inner_vtable_after(0)), 0xb9c15c, "M5: final vtable is 0xb9c15c even on path==0");
+        assert.equal(u(wasm.isaac_log_dtor_inner_vtable_after(0x100)), 0xb9c15c, "M5: final vtable is 0xb9c15c on the free arm");
+      });
+
+    withMutant("M6: FILE* cell NULLed unconditionally (drop the fclose-arm gate)",
+      (b) => b.replace(
+        "  return fclose_fired != 0u ? 0u : file_before;",
+        "  return 0u;"),
+      () => {
+        assert.equal(u(wasm.isaac_log_dtor_inner_file_after(0x1234, 0)), 0x1234, "M6: gate-blocked cell keeps its value");
+      });
+
+    withMutant("M7: path cell NULLed unconditionally",
+      (b) => b.replace(
+        "  return free_fired != 0u ? 0u : path_before;",
+        "  return 0u;"),
+      () => {
+        assert.equal(u(wasm.isaac_log_dtor_inner_path_after(0xabcd, 0)), 0xabcd, "M7: gate-blocked path keeps its value");
+      });
+
+    withMutant("M8: ordered action list puts the FREE first",
+      (b) => b.replace(
+        "  if (index == 0u) {\n    return dtor_inner_fclose_gate_impl(file_ptr) != 0",
+        "  if (index == 1u) {\n    return dtor_inner_fclose_gate_impl(file_ptr) != 0"),
+      () => {
+        assert.equal(wasm.isaac_log_dtor_inner_action_at(0x100, 0x100, 0), 1, "M8: fclose is the FIRST action");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+
+/* ============ v12: the neighbor dtor inner body 0x00a84060 ============ */
+
+test("LBE: v12 constants and the neighbor-inner census agree with the header contract", () => {
+  /* bodies + identity */
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER, 0x00a84060);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_END, 0x00a840dd);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_BODY_BYTES, 0x7d);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_INSN_COUNT, 53);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_RET_ARGS, 0); /* plain `ret` */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_SEH_HANDLER, 0x00af09f0);
+  /* the neighbor SEH handler DIFFERS from the sink inner's — pin the delta */
+  assert.notEqual(LOG_NEIGHBOR_DTOR_INNER_SEH_HANDLER, LOG_DTOR_INNER_SEH_HANDLER);
+  /* vtable chain — BOTH stores unconditional; deltas vs the sink pinned */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_VTABLE_BASE, LOG_NEIGHBOR_DTOR_VTABLE);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_VTABLE_BASE, 0x00ba5520);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL, 0x00ba2218);
+  assert.notEqual(LOG_NEIGHBOR_DTOR_INNER_VTABLE_BASE, LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL);
+  assert.notEqual(LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL, LOG_DTOR_INNER_VTABLE_FINAL);
+  assert.notEqual(LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL, LOG_DTOR_INNER_VTABLE_MID);
+  /* neighbor cell layout */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_PATH_OFFSET, 0x20);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_LOBBY_OFFSET, 0x28);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_SUB_OFFSET, 0x10);
+  /* key sites in program order */
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE1, 0x00a84089);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_FREE_GATE, 0x00a8408f);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_FREE_CALL, 0x00a840a0);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_PATH_NULL, 0x00a840a8);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_RELEASE_CALL, 0x00a840b2);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_LOBBY_NULL, 0x00a840bb);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE2, 0x00a840c2);
+  assert.equal(LOG_VA_NEIGHBOR_DTOR_INNER_SUB_DTOR_CALL, 0x00a840c8);
+  /* reach + census */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_INBOUND_CALLSITES, 2);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_RAW_OCCURRENCES, 0);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_RELEASE_IAT_SITES, 8);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_SUB_DTOR_VA, 0x00426980);
+  /* action enum */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_ACTION_NONE, 0);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_ACTION_FREE, 1);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_ACTION_RELEASE, 2);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_ACTIONS_MAX, 2);
+  /* decode census unchanged */
+  assert.equal(LOG_TEXT_INSN_COUNT_V12, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V12, 469);
+  assert.equal(LOG_V12_BATCHED_VAS, 4);
+  assert.equal(LOG_V12_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model */
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_body_va()), LOG_VA_NEIGHBOR_DTOR_INNER);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_body_bytes()), LOG_NEIGHBOR_DTOR_INNER_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_insn_count()), 53);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_seh_handler()), 0xaf09f0);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_inbound_callsites()), 2);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_raw_occurrences()), 0);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_release_iat_sites()), 8);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_release_iat_va()), 0xb180a4);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_free_helper_va()), 0xa648b0);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_sub_dtor_va()), 0x426980);
+  assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_sub_dtor_offset()), 0x10);
+  /* JS oracles echo the same numbers */
+  assert.equal(logNeighborDtorInnerBodyVa(), LOG_VA_NEIGHBOR_DTOR_INNER);
+  assert.equal(logNeighborDtorInnerBodyBytes(), LOG_NEIGHBOR_DTOR_INNER_BODY_BYTES);
+  assert.equal(logNeighborDtorInnerInsnCount(), 53);
+  assert.equal(logNeighborDtorInnerRetArgs(), 0);
+  assert.equal(logNeighborDtorInnerSehHandler(), 0xaf09f0);
+  assert.equal(logNeighborDtorInnerInboundCallsites(), 2);
+  assert.equal(logNeighborDtorInnerRawOccurrences(), 0);
+  assert.equal(logNeighborDtorInnerReleaseIatSites(), 8);
+  assert.equal(logNeighborDtorInnerReleaseIatVa(), 0xb180a4);
+  assert.equal(logNeighborDtorInnerFreeHelperVa(), 0xa648b0);
+  assert.equal(logNeighborDtorInnerSubDtorVa(), 0x426980);
+  assert.equal(logNeighborDtorInnerSubDtorOffset(), 0x10);
+});
+
+test("LBE: the guest-free gate is FULL-DWORD (wide drives, no pre-mask)", () => {
+  /* 0x00a8408f test edx,edx ; je 0xa840af — reads the FULL 32-bit path
+     cell [this+0x20]. 0x100 (low byte 0) MUST fire; a low-byte reading
+     would misfire on it. */
+  const cases = [
+    [0x0, 0],
+    [0x1, 1],
+    [0x2, 1],
+    [0x100, 1],
+    [0x1ff, 1],
+    [0x80000000, 1],
+    [0xffffffff, 1],
+  ];
+  for (const [ptr, want] of cases) {
+    assert.equal(
+      wasm.isaac_log_neighbor_dtor_inner_free_gate(ptr),
+      want,
+      `wasm free ${ptr.toString(16)}`,
+    );
+    assert.equal(
+      logNeighborDtorInnerFreeGate(ptr),
+      want,
+      `model free ${ptr.toString(16)}`,
+    );
+  }
+  /* the gate drives the ordered host actions: free fires FIRST (0xa840a0,
+     before the release at 0xa840b2); the EOS release ALWAYS fires. */
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_at(0x100, 0), 1, "free first, wide path");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_at(0, 0), 0, "no free");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_at(0x100, 1), 2, "release second");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_at(0, 1), 2, "release fires even with no free");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_count(0x100), 2, "both action slots");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_count(0), 1, "release alone");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_is_platform(1), 1, "free is platform");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_is_platform(2), 1, "release is platform");
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_is_platform(0), 0, "none is not platform");
+  assert.equal(logNeighborDtorInnerActionAt(0x100, 0), 1);
+  assert.equal(logNeighborDtorInnerActionAt(0, 1), 2);
+  assert.equal(logNeighborDtorInnerActionCount(0x100), 2);
+  assert.equal(logNeighborDtorInnerActionCount(0), 1);
+  assert.equal(logNeighborDtorInnerActionIsPlatform(2), 1);
+  assert.equal(logNeighborDtorInnerActionIsPlatform(0), 0);
+});
+
+test("LBE: path cell NULLed on the free arm only; the release is UNCONDITIONAL and gets the PRE-null lobby cell", () => {
+  /* mov [esi+0x20], 0 at 0x00a840a8 sits INSIDE the free arm. A
+     null-everywhere or keep-everywhere mutant changes an observable. */
+  const pathCases = [
+    [0xabcd, 0, 0xabcd],
+    [0xabcd, 1, 0],
+    [0x100, 1, 0],
+    [0xffffffff, 0, 0xffffffff],
+  ];
+  for (const [before, fired, want] of pathCases) {
+    assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_path_after(before, fired)), want, `wasm path ${before.toString(16)},${fired}`);
+    assert.equal(logNeighborDtorInnerPathAfter(before, fired), want, `model path ${before.toString(16)},${fired}`);
+  }
+  /* push [esi+0x28] ; call [0xb180a4] at 0x00a840af/0xb2 has NO gate — it
+     fires for EVERY input, lobby == 0 included. */
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_release_unconditional(), 1, "release gate-free");
+  assert.equal(logNeighborDtorInnerReleaseUnconditional(), 1);
+  /* the release receives the PRE-null cell value (the NULL store at
+     0x00a840bb comes AFTER the call): identity. */
+  const argCases = [
+    [0x0, 0x0],
+    [0x1234, 0x1234],
+    [0x100, 0x100],
+    [0xffffffff, 0xffffffff],
+  ];
+  for (const [before, want] of argCases) {
+    assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_release_arg(before)), want, `wasm release arg ${before.toString(16)}`);
+    assert.equal(logNeighborDtorInnerReleaseArg(before), want, `model release arg ${before.toString(16)}`);
+  }
+  /* mov [esi+0x28], 0 is UNCONDITIONAL: lobby_after == 0 for every input. */
+  for (const before of [0, 1, 0x1234, 0xffffffff]) {
+    assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_lobby_after(before)), 0, `wasm lobby ${before.toString(16)}`);
+    assert.equal(logNeighborDtorInnerLobbyAfter(before), 0, `model lobby ${before.toString(16)}`);
+  }
+});
+
+test("LBE: BOTH lobby-cell NULL and BOTH vtable stores are unconditional (no sink-style mid arm)", () => {
+  /* #1 0xba5520 (0x00a84089, BEFORE the free gate) ALWAYS; #2 0xba2218
+     (0x00a840c2) ALWAYS. There is NO conditional store anywhere in this
+     body — the sink inner's 3-store chain is a DIFFERENT law. */
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_vtable_base(), 0xba5520);
+  assert.equal(wasm.isaac_log_neighbor_dtor_inner_vtable_final(), 0xba2218);
+  assert.equal(logNeighborDtorInnerVtableBase(), 0xba5520);
+  assert.equal(logNeighborDtorInnerVtableFinal(), 0xba2218);
+  for (const path of [0, 1, 0x100, 0x1ff, 0xffffffff]) {
+    assert.equal(wasm.isaac_log_neighbor_dtor_inner_vtable_base_stored(path), 1, `wasm base stored ${path.toString(16)}`);
+    assert.equal(logNeighborDtorInnerVtableBaseStored(path), 1, `model base stored ${path.toString(16)}`);
+    assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_vtable_final_after(path)), 0xba2218, `wasm final after ${path.toString(16)}`);
+    assert.equal(logNeighborDtorInnerVtableFinalAfter(path), 0xba2218, `model final after ${path.toString(16)}`);
+  }
+  /* the ordering is pinned: free -> release -> lobby-NULL -> final vtable
+     -> sub-object dtor (LAST). */
+  assert.ok(LOG_VA_NEIGHBOR_DTOR_INNER_FREE_CALL < LOG_VA_NEIGHBOR_DTOR_INNER_RELEASE_CALL);
+  assert.ok(LOG_VA_NEIGHBOR_DTOR_INNER_RELEASE_CALL < LOG_VA_NEIGHBOR_DTOR_INNER_LOBBY_NULL);
+  assert.ok(LOG_VA_NEIGHBOR_DTOR_INNER_LOBBY_NULL < LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE2);
+  assert.ok(LOG_VA_NEIGHBOR_DTOR_INNER_VTABLE_STORE2 < LOG_VA_NEIGHBOR_DTOR_INNER_SUB_DTOR_CALL);
+});
+
+test("LBE: v12 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a84060/);
+  assert.match(h, /0x00ba2218/);
+  assert.match(h, /0x00af09f0/);
+  assert.match(h, /_EOS_LobbyDetails_Release@4/);
+  assert.match(h, /UNCONDITIONAL/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_neighbor_dtor_inner_free_gate/);
+  assert.match(src, /isaac_log_neighbor_dtor_inner_vtable_base_stored/);
+  assert.match(src, /ndtor_free_gate_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_neighbor_dtor_inner_free_gate\)/);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logNeighborDtorInnerFreeGate/);
+  assert.match(model, /0x00a840b2/);
+  assert.match(model, /0xb180a4/);
+});
+
+test("LBE: mutation — gate width, release gating and vtable/cell arms fail the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  /* Every mutant rebuilds the wasm with ONE flipped term and re-runs the
+     PE-truth law; the assertion must throw, proving the pin discriminates.
+     The source is restored byte-identically in a finally. */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: guest-free gate narrowed to the LOW BYTE",
+      (b) => b.replace(
+        "inline int32_t ndtor_free_gate_impl(uint32_t path_ptr) {\n  return path_ptr != 0u ? 1 : 0;\n}",
+        "inline int32_t ndtor_free_gate_impl(uint32_t path_ptr) {\n  return (path_ptr & 0xffu) != 0u ? 1 : 0;\n}"),
+      () => {
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_free_gate(0x100), 1, "M1: 0x100 must free");
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_free_gate(0xffffffff), 1, "M1: 0xffffffff must free");
+      });
+
+    withMutant("M2: path cell NULLed unconditionally (drop the free-arm gate)",
+      (b) => b.replace(
+        "inline uint32_t ndtor_path_after_impl(uint32_t path_before,\n                                      uint32_t free_fired) {\n  return free_fired != 0u ? 0u : path_before;\n}",
+        "inline uint32_t ndtor_path_after_impl(uint32_t path_before,\n                                      uint32_t free_fired) {\n  return 0u;\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_path_after(0xabcd, 0)), 0xabcd, "M2: gate-blocked path keeps its value");
+      });
+
+    withMutant("M3: the EOS release folded to never-fire",
+      (b) => b.replace(
+        "inline int32_t ndtor_release_unconditional_impl() { return 1; }",
+        "inline int32_t ndtor_release_unconditional_impl() { return 0; }"),
+      () => {
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_release_unconditional(), 1, "M3: release fires for every input");
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_count(0x100), 2, "M3: free + release = 2 actions");
+      });
+
+    withMutant("M4: release argument folded to the POST-null 0",
+      (b) => b.replace(
+        "inline uint32_t ndtor_release_arg_impl(uint32_t lobby_before) {\n  return lobby_before;\n}",
+        "inline uint32_t ndtor_release_arg_impl(uint32_t lobby_before) {\n  return 0u;\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_release_arg(0x1234)), 0x1234, "M4: the release reads the PRE-null cell");
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_release_arg(0xffffffff)), 0xffffffff, "M4: wide pre-null value");
+      });
+
+    withMutant("M5: lobby cell kept instead of NULLed ALWAYS",
+      (b) => b.replace(
+        "inline uint32_t ndtor_lobby_after_impl(uint32_t lobby_before) {\n  (void)lobby_before;\n  return 0u;\n}",
+        "inline uint32_t ndtor_lobby_after_impl(uint32_t lobby_before) {\n  (void)lobby_before;\n  return lobby_before;\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_lobby_after(0x1234)), 0, "M5: lobby cell NULLed on both arms");
+      });
+
+    withMutant("M6: base vtable 0xba5520 stored only on the FREE arm",
+      (b) => b.replace(
+        "inline int32_t ndtor_base_stored_impl(uint32_t path_ptr) {\n  (void)path_ptr;\n  return 1;\n}",
+        "inline int32_t ndtor_base_stored_impl(uint32_t path_ptr) {\n  (void)path_ptr;\n  return path_ptr != 0u ? 1 : 0;\n}"),
+      () => {
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_vtable_base_stored(0), 1, "M6: path==0 still stores 0xba5520");
+      });
+
+    withMutant("M7: final vtable folded to the BASE 0xba5520",
+      (b) => b.replace(
+        "inline uint32_t ndtor_vtable_final_after_impl(uint32_t path_ptr) {\n  (void)path_ptr;\n  return static_cast<uint32_t>(ISAAC_LOG_NEIGHBOR_DTOR_INNER_VTABLE_FINAL);\n}",
+        "inline uint32_t ndtor_vtable_final_after_impl(uint32_t path_ptr) {\n  (void)path_ptr;\n  return static_cast<uint32_t>(ISAAC_LOG_NEIGHBOR_DTOR_INNER_VTABLE_BASE);\n}"),
+      () => {
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_vtable_final_after(0x100)), 0xba2218, "M7: final vtable is 0xba2218 on the free arm");
+        assert.equal(u(wasm.isaac_log_neighbor_dtor_inner_vtable_final_after(0)), 0xba2218, "M7: final vtable is 0xba2218 on the skip arm");
+      });
+
+    withMutant("M8: ordered action list puts the RELEASE first",
+      (b) => b.replace(
+        "  if (index == 0u) {\n    return ndtor_free_gate_impl(path_ptr) != 0",
+        "  if (index == 1u) {\n    return ndtor_free_gate_impl(path_ptr) != 0"),
+      () => {
+        assert.equal(wasm.isaac_log_neighbor_dtor_inner_action_at(0x100, 0), 1, "M8: free is the FIRST action");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+
+/* ============ v13: the sibling vtbl+0x20 flush slot 0x00a52880 ============ */
+
+test("LBG: v13 constants and the flush-slot census agree with the header contract", () => {
+  /* body identity */
+  assert.equal(LOG_VA_FLUSH_SLOT, 0x00a52880);
+  assert.equal(LOG_VA_FLUSH_SLOT_END, 0x00a5288b);
+  assert.equal(LOG_FLUSH_SLOT_BODY_BYTES, 0x0b);
+  assert.equal(LOG_FLUSH_SLOT_INSN_COUNT, 4);
+  assert.equal(LOG_FLUSH_SLOT_FIRST_RET_VA, 0x00a5288a);
+  assert.equal(LOG_FLUSH_SLOT_RET_ARGS, 0); /* plain `ret` */
+  assert.equal(LOG_FLUSH_SLOT_STACK_BYTES_POPPED, 0); /* push/pop balances */
+  /* laws */
+  assert.equal(LOG_FLUSH_SLOT_FILE_OFFSET, 0x0c); /* push [ecx+0xc] */
+  assert.equal(LOG_FLUSH_SLOT_IAT_VA, 0xb1891c);
+  assert.equal(LOG_FLUSH_SLOT_IAT_VA, LOG_IAT_FFLUSH);
+  /* vtable wiring */
+  assert.equal(LOG_FLUSH_SLOT_VTBL_SLOT, 0x20);
+  assert.equal(LOG_FLUSH_SLOT_VTBL_VA, 0x00b9e940);
+  assert.equal(LOG_FLUSH_SLOT_VTBL_ENTRY_VA, 0x00b9e960);
+  assert.equal(LOG_FLUSH_SLOT_VTBL_ENTRY_VA, LOG_VA_SIBLING_VTBL_FLUSH_ENTRY);
+  /* key sites in program order */
+  assert.equal(LOG_FLUSH_SLOT_PUSH_VA, 0x00a52880);
+  assert.equal(LOG_FLUSH_SLOT_CALL_VA, 0x00a52883);
+  assert.equal(LOG_FLUSH_SLOT_POP_VA, 0x00a52889);
+  assert.equal(LOG_FLUSH_SLOT_RET_VA, 0x00a5288a);
+  /* reach + census */
+  assert.equal(LOG_FLUSH_SLOT_INDIRECT_CALLS, 1);
+  assert.equal(LOG_FLUSH_SLOT_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_FLUSH_SLOT_INBOUND, 0);
+  assert.equal(LOG_FLUSH_SLOT_RAW_OCCURRENCES, 1);
+  assert.equal(LOG_FLUSH_SLOT_FFLUSH_IAT_SITES, 6);
+  assert.equal(LOG_FLUSH_SLOT_VTBL_IS_NOP, 0);
+  /* decode census unchanged */
+  assert.equal(LOG_TEXT_INSN_COUNT_V13, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V13, 469);
+  assert.equal(LOG_V13_BATCHED_VAS, 4);
+  assert.equal(LOG_V13_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model */
+  assert.equal(u(wasm.isaac_log_flush_slot_body_va()), LOG_VA_FLUSH_SLOT);
+  assert.equal(u(wasm.isaac_log_flush_slot_body_bytes()), LOG_FLUSH_SLOT_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_flush_slot_insn_count()), 4);
+  assert.equal(u(wasm.isaac_log_flush_slot_first_ret_va()), 0x00a5288a);
+  assert.equal(u(wasm.isaac_log_flush_slot_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_flush_slot_stack_bytes_popped()), 0);
+  assert.equal(u(wasm.isaac_log_flush_slot_file_offset()), 0x0c);
+  assert.equal(u(wasm.isaac_log_flush_slot_iat_va()), 0xb1891c);
+  assert.equal(u(wasm.isaac_log_flush_slot_vtbl_slot()), 0x20);
+  assert.equal(u(wasm.isaac_log_flush_slot_vtbl_va()), 0x00b9e940);
+  assert.equal(u(wasm.isaac_log_flush_slot_vtbl_entry_va()), 0x00b9e960);
+  assert.equal(u(wasm.isaac_log_flush_slot_push_va()), 0x00a52880);
+  assert.equal(u(wasm.isaac_log_flush_slot_call_va()), 0x00a52883);
+  assert.equal(u(wasm.isaac_log_flush_slot_pop_va()), 0x00a52889);
+  assert.equal(u(wasm.isaac_log_flush_slot_ret_va()), 0x00a5288a);
+  assert.equal(u(wasm.isaac_log_flush_slot_indirect_calls()), 1);
+  assert.equal(u(wasm.isaac_log_flush_slot_direct_callsites()), 0);
+  assert.equal(u(wasm.isaac_log_flush_slot_inbound()), 0);
+  assert.equal(u(wasm.isaac_log_flush_slot_raw_occurrences()), 1);
+  assert.equal(u(wasm.isaac_log_flush_slot_fflush_iat_sites()), 6);
+  assert.equal(s(wasm.isaac_log_flush_slot_ret_is_fflush()), 1);
+  assert.equal(s(wasm.isaac_log_flush_slot_vtbl_is_nop()), 0);
+  /* JS oracles echo the same numbers */
+  assert.equal(logFlushSlotBodyVa(), LOG_VA_FLUSH_SLOT);
+  assert.equal(logFlushSlotBodyBytes(), LOG_FLUSH_SLOT_BODY_BYTES);
+  assert.equal(logFlushSlotInsnCount(), 4);
+  assert.equal(logFlushSlotFirstRetVa(), 0x00a5288a);
+  assert.equal(logFlushSlotRetArgs(), 0);
+  assert.equal(logFlushSlotStackBytesPopped(), 0);
+  assert.equal(logFlushSlotFileOffset(), 0x0c);
+  assert.equal(logFlushSlotIatVa(), 0xb1891c);
+  assert.equal(logFlushSlotVtblSlot(), 0x20);
+  assert.equal(logFlushSlotVtblVa(), 0x00b9e940);
+  assert.equal(logFlushSlotVtblEntryVa(), 0x00b9e960);
+  assert.equal(logFlushSlotPushVa(), 0x00a52880);
+  assert.equal(logFlushSlotCallVa(), 0x00a52883);
+  assert.equal(logFlushSlotPopVa(), 0x00a52889);
+  assert.equal(logFlushSlotRetVa(), 0x00a5288a);
+  assert.equal(logFlushSlotIndirectCalls(), 1);
+  assert.equal(logFlushSlotDirectCallsites(), 0);
+  assert.equal(logFlushSlotInbound(), 0);
+  assert.equal(logFlushSlotRawOccurrences(), 1);
+  assert.equal(logFlushSlotFflushIatSites(), 6);
+  assert.equal(logFlushSlotRetIsFflush(), 1);
+  assert.equal(logFlushSlotVtblIsNop(), 0);
+});
+
+test("LBG: the flush-slot fflush call is UNCONDITIONAL — no gate of any kind (wide drives)", () => {
+  /* push [ecx+0xc] ; call [0xb1891c] — the machine has NO test of the
+     FILE*, no state read, no guard read: the call fires for EVERY input.
+     file_ptr is a parameter so a gate mutant is visible. Drive the wide
+     values UNMASKED — a low-byte or !=0 gate would flip on 0x100/0x1ff/
+     the 0 edge. */
+  const files = [0, 1, 2, 0xff, 0x100, 0x1ff, 0x80000000, 0xffffffff];
+  for (const fp of files) {
+    assert.equal(
+      s(wasm.isaac_log_flush_slot_call_unconditional(fp)),
+      1,
+      `wasm unconditional ${fp.toString(16)}`,
+    );
+    assert.equal(
+      logFlushSlotCallUnconditional(fp),
+      1,
+      `model unconditional ${fp.toString(16)}`,
+    );
+  }
+  /* the slot returns fflush's OWN result (EAX untouched between the call
+     and the plain ret); the ret is the first and only return. */
+  assert.equal(s(wasm.isaac_log_flush_slot_ret_is_fflush()), 1);
+  assert.equal(u(wasm.isaac_log_flush_slot_first_ret_va()), LOG_FLUSH_SLOT_RET_VA);
+});
+
+test("LBG: the FILE* field offset is +0xc and the IAT is fflush — the sibling slot is a REAL fflush", () => {
+  /* push [ecx+0xc] — full 32-bit dword read of the FILE* cell. */
+  assert.equal(u(wasm.isaac_log_flush_slot_file_offset()), 0x0c);
+  /* call [0xb1891c] — fflush, verified from the PE import directory this
+     unit (IAT RVA 0x71891c -> api-ms-win-crt-stdio-l1-1-0.dll!fflush). */
+  assert.equal(u(wasm.isaac_log_flush_slot_iat_va()), 0xb1891c);
+  assert.equal(LOG_IAT_FFLUSH, 0xb1891c);
+  /* the sink vtable 0x00ba5184 slot +0x20 is the DIFFERENT nop 0x0040c200
+     (v6 law) — the sibling slot is the real fflush. Delta pinned. */
+  assert.equal(s(wasm.isaac_log_flush_slot_vtbl_is_nop()), 0);
+  assert.equal(s(wasm.isaac_log_sibling_flush_vcall_is_nop()), 0);
+  assert.equal(s(wasm.isaac_log_write_flush_vcall_is_nop()), 1);
+  /* ret width 0 + balanced push/pop: the callee pops 0 stack bytes. */
+  assert.equal(u(wasm.isaac_log_flush_slot_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_flush_slot_stack_bytes_popped()), 0);
+});
+
+test("LBG: v13 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a52880/);
+  assert.match(h, /0xb1891c/);
+  assert.match(h, /0x00b9e960/);
+  assert.match(h, /api-ms-win-crt-stdio-l1-1-0\.dll!fflush/);
+  assert.match(h, /UNCONDITIONAL|unconditional/);
+  assert.match(h, /push \[ecx\+0xc\]/);
+  assert.match(h, /plain `ret`/);
+  assert.match(h, /sibling vtable/);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_flush_slot_call_unconditional/);
+  assert.match(src, /flush_slot_call_unconditional_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_flush_slot_call_unconditional\)/);
+  assert.match(src, /ISAAC_LOG_FLUSH_SLOT_FFLUSH_IAT_SITES/);
+  assert.match(src, /v13 pins/);
+
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logFlushSlotCallUnconditional/);
+  assert.match(model, /0x00a52883/);
+  assert.match(model, /0xb1891c/);
+});
+
+test("LBG: mutation — gate insertion, field offset, IAT and ret-width folds fail the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: fflush call gated on FILE* != 0",
+      (b) => b.replace(
+        "inline int32_t flush_slot_call_unconditional_impl(uint32_t file_ptr) {\n  (void)file_ptr; /* the machine NEVER tests it — see the disasm */\n  return 1;\n}",
+        "inline int32_t flush_slot_call_unconditional_impl(uint32_t file_ptr) {\n  return file_ptr != 0u ? 1 : 0;\n}"),
+      () => {
+        assert.equal(wasm.isaac_log_flush_slot_call_unconditional(0), 1, "M1: NULL FILE* still flushes (CRT fflush(NULL) = flush-all)");
+        assert.equal(wasm.isaac_log_flush_slot_call_unconditional(0x100), 1, "M1: wide file_ptr still flushes");
+      });
+
+    withMutant("M2: FILE* field offset +0x8 instead of +0xc",
+      (b) => b.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_FLUSH_SLOT_FILE_OFFSET);",
+        "return static_cast<uint32_t>(0x8u);"),
+      () => {
+        assert.equal(u(wasm.isaac_log_flush_slot_file_offset()), 0x0c, "M2: push [ecx+0xc]");
+      });
+
+    withMutant("M3: fflush IAT folded to fwrite 0xb188cc",
+      (b) => b.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_FLUSH_SLOT_IAT_VA);",
+        "return static_cast<uint32_t>(ISAAC_LOG_IAT_FWRITE);"),
+      () => {
+        assert.equal(u(wasm.isaac_log_flush_slot_iat_va()), 0xb1891c, "M3: call [0xb1891c] is fflush");
+      });
+
+    withMutant("M4: ret width folded to ret 4 (cdecl cleanup at ret)",
+      (b) => b.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_FLUSH_SLOT_RET_ARGS);",
+        "return static_cast<uint32_t>(4u);"),
+      () => {
+        assert.equal(u(wasm.isaac_log_flush_slot_ret_args()), 0, "M4: plain ret — callee pops 0");
+        assert.equal(u(wasm.isaac_log_flush_slot_stack_bytes_popped()), 0, "M4: push/pop balances internally");
+      });
+
+    withMutant("M5: ret folded to 0 (EAX zeroed before the ret)",
+      (b) => b.replace(
+        "extern \"C\" int32_t isaac_log_flush_slot_ret_is_fflush(void) {\n  /* push [ecx+0xc] ; call [0xb1891c] ; pop ecx ; ret — EAX is never\n     touched between the call and the plain ret. */\n  return 1;\n}",
+        "extern \"C\" int32_t isaac_log_flush_slot_ret_is_fflush(void) {\n  return 0;\n}"),
+      () => {
+        assert.equal(s(wasm.isaac_log_flush_slot_ret_is_fflush()), 1, "M5: the slot returns fflush's own result");
+      });
+
+    withMutant("M6: vtable slot folded to +0x1c (the write slot)",
+      (b) => b.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_FLUSH_SLOT_VTBL_SLOT);",
+        "return static_cast<uint32_t>(0x1cu);"),
+      () => {
+        assert.equal(u(wasm.isaac_log_flush_slot_vtbl_slot()), 0x20, "M6: flush is at vtbl+0x20");
+        assert.equal(u(wasm.isaac_log_flush_slot_vtbl_entry_va()), 0x00b9e960, "M6: 0xb9e940 + 0x20 = 0xb9e960");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+
+/* ============ v14: the fd lock/unlock helper 0x00a52890 ============ */
+
+/* PE-truth reference, transcribed branch-by-branch from the machine
+   (independent of both the C++ and the JS model):
+     call [0xb188f0] _get_osfhandle   ; ALWAYS, first
+     <zero 5 dwords [ebp-0x14..-4]>   ; 20-byte OVERLAPPED
+     call [0xb18254] UnlockFileEx     ; ALWAYS, result ignored
+     mov eax, esi ; and eax, ~4 ; sub 1 ; je / sub 1 ; je / sub 6 ; je
+     case 1: flags = (esi>>2)&1 ; join
+     case 2: flags = ((esi>>2)&1)+2 ; jmp join
+     case 8: return 0
+     default: _errno() ; *errno=0x16 ; or eax,-1 ; return -1
+     join: call [0xb18250] LockFileEx ; test eax,eax ; je default-arm
+           xor eax,eax ; return 0    */
+function fdlockDispatchRef(mode) {
+  let eax = (mode & 0xfffffffb) | 0; /* and eax, ~4 — bit 2 ONLY */
+  eax = (eax - 1) | 0; /* sub eax, 1 */
+  if (eax === 0) return 1;
+  eax = (eax - 1) | 0; /* sub eax, 1 */
+  if (eax === 0) return 2;
+  eax = (eax - 6) | 0; /* sub eax, 6 */
+  if (eax === 0) return 8;
+  return 0;
+}
+function fdlockLockFlagsRef(mode) {
+  const d = fdlockDispatchRef(mode);
+  const bit2 = (mode >>> 2) & 1;
+  if (d === 1) return bit2 >>> 0;
+  if (d === 2) return (bit2 + 2) >>> 0;
+  return 0;
+}
+function fdlockErrnoRef(mode, lockOk) {
+  const d = fdlockDispatchRef(mode);
+  const lockFails = (d === 1 || d === 2) && lockOk === 0 ? 1 : 0;
+  return d === 0 || lockFails !== 0 ? 0x16 : 0;
+}
+function fdlockReturnsRef(mode, lockOk) {
+  return fdlockErrnoRef(mode, lockOk) !== 0 ? -1 : 0;
+}
+
+const FDLOCK_WIDE = [
+  0x000, 0x001, 0x002, 0x004, 0x005, 0x006, 0x008, 0x00c,
+  0x010, 0x012, 0x01c, 0x100, 0x101, 0x104, 0x105, 0x106,
+  0x10e, 0x1ff, 0x7fffffff, 0x80000000, 0xfffffffb, 0xffffffff,
+];
+
+test("LBD: v14 constants and the fdlock census agree with the header contract", () => {
+  /* body identity: 0x00a52890..0x00a52931, 0xa2 bytes, 60 insns,
+     first ret 0x00a52902 (the EINVAL arm), plain `ret` (0 stack args). */
+  assert.equal(LOG_VA_FDLOCK, 0x00a52890);
+  assert.equal(LOG_VA_FDLOCK_END, 0x00a52932); /* first int3 after the ret */
+  assert.equal(LOG_FDLOCK_BODY_BYTES, 0xa2);
+  assert.equal(LOG_FDLOCK_INSN_COUNT, 60);
+  assert.equal(LOG_FDLOCK_FIRST_RET_VA, 0x00a52902);
+  assert.equal(LOG_FDLOCK_RET_ARGS, 0);
+  assert.equal(LOG_FDLOCK_INDIRECT_CALLS, 4);
+  assert.equal(LOG_FDLOCK_DIRECT_CALLSITES, 26);
+  /* C++ / wasm echo the model */
+  assert.equal(u(wasm.isaac_log_fdlock_body_va()), LOG_VA_FDLOCK);
+  assert.equal(u(wasm.isaac_log_fdlock_body_bytes()), LOG_FDLOCK_BODY_BYTES);
+  assert.equal(u(wasm.isaac_log_fdlock_insn_count()), 60);
+  assert.equal(u(wasm.isaac_log_fdlock_first_ret_va()), 0x00a52902);
+  assert.equal(u(wasm.isaac_log_fdlock_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_fdlock_indirect_calls()), 4);
+  assert.equal(u(wasm.isaac_log_fdlock_direct_callsites()), 26);
+  assert.equal(u(wasm.isaac_log_fdlock_overlapped_zero_dwords()), 5);
+  assert.equal(u(wasm.isaac_log_fdlock_overlapped_bytes()), 20);
+  /* JS oracles echo the same numbers */
+  assert.equal(logFdlockBodyVa(), LOG_VA_FDLOCK);
+  assert.equal(logFdlockBodyBytes(), LOG_FDLOCK_BODY_BYTES);
+  assert.equal(logFdlockInsnCount(), 60);
+  assert.equal(logFdlockFirstRetVa(), 0x00a52902);
+  assert.equal(logFdlockRetArgs(), 0);
+  assert.equal(logFdlockIndirectCalls(), 4);
+  assert.equal(logFdlockDirectCallsites(), 26);
+  assert.equal(logFdlockOverlappedZeroDwords(), 5);
+  assert.equal(logFdlockOverlappedBytes(), 20);
+});
+
+test("LBD: the four IAT identities are the PE import-directory slots (this unit)", () => {
+  /* resolved with a pefile walk this unit (log-v14/NOTES.md). */
+  assert.equal(LOG_FDLOCK_IAT_OSFHANDLE, 0xb188f0);
+  assert.equal(LOG_FDLOCK_IAT_UNLOCK, 0xb18254);
+  assert.equal(LOG_FDLOCK_IAT_LOCK, 0xb18250);
+  assert.equal(LOG_FDLOCK_IAT_ERRNO, 0xb18898);
+  assert.equal(u(wasm.isaac_log_fdlock_osfhandle_iat_va()), 0xb188f0);
+  assert.equal(u(wasm.isaac_log_fdlock_unlock_iat_va()), 0xb18254);
+  assert.equal(u(wasm.isaac_log_fdlock_lock_iat_va()), 0xb18250);
+  assert.equal(u(wasm.isaac_log_fdlock_errno_iat_va()), 0xb18898);
+  assert.equal(logFdlockOsfhandleIatVa(), 0xb188f0);
+  assert.equal(logFdlockUnlockIatVa(), 0xb18254);
+  assert.equal(logFdlockLockIatVa(), 0xb18250);
+  assert.equal(logFdlockErrnoIatVa(), 0xb18898);
+});
+
+test("LBD: the dispatch law — and eax,~4 clears BIT 2 ONLY (wide drives)", () => {
+  /* The mask is 0xfffffffb: high bits stay LIVE, so 0x100 / 0x1ff /
+     0xffffffff / 0x105 all land on the default EINVAL arm. Only the
+     exact residues 1, 2 and 8 (mod the bit-2 clear) dispatch. */
+  const cases = {
+    0x000: 0, 0x001: 1, 0x002: 2, 0x004: 0, 0x005: 1, 0x006: 2,
+    0x008: 8, 0x00c: 8, 0x010: 0, 0x012: 0, 0x01c: 0, 0x100: 0,
+    0x101: 0, 0x104: 0, 0x105: 0, 0x106: 0, 0x10e: 0, 0x1ff: 0,
+    0x7fffffff: 0, 0x80000000: 0, 0xfffffffb: 0, 0xffffffff: 0,
+  };
+  for (const [mode, want] of Object.entries(cases)) {
+    const m = Number(mode);
+    assert.equal(fdlockDispatchRef(m), want, `ref ${m.toString(16)}`);
+    assert.equal(fdlockDispatchRef(m), logFdlockDispatch(m), `model ${m.toString(16)}`);
+    assert.equal(u(wasm.isaac_log_fdlock_dispatch(m)), want, `wasm ${m.toString(16)}`);
+  }
+  /* every valid residue: bit 2 toggling stays inside the same arm */
+  for (const m of [1, 2, 5, 6, 8, 12]) {
+    assert.equal(logFdlockDispatch(m), fdlockDispatchRef(m));
+  }
+});
+
+test("LBD: osfhandle and UnlockFileEx are UNCONDITIONAL — the unlock fires before the dispatch", () => {
+  /* call [0xb188f0] is the first instruction effect; call [0xb18254]
+     precedes the dispatch chain — even a mode that then fails with
+     EINVAL has already unlocked (D-LOG-12). */
+  for (const m of FDLOCK_WIDE) {
+    assert.equal(
+      s(wasm.isaac_log_fdlock_osfhandle_unconditional(m, m)),
+      1,
+      `wasm osfhandle ${m.toString(16)}`,
+    );
+    assert.equal(
+      s(wasm.isaac_log_fdlock_unlock_unconditional(m)),
+      1,
+      `wasm unlock ${m.toString(16)}`,
+    );
+    assert.equal(logFdlockOsfhandleUnconditional(m, m), 1, `model ${m.toString(16)}`);
+    assert.equal(logFdlockUnlockUnconditional(m), 1, `model unlock ${m.toString(16)}`);
+  }
+  /* the unlock result (eax) is overwritten by `mov eax, esi` — NEVER
+     tested; only the LockFileEx result reaches the errno arm. */
+  assert.equal(s(wasm.isaac_log_fdlock_unlock_result_ignored()), 1);
+  assert.equal(logFdlockUnlockResultIgnored(), 1);
+});
+
+test("LBD: the lock action — fires on cases 1/2 only, flags = bit2 (+2 on case 2), low=0 high=1 overlapped=NULL", () => {
+  /* flags: case 1 -> (mode>>2)&1 ; case 2 -> ((mode>>2)&1)+2 ; the flags
+     are never computed on cases 8/default. */
+  const flags = { 1: 0, 2: 2, 5: 1, 6: 3, 8: 0, 12: 0, 0x100: 0, 0x105: 0 };
+  for (const [mode, want] of Object.entries(flags)) {
+    const m = Number(mode);
+    assert.equal(fdlockLockFlagsRef(m), want, `flags ref ${m.toString(16)}`);
+    assert.equal(
+      logFdlockLockFlags(m),
+      fdlockLockFlagsRef(m),
+      `flags model ${m.toString(16)}`,
+    );
+    assert.equal(u(wasm.isaac_log_fdlock_lock_flags(m)), want, `flags wasm ${m.toString(16)}`);
+  }
+  for (const m of FDLOCK_WIDE) {
+    const fires = fdlockDispatchRef(m) === 1 || fdlockDispatchRef(m) === 2 ? 1 : 0;
+    assert.equal(s(wasm.isaac_log_fdlock_lock_fires(m)), fires, `fires ${m.toString(16)}`);
+    assert.equal(logFdlockLockFires(m), fires, `fires model ${m.toString(16)}`);
+  }
+  /* the machine arg map (6 dwords top->bottom: &ovl, 0, 1, 0, flags,
+     hFile) gives the 5-arg LockFileEx (hFile, flags, nLow=0, nHigh=1,
+     lpOverlapped=NULL) — deliberately asymmetric with the unlock's
+     (0, 1, 0, &ovl) shape (D-LOG-13). */
+  assert.equal(u(wasm.isaac_log_fdlock_lock_length_low()), 0);
+  assert.equal(u(wasm.isaac_log_fdlock_lock_length_high()), 1);
+  assert.equal(s(wasm.isaac_log_fdlock_lock_overlapped_null()), 1);
+  assert.equal(logFdlockLockLengthLow(), 0);
+  assert.equal(logFdlockLockLengthHigh(), 1);
+  assert.equal(logFdlockLockOverlappedNull(), 1);
+  /* unlock side: reserved 0, low=1, high=0, overlapped USED */
+  assert.equal(u(wasm.isaac_log_fdlock_unlock_reserved()), 0);
+  assert.equal(u(wasm.isaac_log_fdlock_unlock_length_low()), 1);
+  assert.equal(u(wasm.isaac_log_fdlock_unlock_length_high()), 0);
+  assert.equal(s(wasm.isaac_log_fdlock_unlock_uses_overlapped()), 1);
+  assert.equal(logFdlockUnlockReserved(), 0);
+  assert.equal(logFdlockUnlockLengthLow(), 1);
+  assert.equal(logFdlockUnlockLengthHigh(), 0);
+  assert.equal(logFdlockUnlockUsesOverlapped(), 1);
+});
+
+test("LBD: the errno/return law — the EINVAL arm is SHARED by dispatch-default and lock-fail", () => {
+  /* *_errno() = 0x16 then or eax,-1: *errno written and -1 returned on
+     (a) the default dispatch and (b) a FAILED LockFileEx (test eax,eax ;
+     je 0xa528ee). Case 8 never locks, so lock_ok is ignored there. */
+  assert.equal(LOG_FDLOCK_ERRNO_EINVAL, 0x16);
+  assert.equal(LOG_FDLOCK_FAIL_RETURN, 0xffffffff);
+  assert.equal(u(wasm.isaac_log_fdlock_errno_value()), 0x16);
+  assert.equal(u(wasm.isaac_log_fdlock_fail_return()), 0xffffffff);
+  const errnoCases = [
+    [0x100, 0, 0x16], [0x100, 1, 0x16], [0x1ff, 1, 0x16],
+    [0xffffffff, 0, 0x16], [0x105, 1, 0x16],
+    [1, 0, 0x16], [1, 1, 0], [2, 0, 0x16], [2, 1, 0],
+    [5, 0, 0x16], [6, 1, 0], [8, 0, 0], [8, 1, 0], [12, 1, 0],
+    [0, 0, 0x16], [0x10, 1, 0x16],
+  ];
+  for (const [mode, lockOk, want] of errnoCases) {
+    assert.equal(fdlockErrnoRef(mode, lockOk), want, `errno ref ${mode.toString(16)},${lockOk}`);
+    assert.equal(
+      logFdlockErrnoAfter(mode, lockOk),
+      fdlockErrnoRef(mode, lockOk),
+      `errno model ${mode.toString(16)},${lockOk}`,
+    );
+    assert.equal(
+      u(wasm.isaac_log_fdlock_errno_after(mode, lockOk)),
+      want,
+      `errno wasm ${mode.toString(16)},${lockOk}`,
+    );
+    const wantRet = want !== 0 ? -1 : 0;
+    assert.equal(fdlockReturnsRef(mode, lockOk), wantRet, `ret ref ${mode.toString(16)},${lockOk}`);
+    assert.equal(logFdlockReturns(mode, lockOk), wantRet, `ret model ${mode.toString(16)},${lockOk}`);
+    assert.equal(s(wasm.isaac_log_fdlock_returns(mode, lockOk)), wantRet, `ret wasm ${mode.toString(16)},${lockOk}`);
+  }
+  /* the errno store is a dword write of 0x16 to the _errno() cell. */
+  assert.equal(u(wasm.isaac_log_fdlock_errno_after(0x100, 0)), 0x16);
+});
+
+test("LBD: v14 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a52890/);
+  assert.match(h, /0x00a528ee/); /* the shared errno arm VA */
+  assert.match(h, /0x00b18250u/);
+  assert.match(h, /0x00b18254u/);
+  assert.match(h, /0x00b18898u/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_fdlock_dispatch/);
+  assert.match(src, /fdlock_dispatch_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_fdlock_dispatch\)/);
+  assert.match(src, /ISAAC_LOG_FDLOCK_UNLOCK_LENGTH_LOW/);
+  assert.match(src, /v14 pins/);
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logFdlockDispatch/);
+  assert.match(model, /0x00a52902/);
+  assert.match(model, /0xb18250/);
+});
+
+test("LBD: mutation — mask, dispatch, flags, gates and errno folds fail the pinned law", () => {
+    const cleanOriginal = readFileSync(source, "utf8"); /* pre-mutation pristine state for the last-ditch restore (wave-26 hardening GAP B) */
+  /* Every mutant rebuilds the wasm with ONE flipped term and re-runs the
+     PE-truth law; the assertion must throw, proving the pin discriminates.
+     The source is restored byte-identically in a finally. */
+  const withMutant = (label, mutate, check) => {
+    const raw = readFileSync(source, "utf8");
+    const base = raw.replace(/\r\n/g, "\n");
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( bad.replace(/\n/g, "\r\n"));
+    let threw = false;
+    try {
+      wasm = loadExports();
+      view = new DataView(wasm.memory.buffer);
+      check();
+    } catch {
+      threw = true;
+    } finally {
+      writeSourceRetry( raw);
+    }
+    assert.ok(threw, `${label}: mutant survived every pinned assertion`);
+  };
+
+  try {
+    withMutant("M1: dispatch mask folded to 0xff (bit 2 AND high bits cleared)",
+      (b) => b.replace(
+        "static_cast<uint32_t>(ISAAC_LOG_FDLOCK_MODE_MASK)",
+        "static_cast<uint32_t>(0xffu)"),
+      () => {
+        assert.equal(u(wasm.isaac_log_fdlock_dispatch(0x101)), 0, "M1: 0x101&~4 = 0x101 is INVALID");
+        assert.equal(u(wasm.isaac_log_fdlock_dispatch(0x108)), 0, "M1: 0x108&~4 = 0x108 is INVALID");
+      });
+
+    withMutant("M2: the ==2 dispatch arm folded to the default",
+      (b) => b.replace(
+        "  x -= 1u;\n  if (x == 0u) {\n    return static_cast<uint32_t>(ISAAC_LOG_FDLOCK_DISPATCH_LOCK_EXCLUSIVE);\n  }",
+        "  x -= 1u;\n  if (x == 0u) {\n    return static_cast<uint32_t>(ISAAC_LOG_FDLOCK_DISPATCH_NONE);\n  }"),
+      () => {
+        assert.equal(u(wasm.isaac_log_fdlock_dispatch(2)), 2, "M2: mode 2 still dispatches to case 2");
+        assert.equal(u(wasm.isaac_log_fdlock_dispatch(6)), 2, "M2: mode 6 (bit 2 set) still dispatches to case 2");
+      });
+
+    withMutant("M3: case-2 flags +2 dropped (bit2 only, like case 1)",
+      (b) => b.replace(
+        "    return bit2 + 2u;",
+        "    return bit2;"),
+      () => {
+        assert.equal(u(wasm.isaac_log_fdlock_lock_flags(6)), 3, "M3: mode 6 flags = bit2+2 = 3");
+        assert.equal(u(wasm.isaac_log_fdlock_lock_flags(2)), 2, "M3: mode 2 flags = 2 (LOCKFILE_EXCLUSIVE_LOCK)");
+      });
+
+    withMutant("M4: UnlockFileEx gated on a valid mode (D-LOG-12 broken)",
+      (b) => b.replace(
+        "  (void)mode;\n  return 1;\n}\n\nextern \"C\" int32_t isaac_log_fdlock_unlock_result_ignored",
+        "  return fdlock_dispatch_impl(mode) != 0u ? 1 : 0;\n}\n\nextern \"C\" int32_t isaac_log_fdlock_unlock_result_ignored"),
+      () => {
+        assert.equal(s(wasm.isaac_log_fdlock_unlock_unconditional(0x100)), 1, "M4: invalid mode still unlocks first");
+        assert.equal(s(wasm.isaac_log_fdlock_unlock_unconditional(0xffffffff)), 1, "M4: any mode unlocks first");
+      });
+
+    withMutant("M5: errno no longer written on a FAILED LockFileEx",
+      (b) => b.replace(
+        "      lock_fails != 0) {",
+        "      false) {"),
+      () => {
+        assert.equal(u(wasm.isaac_log_fdlock_errno_after(1, 0)), 0x16, "M5: lock fail writes errno 0x16");
+        assert.equal(s(wasm.isaac_log_fdlock_returns(2, 0)), -1, "M5: lock fail returns -1");
+      });
+
+    withMutant("M6: return folded to 0 on EVERY arm",
+      (b) => b.replace(
+        "  return fdlock_errno_after_impl(mode, lock_ok) != 0u\n             ? static_cast<int32_t>(ISAAC_LOG_FDLOCK_FAIL_RETURN)\n             : 0;",
+        "  (void)mode;\n  (void)lock_ok;\n  return 0;"),
+      () => {
+        assert.equal(s(wasm.isaac_log_fdlock_returns(0x100, 0)), -1, "M6: EINVAL arm returns -1");
+        assert.equal(s(wasm.isaac_log_fdlock_returns(1, 0)), -1, "M6: lock-fail returns -1");
+      });
+  } finally {
+    /* restore a clean build regardless of which mutant (if any) threw */
+    writeSourceRetry(cleanOriginal);
+  }
+});
+
+
+test("ZZZ executed assertion count", () => {
+  console.log(`executed assertions: ${ASSERTIONS}`);
+  assert.ok(ASSERTIONS > 60000, `expected >60000 assertions, ran ${ASSERTIONS}`);
+});
+
+
+/* ---- ABI v15: deleting-dtor WRAPPER bodies 0x00a84030 + 0x00a83fa0 ---- */
+
+test("LBD: v15+v16 dtor-wrapper behavioural laws (inner-first + delete composition)", () => {
+  /* W1: inner fires UNCONDITIONALLY, before the gate, for EVERY flag. */
+  for (const fl of [0, 1, 0x100, 0x1ff, 0xfffffffe, 0xffffffff]) {
+    for (const v of [0 /* sink */, 1 /* neighbor */, 2 /* sibling */]) {
+      assert.equal(logDtorIslandInnerFires(fl, v), 1, `inner fires ${fl},${v}`);
+      assert.equal(u(wasm.isaac_log_dtor_island_inner_fires(fl, v)), 1,
+        `wasm inner fires ${fl},${v}`);
+    }
+  }
+
+  /* W2/W3: delete fires iff LOW-BYTE bit0 set; size = gate ? free : 0. */
+  const sizes = [[0, 0x10], [1, 0x30], [2, 0x10]]; /* sink/sibling 0x10, neighbor 0x30 */
+  for (const [v, free] of sizes) {
+    for (const fl of [0, 2, 0x102, 0xfffffffe]) {
+      assert.equal(logDtorIslandSizedDeleteSize(fl, v), 0, `no del ${fl},${v}`);
+      assert.equal(u(wasm.isaac_log_dtor_island_sized_delete_size(fl, v)), 0,
+        `wasm no del ${fl},${v}`);
+    }
+    for (const fl of [1, 0x101, 0x1ff, 0xffffffff]) {
+      assert.equal(logDtorIslandSizedDeleteSize(fl, v), free,
+        `del ${fl},${v} -> ${free}`);
+      assert.equal(u(wasm.isaac_log_dtor_island_sized_delete_size(fl, v)), free,
+        `wasm del ${fl},${v} -> ${free}`);
+    }
+  }
+  /* 0x100 (low byte 0) never deletes even though nonzero. */
+  assert.equal(logDtorIslandSizedDeleteSize(0x100, 0), 0, "0x100 no del");
+  assert.equal(u(wasm.isaac_log_dtor_island_sized_delete_size(0x100, 0)), 0,
+    "wasm 0x100 no del");
+
+  /* W1..W5 composed: the plan. PE variant enum: 0 = SINK (inner 0xa52410,
+     gate 0xa83fb1, vtable 0xba5184 in-wrapper), 1 = NEIGHBOR (inner
+     0xa84060, gate 0xa8403b, no in-wrapper vtable), 2 = SIBLING (inner
+     0xa52410 — the SAME inner as the sink, gate 0xa523eb, no in-wrapper
+     vtable; v16). */
+  {
+    const P = SCRATCH + 0x400;
+    const inst = loadExports();
+    const view = new DataView(inst.memory.buffer);
+    for (const [v, inner, gateVa] of [[0, 0x00a52410, 0x00a83fb1],
+                                      [1, 0x00a84060, 0x00a8403b],
+                                      [2, 0x00a52410, 0x00a523eb]]) {
+      const free = v === 1 ? 0x30 : 0x10;
+      for (const fl of [0, 1, 0x100]) {
+        const plan = logDtorIslandWrapperPlan(fl, v);
+        inst.isaac_log_dtor_island_wrapper_plan(fl, v, P);
+        assert.equal(view.getUint32(P + 0, true), inner, `inner_va ${v},${fl}`);
+        assert.equal(view.getInt32(P + 4, true), 1, `inner_fires ${v},${fl}`);
+        assert.equal(view.getUint32(P + 8, true), gateVa, `gate_va ${v},${fl}`);
+        assert.equal(view.getInt32(P + 12, true), (fl & 1) === 1 ? 1 : 0,
+          `delete_fires ${v},${fl}`);
+        assert.equal(view.getUint32(P + 16, true), (fl & 1) === 1 ? free : 0,
+          `delete_size ${v},${fl}`);
+        assert.equal(view.getUint32(P + 20, true), 0x00aef15c, `delete_va`);
+        assert.equal(view.getInt32(P + 24, true), 1, `returns_this`);
+        assert.equal(view.getUint32(P + 28, true), 4, `ret_args`);
+        /* JS oracle agrees field-by-field. */
+        assert.equal(plan.innerVa, inner, `js inner`);
+        assert.equal(plan.innerFires, 1, `js inner fires`);
+        assert.equal(plan.deleteFires, (fl & 1) === 1 ? 1 : 0, `js d fires`);
+        assert.equal(plan.deleteSize, (fl & 1) === 1 ? free : 0, `js d size`);
+        assert.equal(plan.returnsThis, 1, `js this`);
+        assert.equal(plan.retArgs, 4, `js ret`);
+      }
+    }
+  }
+});
+
+test("LBD: v15 dtor-wrapper mutation discrimination", () => {
+  const before = readFileSync(source, "utf8");
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M1: inner fires only when the gate passes. */
+    withMutant("M1 inner gated on delete",
+      (s) => s.replace(
+        "return 1;",
+        "return isaac_log_dtor_island_delete_needed(delete_flag) != 0u ? 1 : 0;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_inner_fires(0, 0), 1);
+      });
+    /* M2: inner VA swapped between variants. */
+    withMutant("M2 inner VA swapped",
+      (s) => s.replace(
+        "ISAAC_LOG_VA_NEIGHBOR_DTOR_INNER",
+        "ISAAC_LOG_VA_SINK_DTOR_INNER",
+      ),
+      () => {
+        const w = loadExports();
+        const P = SCRATCH + 0x800;
+        w.isaac_log_dtor_island_wrapper_plan(1, 0, P);
+        const view = new DataView(w.memory.buffer);
+        eq(view.getUint32(P + 0, true), 0x00a84060);
+      });
+    /* M3: sink delete size folded to 0x30. */
+    withMutant("M3 sink size folded",
+      (s) => s.replace(
+        "return isaac_log_dtor_island_free_size(variant);",
+        "return 0x30u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_sized_delete_size(1, 1), 0x10);
+      });
+    /* M4: gate inverted (fires on bit0 CLEAR). */
+    withMutant("M4 gate inverted",
+      (s) => s.replace(
+        "isaac_log_dtor_island_delete_needed(delete_flag)",
+        "!isaac_log_dtor_island_delete_needed(delete_flag)",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_sized_delete_size(0, 0), 0);
+        eq(w.isaac_log_dtor_island_sized_delete_size(2, 0), 0);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ---- ABI v16: the SIBLING deleting-dtor WRAPPER 0x00a523e0 ---- */
+
+test("LBD: v16 sibling wrapper — PE evidence in header/model/tests", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a523e0/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_BODY_BYTES = 0x20u/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_INNER = 0x00a52410u/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_GATE_VA = 0x00a523ebu/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_DELETE_CALL_VA = 0x00a523f4u/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_FREE_SIZE = 0x10u/);
+  assert.match(h, /ISAAC_LOG_SIBLING_DTOR_VTABLE = 0x00b9e940u/);
+  const model = readFileSync(
+    join(root, "scripts", "decomp", "log-pure-model.mjs"), "utf8");
+  assert.match(model, /LOG_DTOR_ISLAND_VARIANT_SIBLING = 2/);
+  assert.match(model, /LOG_VA_SIBLING_DTOR = 0x00a523e0/);
+  assert.match(model, /LOG_SIBLING_DTOR_BODY_BYTES = 0x20/);
+  assert.match(model, /LOG_VA_SIBLING_DTOR_GATE = 0x00a523eb/);
+  assert.match(model, /LOG_SIBLING_DTOR_VTABLE = 0x00b9e940/);
+  /* the wrapper stores NO vtable; the INNER (v11, 0xa52438) stores it. */
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /ISAAC_LOG_SIBLING_DTOR_INNER_CALL_VA/);
+  assert.match(src, /ISAAC_LOG_SIBLING_DTOR_GATE_VA/);
+  assert.match(src, /ISAAC_LOG_VA_SIBLING_DTOR_BODY/);
+  /* vtable slot +0 census: 1 raw dword (the slot itself) */
+  assert.equal(LOG_VA_SIBLING_DTOR, 0x00a523e0);
+  assert.equal(LOG_SIBLING_DTOR_FREE_SIZE, LOG_SINK_DTOR_FREE_SIZE);
+});
+
+test("LBD: v16 sibling mutation discrimination (>=4 proven-failing)", () => {
+  const before = readFileSync(source, "utf8");
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* N1: sibling inner folded to the NEIGHBOR inner 0xa84060. */
+    withMutant("N1 sibling inner folded to neighbor",
+      (s) => s.replace(
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_SIBLING_DTOR_INNER);",
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_VA_NEIGHBOR_DTOR_INNER);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_inner_body_va(2), 0x00a52410);
+        eq(u2(w.isaac_log_dtor_island_inner_call_va(2)), 0x00a523e6);
+      });
+    /* N2: sibling free size folded to the NEIGHBOR's 0x30. */
+    withMutant("N2 sibling free size folded to 0x30",
+      (s) => s.replace(
+        ": static_cast<uint32_t>(ISAAC_LOG_SINK_DTOR_FREE_SIZE);",
+        ": static_cast<uint32_t>(ISAAC_LOG_NEIGHBOR_DTOR_FREE_SIZE);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_sized_delete_size(1, 2), 0x10);
+        eq(w.isaac_log_dtor_island_free_size(2), 0x10);
+      });
+    /* N3: sibling vtable folded to the SINK's 0xba5184. */
+    withMutant("N3 sibling vtable folded to sink",
+      (s) => s.replace(
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_SIBLING_DTOR_VTABLE);",
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_SINK_VTABLE_VA);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_dtor_island_vtable_va(2)), 0x00b9e940);
+      });
+    /* N4: variant-2 select falls through to SINK (body_va -> 0xa83fa0). */
+    withMutant("N4 variant-2 select falls to sink",
+      (s) => s.replace(
+        "if (variant == static_cast<uint32_t>(ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING)) {",
+        "if (false && variant == static_cast<uint32_t>(ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING)) {",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_dtor_island_body_va(2)), 0x00a523e0);
+        eq(u2(w.isaac_log_dtor_island_gate_va(2)), 0x00a523eb);
+      });
+    /* N5: wrapper_stores_vtable wrongly 1 for the sibling. */
+    withMutant("N5 sibling stores vtable in wrapper",
+      (s) => s.replace(
+        "return dtor_island_select_impl(variant) ==\n                 static_cast<uint32_t>(ISAAC_LOG_DTOR_ISLAND_VARIANT_SINK)\n             ? 1\n             : 0;",
+        "return 1;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dtor_island_wrapper_stores_vtable(2), 0);
+        eq(w.isaac_log_dtor_island_wrapper_stores_vtable(1), 0);
+      });
+    /* N6: sibling inner_call_va folded to the sink's 0xa83fac. */
+    withMutant("N6 sibling inner call folded to sink",
+      (s) => s.replace(
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_SIBLING_DTOR_INNER_CALL_VA);",
+        "case ISAAC_LOG_DTOR_ISLAND_VARIANT_SIBLING:\n      return static_cast<uint32_t>(ISAAC_LOG_VA_SINK_DTOR_INNER_CALL);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_dtor_island_inner_call_va(2)), 0x00a523e6);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ============ ABI v17: the LOGGER mid-body DISPATCH + TAIL ==============
+   The logger body 0xa112c0 was the v1-era open target. The v1 split landed
+   every decision BEFORE the listener write; v6 pinned the write slot/size/
+   call VAs and the sink body. v17 lands the three remaining MID-body laws
+   (D-LOG-15/16/17): the dispatch nmemb is the SECOND re-derived strlen
+   (0xa11440, after the vsnprintf shim — NOT the append-window snapshot at
+   0xa113dd), the atLineStart compare reads the THIRD re-derived strlen
+   (0xa11453, after the listener vcall 0xa11451), and the dispatch return
+   is dropped. PE-truth transcribed from the full-body decode this unit
+   (cpu-dump/00a112c0.txt, --no-stop-at-ret). */
+
+test("LBH: v17 mid-body constants and program order agree with the header", () => {
+  assert.equal(LOG_VA_DISPATCH_STRLEN_PASS, 0x00a11440);
+  assert.equal(LOG_VA_DISPATCH_NMEMB_PUSH, 0x00a11449);
+  assert.equal(LOG_VA_TAIL_STRLEN_PASS, 0x00a11453);
+  assert.equal(LOG_VA_TAIL_NEWLINE_CMP, 0x00a11469);
+  /* the v6 dispatch pins still stand, and the v17 passes bracket them */
+  assert.equal(LOG_VA_WRITE_LOGGER_SLOT_LOAD, 0x00a11433);
+  assert.equal(LOG_VA_WRITE_LOGGER_CALL, 0x00a11451);
+  assert.ok(LOG_VA_WRITE_LOGGER_SLOT_LOAD < LOG_VA_DISPATCH_STRLEN_PASS);
+  assert.ok(LOG_VA_DISPATCH_STRLEN_PASS < LOG_VA_DISPATCH_NMEMB_PUSH);
+  assert.ok(LOG_VA_DISPATCH_NMEMB_PUSH < LOG_VA_WRITE_LOGGER_CALL);
+  assert.ok(LOG_VA_WRITE_LOGGER_CALL < LOG_VA_TAIL_STRLEN_PASS);
+  assert.ok(LOG_VA_TAIL_STRLEN_PASS < LOG_VA_TAIL_NEWLINE_CMP);
+});
+
+test("LBH: D-LOG-15 — the dispatch nmemb is the RE-DERIVED second strlen", () => {
+  /* The machine computes len1 at 0xa113dd (append window, BEFORE the
+     vsnprintf), then re-derives len2 at 0xa11440 (AFTER the format output
+     was appended) and pushes THAT at 0xa11449. A translation that folds
+     to the append snapshot truncates the listener message to the prefix
+     length. The export is identity on the re-derived value: any pair with
+     differing values discriminates the fold. */
+  const nmemb = wasm.isaac_log_dispatch_nmemb_len;
+  const pairs = [
+    [0, 0],
+    [0, 9],
+    [9, 9],
+    [9, 41],
+    [0x100, 0x1ff],
+    [0xffffffff, 0x100],
+    [0x100, 0xffffffff],
+    [0x2800, 0x2800],
+    [0x2800, 0x2801],
+  ];
+  for (const [app, disp] of pairs) {
+    assert.equal(u(nmemb(app, disp)), u(disp), `nmemb(${app},${disp})`);
+    assert.equal(logDispatchNmembLen(app, disp), u(disp), `model ${app},${disp}`);
+  }
+  assert.equal(u(nmemb(9, 41)), 41, "when len1!=len2 the machine pushes len2");
+  assert.notEqual(u(nmemb(9, 41)), 9, "not folded to the append snapshot");
+  assert.notEqual(u(nmemb(0x2800, 0x2801)), 0x2800);
+});
+
+test("LBH: D-LOG-16 — the newline compare uses the THIRD, post-vcall strlen", () => {
+  /* 0xa11453 re-derives len3 AFTER call esi (0xa11451); the listener holds
+     buf and may modify it. The compare at 0xa11469 reads buf[len3-1]. A
+     fold to len2 (or len1) is wrong on any modified-buffer path. */
+  const tail = wasm.isaac_log_tail_len_after_dispatch;
+  const pairs = [
+    [0, 0],
+    [0, 9],
+    [9, 9],
+    [9, 41],
+    [0x100, 0x1ff],
+    [0xffffffff, 0x100],
+    [0x100, 0xffffffff],
+  ];
+  for (const [d, t] of pairs) {
+    assert.equal(u(tail(d, t)), u(t), `tail(${d},${t})`);
+    assert.equal(logTailLenAfterDispatch(d, t), u(t), `model ${d},${t}`);
+  }
+  assert.equal(u(tail(9, 41)), 41, "when len2!=len3 the compare sees len3");
+  assert.notEqual(u(tail(9, 41)), 9, "not folded to the dispatch snapshot");
+});
+
+test("LBH: D-LOG-17 — the listener-write return is dead on every path", () => {
+  /* call esi at 0xa11451; eax is never consumed: the buffer reset at
+     0xa11470 stores al (the strlen NUL, constant 0 — v1 buffer_reset_byte)
+     and the logger's eax at ret 0xa114a1 is the unlock vcall residue. */
+  assert.equal(s(wasm.isaac_log_dispatch_return_dropped()), 1);
+  assert.equal(logDispatchReturnDropped(), 1);
+  /* cross-law: the reset byte is the strlen NUL, already pinned at v1 —
+     the dispatch result cannot be it (the NUL is unconditional) */
+  assert.equal(u(wasm.isaac_log_buffer_reset_byte()), 0);
+  assert.equal(u(wasm.isaac_log_dispatch_return_dropped()), 1);
+});
+
+test("LBH: v17 VA getters match the header constants (PE-truth)", () => {
+  assert.equal(u(wasm.isaac_log_dispatch_strlen_pass_va()), LOG_VA_DISPATCH_STRLEN_PASS);
+  assert.equal(u(wasm.isaac_log_dispatch_nmemb_push_va()), LOG_VA_DISPATCH_NMEMB_PUSH);
+  assert.equal(u(wasm.isaac_log_tail_strlen_pass_va()), LOG_VA_TAIL_STRLEN_PASS);
+  assert.equal(u(wasm.isaac_log_tail_newline_cmp_va()), LOG_VA_TAIL_NEWLINE_CMP);
+  assert.equal(logDispatchStrlenPassVa(), LOG_VA_DISPATCH_STRLEN_PASS);
+  assert.equal(logDispatchNmembPushVa(), LOG_VA_DISPATCH_NMEMB_PUSH);
+  assert.equal(logTailStrlenPassVa(), LOG_VA_TAIL_STRLEN_PASS);
+  assert.equal(logTailNewlineCmpVa(), LOG_VA_TAIL_NEWLINE_CMP);
+});
+
+test("LBH: randomized differential — mid-body selectors vs the JS oracle", () => {
+  const rnd = makeLcg(0x00a112c0);
+  const draw = () => rnd() >>> 0;
+  for (let i = 0; i < 400; ++i) {
+    const app = draw();
+    const disp = draw();
+    const tail = draw();
+    assert.equal(u(wasm.isaac_log_dispatch_nmemb_len(app, disp)), u(disp),
+      `nmemb draw ${i}`);
+    assert.equal(logDispatchNmembLen(app, disp), u(disp));
+    assert.equal(u(wasm.isaac_log_tail_len_after_dispatch(disp, tail)), u(tail),
+      `tail draw ${i}`);
+    assert.equal(logTailLenAfterDispatch(disp, tail), u(tail));
+    assert.equal(s(wasm.isaac_log_dispatch_return_dropped()), 1);
+    assert.equal(logDispatchReturnDropped(), 1);
+  }
+});
+
+test("LBH: v17 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /D-LOG-15/);
+  assert.match(h, /D-LOG-16/);
+  assert.match(h, /D-LOG-17/);
+  assert.match(h, /ISAAC_LOG_VA_DISPATCH_STRLEN_PASS = 0x00a11440u/);
+  assert.match(h, /ISAAC_LOG_VA_TAIL_NEWLINE_CMP = 0x00a11469u/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_dispatch_nmemb_len/);
+  assert.match(src, /isaac_log_tail_len_after_dispatch/);
+  assert.match(src, /isaac_log_dispatch_return_dropped/);
+  assert.match(src, /D-LOG-15/);
+  assert.match(src, /D-LOG-16/);
+  assert.match(src, /D-LOG-17/);
+  assert.match(src, /ISAAC_LOG_VA_DISPATCH_STRLEN_PASS/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /D-LOG-15/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logDispatchNmembLen/);
+  assert.match(model, /logTailLenAfterDispatch/);
+  assert.match(model, /logDispatchReturnDropped/);
+  assert.match(model, /0x00a11440/);
+  assert.match(model, /0x00a11469/);
+});
+
+test("LBH: v17 mutation — dispatch/tail folds and return-use fail the pinned law", () => {
+  const before = readFileSync(source, "utf8");
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M1: dispatch nmemb folded to the append-window snapshot (D-LOG-15). */
+    withMutant("M1 dispatch nmemb folded to append len1",
+      (s) => s.replace(
+        "  (void)append_len;\n  return dispatch_len;",
+        "  (void)dispatch_len;\n  return append_len;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_dispatch_nmemb_len(9, 41)), 41);
+        eq(u2(w.isaac_log_dispatch_nmemb_len(0x100, 0x1ff)), 0x1ff);
+      });
+    /* M2: tail len folded to the dispatch snapshot (D-LOG-16). */
+    withMutant("M2 tail len folded to dispatch len2",
+      (s) => s.replace(
+        "extern \"C\" uint32_t isaac_log_tail_len_after_dispatch(\n    uint32_t dispatch_len, uint32_t tail_len) {\n  /* D-LOG-16: 0xa11453 re-derives the length AFTER the listener vcall\n     0xa11451; the newline compare at 0xa11469 reads buf[len3-1] with that\n     third-pass value. The dispatch snapshot is not reused. */\n  (void)dispatch_len;\n  return tail_len;",
+        "extern \"C\" uint32_t isaac_log_tail_len_after_dispatch(\n    uint32_t dispatch_len, uint32_t tail_len) {\n  (void)tail_len;\n  return dispatch_len;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_tail_len_after_dispatch(9, 41)), 41);
+        eq(u2(w.isaac_log_tail_len_after_dispatch(0x1ff, 0xffffffff)), 0xffffffff);
+      });
+    /* M3: the dispatch return is USED (D-LOG-17 broken). */
+    withMutant("M3 dispatch return consumed",
+      (s) => s.replace(
+        "extern \"C\" int32_t isaac_log_dispatch_return_dropped(void) {\n  /* D-LOG-17: eax after call esi (0xa11451) is never read — the buffer\n     reset at 0xa11470 stores al = the strlen NUL, and ret (0xa114a1)\n     returns the unlock vcall's residue. */\n  return 1;\n}",
+        "extern \"C\" int32_t isaac_log_dispatch_return_dropped(void) {\n  return 0;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_dispatch_return_dropped(), 1);
+      });
+    /* M4: the tail newline-cmp VA folded to the append-window pass. */
+    withMutant("M4 tail newline cmp VA folded to append pass",
+      (s) => s.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_VA_TAIL_NEWLINE_CMP);",
+        "return static_cast<uint32_t>(ISAAC_LOG_VA_DISPATCH_STRLEN_PASS);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_tail_newline_cmp_va()), 0x00a11469);
+      });
+    /* M5: the dispatch strlen pass VA folded to the append-window pass. */
+    withMutant("M5 dispatch strlen pass VA folded to append pass",
+      (s) => s.replace(
+        "return static_cast<uint32_t>(ISAAC_LOG_VA_DISPATCH_STRLEN_PASS);",
+        "return static_cast<uint32_t>(0x00a113ddu);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_dispatch_strlen_pass_va()), 0x00a11440);
+        eq(u2(w.isaac_log_dispatch_nmemb_push_va()), 0x00a11449);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ============ ABI v18: the shared sub-object VECTOR dtor 0x00426980 ====
+   The dtor-island chain's last host leaf: the neighbor inner calls
+   0x00426980 ALWAYS and LAST (0x00a840c8 lea ecx,[esi+0x10] ; call), and
+   the whole game reuses it for every destroyed std::vector (cross-object:
+   Update tail sweep 0x6fbb6e, exit, hud, ... — 86 E8 call sites + verified
+   tail-jmp thunks, 0 raw dwords). MSVC vector _Tidy_deallocate, NO SEH/GS
+   frame, plain ret 0x4269ca. PE-truth transcribed from the fresh disasm
+   this unit (cpu-dump/00426980.txt). Host: 0xaef15c sized-delete shim +
+   IAT [0xb18894] _invalid_parameter_noinfo_noreturn. */
+
+test("LBH: v18 constants and the sub-dtor census agree with the header contract", () => {
+  assert.equal(LOG_VA_SUB_DTOR, 0x00426980);
+  assert.equal(LOG_SUB_DTOR_END, 0x004269d1);
+  assert.equal(LOG_SUB_DTOR_BODY_BYTES, 0x51);
+  assert.equal(LOG_SUB_DTOR_INSN_COUNT, 36);
+  assert.equal(LOG_SUB_DTOR_FIRST_RET_VA, 0x004269ca);
+  assert.equal(LOG_SUB_DTOR_RET_ARGS, 0);       /* plain ret */
+  assert.equal(LOG_SUB_DTOR_BEGIN_OFFSET, 0);   /* _Myfirst */
+  assert.equal(LOG_SUB_DTOR_MYLAST_OFFSET, 4);  /* null #2 */
+  assert.equal(LOG_SUB_DTOR_MYEND_OFFSET, 8);   /* _Myend (null #3) */
+  assert.equal(LOG_SUB_DTOR_COUNT_MASK, 0xfffffff8);
+  assert.equal(LOG_SUB_DTOR_SMALL_BOUND, 0x1000);
+  assert.equal(LOG_SUB_DTOR_LARGE_SIZE_BIAS, 0x23);
+  assert.equal(LOG_SUB_DTOR_HEADER_DELTA_MAX, 0x1f);
+  assert.equal(LOG_SUB_DTOR_DELETE_VA, 0x00aef15c);
+  assert.equal(LOG_SUB_DTOR_INVALID_IAT, 0x00b18894);
+  assert.equal(LOG_SUB_DTOR_INVALID_CALL_VA, 0x004269cb);
+  assert.equal(LOG_SUB_DTOR_E8_CALLSITES, 86);
+  assert.equal(LOG_SUB_DTOR_RAW_OCCURRENCES, 0);
+  assert.equal(LOG_SUB_DTOR_PLAN_NONE, 0);
+  assert.equal(LOG_SUB_DTOR_PLAN_SMALL, 1);
+  assert.equal(LOG_SUB_DTOR_PLAN_LARGE, 2);
+  assert.equal(LOG_SUB_DTOR_PLAN_INVALID, 3);
+  /* the neighbor inner still pins the sub-object call site + offset */
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_SUB_DTOR_VA, 0x00426980);
+  assert.equal(LOG_NEIGHBOR_DTOR_INNER_SUB_OFFSET, 0x10);
+  /* decode census unchanged (same SHA, deterministic decode) */
+  assert.equal(LOG_TEXT_INSN_COUNT_V18, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V18, 469);
+  assert.equal(LOG_V18_BATCHED_VAS, 3);
+  assert.equal(LOG_V18_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model */
+  assert.equal(u(wasm.isaac_log_sub_dtor_body_va()), LOG_VA_SUB_DTOR);
+  assert.equal(u(wasm.isaac_log_sub_dtor_body_bytes()), 0x51);
+  assert.equal(u(wasm.isaac_log_sub_dtor_insn_count()), 36);
+  assert.equal(u(wasm.isaac_log_sub_dtor_first_ret_va()), 0x4269ca);
+  assert.equal(u(wasm.isaac_log_sub_dtor_ret_args()), 0);
+  assert.equal(u(wasm.isaac_log_sub_dtor_begin_offset()), 0);
+  assert.equal(u(wasm.isaac_log_sub_dtor_mylast_offset()), 4);
+  assert.equal(u(wasm.isaac_log_sub_dtor_myend_offset()), 8);
+  assert.equal(u(wasm.isaac_log_sub_dtor_delete_va()), 0xaef15c);
+  assert.equal(u(wasm.isaac_log_sub_dtor_invalid_iat_va()), 0xb18894);
+  assert.equal(u(wasm.isaac_log_sub_dtor_invalid_call_va()), 0x4269cb);
+  assert.equal(u(wasm.isaac_log_sub_dtor_e8_callsites()), 86);
+  assert.equal(u(wasm.isaac_log_sub_dtor_raw_occurrences()), 0);
+  /* JS oracles echo the same numbers */
+  assert.equal(logSubDtorBodyVa(), LOG_VA_SUB_DTOR);
+  assert.equal(logSubDtorBodyBytes(), 0x51);
+  assert.equal(logSubDtorInsnCount(), 36);
+  assert.equal(logSubDtorFirstRetVa(), 0x4269ca);
+  assert.equal(logSubDtorRetArgs(), 0);
+  assert.equal(logSubDtorBeginOffset(), 0);
+  assert.equal(logSubDtorMylastOffset(), 4);
+  assert.equal(logSubDtorMyendOffset(), 8);
+  assert.equal(logSubDtorDeleteVa(), 0xaef15c);
+  assert.equal(logSubDtorInvalidIatVa(), 0xb18894);
+  assert.equal(logSubDtorInvalidCallVa(), 0x4269cb);
+  assert.equal(logSubDtorE8Callsites(), 86);
+  assert.equal(logSubDtorRawOccurrences(), 0);
+});
+
+test("LBH: the vector begin gate is FULL-DWORD (wide drives, no pre-mask)", () => {
+  /* 0x00426985 test eax,eax ; je 0x4269c9 — FULL 32-bit on the begin
+     cell. 0x100 / 0x1ff / 0xffffffff ALL fire the free AND the nulls;
+     only 0 skips. A low-byte reading misfires on 0x100. */
+  for (const [begin, want] of [
+    [0x0, 0], [0x1, 1], [0x2, 1], [0x100, 1], [0x1ff, 1],
+    [0x80000000, 1], [0xffffffff, 1],
+  ]) {
+    assert.equal(wasm.isaac_log_sub_dtor_needed(begin), want, `wasm needed ${begin.toString(16)}`);
+    assert.equal(logSubDtorNeeded(begin), want, `model needed ${begin.toString(16)}`);
+    /* the null triple runs iff the gate fired */
+    assert.equal(wasm.isaac_log_sub_dtor_null_after(begin, 0x2000, 0xff0), want, `wasm null_after ${begin.toString(16)}`);
+    assert.equal(logSubDtorNullAfter(begin, 0x2000, 0xff0), want, `model null_after ${begin.toString(16)}`);
+    assert.equal(wasm.isaac_log_sub_dtor_null_after(begin, 0xffffffff, 0xffffffff), want, `wasm null_after wide ${begin.toString(16)}`);
+  }
+});
+
+test("LBH: byte count is (end-begin) with 32-bit wrap BEFORE the &~7 mask", () => {
+  /* 0x0042698c sub ecx,eax ; 0x0042698e and ecx,0xfffffff8 — the wrap
+     happens first; the mask is applied to the wrapped difference. */
+  const bc = wasm.isaac_log_sub_dtor_byte_count;
+  const cases = [
+    [0x1000, 0x2000, 0x1000],
+    [0x1000, 0x2009, 0x1008],   /* (0x1009) & ~7 — the mask, not 0x1009 */
+    [0x100, 0x1ff, 0xf8],
+    [0x1000, 0x1fff, 0xff8],    /* (0xfff) & ~7 = 0xff8 — aligned down */
+    [0x0, 0x0, 0x0],
+    [0xfffffff8, 0x0, 0x8],      /* end-begin wraps to 8 */
+    [0x2000, 0x1000, 0xfffff000],/* end < begin wraps to a LARGE count */
+    [0xffffffff, 0xffffffff, 0x0],
+  ];
+  for (const [b, e, want] of cases) {
+    assert.equal(u(bc(b, e)), u(want), `wasm count(${b.toString(16)},${e.toString(16)})`);
+    assert.equal(logSubDtorByteCount(b, e), u(want), `model count(${b.toString(16)},${e.toString(16)})`);
+  }
+  /* small/large split: cmp 0x1000 ; jb — UNSIGNED below */
+  assert.equal(wasm.isaac_log_sub_dtor_large(0x1000, 0x1fff), 0, "0xfff is small");
+  assert.equal(wasm.isaac_log_sub_dtor_large(0x1000, 0x2000), 1, "0x1000 is large");
+  assert.equal(wasm.isaac_log_sub_dtor_large(0x2000, 0x1000), 1, "wrapped count is large");
+  assert.equal(logSubDtorLarge(0x1000, 0x1fff), 0);
+  assert.equal(logSubDtorLarge(0x1000, 0x2000), 1);
+});
+
+test("LBH: the header dance — (u32)(begin-header-4) <= 0x1f, size +0x23", () => {
+  /* 0x00426999 mov edx,[eax-4] ; 0x42699c add ecx,0x23 ; 0x42699f sub
+     eax,edx ; 0x4269a1 add eax,-4 ; 0x4269a4 cmp eax,0x1f ; ja 0x4269cb —
+     the size bias is added BEFORE the sanity check, unconditionally on
+     the large arm; the delta is UNSIGNED above. */
+  const hs = wasm.isaac_log_sub_dtor_header_sane;
+  const saneCases = [
+    [0x1000, 0xff0, 1],     /* delta 0xc */
+    [0x1000, 0xff4, 1],     /* delta 0x8 */
+    [0x1000, 0xfdc, 0],     /* delta 0x20 > 0x1f */
+    [0x1000, 0, 0],         /* huge delta */
+    [0x10, 0xfffffff0, 1],  /* wrap: delta = 0x1c */
+    [0xffffffff, 0xffffffdc, 1], /* wrap: delta = 0x1f (the boundary) */
+    [0xffffffff, 0xffffffd0, 0], /* wrap: delta = 0x2b > 0x1f */
+    [0xffffffff, 0xffffffcf, 0], /* wrap: delta = 0x2c > 0x1f */
+  ];
+  for (const [b, h, want] of saneCases) {
+    assert.equal(hs(b, h), want, `wasm sane(${b.toString(16)},${h.toString(16)})`);
+    assert.equal(logSubDtorHeaderSane(b, h), want, `model sane(${b.toString(16)},${h.toString(16)})`);
+  }
+});
+
+test("LBH: free plan / ptr / size — NONE, SMALL, LARGE and the INVALID abort", () => {
+  const fp = wasm.isaac_log_sub_dtor_free_plan;
+  const ptr = wasm.isaac_log_sub_dtor_free_ptr;
+  const sz = wasm.isaac_log_sub_dtor_free_size;
+  const inv = wasm.isaac_log_sub_dtor_invalid_needed;
+  /* [begin, end, header, plan, free_ptr, free_size] — PE-truth per case:
+     NONE begin==0; SMALL count<0x1000 free(begin,count); LARGE
+     free(header,count+0x23); INVALID host abort (no free). */
+  const cases = [
+    [0x0, 0x2000, 0xff0, 0, 0, 0],                       /* NONE */
+    [0x0, 0xffffffff, 0x12345678, 0, 0, 0],              /* NONE wide */
+    [0x100, 0x1ff, 0, 1, 0x100, 0xf8],                   /* SMALL */
+    [0x1000, 0x1fff, 0x12345678, 1, 0x1000, 0xff8],      /* SMALL (0xff8) */
+    [0xffffffff, 0xffffffff, 0, 1, 0xffffffff, 0],       /* SMALL count 0 */
+    [0x1000, 0x2000, 0xff0, 2, 0xff0, 0x1023],           /* LARGE sane */
+    [0x1000, 0x2009, 0xff0, 2, 0xff0, 0x102b],           /* LARGE (0x1008+0x23) */
+    [0x1000, 0x2000, 0, 3, 0, 0],                        /* INVALID (delta huge) */
+    [0x1000, 0x2000, 0xfdc, 3, 0, 0],                    /* INVALID (delta 0x20) */
+    [0x2000, 0x1000, 0x1fdd, 2, 0x1fdd, 0xfffff023],     /* LARGE wrapped count */
+  ];
+  for (const [b, e, h, plan, p, s] of cases) {
+    assert.equal(u(fp(b, e, h)), plan, `plan(${b.toString(16)},${e.toString(16)},${h.toString(16)})`);
+    assert.equal(logSubDtorFreePlan(b, e, h), plan, `model plan`);
+    assert.equal(u(ptr(b, e, h)), u(p), `ptr`);
+    assert.equal(logSubDtorFreePtr(b, e, h), u(p), `model ptr`);
+    assert.equal(u(sz(b, e, h)), u(s), `size`);
+    assert.equal(logSubDtorFreeSize(b, e, h), u(s), `model size`);
+    assert.equal(inv(b, e, h), plan === 3 ? 1 : 0, `invalid_needed`);
+    assert.equal(logSubDtorInvalidNeeded(b, e, h), plan === 3 ? 1 : 0, `model invalid_needed`);
+  }
+  /* the INVALID arm NEVER frees: plan 3 with ptr/size 0 */
+  assert.equal(u(fp(0x1000, 0x2000, 0)), 3);
+  assert.equal(u(ptr(0x1000, 0x2000, 0)), 0, "INVALID has no free ptr");
+  assert.equal(u(sz(0x1000, 0x2000, 0)), 0, "INVALID has no free size");
+});
+
+test("LBH: the free runs BEFORE the nulls, and the null triple order is pinned", () => {
+  /* 0x4269ad call 0xaef15c < 0x4269b2 [esi]:=0 < 0x4269bb [esi+4]:=0 <
+     0x4269c2 [esi+8]:=0 ; the invalid abort (0x4269cb) sits AFTER the
+     nulls; the ret (0x4269ca) is the join for both free paths. */
+  assert.equal(LOG_SUB_DTOR_FREE_CALL_VA, 0x004269ad);
+  assert.equal(LOG_SUB_DTOR_NULL1_VA, 0x004269b2);
+  assert.equal(LOG_SUB_DTOR_NULL2_VA, 0x004269bb);
+  assert.equal(LOG_SUB_DTOR_NULL3_VA, 0x004269c2);
+  assert.ok(LOG_SUB_DTOR_FREE_CALL_VA < LOG_SUB_DTOR_NULL1_VA);
+  assert.ok(LOG_SUB_DTOR_NULL1_VA < LOG_SUB_DTOR_NULL2_VA);
+  assert.ok(LOG_SUB_DTOR_NULL2_VA < LOG_SUB_DTOR_NULL3_VA);
+  assert.ok(LOG_SUB_DTOR_NULL3_VA < LOG_SUB_DTOR_INVALID_CALL_VA);
+  assert.ok(LOG_SUB_DTOR_FIRST_RET_VA < LOG_SUB_DTOR_INVALID_CALL_VA);
+  /* the null triple is unconditional on BOTH free paths (begin != 0) */
+  assert.equal(wasm.isaac_log_sub_dtor_null_after(0x1000, 0x1fff, 0), 1, "small path nulls");
+  assert.equal(wasm.isaac_log_sub_dtor_null_after(0x1000, 0x2000, 0xff0), 1, "large path nulls");
+  assert.equal(wasm.isaac_log_sub_dtor_null_after(0, 0x2000, 0xff0), 0, "NONE: no nulls");
+});
+
+test("LBH: v18 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00426980/);
+  assert.match(h, /_Tidy_deallocate/);
+  assert.match(h, /0xfffffff8/);
+  assert.match(h, /ISAAC_LOG_SUB_DTOR_SMALL_BOUND = 0x1000u/);
+  assert.match(h, /ISAAC_LOG_SUB_DTOR_LARGE_SIZE_BIAS = 0x23u/);
+  assert.match(h, /ISAAC_LOG_SUB_DTOR_HEADER_DELTA_MAX = 0x1fu/);
+  assert.match(h, /_invalid_parameter/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_sub_dtor_needed/);
+  assert.match(src, /isaac_log_sub_dtor_free_plan/);
+  assert.match(src, /isaac_log_sub_dtor_header_sane/);
+  assert.match(src, /ISAAC_LOG_SUB_DTOR_PLAN_INVALID/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sub_dtor_free_plan\)/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v18: the shared sub-object VECTOR dtor/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logSubDtorFreePlan/);
+  assert.match(model, /logSubDtorHeaderSane/);
+  assert.match(model, /0x00426980/);
+  assert.match(model, /0x00b18894/);
+});
+
+test("LBH: v18 mutation — gate width, mask, split bound, ptr and size bias folds fail", () => {
+  const before = readFileSync(source, "utf8");
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M1: the begin gate narrowed to the LOW BYTE — 0x100 must fire. */
+    withMutant("M1 begin gate narrowed to low byte",
+      (s) => s.replace(
+        "inline int32_t sub_dtor_needed_impl(uint32_t begin) {\n  return begin != 0u ? 1 : 0;\n}",
+        "inline int32_t sub_dtor_needed_impl(uint32_t begin) {\n  return (begin & 0xffu) != 0u ? 1 : 0;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_sub_dtor_needed(0x100), 1);
+        eq(w.isaac_log_sub_dtor_needed(0x0), 0);
+      });
+    /* M2: the &~7 count mask dropped — 0x1009 must become 0x1008. */
+    withMutant("M2 count mask dropped",
+      (s) => s.replace(
+        "  return (end - begin) & static_cast<uint32_t>(ISAAC_LOG_SUB_DTOR_COUNT_MASK);",
+        "  return (end - begin);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sub_dtor_byte_count(0x1000, 0x2009)), 0x1008);
+      });
+    /* M3: the small/large bound inverted (large iff count < 0x1000). */
+    withMutant("M3 small/large split inverted",
+      (s) => s.replace(
+        "  return sub_dtor_byte_count_impl(begin, end) >=\n                 static_cast<uint32_t>(ISAAC_LOG_SUB_DTOR_SMALL_BOUND)",
+        "  return sub_dtor_byte_count_impl(begin, end) <\n                 static_cast<uint32_t>(ISAAC_LOG_SUB_DTOR_SMALL_BOUND)",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sub_dtor_free_plan(0x1000, 0x1fff, 0x12345678)), 1, "0xfff stays SMALL");
+        eq(u2(w.isaac_log_sub_dtor_free_plan(0x1000, 0x2000, 0xff0)), 2, "0x1000 stays LARGE");
+      });
+    /* M4: the large-arm free ptr folded to BEGIN (never the header). */
+    withMutant("M4 large free ptr folded to begin",
+      (s) => s.replace(
+        "    return header; /* mov eax,edx — the header on the large arm */",
+        "    return begin;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sub_dtor_free_ptr(0x1000, 0x2000, 0xff0)), 0xff0);
+      });
+    /* M5: the large-arm size bias +0x23 dropped. */
+    withMutant("M5 large size bias dropped",
+      (s) => s.replace(
+        "    return count + static_cast<uint32_t>(ISAAC_LOG_SUB_DTOR_LARGE_SIZE_BIAS);",
+        "    return count;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sub_dtor_free_size(0x1000, 0x2000, 0xff0)), 0x1023);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ============ ABI v19: the open-helper path-combine 0x00a5a7a0 ====
+   The shared open-helper combine, flipped HOST -> PURE this unit
+   (standing-host since v10). combine(ecx=path, edx=base,
+   [ebp+8]=lowercase flag, [ebp+0xc]=trailing-slash flag): inline
+   strlen lens (NULL -> 0), has-sep detect on the base tail, both-empty
+   counted-empty arm (malloc(5), header dword 5, payload "" at +4,
+   64-bit counter += 5 at init+0x30 or 0xc7f618; fail -> broadcast
+   0x7fcb9dd6 + directed null-write crash, no value), size law
+   (byte)flag + 2 + len_base + len_path, tracked alloc mode 0 via
+   0xa648b0 (host), mode selection (copy-path / copy-base / join),
+   join fmt = has_sep ? "%s%s" (0xb60c28) : "%s/%s" (0xb9ee70), per-char
+   lowercase gate (gated + 8-bit (ch-0x41) <= 0x19) + UNCONDITIONAL
+   backslash->slash, trailing "/" append decision, return out.
+   Host: malloc [0xb187e0], strncpy_s [0xb18938], strcat_s [0xb18930],
+   __stdio_common_vsprintf_s [0xb188e4] via shim 0x652a30, tracked
+   allocator 0xa648b0, fail broadcast 0xa23200 (list head 0xc37974).
+   Census (this unit): 46 direct callsites, zero escapes, zero
+   jcc/push/mov-imm forms, zero raw dwords, no mid-body inbound.
+   Body 0xa5a7a0..0xa5a938 (0x199 bytes, 166 insns, 3 rets), 7 int3
+   pad, next function 0xa5a940. */
+
+test("LBH: v19 constants and the combine census agree with the header contract", () => {
+  assert.equal(LOG_VA_OPEN_COMBINE, 0x00a5a7a0);
+  assert.equal(LOG_OPEN_COMBINE_END, 0x00a5a939);
+  assert.equal(LOG_OPEN_COMBINE_BODY_BYTES, 0x199);
+  assert.equal(LOG_OPEN_COMBINE_INSN_COUNT, 166);
+  assert.equal(LOG_OPEN_COMBINE_FIRST_RET_VA, 0x00a5a83a);
+  assert.equal(LOG_OPEN_COMBINE_RET_ARGS, 0);       /* plain ret */
+  assert.equal(LOG_OPEN_COMBINE_RETS, 3);           /* 83a / 854 / 938 */
+  assert.equal(LOG_OPEN_COMBINE_INBOUND_CALLSITES, 46);
+  assert.equal(LOG_OPEN_COMBINE_RAW_OCCURRENCES, 0);
+  assert.equal(LOG_OPEN_COMBINE_SEP_SLASH, 0x2f);
+  assert.equal(LOG_OPEN_COMBINE_SEP_BACKSLASH, 0x5c);
+  assert.equal(LOG_OPEN_COMBINE_JOIN_SEP_VA, 0x00b60c28);   /* "%s%s" */
+  assert.equal(LOG_OPEN_COMBINE_JOIN_NOSEP_VA, 0x00b9ee70); /* "%s/%s" */
+  assert.equal(LOG_OPEN_COMBINE_SLASH_STR_VA, 0x00b6db28);  /* "/" */
+  assert.equal(LOG_OPEN_COMBINE_FAIL_CODE, 0x7fcb9dd6);
+  assert.equal(LOG_OPEN_COMBINE_FAIL_BROADCAST_VA, 0x00a23200);
+  assert.equal(LOG_OPEN_COMBINE_FAIL_LIST_HEAD_VA, 0x00c37974);
+  assert.equal(LOG_OPEN_COMBINE_ALLOC_VA, 0x00a648b0);
+  assert.equal(LOG_OPEN_COMBINE_VSPRINTF_S_VA, 0x00652a30);
+  assert.equal(LOG_OPEN_COMBINE_OPTIONS_GETTER, 0x0041d4c0);
+  assert.equal(LOG_OPEN_COMBINE_OPTIONS_VA, 0x00c71648);
+  assert.equal(LOG_OPEN_COMBINE_MALLOC_IAT, 0x00b187e0);
+  assert.equal(LOG_OPEN_COMBINE_STRNCPY_S_IAT, 0x00b18938);
+  assert.equal(LOG_OPEN_COMBINE_STRCAT_S_IAT, 0x00b18930);
+  assert.equal(LOG_OPEN_COMBINE_VSPRINTF_S_IAT, 0x00b188e4);
+  assert.equal(LOG_OPEN_COMBINE_COUNTER_DEFAULT_VA, 0x00c7f618);
+  assert.equal(LOG_OPEN_COMBINE_COUNTER_INIT_OFFSET, 0x30);
+  assert.equal(LOG_OPEN_COMBINE_INIT_OBJECT_VA, 0x00c7de78);
+  assert.equal(LOG_OPEN_COMBINE_BASE_GLOBAL_VA, 0x00c5aa98);
+  assert.equal(LOG_OPEN_COMBINE_BOTH_EMPTY_HEADER, 5);
+  assert.equal(LOG_OPEN_COMBINE_BOTH_EMPTY_DELTA, 5);
+  assert.equal(LOG_OPEN_COMBINE_SIZE_SLACK, 2);
+  assert.equal(LOG_OPEN_COMBINE_MODE_COPY_PATH, 0);
+  assert.equal(LOG_OPEN_COMBINE_MODE_COPY_BASE, 1);
+  assert.equal(LOG_OPEN_COMBINE_MODE_JOIN, 2);
+  /* decode census unchanged (same SHA, deterministic decode) */
+  assert.equal(LOG_TEXT_INSN_COUNT_V19, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V19, 469);
+  assert.equal(LOG_V19_BATCHED_VAS, 7);
+  assert.equal(LOG_V19_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model (self-built: no dependency on the suite
+     order under --test-name-pattern runs) */
+  const w = loadExports();
+  assert.equal(u(w.isaac_log_combine_body_va()), 0xa5a7a0);
+  assert.equal(u(w.isaac_log_combine_end_va()), 0xa5a939);
+  assert.equal(u(w.isaac_log_combine_body_bytes()), 0x199);
+  assert.equal(u(w.isaac_log_combine_insn_count()), 166);
+  assert.equal(u(w.isaac_log_combine_first_ret_va()), 0xa5a83a);
+  assert.equal(u(w.isaac_log_combine_ret_args()), 0);
+  assert.equal(u(w.isaac_log_combine_rets()), 3);
+  assert.equal(u(w.isaac_log_combine_inbound_callsites()), 46);
+  assert.equal(u(w.isaac_log_combine_raw_occurrences()), 0);
+  assert.equal(u(w.isaac_log_combine_join_sep_va()), 0xb60c28);
+  assert.equal(u(w.isaac_log_combine_join_nosep_va()), 0xb9ee70);
+  assert.equal(u(w.isaac_log_combine_slash_str_va()), 0xb6db28);
+  assert.equal(u(w.isaac_log_combine_fail_broadcast_va()), 0xa23200);
+  assert.equal(u(w.isaac_log_combine_alloc_va()), 0xa648b0);
+  assert.equal(u(w.isaac_log_combine_malloc_iat_va()), 0xb187e0);
+  assert.equal(u(w.isaac_log_combine_strncpy_s_iat_va()), 0xb18938);
+  assert.equal(u(w.isaac_log_combine_strcat_s_iat_va()), 0xb18930);
+  assert.equal(u(w.isaac_log_combine_fail_code()), 0x7fcb9dd6);
+  /* JS oracles echo the same numbers */
+  assert.equal(logCombineBodyVa(), LOG_VA_OPEN_COMBINE);
+  assert.equal(logCombineEndVa(), LOG_OPEN_COMBINE_END);
+  assert.equal(logCombineBodyBytes(), LOG_OPEN_COMBINE_BODY_BYTES);
+  assert.equal(logCombineInsnCount(), LOG_OPEN_COMBINE_INSN_COUNT);
+  assert.equal(logCombineFirstRetVa(), LOG_OPEN_COMBINE_FIRST_RET_VA);
+  assert.equal(logCombineRetArgs(), LOG_OPEN_COMBINE_RET_ARGS);
+  assert.equal(logCombineRets(), LOG_OPEN_COMBINE_RETS);
+  assert.equal(logCombineInboundCallsites(), LOG_OPEN_COMBINE_INBOUND_CALLSITES);
+  assert.equal(logCombineRawOccurrences(), LOG_OPEN_COMBINE_RAW_OCCURRENCES);
+  assert.equal(logCombineJoinSepVa(), LOG_OPEN_COMBINE_JOIN_SEP_VA);
+  assert.equal(logCombineJoinNosepVa(), LOG_OPEN_COMBINE_JOIN_NOSEP_VA);
+  assert.equal(logCombineSlashStrVa(), LOG_OPEN_COMBINE_SLASH_STR_VA);
+  assert.equal(logCombineFailBroadcastVa(), LOG_OPEN_COMBINE_FAIL_BROADCAST_VA);
+  assert.equal(logCombineAllocVa(), LOG_OPEN_COMBINE_ALLOC_VA);
+  assert.equal(logCombineMallocIatVa(), LOG_OPEN_COMBINE_MALLOC_IAT);
+  assert.equal(logCombineStrncpySIatVa(), LOG_OPEN_COMBINE_STRNCPY_S_IAT);
+  assert.equal(logCombineStrcatSIatVa(), LOG_OPEN_COMBINE_STRCAT_S_IAT);
+  assert.equal(logCombineFailCode(), LOG_OPEN_COMBINE_FAIL_CODE);
+});
+
+test("LBH: the combine separator gate is BYTE-wide and the both-empty arm is exact", () => {
+  const w = loadExports();
+  const sep = w.isaac_log_combine_has_trailing_sep;
+  /* 0xa5a7df je 0xa5a7f6 — len_base == 0 CLEARS the flag without a
+     base[-1] read; then cmp '/', cmp '\\'. */
+  assert.equal(sep(0, 0x2f), 0);
+  assert.equal(sep(0, 0x5c), 0);
+  assert.equal(sep(3, 0x2f), 1);
+  assert.equal(sep(3, 0x5c), 1);
+  assert.equal(sep(3, 0x78), 0);
+  /* the last-byte compare is 8-bit: 0x12f reads as 0x2f */
+  assert.equal(sep(3, 0x12f), 1);
+  assert.equal(sep(1, 0x15c), 1);
+  assert.equal(sep(1, 0x101), 0);
+  /* both-empty arm gate (test esi,esi / test edi,edi — FULL dword) */
+  assert.equal(w.isaac_log_combine_both_empty(0, 0), 1);
+  assert.equal(w.isaac_log_combine_both_empty(0, 1), 0);
+  assert.equal(w.isaac_log_combine_both_empty(1, 0), 0);
+  assert.equal(w.isaac_log_combine_both_empty(0x100, 0), 0);
+  /* counter selection: init_ptr ? init_ptr+0x30 : 0xc7f618 */
+  assert.equal(u(w.isaac_log_combine_counter_va(0)), 0xc7f618);
+  assert.equal(u(w.isaac_log_combine_counter_va(0x12345000)), 0x12345030);
+  assert.equal(u(w.isaac_log_combine_counter_va(0xfffffff0)), 0x20); /* wrap */
+  /* both-empty header + 64-bit delta */
+  assert.equal(u(w.isaac_log_combine_both_empty_header()), 5);
+  assert.equal(u(w.isaac_log_combine_both_empty_delta()), 5);
+  /* fail arm: broadcast then directed crash, no value */
+  assert.equal(w.isaac_log_combine_fail_crashes(), 1);
+  assert.equal(u(w.isaac_log_combine_fail_code()), 0x7fcb9dd6);
+});
+
+test("LBH: the combine size law and the mode/format selection are exact", () => {
+  const w = loadExports();
+  const size = w.isaac_log_combine_alloc_size;
+  /* movzx eax, byte [ebp+0xc]; add eax,2; add eax,edi; add eax,esi */
+  assert.equal(u(size(1, 2, 0)), 5);
+  assert.equal(u(size(1, 2, 1)), 6);
+  assert.equal(u(size(0, 0, 0)), 2);
+  assert.equal(u(size(0, 0, 1)), 3);
+  /* the flag is BYTE-zero-extended: 0x101 -> 1 */
+  assert.equal(u(size(1, 2, 0x101)), 6);
+  /* 32-bit wrap on the adds */
+  assert.equal(u(size(0xfffffffe, 0, 0)), 0);
+  assert.equal(u(size(0xffffffff, 0, 1)), 2);
+  /* lea ecx,[esi+1] — copy count includes the NUL */
+  assert.equal(u(w.isaac_log_combine_copy_count(0)), 1);
+  assert.equal(u(w.isaac_log_combine_copy_count(5)), 6);
+  assert.equal(u(w.isaac_log_combine_copy_count(0xffffffff)), 0);
+  /* mode: base empty -> copy path; path empty -> copy base; else join */
+  assert.equal(u(w.isaac_log_combine_mode(5, 0)), LOG_OPEN_COMBINE_MODE_COPY_PATH);
+  assert.equal(u(w.isaac_log_combine_mode(0, 5)), LOG_OPEN_COMBINE_MODE_COPY_BASE);
+  assert.equal(u(w.isaac_log_combine_mode(5, 7)), LOG_OPEN_COMBINE_MODE_JOIN);
+  assert.equal(u(w.isaac_log_combine_mode(0x100, 0)), LOG_OPEN_COMBINE_MODE_COPY_PATH);
+  /* join separator decision + fmt VAs */
+  assert.equal(u(w.isaac_log_combine_join_uses_sep(0)), 1);   /* "%s/%s" */
+  assert.equal(u(w.isaac_log_combine_join_uses_sep(1)), 0);   /* "%s%s" */
+  assert.equal(u(w.isaac_log_combine_join_uses_sep(0x101)), 0); /* byte 1 */
+  assert.equal(u(w.isaac_log_combine_join_sep_va()), 0xb60c28);
+  assert.equal(u(w.isaac_log_combine_join_nosep_va()), 0xb9ee70);
+  assert.equal(u(w.isaac_log_combine_slash_str_va()), 0xb6db28);
+});
+
+test("LBH: the normalize loop is byte-gate exact (lowercase gate + unconditional slash)", () => {
+  const w = loadExports();
+  const n = w.isaac_log_combine_normalize_char;
+  /* flag off: identity except backslash (UNCONDITIONAL conversion) */
+  assert.equal(u(n(0x41, 0)), 0x41);   /* 'A' unchanged without the flag */
+  assert.equal(u(n(0x5c, 0)), 0x2f);   /* '\' -> '/' ALWAYS */
+  assert.equal(u(n(0x2f, 0)), 0x2f);   /* '/' stays */
+  /* flag on: A-Z -> a-z via (uint8)(ch-0x41) <= 0x19 */
+  assert.equal(u(n(0x41, 1)), 0x61);   /* 'A' -> 'a' */
+  assert.equal(u(n(0x5a, 1)), 0x7a);   /* 'Z' -> 'z' */
+  assert.equal(u(n(0x30, 1)), 0x30);   /* '0' untouched */
+  assert.equal(u(n(0x5b, 1)), 0x5b);   /* '[' untouched (0x1a > 0x19) */
+  assert.equal(u(n(0x61, 1)), 0x61);   /* already lowercase */
+  /* 8-bit wrap: 0x40-0x41 = 0xff and 0xc1-0x41 = 0x80 both > 0x19 */
+  assert.equal(u(n(0x40, 1)), 0x40);   /* '@' */
+  assert.equal(u(n(0xc1, 1)), 0xc1);   /* wrapped byte stays */
+  /* WIDE inputs are narrowed to the byte */
+  assert.equal(u(n(0x141, 1)), 0x61);  /* 0x141 -> 'A' -> 'a' */
+  assert.equal(u(n(0x15c, 1)), 0x2f);  /* 0x15c -> '\' -> '/' */
+  /* the flag gate itself is byte-wide: mov ah, byte [ebp+8] */
+  assert.equal(u(n(0x41, 0x100)), 0x41); /* byte 0 -> no lowercase */
+  assert.equal(u(n(0x41, 0x101)), 0x61); /* byte 1 -> lowercase */
+  /* lowercase runs BEFORE the slash conversion, on the stored byte */
+  assert.equal(u(n(0x5c, 1)), 0x2f);
+});
+
+test("LBH: the trailing-slash append decision is exact", () => {
+  const w = loadExports();
+  const t = w.isaac_log_combine_trailing_needed;
+  /* cmp byte [ebp+0xc],0 ; je skip  +  cmp byte [out+len-1],'/' ; je skip */
+  assert.equal(t(0, 0x2f), 0);   /* flag off */
+  assert.equal(t(0, 0x61), 0);
+  assert.equal(t(1, 0x61), 1);   /* flag on, last != '/' -> append */
+  assert.equal(t(1, 0x2f), 0);   /* flag on, last == '/' -> skip */
+  assert.equal(t(1, 0x12f), 0);  /* byte-wide last compare */
+  assert.equal(t(0x100, 0x61), 0); /* flag byte 0 -> skip */
+  assert.equal(t(0x101, 0x61), 1); /* flag byte 1 -> append */
+  /* len==0 reads the pre-buffer byte out[-1] (caller passes it as
+     last_byte — D-LOG-1 convention, never corrected) */
+  assert.equal(t(1, 0), 1);      /* header hi byte 0 -> append */
+  assert.equal(t(1, 0x2f), 0);   /* hypothetical '/' -> skip */
+});
+
+test("LBH: v19 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a5a7a0/);
+  assert.match(h, /HOST -> PURE/);
+  assert.match(h, /0x7fcb9dd6/);
+  assert.match(h, /0x00b60c28/);
+  assert.match(h, /0x00b9ee70/);
+  assert.match(h, /0x00b6db28/);
+  assert.match(h, /0x00c7f618/);
+  assert.match(h, /0x00b187e0/);
+  assert.match(h, /strncpy_s/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_combine_normalize_char/);
+  assert.match(src, /isaac_log_combine_alloc_size/);
+  assert.match(src, /combine_trailing_needed_impl/);
+  assert.match(src, /combine_both_empty_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_combine_normalize_char\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_combine_alloc_size\)/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v19: the open-helper path-combine/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /logCombineNormalizeChar/);
+  assert.match(model, /logCombineAllocSize/);
+  assert.match(model, /0x00a5a7a0/);
+  assert.match(model, /0x00b60c28/);
+  assert.match(model, /0x00a23200/);
+});
+
+test("LBH: v19 mutation — sep gate, size byte, mode, lowercase and trailing folds fail", () => {
+  const before = readFileSync(source, "utf8");
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M1: the len_base==0 sep gate dropped — base[-1] would be read. */
+    withMutant("M1 sep gate len==0 dropped",
+      (s) => s.replace(
+        "  if (len_base == 0u) {\n    return 0;\n  }\n  const uint32_t b = combine_last_byte_impl(last_byte);",
+        "  const uint32_t b = combine_last_byte_impl(last_byte);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_combine_has_trailing_sep(0, 0x2f), 0);
+      });
+    /* M2: the trailing-flag byte narrow dropped in the size law. */
+    withMutant("M2 size flag byte-narrow dropped",
+      (s) => s.replace(
+        "  return (len_path + len_base + (trailing_flag & 0xffu) +\n          ISAAC_LOG_OPEN_COMBINE_SIZE_SLACK);",
+        "  return (len_path + len_base + trailing_flag +\n          ISAAC_LOG_OPEN_COMBINE_SIZE_SLACK);",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_combine_alloc_size(1, 2, 0x101)), 6);
+      });
+    /* M3: the copy-path / copy-base arms swapped. */
+    withMutant("M3 copy arms swapped",
+      (s) => s.replace(
+        "  if (len_base == 0u) {\n    return ISAAC_LOG_OPEN_COMBINE_MODE_COPY_PATH;\n  }\n  if (len_path == 0u) {\n    return ISAAC_LOG_OPEN_COMBINE_MODE_COPY_BASE;\n  }",
+        "  if (len_base == 0u) {\n    return ISAAC_LOG_OPEN_COMBINE_MODE_COPY_BASE;\n  }\n  if (len_path == 0u) {\n    return ISAAC_LOG_OPEN_COMBINE_MODE_COPY_PATH;\n  }",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_combine_mode(5, 0)), 0); /* COPY_PATH */
+        eq(u2(w.isaac_log_combine_mode(0, 5)), 1); /* COPY_BASE */
+      });
+    /* M4: the lowercase flag gate inverted — flag OFF would lowercase. */
+    withMutant("M4 lowercase gate inverted",
+      (s) => s.replace(
+        "  if (combine_last_byte_impl(lowercase_flag) != 0u) {",
+        "  if (combine_last_byte_impl(lowercase_flag) == 0u) {",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_combine_normalize_char(0x41, 0)), 0x41);
+      });
+    /* M5: the trailing flag gate dropped — flag OFF would append. */
+    withMutant("M5 trailing flag gate dropped",
+      (s) => s.replace(
+        "  if (combine_last_byte_impl(trailing_flag) == 0u) {\n    return 0;\n  }\n  return combine_last_byte_impl(last_byte) == ISAAC_LOG_OPEN_COMBINE_SEP_SLASH\n             ? 0\n             : 1;",
+        "  return combine_last_byte_impl(last_byte) == ISAAC_LOG_OPEN_COMBINE_SEP_SLASH\n             ? 0\n             : 1;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_combine_trailing_needed(0, 0x61), 0);
+      });
+    /* M6: the join separator decision inverted. */
+    withMutant("M6 join separator inverted",
+      (s) => s.replace(
+        "  return combine_last_byte_impl(has_trailing_sep) != 0u ? 0u : 1u;",
+        "  return combine_last_byte_impl(has_trailing_sep) != 0u ? 1u : 0u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_combine_join_uses_sep(1)), 0); /* "%s%s" */
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v20 constants and the broadcast census agree with the header contract", () => {
+  assert.equal(LOG_VA_FAIL_BROADCAST, 0x00a23200);
+  assert.equal(LOG_FAIL_BROADCAST_END, 0x00a2322f);
+  assert.equal(LOG_FAIL_BROADCAST_BODY_BYTES, 0x2f);   /* 47 bytes */
+  assert.equal(LOG_FAIL_BROADCAST_INSN_COUNT, 21);
+  assert.equal(LOG_FAIL_BROADCAST_FIRST_RET_VA, 0x00a2322c);
+  assert.equal(LOG_FAIL_BROADCAST_RET_ARGS, 4);        /* ret 4 */
+  assert.equal(LOG_FAIL_BROADCAST_RETS, 1);
+  assert.equal(LOG_FAIL_BROADCAST_INDIRECT_CALLS, 1);  /* call eax */
+  assert.equal(LOG_FAIL_BROADCAST_E8_CALLS, 0);
+  assert.equal(LOG_FAIL_BROADCAST_DIRECT_CALLSITES, 45);
+  assert.equal(LOG_FAIL_BROADCAST_INLINED_COPIES, 6);
+  assert.equal(LOG_FAIL_BROADCAST_RAW_OCCURRENCES, 0);
+  assert.equal(LOG_FAIL_BROADCAST_LIST_HEAD_VA, 0x00c37974);
+  assert.equal(LOG_FAIL_BROADCAST_FAIL_CODE, 0x7fcb9dd6);
+  assert.equal(LOG_FAIL_BROADCAST_CONSTANT_CODE_SITES, 44);
+  assert.equal(LOG_FAIL_BROADCAST_DYNAMIC_CODE_SITE_VA, 0x00a23129);
+  assert.equal(LOG_FAIL_BROADCAST_DYNAMIC_CODE_SOURCE_VA, 0x00a23260);
+  assert.equal(LOG_FAIL_BROADCAST_NODE_NEXT_OFFSET, 0x00);
+  assert.equal(LOG_FAIL_BROADCAST_NODE_PREV_OFFSET, 0x04);
+  assert.equal(LOG_FAIL_BROADCAST_NODE_FN_OFFSET, 0x08);
+  assert.equal(LOG_FAIL_BROADCAST_NODE_CTX_OFFSET, 0x0c);
+  assert.equal(LOG_FAIL_BROADCAST_CALLBACK_ARGS, 2);
+  assert.equal(LOG_FAIL_BROADCAST_CALLBACK_STACK_BYTES, 8);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_WRITERS, 2);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_ZERO_WRITE_VA, 0x0040678a);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_SENTINEL_WRITE_VA, 0x004067ad);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_READER_SITES, 18);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_LOAD_VALUE, 0);
+  assert.equal(LOG_FAIL_BROADCAST_HEAD_WRITES_AFTER_INIT, 0);
+  assert.equal(LOG_FAIL_BROADCAST_SENTINEL_SELF_LINKS, 1);
+  assert.equal(LOG_FAIL_BROADCAST_INIT_THUNK_VA, 0x00406740);
+  assert.equal(LOG_FAIL_BROADCAST_INIT_TABLE_SLOT_VA, 0x00b18ba4);
+  assert.equal(LOG_FAIL_BROADCAST_INIT_SEH_VA, 0x00b11949);
+  assert.equal(LOG_FAIL_BROADCAST_OBJECT_VA, 0x00c37964);
+  assert.equal(LOG_FAIL_BROADCAST_OBJECT_VTABLE_VA, 0x00ba2120);
+  assert.equal(LOG_FAIL_BROADCAST_ACTIVE_LIST_HEAD_VA, 0x00c3796c);
+  assert.equal(LOG_FAIL_BROADCAST_SENTINEL_A_SIZE, 0x18);
+  assert.equal(LOG_FAIL_BROADCAST_SENTINEL_B_SIZE, 0x10);
+  assert.equal(LOG_FAIL_BROADCAST_SENTINEL_TAG, 0x101);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_VA, 0x00b16c80);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_BODY_BYTES, 0x5e);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_FIRST_RET_VA, 0x00b16cdd);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_RET_ARGS, 0);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_HEAD_DELETE_SIZE, 0x10);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_CLEARS_HEAD, 0); /* pin: dangles */
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_VTABLE_SWAP_1, 0x00b82d40);
+  assert.equal(LOG_FAIL_BROADCAST_DTOR_VTABLE_SWAP_2, 0x00b9fdcc);
+  assert.equal(LOG_FAIL_BROADCAST_ATEXIT_VA, 0x00aef5af);
+  assert.equal(LOG_TEXT_INSN_COUNT_V20, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V20, 469);
+  assert.equal(LOG_V20_BATCHED_VAS, 4);
+  assert.equal(LOG_V20_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model (self-built) */
+  const w = loadExports();
+  assert.equal(u(w.isaac_log_broadcast_body_va()), 0xa23200);
+  assert.equal(u(w.isaac_log_broadcast_end_va()), 0xa2322f);
+  assert.equal(u(w.isaac_log_broadcast_body_bytes()), 0x2f);
+  assert.equal(u(w.isaac_log_broadcast_insn_count()), 21);
+  assert.equal(u(w.isaac_log_broadcast_first_ret_va()), 0xa2322c);
+  assert.equal(u(w.isaac_log_broadcast_ret_args()), 4);
+  assert.equal(u(w.isaac_log_broadcast_rets()), 1);
+  assert.equal(u(w.isaac_log_broadcast_indirect_calls()), 1);
+  assert.equal(u(w.isaac_log_broadcast_e8_calls()), 0);
+  assert.equal(u(w.isaac_log_broadcast_direct_callsites()), 45);
+  assert.equal(u(w.isaac_log_broadcast_inlined_copies()), 6);
+  assert.equal(u(w.isaac_log_broadcast_raw_occurrences()), 0);
+  assert.equal(u(w.isaac_log_broadcast_list_head_va()), 0xc37974);
+  assert.equal(u(w.isaac_log_broadcast_fail_code()), 0x7fcb9dd6);
+  assert.equal(w.isaac_log_broadcast_callback_dispatch_is_platform(), 1);
+  assert.equal(w.isaac_log_broadcast_fail_code_matches_init_magic(), 1);
+  assert.equal(u(w.isaac_log_broadcast_constant_code_sites()), 44);
+  assert.equal(u(w.isaac_log_broadcast_dynamic_code_site_va()), 0xa23129);
+  assert.equal(u(w.isaac_log_broadcast_dynamic_code_source_va()), 0xa23260);
+  assert.equal(u(w.isaac_log_broadcast_callback_args()), 2);
+  assert.equal(u(w.isaac_log_broadcast_callback_stack_bytes()), 8);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_tag()), 0x101);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_tag_low_byte()), 1);
+  assert.equal(u(w.isaac_log_broadcast_head_writers()), 2);
+  assert.equal(u(w.isaac_log_broadcast_head_zero_write_va()), 0x40678a);
+  assert.equal(u(w.isaac_log_broadcast_head_sentinel_write_va()), 0x4067ad);
+  assert.equal(u(w.isaac_log_broadcast_head_reader_sites()), 18);
+  assert.equal(u(w.isaac_log_broadcast_head_load_value()), 0);
+  assert.equal(u(w.isaac_log_broadcast_head_writes_after_init()), 0);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_self_links()), 1);
+  assert.equal(u(w.isaac_log_broadcast_init_thunk_va()), 0x406740);
+  assert.equal(u(w.isaac_log_broadcast_init_table_slot_va()), 0xb18ba4);
+  assert.equal(u(w.isaac_log_broadcast_init_seh_va()), 0xb11949);
+  assert.equal(u(w.isaac_log_broadcast_object_va()), 0xc37964);
+  assert.equal(u(w.isaac_log_broadcast_object_vtable_va()), 0xba2120);
+  assert.equal(u(w.isaac_log_broadcast_active_list_head_va()), 0xc3796c);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_a_size()), 0x18);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_b_size()), 0x10);
+  assert.equal(u(w.isaac_log_broadcast_dtor_va()), 0xb16c80);
+  assert.equal(u(w.isaac_log_broadcast_dtor_body_bytes()), 0x5e);
+  assert.equal(u(w.isaac_log_broadcast_dtor_first_ret_va()), 0xb16cdd);
+  assert.equal(u(w.isaac_log_broadcast_dtor_ret_args()), 0);
+  assert.equal(u(w.isaac_log_broadcast_dtor_head_delete_size()), 0x10);
+  assert.equal(u(w.isaac_log_broadcast_dtor_clears_head()), 0);
+  assert.equal(u(w.isaac_log_broadcast_dtor_vtable_swap_1()), 0xb82d40);
+  assert.equal(u(w.isaac_log_broadcast_dtor_vtable_swap_2()), 0xb9fdcc);
+  assert.equal(u(w.isaac_log_broadcast_atexit_va()), 0xaef5af);
+});
+
+test("LBH: the broadcast traversal bounds are the snapshot/live head laws", () => {
+  const w = loadExports();
+  if (w.memory.buffer.byteLength < SCRATCH + 0x10000) {
+    w.memory.grow(
+      Math.ceil((SCRATCH + 0x10000 - w.memory.buffer.byteLength) / 65536),
+    );
+  }
+  const v = new DataView(w.memory.buffer);
+  const H = 0xc37974;
+  /* ENTRY GATE vs SNAPSHOT: empty iff first_next == head_snapshot. */
+  assert.equal(w.isaac_log_broadcast_walk_empty(H, H), 1);      /* sentinel */
+  assert.equal(w.isaac_log_broadcast_walk_empty(H, 0), 0);
+  assert.equal(w.isaac_log_broadcast_walk_empty(H, 0x12345678), 0);
+  assert.equal(w.isaac_log_broadcast_walk_empty(0, 0), 1);      /* zero head */
+  /* the compare is FULL 32-bit (no byte narrowing) */
+  assert.equal(w.isaac_log_broadcast_walk_empty(H, H + 0x100), 0);
+  /* LOOP GATE vs LIVE head: continue iff node_next != head_live. */
+  assert.equal(w.isaac_log_broadcast_walk_continues(0x12340000, H), 1);
+  assert.equal(w.isaac_log_broadcast_walk_continues(H, H), 0);
+  assert.equal(w.isaac_log_broadcast_walk_continues(H, 0x99990000), 1);
+  /* wrap-around equality is exact: 0x100000000 truncates to i32 0 */
+  assert.equal(w.isaac_log_broadcast_walk_continues(0x100000000, 0), 0);
+  /* nexts arrays live in wasm scratch (little-endian dwords) */
+  const BASE = SCRATCH + 0x4000;
+  const putNexts = (vals) => {
+    for (let i = 0; i < vals.length; ++i) {
+      v.setUint32(BASE + i * 4, vals[i] >>> 0, true);
+    }
+    return BASE;
+  };
+  /* termination: empty trivially; else SOME next must equal the LIVE
+     head — a chain that never returns to the head does NOT terminate. */
+  assert.equal(w.isaac_log_broadcast_walk_terminates(H, H, H, 0, 0), 1);
+  assert.equal(w.isaac_log_broadcast_walk_terminates(H, H, 0x1111, putNexts([0x2222, H]), 2), 1);
+  assert.equal(w.isaac_log_broadcast_walk_terminates(H, H, 0x1111, putNexts([0x2222, 0x3333]), 2), 0);
+  /* the loop gate uses the LIVE head, NOT the snapshot: a chain that
+     returns to a DIFFERENT live head still terminates. */
+  const live2 = 0x12345678;
+  assert.equal(w.isaac_log_broadcast_walk_terminates(H, live2, 0x1111, putNexts([live2]), 1), 1);
+  /* visited counts: fired = first index with nexts[i] == live head + 1 */
+  assert.equal(w.isaac_log_broadcast_visited_count(H, H, H, 0, 0), 0);
+  assert.equal(w.isaac_log_broadcast_visited_count(H, H, 0x1111, putNexts([H]), 1), 1);
+  assert.equal(w.isaac_log_broadcast_visited_count(H, H, 0x1111, putNexts([0x2222, H]), 2), 2);
+  assert.equal(w.isaac_log_broadcast_visited_count(H, H, 0x1111, putNexts([0x2222, 0x3333, H]), 3), 3);
+  assert.equal(w.isaac_log_broadcast_visited_count(H, H, 0x1111, putNexts([0x2222, 0x3333]), 2), 0);
+  /* snapshot/live asymmetry: entry gate on the SNAPSHOT, loop on LIVE —
+     first_next == snapshot passes but the chain only returns to live. */
+  assert.equal(w.isaac_log_broadcast_visited_count(H, live2, 0x1111, putNexts([live2]), 1), 1);
+  assert.equal(w.isaac_log_broadcast_visited_count(H, live2, H, 0, 0), 0); /* empty gate */
+  /* the empty gate reads first_next against the SNAPSHOT only: a live
+     head that differs does NOT reopen the walk's entry. */
+  assert.equal(w.isaac_log_broadcast_walk_empty(H, live2), 0);
+  /* JS oracle parity (same inputs as the wasm calls above) */
+  assert.equal(logBroadcastWalkEmpty(H, H), 1);
+  assert.equal(logBroadcastWalkEmpty(H, 0), 0);
+  assert.equal(logBroadcastWalkContinues(0x12340000, H), 1);
+  assert.equal(logBroadcastWalkContinues(H, H), 0);
+  assert.equal(logBroadcastWalkTerminates(H, H, 0x1111, [0x2222, H]), 1);
+  assert.equal(logBroadcastWalkTerminates(H, H, 0x1111, [0x2222, 0x3333]), 0);
+  assert.equal(logBroadcastVisitedCount(H, H, 0x1111, [0x2222, 0x3333, H]), 3);
+  assert.equal(logBroadcastVisitedCount(H, H, 0x1111, [0x2222, 0x3333]), 0);
+  assert.equal(logBroadcastVisitedCount(H, live2, 0x1111, [live2]), 1);
+});
+
+test("LBH: the fail-code semantics — passthrough, the constant sites and the dynamic site", () => {
+  const w = loadExports();
+  /* the body passes [ebp+8] through UNMODIFIED: identity, full 32-bit */
+  assert.equal(u(w.isaac_log_broadcast_code_passthrough(0)), 0);
+  assert.equal(u(w.isaac_log_broadcast_code_passthrough(0x7fcb9dd6)), 0x7fcb9dd6);
+  assert.equal(u(w.isaac_log_broadcast_code_passthrough(0xffffffff)), 0xffffffff);
+  assert.equal(u(w.isaac_log_broadcast_code_passthrough(0x12345678)), 0x12345678);
+  assert.equal(u(logBroadcastCodePassthrough(0x7fcb9dd6)), 0x7fcb9dd6);
+  /* 44/45 sites push the constant; 1 dynamic site (0xa23129) */
+  assert.equal(u(w.isaac_log_broadcast_fail_code()), 0x7fcb9dd6);
+  assert.equal(u(w.isaac_log_broadcast_constant_code_sites()), 44);
+  assert.equal(u(w.isaac_log_broadcast_dynamic_code_site_va()), 0xa23129);
+  assert.equal(u(w.isaac_log_broadcast_dynamic_code_source_va()), 0xa23260);
+  assert.equal(w.isaac_log_broadcast_fail_code_matches_init_magic(), 1);
+  assert.equal(logBroadcastFailCode(), 0x7fcb9dd6);
+  assert.equal(logBroadcastFailCodeMatchesInitMagic(), 1);
+  /* callback dispatch is typed-host: 2 cdecl args, caller pops 8 */
+  assert.equal(u(w.isaac_log_broadcast_callback_args()), 2);
+  assert.equal(u(w.isaac_log_broadcast_callback_stack_bytes()), 8);
+  assert.equal(w.isaac_log_broadcast_callback_dispatch_is_platform(), 1);
+  assert.equal(logBroadcastCallbackArgs(), 2);
+  assert.equal(logBroadcastCallbackStackBytes(), 8);
+  assert.equal(logBroadcastCallbackDispatchIsPlatform(), 1);
+  /* the dynamic site's gate chain (0xa23101..0xa23126): byte flag,
+     unsigned rank, sentinel, payload result */
+  const fires = w.isaac_log_broadcast_dynamic_site_fires;
+  assert.equal(fires(0, 5, 3, 0, 0), 1);      /* all clear */
+  assert.equal(fires(1, 5, 3, 0, 0), 0);      /* flag byte != 0 */
+  assert.equal(fires(0x101, 5, 3, 0, 0), 0);  /* flag byte 1 (wide) */
+  assert.equal(fires(0x100, 5, 3, 0, 0), 1);  /* flag byte 0 (wide) */
+  assert.equal(fires(0, 2, 3, 0, 0), 0);      /* rank < node_rank */
+  assert.equal(fires(0, 3, 3, 0, 0), 1);      /* rank == node_rank */
+  assert.equal(fires(0, 0xffffffff, 0, 0, 0), 1); /* wrap: max rank */
+  assert.equal(fires(0, 5, 3, 1, 0), 0);      /* at the sentinel */
+  assert.equal(fires(0, 5, 3, 0, 1), 0);      /* payload handled */
+  /* JS oracle parity */
+  assert.equal(logBroadcastDynamicSiteFires(0, 5, 3, 0, 0), 1);
+  assert.equal(logBroadcastDynamicSiteFires(0x101, 5, 3, 0, 0), 0);
+  assert.equal(logBroadcastDynamicSiteFires(0, 2, 3, 0, 0), 0);
+  assert.equal(logBroadcastDynamicSiteFires(0, 5, 3, 1, 0), 0);
+  assert.equal(logBroadcastDynamicSiteFires(0, 5, 3, 0, 1), 0);
+  /* sentinel word tag 0x101 with the byte-gate low-byte law */
+  assert.equal(u(w.isaac_log_broadcast_sentinel_tag()), 0x101);
+  assert.equal(u(w.isaac_log_broadcast_sentinel_tag_low_byte()), 1);
+  assert.equal(logBroadcastSentinelTag(), 0x101);
+  assert.equal(logBroadcastSentinelTagLowByte(), 1);
+});
+
+test("LBH: v20 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a23200/);
+  assert.match(h, /TYPED-HOST/);
+  assert.match(h, /0x00c37974/);
+  assert.match(h, /0x7fcb9dd6/);
+  assert.match(h, /0x00406740/);
+  assert.match(h, /0x00b16c80/);
+  assert.match(h, /dangles/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_broadcast_walk_terminates/);
+  assert.match(src, /isaac_log_broadcast_visited_count/);
+  assert.match(src, /broadcast_walk_empty_impl/);
+  assert.match(src, /broadcast_dynamic_site_fires_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_broadcast_dynamic_site_fires\)/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v20: the fail-broadcast list walk/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /broadcastWalkTerminatesImpl/);
+  assert.match(model, /broadcastDynamicSiteFiresImpl/);
+  assert.match(model, /0x00a23200/);
+  assert.match(model, /0x00c37974/);
+  assert.match(model, /0x7fcb9dd6/);
+});
+
+test("LBH: v20 mutation — walk gates, visited count, passthrough and teardown pins fail", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    const H = 0xc37974;
+    /* M1: the ENTRY GATE inverted — a populated list would be treated
+       as empty (or the empty sentinel would fire the dispatch). */
+    withMutant("M1 entry gate inverted",
+      (s) => s.replace(
+        "  return first_next == head_snapshot ? 1 : 0;",
+        "  return first_next == head_snapshot ? 0 : 1;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_broadcast_walk_empty(H, H), 1);
+      });
+    /* M2: the LOOP GATE flipped to equality — the walk would stop at
+       the FIRST node of a populated list. */
+    withMutant("M2 loop gate flipped",
+      (s) => s.replace(
+        "  return node_next != head_live ? 1 : 0;",
+        "  return node_next == head_live ? 1 : 0;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_broadcast_walk_continues(0x12340000, H), 1);
+      });
+    /* M3: the visited count off-by-one — the first returning node is
+       counted as fired. */
+    withMutant("M3 visited count off-by-one",
+      (s) => s.replace(
+        "      return i + 1u;",
+        "      return i;",
+      ),
+      () => {
+        const w = loadExports();
+        if (w.memory.buffer.byteLength < SCRATCH + 0x10000) {
+          w.memory.grow(
+            Math.ceil((SCRATCH + 0x10000 - w.memory.buffer.byteLength) / 65536),
+          );
+        }
+        const v = new DataView(w.memory.buffer);
+        const BASE = SCRATCH + 0x4000;
+        v.setUint32(BASE, H, true);
+        eq(u2(w.isaac_log_broadcast_visited_count(H, H, 0x1111, BASE, 1)), 1);
+      });
+    /* M4: the walk-terminates predicate dropped — a chain that never
+       returns to the live head would be declared terminating. */
+    withMutant("M4 terminates predicate dropped",
+      (s) => s.replace(
+        "  for (uint32_t i = 0; i < next_count; ++i) {\n    if (nexts[i] == head_live) {\n      return 1;\n    }\n  }\n  return 0;",
+        "  return 1;",
+      ),
+      () => {
+        const w = loadExports();
+        /* correct law: a chain that never returns to the live head does
+           NOT terminate (0) — the mutant would answer 1 */
+        eq(w.isaac_log_broadcast_walk_terminates(H, H, 0x1111, 0, 0), 0);
+      });
+    /* M5: the passthrough narrowed — the fail code would be masked to a
+       byte, breaking the 44-site constant semantics. */
+    withMutant("M5 passthrough narrowed",
+      (s) => s.replace(
+        "  return code;",
+        "  return code & 0xffu;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_broadcast_code_passthrough(0x7fcb9dd6)), 0x7fcb9dd6);
+      });
+    /* M6: the dynamic site's BYTE flag gate dropped — a nonzero flag
+       byte would still fire the broadcast. */
+    withMutant("M6 dynamic flag byte dropped",
+      (s) => s.replace(
+        "  if ((flag_byte & 0xffu) != 0u) {\n    return 0;\n  }",
+        "  (void)flag_byte;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_broadcast_dynamic_site_fires(1, 5, 3, 0, 0), 0);
+      });
+    /* M7: the teardown pin flipped — the dtor would be claimed to clear
+       the head. */
+    withMutant("M7 dtor clears head flipped",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_FAIL_BROADCAST_DTOR_CLEARS_HEAD);",
+        "  return static_cast<uint32_t>(ISAAC_LOG_FAIL_BROADCAST_DTOR_CLEARS_HEAD) ^ 1u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_broadcast_dtor_clears_head()), 0);
+      });
+    /* M8: the fail-code constant folded to the init magic's other half —
+       the census identity (matches_init_magic) would break. */
+    withMutant("M8 fail code constant folded",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_FAIL_BROADCAST_FAIL_CODE) ==\n                 static_cast<uint32_t>(ISAAC_LOG_INIT_OBJECT_MAGIC)\n             ? 1\n             : 0;",
+        "  return 0;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_broadcast_fail_code_matches_init_magic(), 1);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v21 constants and the Close census agree with the header contract", () => {
+  assert.equal(LOG_VA_SINK_CLOSE, 0x00a526f0);
+  assert.equal(LOG_SINK_CLOSE_END, 0x00a52754);      /* first int3 */
+  assert.equal(LOG_SINK_CLOSE_BODY_BYTES, 0x64);
+  assert.equal(LOG_SINK_CLOSE_INSN_COUNT, 32);
+  assert.equal(LOG_SINK_CLOSE_FIRST_RET_VA, 0x00a52753);
+  assert.equal(LOG_SINK_CLOSE_RET_ARGS, 0);          /* plain ret */
+  assert.equal(LOG_SINK_CLOSE_RETS, 1);
+  assert.equal(LOG_SINK_CLOSE_E8_CALLS, 1);          /* 0xa648b0 */
+  assert.equal(LOG_SINK_CLOSE_INDIRECT_CALLS, 1);    /* call [eax+0x2c] */
+  assert.equal(LOG_SINK_CLOSE_MEM_STORES, 5);
+  assert.equal(LOG_SINK_CLOSE_DISPATCH_VA, 0x00a52717);
+  assert.equal(LOG_SINK_CLOSE_DISPATCH_SLOT, 0x2c);  /* vtbl+0x2c */
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_LEAF_VA, 0x00a526d0);
+  assert.equal(LOG_SINK_CLOSE_STATE_STORE_VA, 0x00a5271d);
+  assert.equal(LOG_SINK_CLOSE_STATE_VALUE, 2);       /* NO_FILE */
+  assert.equal(LOG_SINK_CLOSE_STATE_STORES, 1);      /* v11 dtor: 2 */
+  assert.equal(LOG_SINK_CLOSE_VTABLE_STORES, 0);     /* no vtable store */
+  assert.equal(LOG_SINK_CLOSE_STATE_OFFSET, 4);
+  assert.equal(LOG_SINK_CLOSE_PATH_OFFSET, 8);
+  assert.equal(LOG_SINK_CLOSE_FILE_OFFSET, 0xc);     /* leaf FILE* cell */
+  assert.equal(LOG_SINK_CLOSE_FREE_GATE_VA, 0x00a52724);
+  assert.equal(LOG_SINK_CLOSE_FREE_BRANCH_VA, 0x00a52726);
+  assert.equal(LOG_SINK_CLOSE_FREE_CALL_VA, 0x00a52735);
+  assert.equal(LOG_SINK_CLOSE_FREE_MODE, 1);         /* cl=1 */
+  assert.equal(LOG_SINK_CLOSE_PATH_NULL_VA, 0x00a5273d);
+  assert.equal(LOG_SINK_CLOSE_FREE_HELPER_VA, 0x00a648b0);
+  assert.equal(LOG_SINK_CLOSE_SEH_HANDLER, 0x00af0a10);
+  assert.equal(LOG_SINK_CLOSE_STATE_GETTER_VA, 0x00a25440);
+  assert.equal(LOG_SINK_CLOSE_SINK_SLOT_VA, 0x00ba51b8);   /* 0xba5184+0x34 */
+  assert.equal(LOG_SINK_CLOSE_SIBLING_SLOT_VA, 0x00b9e974); /* 0xb9e940+0x34 */
+  assert.equal(LOG_SINK_CLOSE_VTABLE_SLOTS, 2);
+  assert.equal(LOG_SINK_CLOSE_RAW_OCCURRENCES, 2);   /* the two slots */
+  assert.equal(LOG_SINK_CLOSE_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_SINK_CLOSE_DISPATCH_UNCONDITIONAL, 1);
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_GATE_VA, 0x00a526d3);
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_TEST_VA, 0x00a526d6);
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_BRANCH_VA, 0x00a526d8);
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_CALL_VA, 0x00a526db);
+  assert.equal(LOG_SINK_CLOSE_FCLOSE_NULL_VA, 0x00a526e4);
+  assert.equal(LOG_TEXT_INSN_COUNT_V21, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V21, 469);
+  assert.equal(LOG_V21_BATCHED_VAS, 6);
+  assert.equal(LOG_V21_EXACT_ZHL_MATCHES, 0);
+  /* C++ / wasm echo the model (self-built) */
+  const w = loadExports();
+  assert.equal(u(w.isaac_log_sink_close_body_va()), 0xa526f0);
+  assert.equal(u(w.isaac_log_sink_close_end_va()), 0xa52754);
+  assert.equal(u(w.isaac_log_sink_close_body_bytes()), 0x64);
+  assert.equal(u(w.isaac_log_sink_close_insn_count()), 32);
+  assert.equal(u(w.isaac_log_sink_close_first_ret_va()), 0xa52753);
+  assert.equal(u(w.isaac_log_sink_close_ret_args()), 0);
+  assert.equal(u(w.isaac_log_sink_close_rets()), 1);
+  assert.equal(u(w.isaac_log_sink_close_e8_calls()), 1);
+  assert.equal(u(w.isaac_log_sink_close_indirect_calls()), 1);
+  assert.equal(u(w.isaac_log_sink_close_mem_stores()), 5);
+  assert.equal(u(w.isaac_log_sink_close_dispatch_va()), 0xa52717);
+  assert.equal(u(w.isaac_log_sink_close_dispatch_slot()), 0x2c);
+  assert.equal(u(w.isaac_log_sink_close_fclose_leaf_va()), 0xa526d0);
+  assert.equal(u(w.isaac_log_sink_close_state_store_va()), 0xa5271d);
+  assert.equal(u(w.isaac_log_sink_close_state_value()), 2);
+  assert.equal(u(w.isaac_log_sink_close_state_store_count()), 1);
+  assert.equal(u(w.isaac_log_sink_close_state_getter_va()), 0xa25440);
+  assert.equal(u(w.isaac_log_sink_close_free_branch_va()), 0xa52726);
+  assert.equal(u(w.isaac_log_sink_close_free_call_va()), 0xa52735);
+  assert.equal(u(w.isaac_log_sink_close_free_mode()), 1);
+  assert.equal(u(w.isaac_log_sink_close_free_helper_va()), 0xa648b0);
+  assert.equal(u(w.isaac_log_sink_close_path_null_va()), 0xa5273d);
+  assert.equal(u(w.isaac_log_sink_close_file_offset()), 0xc);
+  assert.equal(u(w.isaac_log_sink_close_path_offset()), 8);
+  assert.equal(u(w.isaac_log_sink_close_state_offset()), 4);
+  assert.equal(u(w.isaac_log_sink_close_vtable_store_count()), 0);
+  assert.equal(u(w.isaac_log_sink_close_seh_handler()), 0xaf0a10);
+  assert.equal(u(w.isaac_log_sink_close_sink_slot_va()), 0xba51b8);
+  assert.equal(u(w.isaac_log_sink_close_sibling_slot_va()), 0xb9e974);
+  assert.equal(u(w.isaac_log_sink_close_vtable_slots()), 2);
+  assert.equal(u(w.isaac_log_sink_close_raw_occurrences()), 2);
+  assert.equal(u(w.isaac_log_sink_close_direct_callsites()), 0);
+  assert.equal(w.isaac_log_sink_close_dispatch_unconditional(), 1);
+  assert.equal(u(w.isaac_log_sink_close_fclose_gate_va()), 0xa526d3);
+  assert.equal(u(w.isaac_log_sink_close_fclose_test_va()), 0xa526d6);
+  assert.equal(u(w.isaac_log_sink_close_fclose_branch_va()), 0xa526d8);
+  assert.equal(u(w.isaac_log_sink_close_fclose_call_va()), 0xa526db);
+  assert.equal(u(w.isaac_log_sink_close_fclose_null_va()), 0xa526e4);
+  /* JS oracle parity */
+  assert.equal(logSinkCloseBodyVa(), 0xa526f0);
+  assert.equal(logSinkCloseEndVa(), 0xa52754);
+  assert.equal(logSinkCloseBodyBytes(), 0x64);
+  assert.equal(logSinkCloseInsnCount(), 32);
+  assert.equal(logSinkCloseDispatchSlot(), 0x2c);
+  assert.equal(logSinkCloseFcloseLeafVa(), 0xa526d0);
+  assert.equal(logSinkCloseStateValue(), 2);
+  assert.equal(logSinkCloseStateStoreCount(), 1);
+  assert.equal(logSinkCloseVtableStoreCount(), 0);
+  assert.equal(logSinkCloseFreeMode(), 1);
+  assert.equal(logSinkCloseSehHandler(), 0xaf0a10);
+  assert.equal(logSinkCloseSinkSlotVa(), 0xba51b8);
+  assert.equal(logSinkCloseSiblingSlotVa(), 0xb9e974);
+  assert.equal(logSinkCloseVtableSlots(), 2);
+  assert.equal(logSinkCloseRawOccurrences(), 2);
+  assert.equal(logSinkCloseDirectCallsites(), 0);
+  assert.equal(logSinkCloseDispatchUnconditional(), 1);
+  /* ordering pins from VAs: dispatch -> state -> gate -> branch -> free
+     call -> path null (the state store runs BEFORE the free gate; the
+     path NULL lands AFTER the guest free) */
+  assert.ok(LOG_SINK_CLOSE_DISPATCH_VA < LOG_SINK_CLOSE_STATE_STORE_VA);
+  assert.ok(LOG_SINK_CLOSE_STATE_STORE_VA < LOG_SINK_CLOSE_FREE_GATE_VA);
+  assert.ok(LOG_SINK_CLOSE_FREE_GATE_VA < LOG_SINK_CLOSE_FREE_BRANCH_VA);
+  assert.ok(LOG_SINK_CLOSE_FREE_BRANCH_VA < LOG_SINK_CLOSE_FREE_CALL_VA);
+  assert.ok(LOG_SINK_CLOSE_FREE_CALL_VA < LOG_SINK_CLOSE_PATH_NULL_VA);
+  assert.ok(LOG_SINK_CLOSE_DISPATCH_VA < LOG_SINK_CLOSE_END);
+  /* fclose-leaf interior order: read cell -> test -> je skip -> fclose
+     -> conditional null (the NULL store ONLY after the call) */
+  assert.ok(LOG_SINK_CLOSE_FCLOSE_GATE_VA < LOG_SINK_CLOSE_FCLOSE_TEST_VA);
+  assert.ok(LOG_SINK_CLOSE_FCLOSE_TEST_VA < LOG_SINK_CLOSE_FCLOSE_BRANCH_VA);
+  assert.ok(LOG_SINK_CLOSE_FCLOSE_BRANCH_VA < LOG_SINK_CLOSE_FCLOSE_CALL_VA);
+  assert.ok(LOG_SINK_CLOSE_FCLOSE_CALL_VA < LOG_SINK_CLOSE_FCLOSE_NULL_VA);
+  assert.ok(LOG_SINK_CLOSE_FCLOSE_NULL_VA < LOG_SINK_CLOSE_DISPATCH_VA);
+});
+
+test("LBH: the Close dispatch, FILE* gate, state transition and free-path laws", () => {
+  const w = loadExports();
+  /* D1 — the dispatch is UNCONDITIONAL: fires for every input (even a
+     fully-null object). The FILE* presence gate is NOT in this body. */
+  assert.equal(w.isaac_log_sink_close_dispatch_fires(), 1);
+  assert.equal(w.isaac_log_sink_close_dispatch_unconditional(), 1);
+  assert.equal(logSinkCloseDispatchFires(), 1);
+  assert.equal(logSinkCloseDispatchUnconditional(), 1);
+  /* D2 — the FILE* presence gate (the dispatched fclose leaf's FULL
+     dword semantics): 0x100 / 0x1ff / 0xffffffff close; 0 skips. A
+     low-byte reading misfires on 0x100 and 0xffff0000. */
+  const fg = w.isaac_log_sink_close_file_gate;
+  assert.equal(fg(0), 0);
+  assert.equal(fg(0x100), 1);
+  assert.equal(fg(0x1ff), 1);
+  assert.equal(fg(0xffffffff), 1);
+  assert.equal(fg(0xffff0000), 1);
+  assert.equal(logSinkCloseFileGate(0), 0);          /* parity */
+  assert.equal(logSinkCloseFileGate(0x100), 1);
+  assert.equal(logSinkCloseFileGate(0xffff0000), 1);
+  /* leaf conditional null: the FILE* cell is NULLed ONLY when fclose
+     fired; the skip arm keeps the cell value */
+  const fa = w.isaac_log_sink_close_file_after;
+  assert.equal(u(fa(0x100, 1)), 0);
+  assert.equal(u(fa(0x100, 0)), 0x100);
+  assert.equal(u(fa(0x12345678, 0)), 0x12345678);
+  assert.equal(u(fa(0, 1)), 0);
+  assert.equal(u(logSinkCloseFileAfter(0x12345678, 0)), 0x12345678);
+  assert.equal(u(logSinkCloseFileAfter(0x100, 1)), 0);
+  /* D1 — the state-transition gate: state := 2 on ONE unconditional
+     store; BOTH arms end with 2 (skip-arm visibility: the store runs
+     before the free gate, so state_after is 2 for every input) */
+  const sa = w.isaac_log_sink_close_state_after;
+  assert.equal(u(sa(0)), 2);
+  assert.equal(u(sa(1)), 2);
+  assert.equal(u(sa(2)), 2);
+  assert.equal(u(sa(0xffffffff)), 2);
+  assert.equal(u(sa(0x12345678)), 2);
+  assert.equal(u(logSinkCloseStateAfter(0)), 2);     /* parity */
+  assert.equal(u(logSinkCloseStateAfter(0xffffffff)), 2);
+  assert.equal(u(w.isaac_log_sink_close_state_value()), 2);
+  assert.equal(u(w.isaac_log_sink_close_state_store_count()), 1);
+  assert.equal(logSinkCloseStateStoreCount(), 1);
+  /* D3 — the free-path condition: FULL-dword gate on the +8 path cell */
+  const pg = w.isaac_log_sink_close_free_gate;
+  assert.equal(pg(0), 0);
+  assert.equal(pg(0x100), 1);
+  assert.equal(pg(0x1ff), 1);
+  assert.equal(pg(0xffffffff), 1);
+  assert.equal(pg(0xffff0000), 1);
+  assert.equal(logSinkCloseFreeGate(0), 0);          /* parity */
+  assert.equal(logSinkCloseFreeGate(0xffff0000), 1);
+  /* path cell NULLed ONLY on the free arm, AFTER the guest free */
+  const pa = w.isaac_log_sink_close_path_after;
+  assert.equal(u(pa(0x100, 1)), 0);
+  assert.equal(u(pa(0x100, 0)), 0x100);
+  assert.equal(u(pa(0x12345678, 0)), 0x12345678);
+  assert.equal(u(pa(0, 1)), 0);
+  assert.equal(u(logSinkClosePathAfter(0x12345678, 0)), 0x12345678);
+  assert.equal(u(logSinkClosePathAfter(0x100, 1)), 0);
+  /* free arm details: mode 1 (cl=1), helper 0xa648b0, no vtable store */
+  assert.equal(u(w.isaac_log_sink_close_free_mode()), 1);
+  assert.equal(u(w.isaac_log_sink_close_free_helper_va()), 0xa648b0);
+  assert.equal(u(w.isaac_log_sink_close_vtable_store_count()), 0);
+  assert.equal(logSinkCloseFreeMode(), 1);
+  assert.equal(logSinkCloseFreeHelperVa(), 0xa648b0);
+  assert.equal(logSinkCloseVtableStoreCount(), 0);
+  /* reach: the two vtable slots are the ONLY refs (0 direct callers) */
+  assert.equal(u(w.isaac_log_sink_close_sink_slot_va()), 0xba51b8);
+  assert.equal(u(w.isaac_log_sink_close_sibling_slot_va()), 0xb9e974);
+  assert.equal(u(w.isaac_log_sink_close_vtable_slots()), 2);
+  assert.equal(u(w.isaac_log_sink_close_raw_occurrences()), 2);
+  assert.equal(u(w.isaac_log_sink_close_direct_callsites()), 0);
+  assert.equal(logSinkCloseVtableSlots(), 2);
+  assert.equal(logSinkCloseRawOccurrences(), 2);
+  assert.equal(logSinkCloseDirectCallsites(), 0);
+});
+
+test("LBH: v21 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a526f0/);
+  assert.match(h, /0xaf0a10/);
+  assert.match(h, /0x00a648b0/);
+  assert.match(h, /0x00ba51b8/);
+  assert.match(h, /0x00b9e974/);
+  assert.match(h, /FULL-dword/);
+  assert.match(h, /0xa25450/);
+  assert.match(h, /census-close/);
+  assert.match(h, /ISAAC_LOG_SINK_CLOSE_STATE_STORES = 1/);
+  assert.match(h, /ISAAC_LOG_SINK_CLOSE_VTABLE_STORES = 0/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_sink_close_dispatch_fires/);
+  assert.match(src, /sink_close_state_after_impl/);
+  assert.match(src, /sink_close_file_gate_impl/);
+  assert.match(src, /sink_close_free_gate_impl/);
+  assert.match(src, /sink_close_path_after_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sink_close_file_gate\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_sink_close_path_after\)/);
+  assert.match(src, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION == ${LOG_PURE_ABI_VERSION}`));
+  assert.match(src, /v22 lands the state!=2 getter/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v21: the sink Close member/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /sinkCloseDispatchFiresImpl/);
+  assert.match(model, /sinkCloseStateAfterImpl/);
+  assert.match(model, /sinkClosePathAfterImpl/);
+  assert.match(model, /0x00a526f0/);
+  assert.match(model, /0xa25450/);
+  assert.match(model, /0x00af0a10/);
+});
+
+test("LBH: v21 mutation — dispatch, gates, state store and free-arm pins fail", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M1: the dispatch dropped — a gated Close would not reach the
+       fclose leaf for a null object. */
+    withMutant("M1 dispatch dropped",
+      (s) => s.replace(
+        "inline int32_t sink_close_dispatch_fires_impl() {\n  return 1;\n}",
+        "inline int32_t sink_close_dispatch_fires_impl() {\n  return 0;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_sink_close_dispatch_fires(), 1);
+      });
+    /* M2: the FILE* presence gate narrowed to a byte — 0x100 would
+       skip the fclose. (Signature context keeps the v11 dtor's
+       identical impl text out of scope.) */
+    withMutant("M2 file gate narrowed",
+      (s) => s.replace(
+        "inline int32_t sink_close_file_gate_impl(uint32_t file_ptr) {\n  return file_ptr != 0u ? 1 : 0;\n}",
+        "inline int32_t sink_close_file_gate_impl(uint32_t file_ptr) {\n  return (file_ptr & 0xffu) != 0u ? 1 : 0;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_sink_close_file_gate(0x100), 1);
+      });
+    /* M3: the leaf's conditional null became unconditional — a skipped
+       fclose would still clear the FILE* cell. */
+    withMutant("M3 file_after unconditional null",
+      (s) => s.replace(
+        "inline uint32_t sink_close_file_after_impl(uint32_t file_before,\n                                           uint32_t fclose_fired) {\n  return fclose_fired != 0u ? 0u : file_before;\n}",
+        "inline uint32_t sink_close_file_after_impl(uint32_t file_before,\n                                           uint32_t fclose_fired) {\n  return 0u;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_file_after(0x12345678, 0)), 0x12345678);
+      });
+    /* M4: the state store kept the input on the skip arm — the
+       unconditional transition before the free gate is the law. */
+    withMutant("M4 state_after keeps input",
+      (s) => s.replace(
+        "  (void)state_before;\n  return static_cast<uint32_t>(ISAAC_LOG_SINK_CLOSE_STATE_VALUE);",
+        "  return state_before;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_state_after(0)), 2);
+      });
+    /* M5: the free-path gate narrowed to a byte — 0x100 would skip
+       the guest free. */
+    withMutant("M5 free gate narrowed",
+      (s) => s.replace(
+        "inline int32_t sink_close_free_gate_impl(uint32_t path_ptr) {\n  return path_ptr != 0u ? 1 : 0;\n}",
+        "inline int32_t sink_close_free_gate_impl(uint32_t path_ptr) {\n  return (path_ptr & 0xffu) != 0u ? 1 : 0;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(w.isaac_log_sink_close_free_gate(0x100), 1);
+      });
+    /* M6: the path null became unconditional — the free-arm-only
+       store is the law. */
+    withMutant("M6 path_after unconditional null",
+      (s) => s.replace(
+        "inline uint32_t sink_close_path_after_impl(uint32_t path_before,\n                                           uint32_t free_fired) {\n  return free_fired != 0u ? 0u : path_before;\n}",
+        "inline uint32_t sink_close_path_after_impl(uint32_t path_before,\n                                           uint32_t free_fired) {\n  return 0u;\n}",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_path_after(0x12345678, 0)), 0x12345678);
+      });
+    /* M7: the state-store count folded to the v11 dtor's 2 — Close
+       stores exactly ONCE. */
+    withMutant("M7 state store count folded to 2",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_SINK_CLOSE_STATE_STORES);",
+        "  return 2u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_state_store_count()), 1);
+      });
+    /* M8: a vtable store claimed — the Close body stores NO vtable
+       (delta vs the v11 dtor chain). */
+    withMutant("M8 vtable store count flipped",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_SINK_CLOSE_VTABLE_STORES);",
+        "  return 1u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_vtable_store_count()), 0);
+      });
+    /* M9: the dispatch slot folded to +0x30 — the fclose-leaf slot is
+       +0x2c. */
+    withMutant("M9 dispatch slot folded",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_SINK_CLOSE_DISPATCH_SLOT);",
+        "  return 0x30u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_sink_close_dispatch_slot()), 0x2c);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v22 constants and the getter census agree with the header contract", () => {
+  assert.equal(LOG_VA_STATE_GETTER, 0x00a25440);
+  assert.equal(LOG_STATE_GETTER_END, 0x00a25448);      /* first int3 */
+  assert.equal(LOG_STATE_GETTER_BODY_BYTES, 0x08);
+  assert.equal(LOG_STATE_GETTER_INSN_COUNT, 3);
+  assert.equal(LOG_STATE_GETTER_FIRST_RET_VA, 0x00a25447);
+  assert.equal(LOG_STATE_GETTER_RET_ARGS, 0);          /* plain ret */
+  assert.equal(LOG_STATE_GETTER_RETS, 1);
+  assert.equal(LOG_STATE_GETTER_E8_CALLS, 0);          /* no call */
+  assert.equal(LOG_STATE_GETTER_INDIRECT_CALLS, 0);
+  assert.equal(LOG_STATE_GETTER_MEM_STORES, 0);        /* no store/SEH */
+  assert.equal(LOG_STATE_GETTER_STATE_OFFSET, 4);
+  assert.equal(LOG_STATE_GETTER_READ_WIDTH, 4);        /* FULL-dword cmp */
+  assert.equal(LOG_STATE_GETTER_COMPARE_VALUE, 2);     /* == NO_FILE */
+  assert.equal(LOG_STATE_GETTER_VTABLE_SLOTS, 3);      /* +0x30 x3 tables */
+  assert.equal(LOG_STATE_GETTER_EXTRA_SLOT_VA, 0x00b65754); /* 0xb65724+0x30 */
+  assert.equal(LOG_STATE_GETTER_RAW_OCCURRENCES, 7);   /* .rdata 4 + .text 3 */
+  assert.equal(LOG_STATE_GETTER_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_STATE_GETTER_INLINED_COPIES, 3);    /* devirt-cmp sites */
+  assert.equal(LOG_STATE_GETTER_DEVIRT_CMP_1, 0x0092be28);
+  assert.equal(LOG_STATE_GETTER_DEVIRT_CMP_2, 0x0092c008);
+  assert.equal(LOG_STATE_GETTER_DEVIRT_CMP_3, 0x0092c1e8);
+  assert.equal(LOG_STATE_GETTER_SLOT_DTOR_BASE_VA, 0x00b83408); /* 0xb833d8+0x30 */
+  assert.equal(LOG_STATE_GETTER_SLOT_SINK_VA, 0x00ba51b4);      /* 0xba5184+0x30 */
+  assert.equal(LOG_STATE_GETTER_SLOT_SIBLING_VA, 0x00b9e970);   /* 0xb9e940+0x30 */
+  assert.equal(LOG_TEXT_INSN_COUNT_V22, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V22, 469);
+  /* C++ / wasm echo the model (self-built) */
+  const w = loadExports();
+  assert.equal(u(w.isaac_log_state_getter_body_va()), 0xa25440);
+  assert.equal(u(w.isaac_log_state_getter_end_va()), 0xa25448);
+  assert.equal(u(w.isaac_log_state_getter_body_bytes()), 0x08);
+  assert.equal(u(w.isaac_log_state_getter_insn_count()), 3);
+  assert.equal(u(w.isaac_log_state_getter_first_ret_va()), 0xa25447);
+  assert.equal(u(w.isaac_log_state_getter_ret_args()), 0);
+  assert.equal(u(w.isaac_log_state_getter_rets()), 1);
+  assert.equal(u(w.isaac_log_state_getter_e8_calls()), 0);
+  assert.equal(u(w.isaac_log_state_getter_indirect_calls()), 0);
+  assert.equal(u(w.isaac_log_state_getter_mem_stores()), 0);
+  assert.equal(u(w.isaac_log_state_getter_state_offset()), 4);
+  assert.equal(u(w.isaac_log_state_getter_read_width()), 4);
+  assert.equal(u(w.isaac_log_state_getter_compare_value()), 2);
+  assert.equal(u(w.isaac_log_state_getter_vtable_slots()), 3);
+  assert.equal(u(w.isaac_log_state_getter_extra_slot_va()), 0xb65754);
+  assert.equal(u(w.isaac_log_state_getter_raw_occurrences()), 7);
+  assert.equal(u(w.isaac_log_state_getter_direct_callsites()), 0);
+  assert.equal(u(w.isaac_log_state_getter_inlined_copies()), 3);
+  assert.equal(u(w.isaac_log_state_getter_devirt_cmp_1()), 0x92be28);
+  assert.equal(u(w.isaac_log_state_getter_devirt_cmp_2()), 0x92c008);
+  assert.equal(u(w.isaac_log_state_getter_devirt_cmp_3()), 0x92c1e8);
+  assert.equal(u(w.isaac_log_state_getter_slot_dtor_base_va()), 0xb83408);
+  assert.equal(u(w.isaac_log_state_getter_slot_sink_va()), 0xba51b4);
+  assert.equal(u(w.isaac_log_state_getter_slot_sibling_va()), 0xb9e970);
+  /* JS oracle parity */
+  assert.equal(logStateGetterBodyVa(), 0xa25440);
+  assert.equal(logStateGetterEndVa(), 0xa25448);
+  assert.equal(logStateGetterBodyBytes(), 0x08);
+  assert.equal(logStateGetterInsnCount(), 3);
+  assert.equal(logStateGetterFirstRetVa(), 0xa25447);
+  assert.equal(logStateGetterRetArgs(), 0);
+  assert.equal(logStateGetterRets(), 1);
+  assert.equal(logStateGetterE8Calls(), 0);
+  assert.equal(logStateGetterIndirectCalls(), 0);
+  assert.equal(logStateGetterMemStores(), 0);
+  assert.equal(logStateGetterStateOffset(), 4);
+  assert.equal(logStateGetterReadWidth(), 4);
+  assert.equal(logStateGetterCompareValue(), 2);
+  assert.equal(logStateGetterVtableSlots(), 3);
+  assert.equal(logStateGetterExtraSlotVa(), 0xb65754);
+  assert.equal(logStateGetterRawOccurrences(), 7);
+  assert.equal(logStateGetterDirectCallsites(), 0);
+  assert.equal(logStateGetterInlinedCopies(), 3);
+  assert.equal(logStateGetterDevirtCmp1(), 0x92be28);
+  assert.equal(logStateGetterDevirtCmp2(), 0x92c008);
+  assert.equal(logStateGetterDevirtCmp3(), 0x92c1e8);
+  assert.equal(logStateGetterSlotDtorBaseVa(), 0xb83408);
+  assert.equal(logStateGetterSlotSinkVa(), 0xba51b4);
+  assert.equal(logStateGetterSlotSiblingVa(), 0xb9e970);
+  /* ordering pins: ret is the LAST byte; the three devirt sites are
+     distinct and ascending; the extra carrier differs from the three
+     table slots (it is the 13-slot function table's +0x30) */
+  assert.equal(LOG_STATE_GETTER_FIRST_RET_VA, LOG_STATE_GETTER_END - 1);
+  assert.ok(LOG_STATE_GETTER_DEVIRT_CMP_1 < LOG_STATE_GETTER_DEVIRT_CMP_2);
+  assert.ok(LOG_STATE_GETTER_DEVIRT_CMP_2 < LOG_STATE_GETTER_DEVIRT_CMP_3);
+  assert.ok(LOG_STATE_GETTER_EXTRA_SLOT_VA !== LOG_STATE_GETTER_SLOT_DTOR_BASE_VA);
+  assert.ok(LOG_STATE_GETTER_EXTRA_SLOT_VA !== LOG_STATE_GETTER_SLOT_SINK_VA);
+  assert.ok(LOG_STATE_GETTER_EXTRA_SLOT_VA !== LOG_STATE_GETTER_SLOT_SIBLING_VA);
+  assert.ok(LOG_STATE_GETTER_SLOT_DTOR_BASE_VA < LOG_STATE_GETTER_SLOT_SIBLING_VA);
+  assert.ok(LOG_STATE_GETTER_SLOT_SIBLING_VA < LOG_STATE_GETTER_SLOT_SINK_VA);
+});
+
+test("LBH: the state-getter leaf is pure — full-dword neq, no call/store/frame", () => {
+  const w = loadExports();
+  /* the FULL-dword read is the byte-gate law: values whose LOW byte is 2
+     (0x102/0x302/0xff02) still compare as full dwords != 2 -> true. A
+     low-byte mutant misfires on every one of them. 0x100000002 truncates
+     to 2 in the i32 ABI -> false (the full dword IS 2). */
+  const neq = w.isaac_log_state_getter_neq;
+  const cases = [
+    [0, 1], [1, 1], [2, 0], [3, 1], [0x100, 1], [0x102, 1], [0x1ff, 1],
+    [0x302, 1], [0xff02, 1], [0x1000000, 1], [0xffffffff, 1],
+    [0x100000002, 0],
+  ];
+  for (const [state, want] of cases) {
+    assert.equal(s(neq(state)), want, `wasm neq(0x${state.toString(16)})`);
+    assert.equal(logStateGetterNeq(state), want, `js neq(0x${state.toString(16)})`);
+  }
+  /* 384 deterministic LCG draws cap the differential (coordinator wave
+     limit 500): the JS oracle and the wasm must agree on every dword. */
+  const rnd = makeLcg(0x5eed1234);
+  for (let i = 0; i < 384; i++) {
+    const state = rnd();
+    assert.equal(s(neq(state)), logStateGetterNeq(state),
+      `oracle parity draw ${i} state 0x${state.toString(16)}`);
+  }
+  /* the law pins: compare value == the Close law's SINK_STATE_NO_FILE
+     (cross-law identity — the getter is the state cell's != NO_FILE test) */
+  assert.equal(u(w.isaac_log_state_getter_compare_value()),
+    LOG_SINK_CLOSE_STATE_VALUE);
+  assert.equal(logStateGetterCompareValue(), LOG_SINK_CLOSE_STATE_VALUE);
+  assert.equal(u(w.isaac_log_state_getter_state_offset()), LOG_SINK_CLOSE_STATE_OFFSET);
+  assert.equal(u(w.isaac_log_state_getter_read_width()), 4);
+  /* leaf purity: 0 calls, 0 indirect, 0 stores, plain ret, 3 insns */
+  assert.equal(u(w.isaac_log_state_getter_e8_calls()), 0);
+  assert.equal(u(w.isaac_log_state_getter_indirect_calls()), 0);
+  assert.equal(u(w.isaac_log_state_getter_mem_stores()), 0);
+  assert.equal(u(w.isaac_log_state_getter_ret_args()), 0);
+  assert.equal(u(w.isaac_log_state_getter_insn_count()), 3);
+  assert.equal(logStateGetterE8Calls(), 0);
+  assert.equal(logStateGetterMemStores(), 0);
+});
+
+test("LBH: v22 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x00a25440/);
+  assert.match(h, /state!=2 getter — PURE since v22/);
+  assert.match(h, /ISAAC_LOG_STATE_GETTER_READ_WIDTH = 4/);
+  assert.match(h, /0xb65754/);
+  assert.match(h, /0x92be28/);
+  assert.match(h, /10-SLOT table/);
+  assert.match(h, /0xa254c0/);
+  assert.match(h, /ISAAC_LOG_STATE_GETTER_INLINED_COPIES = 3/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /isaac_log_state_getter_neq/);
+  assert.match(src, /state_getter_neq_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_state_getter_neq\)/);
+  assert.match(src, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION == ${LOG_PURE_ABI_VERSION}`));
+  assert.match(src, /v22 lands the state!=2 getter/);
+  assert.match(src, /ISAAC_LOG_STATE_GETTER_COMPARE_VALUE/);
+  assert.match(src, /ISAAC_LOG_STATE_GETTER_READ_WIDTH/);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v22: the state!=2 getter/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /stateGetterNeqImpl/);
+  assert.match(model, /0x00a25440/);
+  assert.match(model, /0x0092c008/);
+  assert.match(model, /LOG_STATE_GETTER_READ_WIDTH = 4/);
+  assert.match(model, /0xb65724\+0x30/);
+});
+
+test("LBH: v22 mutation — read width, compare value and bool polarity fail", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const s2 = (v) => (v | 0);
+    /* M1: the state-cell read narrowed to a byte — 0x102 / 0x302 / 0xff02
+       have low byte 2 and must read as != 2 (FULL-dword compare). */
+    withMutant("M1 read narrowed to byte",
+      (s) => s.replace(
+        "  return state != static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_COMPARE_VALUE)\n             ? 1\n             : 0;",
+        "  return (state & 0xffu) != static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_COMPARE_VALUE)\n             ? 1\n             : 0;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(s2(w.isaac_log_state_getter_neq(0x102)), 1);
+      });
+    /* M2: the compare value folded to 3 — state 2 must answer 0 (the
+       getter tests == NO_FILE, not == 3). */
+    withMutant("M2 compare value folded to 3",
+      (s) => s.replace(
+        "  return state != static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_COMPARE_VALUE)\n             ? 1\n             : 0;",
+        "  return state != 3u ? 1 : 0;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(s2(w.isaac_log_state_getter_neq(2)), 0);
+      });
+    /* M3: the setne polarity inverted (== instead of !=) — state 2 must
+       answer 0, not 1. */
+    withMutant("M3 polarity inverted",
+      (s) => s.replace(
+        "  return state != static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_COMPARE_VALUE)",
+        "  return state == static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_COMPARE_VALUE)",
+      ),
+      () => {
+        const w = loadExports();
+        eq(s2(w.isaac_log_state_getter_neq(2)), 0);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v22 mutation — getter census pins fail when folded", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s) => (crlfFile ? s.replace(/\n/g, "\r\n") : s);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry( toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry( before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M4: read width folded to 1 — the FULL-dword read is the law. */
+    withMutant("M4 read width folded to 1",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_READ_WIDTH);",
+        "  return 1u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_read_width()), 4);
+      });
+    /* M5: vtable slots folded to 2 — the third 15-slot carrier dropped. */
+    withMutant("M5 vtable slots folded to 2",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_VTABLE_SLOTS);",
+        "  return 2u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_vtable_slots()), 3);
+      });
+    /* M6: raw occurrences folded to 4 — the .text devirt immediates
+       dropped. */
+    withMutant("M6 raw occurrences folded to 4",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_RAW_OCCURRENCES);",
+        "  return 4u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_raw_occurrences()), 7);
+      });
+    /* M7: inlined copies folded to 0 — the devirt evidence dropped. */
+    withMutant("M7 inlined copies folded to 0",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_INLINED_COPIES);",
+        "  return 0u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_inlined_copies()), 3);
+      });
+    /* M8: the state offset folded to 8 — the getter reads cell +4. */
+    withMutant("M8 state offset folded to 8",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_STATE_OFFSET);",
+        "  return 8u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_state_offset()), 4);
+      });
+/* M9: direct callsites flipped to 1 — the getter has ZERO (only the
+       vtable slots + the devirt cmps reach it). */
+    withMutant("M9 direct callsites flipped to 1",
+      (s) => s.replace(
+        "  return static_cast<uint32_t>(ISAAC_LOG_STATE_GETTER_DIRECT_CALLSITES);",
+        "  return 1u;",
+      ),
+      () => {
+        const w = loadExports();
+        eq(u2(w.isaac_log_state_getter_direct_callsites()), 0);
+      });
+  } finally {
+    writeSourceRetry( before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v23 constants — engine-binding census final and cluster closure", () => {
+  /* ZERO laws this unit: the ABI must NOT move (no pure decision was
+     found — the 0x43eec0 getter is a typed-host LEASE row, the cluster
+     is closed). Every pin below is PE-truth from census-binding.out. */
+  assert.equal(LOG_PURE_ABI_VERSION, 25, "no laws -> no ABI bump since v27");
+  assert.equal(logAbiVersion(), 25);
+
+  /* path getter body identity: `mov eax,[ecx+8]; ret` — 2 insns, 4
+     bytes, plain ret, no call/store/frame (fresh decode 0043eec0.txt). */
+  assert.equal(LOG_VA_PATH_GETTER, 0x0043eec0);
+  assert.equal(LOG_PATH_GETTER_END, 0x0043eec4);      /* first int3 */
+  assert.equal(LOG_PATH_GETTER_BODY_BYTES, 0x04);
+  assert.equal(LOG_PATH_GETTER_INSN_COUNT, 2);
+  assert.equal(LOG_PATH_GETTER_FIRST_RET_VA, 0x0043eec3);
+  assert.equal(LOG_PATH_GETTER_RET_ARGS, 0);
+  assert.equal(LOG_PATH_GETTER_RETS, 1);
+  assert.equal(LOG_PATH_GETTER_E8_CALLS, 0);
+  assert.equal(LOG_PATH_GETTER_INDIRECT_CALLS, 0);
+  assert.equal(LOG_PATH_GETTER_MEM_STORES, 0);
+  assert.equal(LOG_PATH_GETTER_PATH_OFFSET, 8);       /* the +8 cell */
+
+  /* census: 22 direct calls + 2 registration pushes; 6 raw dwords
+     (.rdata 4 + .text 2); 4 vtable-slot carriers (all +0x38). */
+  assert.equal(LOG_PATH_GETTER_DIRECT_CALLSITES, 22);
+  assert.equal(LOG_PATH_GETTER_REGISTRATION_PUSHES, 2);
+  assert.equal(LOG_PATH_GETTER_REG_PUSH_VA_1, 0x0086b72b);
+  assert.equal(LOG_PATH_GETTER_REG_PUSH_VA_2, 0x0086c361);
+  assert.equal(LOG_PATH_GETTER_RAW_OCCURRENCES, 6);
+  assert.equal(LOG_PATH_GETTER_VTABLE_SLOTS, 4);
+  assert.equal(LOG_PATH_GETTER_SLOT_DTOR_BASE_VA, 0x00b83410); /* 0xb833d8+0x38 */
+  assert.equal(LOG_PATH_GETTER_SLOT_SINK_VA, 0x00ba51bc);      /* 0xba5184+0x38 */
+  assert.equal(LOG_PATH_GETTER_SLOT_SIBLING_VA, 0x00b9e978);   /* 0xb9e940+0x38 */
+  assert.equal(LOG_PATH_GETTER_SLOT_EXTRA_VA, 0x00b6575c);     /* 0xb65724+0x38 */
+
+  /* cross-law identity: the +0x30/+0x34/+0x38 slots of the SAME tables
+     are the state getter (v22), the Close member (v21) and the path
+     getter — the +0x38 carriers sit exactly +8 above the +0x30 ones. */
+  assert.equal(LOG_PATH_GETTER_SLOT_DTOR_BASE_VA,
+    LOG_STATE_GETTER_SLOT_DTOR_BASE_VA + 8);
+  assert.equal(LOG_PATH_GETTER_SLOT_SINK_VA, LOG_STATE_GETTER_SLOT_SINK_VA + 8);
+  assert.equal(LOG_PATH_GETTER_SLOT_SIBLING_VA,
+    LOG_STATE_GETTER_SLOT_SIBLING_VA + 8);
+  assert.equal(LOG_PATH_GETTER_SLOT_EXTRA_VA, LOG_STATE_GETTER_EXTRA_SLOT_VA + 8);
+  assert.equal(LOG_PATH_GETTER_SLOT_SINK_VA, LOG_SINK_VTABLE_VA + 0x38);
+  assert.equal(LOG_PATH_GETTER_SLOT_SIBLING_VA, LOG_SIBLING_VTABLE_VA + 0x38);
+  assert.equal(LOG_PATH_GETTER_SLOT_DTOR_BASE_VA, 0x00b833d8 + 0x38);
+  assert.equal(LOG_SINK_CLOSE_SINK_SLOT_VA, LOG_SINK_VTABLE_VA + 0x34);
+  assert.equal(LOG_SINK_CLOSE_SIBLING_SLOT_VA, LOG_SIBLING_VTABLE_VA + 0x34);
+  assert.ok(LOG_PATH_GETTER_SLOT_DTOR_BASE_VA < LOG_PATH_GETTER_SLOT_SIBLING_VA);
+  assert.ok(LOG_PATH_GETTER_SLOT_SIBLING_VA < LOG_PATH_GETTER_SLOT_SINK_VA);
+  assert.ok(LOG_PATH_GETTER_SLOT_EXTRA_VA !== LOG_PATH_GETTER_SLOT_SINK_VA);
+
+  /* cluster closure: the sink/sibling maps differ ONLY at +0x00/+0x1c/
+     +0x20 — 12 shared slots; every reachable body is classified (PURE
+     laws landed or HOST evidence, per the v21-iocluster + v22 records
+     re-verified this unit). */
+  assert.equal(LOG_SINK_VTABLE_VA, 0x00ba5184);
+  assert.equal(LOG_SIBLING_VTABLE_VA, 0x00b9e940);
+  assert.equal(LOG_SINK_SIBLING_SHARED_SLOTS, 12);   /* 15 - 3 */
+  assert.equal(LOG_SINK_DTOR_WRAPPER_VA, 0x00a83fa0);  /* +0x00 v15 */
+  assert.equal(LOG_SIBLING_DTOR_WRAPPER_VA, 0x00a523e0); /* +0x00 v16 */
+  assert.equal(LOG_SINK_WRITE_VA, 0x00a83fd0);         /* +0x1c v6 */
+  assert.equal(LOG_SIBLING_WRITE_VA, 0x00a52850);      /* +0x1c v7 */
+  assert.equal(LOG_SINK_FLUSH_VA, 0x0040c200);         /* +0x20 nop */
+  assert.equal(LOG_SIBLING_FLUSH_VA, 0x00a52880);      /* +0x20 v13 */
+  /* the differing trios are pairwise distinct and non-overlapping */
+  const diffVas = [
+    LOG_SINK_DTOR_WRAPPER_VA, LOG_SIBLING_DTOR_WRAPPER_VA,
+    LOG_SINK_WRITE_VA, LOG_SIBLING_WRITE_VA,
+    LOG_SINK_FLUSH_VA, LOG_SIBLING_FLUSH_VA,
+  ];
+  assert.equal(new Set(diffVas).size, 6, "six differing-slot VAs are distinct");
+  /* shared slots pinned by the family laws (same body both maps): the
+     +0x30 getter is reachable through BOTH vtables at the same offset */
+  assert.equal(LOG_STATE_GETTER_SLOT_SINK_VA - LOG_SINK_VTABLE_VA, 0x30);
+  assert.equal(LOG_STATE_GETTER_SLOT_SIBLING_VA - LOG_SIBLING_VTABLE_VA, 0x30);
+
+  /* wave census carried (same deterministic decode, same SHA) */
+  assert.equal(LOG_TEXT_INSN_COUNT_V23, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V23, 469);
+  assert.equal(LOG_TEXT_INSN_COUNT_V23, LOG_TEXT_INSN_COUNT_V22);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V23, LOG_TEXT_UNDECODABLE_BYTES_V22);
+});
+
+test("LBH: v23 header records the typed-host LEASE row and the closure", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /0x0043eec0/);
+  assert.match(h, /TYPED-HOST LEASE row/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_DIRECT_CALLSITES = 22/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_REG_PUSH_VA_1 = 0x0086b72bu/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_REG_PUSH_VA_2 = 0x0086c361u/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_SLOT_EXTRA_VA = 0x00b6575cu/);
+  assert.match(h, /ISAAC_LOG_SINK_SIBLING_SHARED_SLOTS = 12/);
+  assert.match(h, /ISAAC_LOG_SIBLING_FLUSH_VA = 0x00a52880u/);
+  assert.match(h, /ISAAC_LOG_TEXT_INSN_COUNT_V23 = 2094319/);
+  /* the lease: NO family owns the engine binding — the log ledger leases
+     the referent; the lua family's property table covers sibling rows of
+     the same register megablock only */
+  assert.match(h, /engine-family owner: NONE/);
+  assert.match(
+    h,
+    new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
+  );
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v23: engine-binding census final \+ cluster closure/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /LOG_VA_PATH_GETTER = 0x0043eec0/);
+  assert.match(model, /LOG_PATH_GETTER_REG_PUSH_VA_1 = 0x0086b72b/);
+  assert.match(model, /LOG_PATH_GETTER_SLOT_EXTRA_VA = 0x00b6575c/);
+  assert.match(model, /LOG_SINK_SIBLING_SHARED_SLOTS = 12/);
+  assert.match(model, /LOG_TEXT_UNDECODABLE_BYTES_V23 = 469/);
+});
+
+test("LBH: v24 constants — engine-family owner identified, lease transfer proposed", () => {
+  /* ZERO laws: the megablock rows are host registrations inside the lua
+     family's OWN body LuaEngine::RegisterClasses (0x866960..0x86e4c9) —
+     no log-owned pure decision exists there, so the ABI must NOT move.
+     Every pin below is PE-truth from census-megablock.py (fresh decode). */
+  assert.equal(LOG_PURE_ABI_VERSION, 25, "no laws -> no ABI bump since v27");
+  assert.equal(logAbiVersion(), 25);
+
+  /* the two 0x43eec0 registration rows: push fn; push name; call binder */
+  assert.equal(LOG_PATH_GETTER_REG_PUSH_VA_1, 0x0086b72b);   /* v23 pin */
+  assert.equal(LOG_PATH_GETTER_ROW1_CALL_VA, 0x0086b737);    /* call 0x88ab60 */
+  assert.equal(LOG_PATH_GETTER_ROW1_BINDER_VA, 0x0088ab60);  /* single-fn binder */
+  assert.equal(LOG_PATH_GETTER_ROW1_NAME_VA, 0x00b730ec);    /* "GetVariant" */
+  assert.equal(LOG_PATH_GETTER_REG_PUSH_VA_2, 0x0086c361);   /* v23 pin */
+  assert.equal(LOG_PATH_GETTER_ROW2_CALL_VA, 0x0086c36d);    /* call 0x88fd10 */
+  assert.equal(LOG_PATH_GETTER_ROW2_BINDER_VA, 0x0088fd10);  /* single-fn binder */
+  assert.equal(LOG_PATH_GETTER_ROW2_NAME_VA, 0x00b7306c);    /* "GetType" */
+
+  /* the megablock is LuaEngine::RegisterClasses — the lua family's own
+     censused body (v15 structural model span 0x866960..0x86e4c9). */
+  assert.equal(LOG_ENGINE_REGISTER_CLASSES_VA, 0x00866960);
+  assert.equal(LOG_ENGINE_REGISTER_CLASSES_END_VA, 0x0086e4c9);
+  assert.equal(LOG_ENGINE_REGISTER_CLASSES_BODY_BYTES, 0x7b6a);
+  assert.ok(LOG_ENGINE_REGISTER_CLASSES_VA <= LOG_PATH_GETTER_ROW1_CALL_VA);
+  assert.ok(LOG_PATH_GETTER_ROW1_CALL_VA < LOG_PATH_GETTER_ROW2_CALL_VA);
+  assert.ok(LOG_PATH_GETTER_ROW2_CALL_VA < LOG_ENGINE_REGISTER_CLASSES_END_VA);
+
+  /* gap bin A: exactly 6 un-recorded rows 0x86b704..0x86b759 (the
+     lua-recorded rows bracket the bin at 0x86b68d/0x86b76f). */
+  assert.equal(LOG_MEGABLOCK_A_GAP_ROWS, 6);
+  assert.equal(LOG_MEGABLOCK_A_GAP_FIRST_CALL_VA, 0x0086b704);
+  assert.equal(LOG_MEGABLOCK_A_GAP_LAST_CALL_VA, 0x0086b759);
+  assert.ok(LOG_MEGABLOCK_A_GAP_FIRST_CALL_VA < LOG_MEGABLOCK_A_GAP_LAST_CALL_VA);
+  assert.ok(LOG_MEGABLOCK_A_GAP_FIRST_CALL_VA < LOG_PATH_GETTER_ROW1_CALL_VA);
+  assert.ok(LOG_PATH_GETTER_ROW1_CALL_VA < LOG_MEGABLOCK_A_GAP_LAST_CALL_VA);
+
+  /* closure re-verified: sink/sibling maps byte-identical to v23 */
+  assert.equal(LOG_SINK_VTABLE_VA, 0x00ba5184);
+  assert.equal(LOG_SIBLING_VTABLE_VA, 0x00b9e940);
+  assert.equal(LOG_SINK_SIBLING_SHARED_SLOTS, 12);
+  assert.equal(LOG_PATH_GETTER_SLOT_SINK_VA, LOG_SINK_VTABLE_VA + 0x38);
+  assert.equal(LOG_PATH_GETTER_SLOT_SIBLING_VA, LOG_SIBLING_VTABLE_VA + 0x38);
+});
+
+test("LBH: v24 header records the owner identification and transfer proposal", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /v24 ENGINE-OWNER\s+IDENTIFIED/);
+  assert.match(h, /lease transfer PROPOSED/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_ROW1_BINDER_VA = 0x0088ab60u/);
+  assert.match(h, /ISAAC_LOG_PATH_GETTER_ROW2_BINDER_VA = 0x0088fd10u/);
+  assert.match(h, /ISAAC_LOG_ENGINE_REGISTER_CLASSES_VA = 0x00866960u/);
+  assert.match(h, /ISAAC_LOG_MEGABLOCK_A_GAP_ROWS = 6/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v24: engine owner IDENTIFIED \+ lease transfer PROPOSED/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /LOG_PATH_GETTER_ROW1_BINDER_VA = 0x0088ab60/);
+  assert.match(model, /LOG_PATH_GETTER_ROW2_BINDER_VA = 0x0088fd10/);
+  assert.match(model, /LOG_ENGINE_REGISTER_CLASSES_VA = 0x00866960/);
+  assert.match(model, /LOG_MEGABLOCK_A_GAP_ROWS = 6/);
+});
+
+
+test("LBH: v25 constants — base-class tables closed, four laws land at ABI 23", () => {
+  /* FOUR laws this unit (the first log-family laws since v22): the base
+     tables of the sink object graph (0xb83418 / 0xb833d8) were dumped in
+     v22 but never closed. Every member body is decoded this unit
+     (census-base-tables.py) and the four complete small helpers land:
+     flags-set1 0xa649b0, flush-clear 0xa24ea0, open twins 0xa253e0 /
+     0xa25410. The megablock lease row is VERIFIED live (the shared
+     cell+0x18 leaf 0x67efc0 is lua-registered: push @ 0x86b763). */
+  assert.equal(LOG_PURE_ABI_VERSION, 25,
+    "four laws landed at ABI 24 (v26); v27's clear1 sweeps it to 25");
+  assert.equal(logAbiVersion(), 25);
+
+  /* ---- B1: flags-set1 0xa649b0 (`or dword [ecx+4],1 ; mov al,1 ; ret`) */
+  assert.equal(LOG_VA_BASE_FLAGS_SET1, 0x00a649b0);
+  assert.equal(LOG_BASE_FLAGS_SET1_END, 0x00a649b7);          /* first int3 */
+  assert.equal(LOG_BASE_FLAGS_SET1_BODY_BYTES, 0x07);
+  assert.equal(LOG_BASE_FLAGS_SET1_INSN_COUNT, 3);
+  assert.equal(LOG_BASE_FLAGS_SET1_FIRST_RET_VA, 0x00a649b6);
+  assert.equal(LOG_BASE_FLAGS_SET1_RET_ARGS, 0);              /* plain ret */
+  assert.equal(LOG_BASE_FLAGS_SET1_RETS, 1);
+  assert.equal(LOG_BASE_FLAGS_SET1_E8_CALLS, 0);
+  assert.equal(LOG_BASE_FLAGS_SET1_INDIRECT_CALLS, 0);
+  assert.equal(LOG_BASE_FLAGS_SET1_MEM_STORES, 1);            /* the or */
+  assert.equal(LOG_BASE_FLAGS_SET1_STATE_OFFSET, 4);          /* the +4 cell */
+  assert.equal(LOG_BASE_FLAGS_SET1_READ_WIDTH, 4);  /* ENCODING: 83 49 04 01 */
+  assert.equal(LOG_BASE_FLAGS_SET1_VTABLE_SLOTS, 5);          /* 5 carriers */
+  assert.equal(LOG_BASE_FLAGS_SET1_SLOT_1_VA, 0x00b81ae0);
+  assert.equal(LOG_BASE_FLAGS_SET1_SLOT_2_VA, 0x00b8341c);    /* 0xb83418+4 */
+  assert.equal(LOG_BASE_FLAGS_SET1_SLOT_3_VA, 0x00b9ebe8);
+  assert.equal(LOG_BASE_FLAGS_SET1_SLOT_4_VA, 0x00b9fdd0);    /* 0xb9fdcc+4 */
+  assert.equal(LOG_BASE_FLAGS_SET1_SLOT_5_VA, 0x00ba918c);
+  assert.equal(LOG_BASE_FLAGS_SET1_RAW_OCCURRENCES, 5);
+  assert.equal(LOG_BASE_FLAGS_SET1_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_BASE_FLAGS_SET1_SIBLING_CLEAR_VA, 0x00a649c0); /* and ~1 */
+
+  /* ---- B2: flush-clear 0xa24ea0 */
+  assert.equal(LOG_VA_BASE_FLUSH_CLEAR, 0x00a24ea0);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_END, 0x00a24eb8);         /* first int3 */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_BODY_BYTES, 0x18);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_INSN_COUNT, 8);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_FIRST_RET_VA, 0x00a24eb7);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_RET_ARGS, 0);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_RETS, 1);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_E8_CALLS, 0);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_INDIRECT_CALLS, 1);       /* flush vcall */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_MEM_STORES, 1);           /* the and */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_LISTENER_GLOBAL_VA, 0x00c79bd8);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_FLUSH_SLOT, 0x20);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_CLEAR_MASK, 0xfffffffe);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_READ_WIDTH, 4); /* ENCODING: 83 66 04 fe */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_FLUSH_CALL_VA, 0x00a24eaf);
+  assert.equal(LOG_BASE_FLUSH_CLEAR_CLEAR_VA, 0x00a24eb2);    /* after call */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_RAW_OCCURRENCES, 1);      /* 0xb83420 */
+  assert.equal(LOG_BASE_FLUSH_CLEAR_DIRECT_CALLSITES, 0);
+
+  /* ---- B3/B4: open twins 0xa253e0 / 0xa25410 */
+  assert.equal(LOG_VA_BASE_OPEN0, 0x00a253e0);
+  assert.equal(LOG_BASE_OPEN0_END, 0x00a25408);
+  assert.equal(LOG_BASE_OPEN0_BODY_BYTES, 0x28);
+  assert.equal(LOG_BASE_OPEN0_INSN_COUNT, 16);
+  assert.equal(LOG_BASE_OPEN0_FIRST_RET_VA, 0x00a25405);
+  assert.equal(LOG_BASE_OPEN0_RET_ARGS, 4);                   /* one arg */
+  assert.equal(LOG_BASE_OPEN0_RETS, 1);
+  assert.equal(LOG_BASE_OPEN0_E8_CALLS, 1);                   /* combine */
+  assert.equal(LOG_BASE_OPEN0_INDIRECT_CALLS, 0);
+  assert.equal(LOG_BASE_OPEN0_MEM_STORES, 2);                 /* state+path */
+  assert.equal(LOG_BASE_OPEN0_STATE_VALUE, 0);      /* == SINK_STATE_OPEN_READ */
+  assert.equal(LOG_BASE_OPEN0_STATE_OFFSET, 4);
+  assert.equal(LOG_BASE_OPEN0_PATH_OFFSET, 8);
+  assert.equal(LOG_BASE_OPEN0_STATE_STORE_VA, 0x00a253ef);
+  assert.equal(LOG_BASE_OPEN0_COMBINE_CALL_VA, 0x00a253f6);
+  assert.equal(LOG_BASE_OPEN0_CLEANUP_VA, 0x00a253fb);
+  assert.equal(LOG_BASE_OPEN0_RAW_OCCURRENCES, 1);            /* 0xb833fc */
+  assert.equal(LOG_BASE_OPEN0_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_VA_BASE_OPEN1, 0x00a25410);
+  assert.equal(LOG_BASE_OPEN1_END, 0x00a2543a);
+  assert.equal(LOG_BASE_OPEN1_BODY_BYTES, 0x2a);
+  assert.equal(LOG_BASE_OPEN1_INSN_COUNT, 19);
+  assert.equal(LOG_BASE_OPEN1_FIRST_RET_VA, 0x00a25437);
+  assert.equal(LOG_BASE_OPEN1_RET_ARGS, 8);                   /* two args */
+  assert.equal(LOG_BASE_OPEN1_RETS, 1);
+  assert.equal(LOG_BASE_OPEN1_E8_CALLS, 1);
+  assert.equal(LOG_BASE_OPEN1_INDIRECT_CALLS, 0);
+  assert.equal(LOG_BASE_OPEN1_MEM_STORES, 2);
+  assert.equal(LOG_BASE_OPEN1_STATE_VALUE, 1);                /* == OPEN */
+  assert.equal(LOG_BASE_OPEN1_STATE_OFFSET, 4);
+  assert.equal(LOG_BASE_OPEN1_PATH_OFFSET, 8);
+  assert.equal(LOG_BASE_OPEN1_STATE_STORE_VA, 0x00a25420);
+  assert.equal(LOG_BASE_OPEN1_COMBINE_CALL_VA, 0x00a25427);
+  assert.equal(LOG_BASE_OPEN1_CLEANUP_VA, 0x00a2542c);
+  assert.equal(LOG_BASE_OPEN1_ARG2_DEAD, 1);                  /* [ebp+0xc] dead */
+  assert.equal(LOG_BASE_OPEN1_RAW_OCCURRENCES, 2);  /* 0xb6574c + 0xb83400 */
+  assert.equal(LOG_BASE_OPEN1_DIRECT_CALLSITES, 0);
+  assert.equal(LOG_BASE_OPEN_COMBINE_BASE_NULL, 1);           /* edx = 0 */
+  assert.equal(LOG_BASE_OPEN_COMBINE_FLAGS_ZERO, 1);          /* two zeros */
+  assert.equal(LOG_BASE_OPEN_COMBINE_MODE, 0);      /* == COMBINE_MODE_COPY_PATH */
+  assert.equal(LOG_BASE_OPEN_COMBINE_MODE, LOG_OPEN_COMBINE_MODE_COPY_PATH);
+
+  /* state encodings mirror the sink (cross-law identity) */
+  assert.equal(LOG_BASE_OPEN0_STATE_VALUE, LOG_SINK_STATE_OPEN_READ);
+  assert.equal(LOG_BASE_OPEN1_STATE_VALUE, LOG_SINK_STATE_OPEN);
+
+  /* ---- closure census (evidence) ---- */
+  assert.equal(LOG_BASE_DTOR_TABLE_VA, 0x00b833d8);           /* 15 slots */
+  assert.equal(LOG_BASE_TABLE_VA, 0x00b83418);                /* 12 live */
+  assert.equal(LOG_BASE_TABLE_SLOTS, 12);
+  assert.equal(LOG_BASE_TABLE_NULL_SLOT, 0);
+  assert.equal(LOG_VA_BASE_DTOR_WRAPPER, 0x00a25350);
+  assert.equal(LOG_BASE_DTOR_WRAPPER_END, 0x00a253d0);
+  assert.equal(LOG_BASE_DTOR_WRAPPER_BODY_BYTES, 0x80);
+  assert.equal(LOG_BASE_DTOR_WRAPPER_SEH, 0x00af12a0);
+  assert.equal(LOG_VA_BASE_TIMED_WINDOW, 0x00a24ec0);
+  assert.equal(LOG_VA_BASE_OPEN_GATED, 0x00a24fd0);
+  assert.equal(LOG_VA_BASE_FACTORY, 0x00a25090);              /* exit HOST */
+  assert.equal(LOG_VA_BASE_SEH_WRAPPER, 0x00a25130);
+  assert.equal(LOG_VA_BASE_ACCESS_LEAF, 0x00a25510);
+  assert.equal(LOG_BASE_ACCESS_LEAF_END, 0x00a25529);
+  assert.equal(LOG_BASE_ACCESS_LEAF_DIRECT_CALLSITES, 1);     /* v21: 0 */
+  assert.equal(LOG_BASE_ACCESS_LEAF_CALLSITE_VA, 0x0091a3d0); /* CORRECTED */
+  assert.equal(LOG_VA_BASE_GFA_LEAF, 0x00a25530);
+  assert.equal(LOG_BASE_GFA_LEAF_END, 0x00a2555c);
+  assert.equal(LOG_VA_BASE_STATS_WRITER, 0x00a25560);
+  assert.equal(LOG_VA_BASE_GETTER_18, 0x0067efc0);
+  assert.equal(LOG_BASE_GETTER_18_END, 0x0067efc4);
+  assert.equal(LOG_BASE_GETTER_18_REG_PUSH_VA, 0x0086b763);   /* lua owned */
+  assert.equal(LOG_VA_BASE_COMBINE_WRAPPER, 0x00a25200);
+  assert.equal(LOG_TEXT_INSN_COUNT_V25, 2094319);
+  assert.equal(LOG_TEXT_UNDECODABLE_BYTES_V25, 469);
+  assert.equal(LOG_V25_BATCHED_VAS, 16);
+  assert.equal(LOG_V25_EXACT_ZHL_MATCHES, 0);
+
+  /* C++ / wasm echo the model (self-built) */
+  const w = loadExports();
+  assert.equal(u(w.isaac_log_base_flags_set1_body_va()), 0xa649b0);
+  assert.equal(u(w.isaac_log_base_flags_set1_end_va()), 0xa649b7);
+  assert.equal(u(w.isaac_log_base_flags_set1_body_bytes()), 0x07);
+  assert.equal(u(w.isaac_log_base_flags_set1_insn_count()), 3);
+  assert.equal(u(w.isaac_log_base_flags_set1_read_width()), 4);
+  assert.equal(u(w.isaac_log_base_flags_set1_vtable_slots()), 5);
+  assert.equal(u(w.isaac_log_base_flags_set1_raw_occurrences()), 5);
+  assert.equal(u(w.isaac_log_base_flush_clear_indirect_calls()), 1);
+  assert.equal(u(w.isaac_log_base_flush_clear_clear_mask()), 0xfffffffe);
+  assert.equal(u(w.isaac_log_base_open0_state_value()), 0);
+  assert.equal(u(w.isaac_log_base_open0_ret_args()), 4);
+  assert.equal(u(w.isaac_log_base_open0_e8_calls()), 1);
+  assert.equal(u(w.isaac_log_base_open0_combine_call_va()), 0xa253f6);
+  assert.equal(u(w.isaac_log_base_open1_state_value()), 1);
+  assert.equal(u(w.isaac_log_base_open1_ret_args()), 8);
+  assert.equal(u(w.isaac_log_base_open1_arg2_dead()), 1);
+  assert.equal(u(w.isaac_log_base_open1_raw_occurrences()), 2);
+  assert.equal(u(w.isaac_log_base_dtor_wrapper_body_bytes()), 0x80);
+  assert.equal(u(w.isaac_log_base_access_leaf_direct_callsites()), 1);
+  assert.equal(u(w.isaac_log_text_insn_count_v25()), 2094319);
+});
+
+test("LBH: v25 behavior — flags set1, flush-clear, open twins (oracle parity)", () => {
+  const w = loadExports();
+  const set1 = w.isaac_log_base_flags_after_set1;
+  const flushNeeded = w.isaac_log_base_flush_needed;
+  const clears = w.isaac_log_base_flush_clears_bit0;
+  const o0 = w.isaac_log_base_open0_state_after;
+  const o1 = w.isaac_log_base_open1_state_after;
+
+  /* B1: (flags | 1) — the dword-or; 0x100 keeps its high byte (a
+     byte-or mutant would return 0x1 for flags 0x100). */
+  const set1Cases = [
+    [0, 1], [1, 1], [2, 3], [0x100, 0x101], [0x101, 0x101],
+    [0x1ff, 0x1ff], [0xfffffffe, 0xffffffff], [0xffffffff, 0xffffffff],
+  ];
+  for (const [flags, want] of set1Cases) {
+    assert.equal(u(set1(flags)), want, `wasm set1(0x${flags.toString(16)})`);
+    assert.equal(logBaseFlagsAfterSet1(flags), want, `js set1(0x${flags.toString(16)})`);
+  }
+  assert.equal(s(w.isaac_log_base_flags_set1_returns_one()), 1);
+  assert.equal(logBaseFlagsSet1ReturnsOne(), 1);
+
+  /* B2: full-dword listener gate (0x100 fires) + unconditional clear. */
+  for (const [ptr, want] of [[0, 0], [1, 1], [0x100, 1], [0xffffffff, 1]]) {
+    assert.equal(s(flushNeeded(ptr)), want, `wasm flushNeeded(0x${ptr.toString(16)})`);
+    assert.equal(logBaseFlushNeeded(ptr), want, `js flushNeeded(0x${ptr.toString(16)})`);
+  }
+  const clearCases = [
+    [0, 0], [1, 0], [2, 2], [0x100, 0x100], [0x101, 0x100],
+    [0xfffffffe, 0xfffffffe], [0xffffffff, 0xfffffffe],
+  ];
+  for (const [flags, want] of clearCases) {
+    assert.equal(u(clears(flags)), want, `wasm clears(0x${flags.toString(16)})`);
+    assert.equal(logBaseFlushClearsBit0(flags), want, `js clears(0x${flags.toString(16)})`);
+  }
+  assert.equal(s(w.isaac_log_base_flush_clear_unconditional()), 1);
+  assert.equal(logBaseFlushClearUnconditional(), 1);
+
+  /* B3/B4: the state store is CONSTANT (0 / 1) regardless of the input
+     — a skip-store mutant leaks state_before and is caught here. */
+  for (const state of [0, 1, 2, 3, 0x100, 0xffffffff]) {
+    assert.equal(u(o0(state)), 0, `wasm open0 state_after(0x${state.toString(16)})`);
+    assert.equal(u(o1(state)), 1, `wasm open1 state_after(0x${state.toString(16)})`);
+    assert.equal(logBaseOpen0StateAfter(state), 0);
+    assert.equal(logBaseOpen1StateAfter(state), 1);
+  }
+  assert.equal(s(w.isaac_log_base_open_combine_base_null()), 1);
+  assert.equal(s(w.isaac_log_base_open_combine_flags_zero()), 1);
+  assert.equal(u(w.isaac_log_base_open_combine_mode()), 0);
+  assert.equal(logBaseOpenCombineBaseNull(), 1);
+  assert.equal(logBaseOpenCombineFlagsZero(), 1);
+  assert.equal(logBaseOpenCombineMode(), 0);
+  assert.equal(s(w.isaac_log_base_open_returns_one()), 1);
+  assert.equal(logBaseOpenReturnsOne(), 1);
+  assert.equal(u(w.isaac_log_base_open0_ret_args()), 4);
+  assert.equal(u(w.isaac_log_base_open1_ret_args()), 8);
+  assert.equal(s(w.isaac_log_base_open1_arg2_dead()), 1);
+  assert.equal(logBaseOpen1Arg2Dead(), 1);
+
+  /* deterministic LCG draws cap the differential at the coordinator
+     wave limit (500): the JS oracle and the wasm must agree on every
+     dword for the two state transforms and the bit0 pair. */
+  const rnd = makeLcg(0xa25440);
+  for (let i = 0; i < 448; i++) {
+    const v = rnd();
+    assert.equal(u(set1(v)), logBaseFlagsAfterSet1(v), `set1 draw ${i}`);
+    assert.equal(u(clears(v)), logBaseFlushClearsBit0(v), `clears draw ${i}`);
+    assert.equal(u(o0(v)), logBaseOpen0StateAfter(v), `open0 draw ${i}`);
+    assert.equal(u(o1(v)), logBaseOpen1StateAfter(v), `open1 draw ${i}`);
+    assert.equal(s(flushNeeded(v)), logBaseFlushNeeded(v), `flush draw ${i}`);
+  }
+
+  /* the four bodies are pure leaves: no SEH, no store to other objects,
+     no unbounded varargs (the combine call is the v19 body — its OWN
+     laws pin its decisions; the base-open marshalling law pins the args). */
+  assert.equal(u(w.isaac_log_base_flags_set1_e8_calls()), 0);
+  assert.equal(u(w.isaac_log_base_flags_set1_indirect_calls()), 0);
+  assert.equal(u(w.isaac_log_base_flags_set1_mem_stores()), 1);
+  assert.equal(u(w.isaac_log_base_flush_clear_e8_calls()), 0);
+  assert.equal(u(w.isaac_log_base_open0_indirect_calls()), 0);
+  assert.equal(u(w.isaac_log_base_open1_indirect_calls()), 0);
+  assert.equal(logBaseFlagsSet1E8Calls(), 0);
+  assert.equal(logBaseFlushClearE8Calls(), 0);
+});
+
+test("LBH: v25 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  assert.match(h, /v25: base-class table closure/);
+  assert.match(h, /FOUR laws land/);
+  assert.match(h, /0x00a649b0/);
+  assert.match(h, /83 49 04 01/);
+  assert.match(h, /0x00a24ea0/);
+  assert.match(h, /83 66 04 fe/);
+  assert.match(h, /0x00a253e0/);
+  assert.match(h, /0x00a25410/);
+  assert.match(h, /COPY_PATH arm/);
+  assert.match(h, /0xa25410, the base-class open-1 twin/);   /* v22 correction */
+  assert.match(h, /CALLSITE_VA = 0x0091a3d0u/);              /* v21 correction */
+  assert.match(h, /ISAAC_LOG_BASE_ACCESS_LEAF_DIRECT_CALLSITES = 1/);
+  assert.match(h, /0x0086b763/);                             /* lua reg push */
+  assert.match(h, /ISAAC_LOG_BASE_OPEN1_ARG2_DEAD = 1/);
+  assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
+  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
+
+  const src = readFileSync(source, "utf8");
+  assert.match(src, /base_flags_after_set1_impl/);
+  assert.match(src, /base_flush_needed_impl/);
+  assert.match(src, /base_flush_clears_bit0_impl/);
+  assert.match(src, /base_open0_state_after_impl/);
+  assert.match(src, /base_open1_state_after_impl/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_base_flags_after_set1\)/);
+  assert.match(src, /ISAAC_LOG_NO_NARROW_PARAMS\(isaac_log_base_open1_state_after\)/);
+  assert.match(src, /v25 pins \(base-class tables/);
+  assert.match(src, /isaac_log_base_open0_state_after/);
+  assert.match(src, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION == ${LOG_PURE_ABI_VERSION}`));
+
+  const model = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "decomp", "log-pure-model.mjs"),
+    "utf8",
+  );
+  assert.match(model, /v25: base-class table closure/);
+  assert.match(model, new RegExp(`LOG_PURE_ABI_VERSION = ${LOG_PURE_ABI_VERSION};`));
+  assert.match(model, /baseFlagsAfterSet1Impl/);
+  assert.match(model, /baseFlushClearsBit0Impl/);
+  assert.match(model, /baseOpen0StateAfterImpl/);
+  assert.match(model, /baseOpen1StateAfterImpl/);
+  assert.match(model, /0x00a649b0/);
+  assert.match(model, /0xb6574c/);
+  assert.match(model, /LOG_BASE_ACCESS_LEAF_DIRECT_CALLSITES = 1/);
+});
+
+test("LBH: v25 mutation — the four landed laws fail when broken", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s2) => createHash("sha256").update(s2, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s2) => (crlfFile ? s2.replace(/\n/g, "\r\n") : s2);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry(toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry(before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    const s2 = (v) => (v | 0);
+    /* M1: the set1 OR folded to OR-2 — bit 0 must be the set bit. */
+    withMutant("M1 set1 or-2 instead of or-1",
+      (s2b) => s2b.replace(
+        "inline uint32_t base_flags_after_set1_impl(uint32_t flags) {\n  return flags | 1u;\n}",
+        "inline uint32_t base_flags_after_set1_impl(uint32_t flags) {\n  return flags | 2u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_flags_after_set1(0)), 1);
+      });
+    /* M2: the set1 read narrowed to a byte — flags 0x100 must keep
+       bit 8 (dword result 0x101). */
+    withMutant("M2 set1 narrowed to byte",
+      (s2b) => s2b.replace(
+        "inline uint32_t base_flags_after_set1_impl(uint32_t flags) {\n  return flags | 1u;\n}",
+        "inline uint32_t base_flags_after_set1_impl(uint32_t flags) {\n  return (flags & 0xffu) | 1u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_flags_after_set1(0x100)), 0x101);
+      });
+    /* M3: the flush listener gate narrowed to a byte — 0x100 fires. */
+    withMutant("M3 flush gate narrowed",
+      (s2b) => s2b.replace(
+        "inline int32_t base_flush_needed_impl(uint32_t listener_ptr) {\n  return listener_ptr != 0u ? 1 : 0;\n}",
+        "inline int32_t base_flush_needed_impl(uint32_t listener_ptr) {\n  return (listener_ptr & 0xffu) != 0u ? 1 : 0;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(s2(w2.isaac_log_base_flush_needed(0x100)), 1);
+      });
+    /* M4: the clear mask folded to 0xfffffffd — bit 1 must survive. */
+    withMutant("M4 clear mask folded",
+      (s2b) => s2b.replace(
+        "inline uint32_t base_flush_clears_bit0_impl(uint32_t flags) {\n  return flags & 0xfffffffeu;\n}",
+        "inline uint32_t base_flush_clears_bit0_impl(uint32_t flags) {\n  return flags & 0xfffffffdu;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_flush_clears_bit0(2)), 2);
+      });
+    /* M5: the unconditional-clear LAW flipped — the null-skip arm
+       would skip the clear. */
+    withMutant("M5 clear conditional",
+      (s2b) => s2b.replace(
+        "extern \"C\" int32_t isaac_log_base_flush_clear_unconditional(void) {",
+        "extern \"C\" int32_t isaac_log_base_flush_clear_unconditional(void) {\n  return 0;",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(s2(w2.isaac_log_base_flush_clear_unconditional()), 1);
+      });
+    /* M6: the open0 store skipped — state_before leaks into the cell. */
+    withMutant("M6 open0 skip-store",
+      (s2b) => s2b.replace(
+        "inline uint32_t base_open0_state_after_impl(uint32_t state_before) {\n  (void)state_before;\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_OPEN0_STATE_VALUE);\n}",
+        "inline uint32_t base_open0_state_after_impl(uint32_t state_before) {\n  return state_before;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_open0_state_after(3)), 0);
+      });
+    /* M7: the open1 state value folded to 0 — the twin delta is the law. */
+    withMutant("M7 open1 state folded to 0",
+      (s2b) => s2b.replace(
+        "inline uint32_t base_open1_state_after_impl(uint32_t state_before) {\n  (void)state_before;\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_OPEN1_STATE_VALUE);\n}",
+        "inline uint32_t base_open1_state_after_impl(uint32_t state_before) {\n  return 0u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_open1_state_after(0)), 1);
+      });
+    /* M8: the open0 ret width folded to 8 — one argument is the law. */
+    withMutant("M8 open0 ret_args folded to 8",
+      (s2b) => s2b.replace(
+        "extern \"C\" uint32_t isaac_log_base_open0_ret_args(void) {\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_OPEN0_RET_ARGS);\n}",
+        "extern \"C\" uint32_t isaac_log_base_open0_ret_args(void) {\n  return 8u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_open0_ret_args()), 4);
+      });
+    /* M9: the arg2-dead pin flipped — [ebp+0xc] IS read by the machine. */
+    withMutant("M9 arg2_dead flipped",
+      (s2b) => s2b.replace(
+        "extern \"C\" int32_t isaac_log_base_open1_arg2_dead(void) {",
+        "extern \"C\" int32_t isaac_log_base_open1_arg2_dead(void) {\n  return 0;",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(s2(w2.isaac_log_base_open1_arg2_dead()), 1);
+      });
+  } finally {
+    writeSourceRetry(before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+test("LBH: v25 mutation — census pins fail when folded", () => {
+  const before = readFileSync(source, "utf8");
+  const sha = (s2) => createHash("sha256").update(s2, "utf8").digest("hex");
+  const beforeSha = sha(before);
+  const crlfFile = before.includes("\r\n");
+  const base = before.replace(/\r\n/g, "\n");
+  const toFile = (s2) => (crlfFile ? s2.replace(/\n/g, "\r\n") : s2);
+  const withMutant = (label, mutate, check) => {
+    const bad = mutate(base);
+    assert.notEqual(bad, base, `${label}: mutant did not apply`);
+    writeSourceRetry(toFile(bad), "utf8");
+    let threw = false;
+    try { check(); } catch { threw = true; }
+    writeSourceRetry(before, "utf8");
+    assert.ok(threw, `${label}: mutant survived every assertion`);
+  };
+  try {
+    const eq = (a, b) => assert.equal(a, b);
+    const u2 = (v) => (v >>> 0);
+    /* M10: flags-set1 carriers folded to 4 — a fifth slot is dropped. */
+    withMutant("M10 set1 vtable slots folded to 4",
+      (s2b) => s2b.replace(
+        "extern \"C\" uint32_t isaac_log_base_flags_set1_vtable_slots(void) {\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_FLAGS_SET1_VTABLE_SLOTS);\n}",
+        "extern \"C\" uint32_t isaac_log_base_flags_set1_vtable_slots(void) {\n  return 4u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_flags_set1_vtable_slots()), 5);
+      });
+    /* M11: the open1 raw occurrences folded to 1 — the steamworks
+       carrier (0xb6574c) dropped. */
+    withMutant("M11 open1 raw occurrences folded to 1",
+      (s2b) => s2b.replace(
+        "extern \"C\" uint32_t isaac_log_base_open1_raw_occurrences(void) {\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_OPEN1_RAW_OCCURRENCES);\n}",
+        "extern \"C\" uint32_t isaac_log_base_open1_raw_occurrences(void) {\n  return 1u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_open1_raw_occurrences()), 2);
+      });
+    /* M12: the read-width encoding pin folded to 1 — the or/and are
+       FULL-dword (83 49 04 01 / 83 66 04 fe). */
+    withMutant("M12 read width folded to 1",
+      (s2b) => s2b.replace(
+        "extern \"C\" uint32_t isaac_log_base_flags_set1_read_width(void) {\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_FLAGS_SET1_READ_WIDTH);\n}",
+        "extern \"C\" uint32_t isaac_log_base_flags_set1_read_width(void) {\n  return 1u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_flags_set1_read_width()), 4);
+      });
+    /* M13: the v21-correction pin flipped back to 0 — the _access leaf
+       HAS one direct caller (0x91a3d0). */
+    withMutant("M13 access leaf callsites folded to 0",
+      (s2b) => s2b.replace(
+        "extern \"C\" uint32_t isaac_log_base_access_leaf_direct_callsites(void) {\n  return static_cast<uint32_t>(ISAAC_LOG_BASE_ACCESS_LEAF_DIRECT_CALLSITES);\n}",
+        "extern \"C\" uint32_t isaac_log_base_access_leaf_direct_callsites(void) {\n  return 0u;\n}",
+      ),
+      () => {
+        const w2 = loadExports();
+        eq(u2(w2.isaac_log_base_access_leaf_direct_callsites()), 1);
+      });
+  } finally {
+    writeSourceRetry(before, "utf8");
+  }
+  assert.equal(readFileSync(source, "utf8"), before, "source restored");
+  assert.equal(sha(before), beforeSha, "restored source is byte-identical (sha256)");
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ---------- v26: the KAGE::MutexBase same-template trio
+   (0xa68440 dtor HOST; laws land at ABI 23 -> 24) ----------
+   Oracular rows from cpu-dump/00a68400.txt — NOT derived from the
+   cpp.  BYTE-width encoding: upper dword bytes preserved. */
+
+test("LBH: v26 constants — mutexbase trio census pins", () => {
+  const u = (x) => x >>> 0;
+  assert.equal(LOG_VA_MUTEXBASE_SET1, 0x00a68470);
+  assert.equal(LOG_MUTEXBASE_SET1_END, 0x00a6847e);
+  assert.equal(LOG_MUTEXBASE_SET1_BODY_BYTES, 0x0e);
+  assert.equal(LOG_MUTEXBASE_SET1_INSN_COUNT, 5);
+  assert.equal(LOG_MUTEXBASE_SET1_FIRST_RET_VA, 0x00a6847d);
+  assert.equal(LOG_MUTEXBASE_SET1_RETS, 1);
+  assert.equal(LOG_MUTEXBASE_SET1_MEM_STORES, 1);
+  assert.equal(LOG_MUTEXBASE_SET1_CELL_OFFSET, 4);
+  assert.equal(LOG_MUTEXBASE_SET1_READ_WIDTH, 1,
+    "BYTE-width encoding law (movzx/bts/mov byte)");
+  assert.equal(LOG_MUTEXBASE_SET1_BIT, 0);
+  assert.equal(LOG_MUTEXBASE_SET1_VTABLE_REF_RDATA, 0x00ba04b8);
+  assert.equal(LOG_VA_MUTEXBASE_CLEAR1, 0x00a68480);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_END, 0x00a68485);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_BODY_BYTES, 5);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_INSN_COUNT, 2);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_BYTE_MASK, 0xfe);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_READ_WIDTH, 1);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_CELL_OFFSET, 4);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_VTABLE_REF_RDATA, 0x00ba04bc);
+  /* band context */
+  assert.equal(LOG_MUTEXBASE_SDTOR_VA, 0x00a68440);
+  assert.equal(LOG_MUTEXBASE_SDTOR_FREE_SIZE, 8);
+  assert.equal(LOG_MUTEXBASE_SDTOR_VTABLE, 0x00ba04b4);
+  assert.equal(LOG_MUTEXBASE_OBJECT_SIZE, 8);
+  assert.equal(LOG_MUTEXBASE_LOCK_CLOCK_RECHECK, 0x00a68490);
+  assert.equal(LOG_MUTEXBASE_LOCK_CLOCK_RECHECK, 0x00a68490);
+  /* cross-law: vtable refs are consecutive slots of ONE interface
+     table (dtor +0x00, set +0x04, clear +0x08); the set/clear
+     bodies are adjacent (set END == clear VA). */
+  assert.equal(LOG_MUTEXBASE_SET1_VTABLE_REF_RDATA - LOG_MUTEXBASE_SDTOR_VTABLE, 4);
+  assert.equal(LOG_MUTEXBASE_CLEAR1_VTABLE_REF_RDATA -
+    LOG_MUTEXBASE_SET1_VTABLE_REF_RDATA, 4);
+  assert.equal(LOG_MUTEXBASE_SET1_END + 2, LOG_VA_MUTEXBASE_CLEAR1,
+    "two-byte int3 pad between the set and clear bodies");
+});
+
+test("LBH: v26 behavior — byte bit0 set/clear (oracle parity)", () => {
+  const w = loadExports();
+  const rows = [
+    0x00000000, 0x00000001, 0x00000100, 0x00000101, 0x000000fe,
+    0x000000ff, 0xffffff00, 0xffffffff, 0xfffffeff, 0x12345600,
+    0x12345678, 0x7fffffff, 0x80000000, 0x800000ff, 0xfeffffff,
+  ];
+  for (const cell of rows) {
+    const wantSet = logMutexbaseSet1After(cell);
+    const wantClear = logMutexbaseClear1After(cell);
+    assert.equal(w.isaac_log_mutexbase_set1_after(cell) >>> 0,
+      wantSet >>> 0, `set ${cell.toString(16)}`);
+    assert.equal(w.isaac_log_mutexbase_clear1_after(cell) >>> 0,
+      wantClear >>> 0, `clear ${cell.toString(16)}`);
+    const handSet = ((cell & 0xffffff00) | ((cell & 0xff) | 1)) >>> 0;
+    const handClear = ((cell & 0xffffff00) | ((cell & 0xff) & 0xfe)) >>> 0;
+    assert.equal(wantSet >>> 0, handSet >>> 0, `set semantic ${cell}`);
+    assert.equal(wantClear >>> 0, handClear >>> 0, `clear semantic ${cell}`);
+  }
+  /* the width law: upper bytes MUST survive (a full-dword or/and
+     on the whole cell is behaviorally identical here — the WIDTH
+     is pinned by the PE-evidence test below and the read-width
+     getters).  The behavioral edge is bit0 vs the neighbors: */
+  assert.equal(logMutexbaseSet1After(0x00000100) >>> 0, 0x00000101);
+  assert.equal(logMutexbaseClear1After(0x00000101) >>> 0, 0x00000100);
+  assert.equal(logMutexbaseSet1After(0x00000002) >>> 0, 0x00000003,
+    "bit1 preserved when set fires");
+  assert.equal(logMutexbaseClear1After(0x00000003) >>> 0, 0x00000002,
+    "bit1 preserved when clear fires");
+  assert.equal(w.isaac_log_mutexbase_set1_returns_one() | 0, 1);
+  assert.equal(w.isaac_log_mutexbase_clear1_unconditional() | 0, 1);
+  /* randomized wide differential */
+  let rng = 0xa68470;
+  for (let i = 0; i < 400; i++) {
+    rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0;
+    const cell = rng >>> 0;
+    assert.equal(w.isaac_log_mutexbase_set1_after(cell) >>> 0,
+      logMutexbaseSet1After(cell) >>> 0, `set rand ${i}`);
+    assert.equal(w.isaac_log_mutexbase_clear1_after(cell) >>> 0,
+      logMutexbaseClear1After(cell) >>> 0, `clear rand ${i}`);
+  }
+});
+
+test("LBH: v26 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  const m = readFileSync(join(root, "scripts", "decomp", "log-pure-model.mjs"), "utf8");
+  const src = readFileSync(source, "utf8");
+  assert.match(h, /v26: the KAGE::MutexBase same-template trio/);
+  assert.match(h, /0x00a68440/);
+  assert.match(h, /0x00ba04b4/);
+  assert.match(src, /mutexbase_set1_after/);
+  assert.match(src, /mutexbase_clear1_after/);
+  /* ENCODING law surfaced in both artifacts: BYTE width, not the
+     v25 base-class dword-or twin. */
+  assert.match(h, /READ_WIDTH = 1u/);
+  assert.match(m, /LOG_MUTEXBASE_SET1_READ_WIDTH = 1;/);
+  /* band verdicts recorded */
+  assert.match(h, /re-verified HOST/);
+  assert.match(m, /logMutexbaseLockClockRecheck\(\)/);
+});
+
+test("LBH: v26 mutation group — set mask, clear mask, return flag, "
+   + "width pin, next-pin", () => {
+  const w0 = loadExports();
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const before = readFileSync(source, "utf8");
+  const beforeSha = sha(before);
+  const breakAndCheck = (oldStr, newStr, probe) => {
+    const mutated = before.replace(oldStr, newStr);
+    if (mutated === before) { throw new Error("mutant anchor missing"); }
+    writeSourceRetry(mutated, "utf8");
+    try {
+      const w = loadExports();
+      let failed = false;
+      try {
+        probe(w);
+      } catch {
+        failed = true;
+      }
+      assert.ok(failed, "mutant must break the v26 probe");
+    } finally {
+      writeSourceRetry(before, "utf8");
+    }
+    assert.equal(readFileSync(source, "utf8"), before, "source restored");
+    assert.equal(sha(readFileSync(source, "utf8")), beforeSha,
+      "restored byte-identical");
+  };
+  /* M1: set uses |2 (bit1) instead of bit0 */
+  breakAndCheck("(cell & 0xffu) | 0x01u;", "(cell & 0xffu) | 0x02u;",
+    (w) => { assert.equal(w.isaac_log_mutexbase_set1_after(0x101) >>> 0, 0x101); });
+  /* M2: clear mask 0xfd (clears bit1 instead of bit0) */
+  breakAndCheck("const uint32_t low = (cell & 0xffu) & 0xfeu;",
+    "const uint32_t low = (cell & 0xffu) & 0xfdu;",
+    (w) => { assert.equal(w.isaac_log_mutexbase_clear1_after(3) >>> 0, 2); });
+  /* M3: clear becomes a no-op */
+  breakAndCheck("const uint32_t low = (cell & 0xffu) & 0xfeu;",
+    "const uint32_t low = (cell & 0xffu);",
+    (w) => { assert.equal(w.isaac_log_mutexbase_clear1_after(0xff) >>> 0, 0xfe); });
+  /* M4: set1 stops returning one */
+  breakAndCheck("return 1; /* mov al,1 ALWAYS */",
+    "return 0; /* mov al,1 ALWAYS */",
+    (w) => { assert.equal(w.isaac_log_mutexbase_set1_returns_one() | 0, 1); });
+  /* M5: width getter drifts to dword (the header constexpr stays;
+     the CPP return site is what the wasm bakes). */
+  breakAndCheck("return ISAAC_LOG_MUTEXBASE_SET1_READ_WIDTH;",
+    "return 4u;",
+    (w) => { assert.equal(w.isaac_log_mutexbase_set1_read_width() >>> 0, 1); });
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});
+
+/* ---------- v27: the base-class flags-CLEAR twin 0xa649c0
+   (recorded by v25 as "not landed"; laws land at ABI 24 -> 25) ----------
+   Oracular rows from cpu-dump/00a649b7.txt — NOT derived from the
+   cpp.  FULL-dword encoding: `and dword ptr [ecx+4],0xfffffffe`
+   (READ_WIDTH=4) — the width-CONTRAST to the mutexbase byte-clear
+   0xa68480 (READ_WIDTH=1). */
+
+test("LBH: v27 constants — base flags-clear1 census pins", () => {
+  assert.equal(LOG_VA_BASE_FLAGS_CLEAR1, 0x00a649c0);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_END, 0x00a649c5);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_BODY_BYTES, 5);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_INSN_COUNT, 2);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_FIRST_RET_VA, 0x00a649c4);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_RET_ARGS, 0, "plain ret");
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_RETS, 1);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_E8_CALLS, 0);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_INDIRECT_CALLS, 0);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_MEM_STORES, 1);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_STATE_OFFSET, 4);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_CLEAR_MASK, 0xfffffffe);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_BYTE_MASK, 0xfe);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_READ_WIDTH, 4,
+    "FULL-dword encoding law (`83 61 04 fe`) — contrast to the "
+    + "mutexbase byte-clear's READ_WIDTH=1");
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_VTABLE_SLOTS, 6);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_1_VA, 0x00b9e924);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_2_VA, 0x00b9ebec);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_3_VA, 0x00b9fa8c);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_4_VA, 0x00b9fdd4);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_5_VA, 0x00ba315c);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_6_VA, 0x00ba9190);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_RAW_OCCURRENCES, 6);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_DIRECT_CALLSITES, 0);
+  /* cross-law: the v25 recorded row IS this body; the sibling back-ref
+     is set1; three slots sit ADJACENT (+4) to a set1 slot; the int3 pad
+     between set1 END and clear1 is 9 bytes; every clear1 slot is
+     followed in its table by the nop-flush 0x40c200. */
+  assert.equal(LOG_BASE_FLAGS_SET1_SIBLING_CLEAR_VA, LOG_VA_BASE_FLAGS_CLEAR1,
+    "v25 recorded row == landed body");
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SIBLING_SET_VA, LOG_VA_BASE_FLAGS_SET1);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_2_VA - LOG_BASE_FLAGS_SET1_SLOT_3_VA, 4);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_4_VA - LOG_BASE_FLAGS_SET1_SLOT_4_VA, 4);
+  assert.equal(LOG_BASE_FLAGS_CLEAR1_SLOT_6_VA - LOG_BASE_FLAGS_SET1_SLOT_5_VA, 4);
+  assert.equal(LOG_VA_BASE_FLAGS_CLEAR1 - LOG_BASE_FLAGS_SET1_END,
+    LOG_BASE_FLAGS_SET1_TO_CLEAR1_PAD_BYTES);
+  assert.equal(LOG_BASE_FLAGS_SET1_TO_CLEAR1_PAD_BYTES, 9);
+});
+
+test("LBH: v27 behavior — full-dword bit0 clear (oracle parity)", () => {
+  const w = loadExports();
+  const rows = [
+    0x00000000, 0x00000001, 0x00000100, 0x00000101, 0x000000fe,
+    0x000000ff, 0xffffff00, 0xffffffff, 0xfffffeff, 0x12345600,
+    0x12345678, 0x7fffffff, 0x80000000, 0x800000ff, 0xfeffffff,
+  ];
+  for (const cell of rows) {
+    const wantClear = logBaseFlagsAfterClear1(cell);
+    const wantSet = logBaseFlagsAfterSet1(cell);
+    assert.equal(w.isaac_log_base_flags_after_clear1(cell) >>> 0,
+      wantClear >>> 0, `clear ${cell.toString(16)}`);
+    const handClear = (cell & 0xfffffffe) >>> 0;
+    assert.equal(wantClear >>> 0, handClear >>> 0, `clear semantic ${cell}`);
+    /* round-trip law: clear undoes set for bit 0 and NOTHING else */
+    assert.equal((wantSet & wantClear) >>> 0, wantClear >>> 0,
+      `set->clear idempotence ${cell.toString(16)}`);
+    assert.equal((wantClear | 1) >>> 0, wantSet >>> 0,
+      `clear->set restores exactly bit 0 ${cell.toString(16)}`);
+  }
+  /* behavioral edges: neighbors of bit 0 survive; the mask never
+     touches bits 1..31 */
+  assert.equal(logBaseFlagsAfterClear1(0x00000101) >>> 0, 0x00000100);
+  assert.equal(logBaseFlagsAfterClear1(0x00000003) >>> 0, 0x00000002,
+    "bit1 preserved when clear fires");
+  assert.equal(logBaseFlagsAfterClear1(0xffffffff) >>> 0, 0xfffffffe);
+  assert.equal(w.isaac_log_base_flags_clear1_unconditional() | 0, 1);
+  /* randomized wide differential — HIGH-bit LCG draws, unmasked */
+  let rng = 0xa649c0;
+  for (let i = 0; i < 400; i++) {
+    rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0;
+    const cell = rng >>> 0;
+    assert.equal(w.isaac_log_base_flags_after_clear1(cell) >>> 0,
+      logBaseFlagsAfterClear1(cell) >>> 0, `clear rand ${i}`);
+    assert.equal(w.isaac_log_base_flags_after_clear1(cell) >>> 0,
+      w.isaac_log_base_flush_clears_bit0(cell) >>> 0,
+      `clear agrees with the landed flush-clear leaf ${i}`);
+  }
+});
+
+test("LBH: v27 census getters — wasm vs oracle pins", () => {
+  const w = loadExports();
+  const u = (x) => x >>> 0;
+  const pins = [
+    ["isaac_log_base_flags_clear1_body_va", logBaseFlagsClear1BodyVa],
+    ["isaac_log_base_flags_clear1_end_va", logBaseFlagsClear1EndVa],
+    ["isaac_log_base_flags_clear1_body_bytes", logBaseFlagsClear1BodyBytes],
+    ["isaac_log_base_flags_clear1_insn_count", logBaseFlagsClear1InsnCount],
+    ["isaac_log_base_flags_clear1_first_ret_va", logBaseFlagsClear1FirstRetVa],
+    ["isaac_log_base_flags_clear1_ret_args", logBaseFlagsClear1RetArgs],
+    ["isaac_log_base_flags_clear1_rets", logBaseFlagsClear1Rets],
+    ["isaac_log_base_flags_clear1_e8_calls", logBaseFlagsClear1E8Calls],
+    ["isaac_log_base_flags_clear1_indirect_calls", logBaseFlagsClear1IndirectCalls],
+    ["isaac_log_base_flags_clear1_mem_stores", logBaseFlagsClear1MemStores],
+    ["isaac_log_base_flags_clear1_state_offset", logBaseFlagsClear1StateOffset],
+    ["isaac_log_base_flags_clear1_clear_mask", logBaseFlagsClear1ClearMask],
+    ["isaac_log_base_flags_clear1_byte_mask", logBaseFlagsClear1ByteMask],
+    ["isaac_log_base_flags_clear1_read_width", logBaseFlagsClear1ReadWidth],
+    ["isaac_log_base_flags_clear1_vtable_slots", logBaseFlagsClear1VtableSlots],
+    ["isaac_log_base_flags_clear1_slot_1_va", logBaseFlagsClear1Slot1Va],
+    ["isaac_log_base_flags_clear1_slot_2_va", logBaseFlagsClear1Slot2Va],
+    ["isaac_log_base_flags_clear1_slot_3_va", logBaseFlagsClear1Slot3Va],
+    ["isaac_log_base_flags_clear1_slot_4_va", logBaseFlagsClear1Slot4Va],
+    ["isaac_log_base_flags_clear1_slot_5_va", logBaseFlagsClear1Slot5Va],
+    ["isaac_log_base_flags_clear1_slot_6_va", logBaseFlagsClear1Slot6Va],
+    ["isaac_log_base_flags_clear1_raw_occurrences", logBaseFlagsClear1RawOccurrences],
+    ["isaac_log_base_flags_clear1_direct_callsites", logBaseFlagsClear1DirectCallsites],
+    ["isaac_log_base_flags_clear1_sibling_set_va", logBaseFlagsClear1SiblingSetVa],
+    ["isaac_log_base_flags_set1_to_clear1_pad_bytes", logBaseFlagsSet1ToClear1PadBytes],
+  ];
+  for (const [name, oracle] of pins) {
+    assert.equal(u(w[name]()), u(oracle()), name);
+  }
+});
+
+test("LBH: v27 header, source and oracle record the PE evidence", () => {
+  const h = readFileSync(header, "utf8");
+  const m = readFileSync(join(root, "scripts", "decomp", "log-pure-model.mjs"), "utf8");
+  const src = readFileSync(source, "utf8");
+  assert.match(h, /v27: the base-class flags-CLEAR twin 0xa649c0/);
+  assert.match(h, /83 61 04 fe/);
+  assert.match(h, /0xb9fdd4/);
+  assert.match(src, /base_flags_after_clear1/);
+  assert.match(m, /LOG_BASE_FLAGS_CLEAR1_READ_WIDTH = 4;/);
+  /* ENCODING law surfaced in both artifacts: FULL-dword width, not the
+     mutexbase byte-clear twin. */
+  assert.match(h, /ISAAC_LOG_BASE_FLAGS_CLEAR1_READ_WIDTH = 4/);
+  /* the v25 "not landed" record is superseded */
+  assert.match(h, /LANDED by the/);
+  assert.match(src, /return flags & 0xfffffffeu;/);
+});
+
+test("LBH: v27 mutation group — mask, width, no-op, gate and census folds", () => {
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const before = readFileSync(source, "utf8");
+  const beforeSha = sha(before);
+  const breakAndCheck = (oldStr, newStr, probe) => {
+    const mutated = before.replace(oldStr, newStr);
+    if (mutated === before) { throw new Error("mutant anchor missing"); }
+    writeSourceRetry(mutated, "utf8");
+    try {
+      const w = loadExports();
+      let failed = false;
+      try {
+        probe(w);
+      } catch {
+        failed = true;
+      }
+      assert.ok(failed, "mutant must break the v27 probe");
+    } finally {
+      writeSourceRetry(before, "utf8");
+    }
+    assert.equal(readFileSync(source, "utf8"), before, "source restored");
+    assert.equal(sha(readFileSync(source, "utf8")), beforeSha,
+      "restored byte-identical");
+  };
+  /* M1: mask clears bit1 instead of bit0 */
+  breakAndCheck("return flags & 0xfffffffeu; /* the 0xa649c0 clear mask */",
+    "return flags & 0xfffffffcu; /* the 0xa649c0 clear mask */",
+    (w) => { assert.equal(w.isaac_log_base_flags_after_clear1(3) >>> 0, 2); });
+  /* M2: clear becomes a no-op */
+  breakAndCheck("return flags & 0xfffffffeu; /* the 0xa649c0 clear mask */",
+    "return flags; /* the 0xa649c0 clear mask */",
+    (w) => { assert.equal(w.isaac_log_base_flags_after_clear1(0xff) >>> 0, 0xfe); });
+  /* M3: unconditional flag flipped */
+  breakAndCheck("return 1; /* the 0xa649c0 and has NO gate */",
+    "return 0; /* the 0xa649c0 and has NO gate */",
+    (w) => { assert.equal(w.isaac_log_base_flags_clear1_unconditional() | 0, 1); });
+  /* M4: width getter drifts to byte (the header constexpr stays;
+     the CPP return site is what the wasm bakes). */
+  breakAndCheck("return static_cast<uint32_t>(ISAAC_LOG_BASE_FLAGS_CLEAR1_READ_WIDTH);",
+    "return 1u;",
+    (w) => { assert.equal(w.isaac_log_base_flags_clear1_read_width() >>> 0, 4); });
+  /* M5: raw occurrence count folded */
+  breakAndCheck("ISAAC_LOG_BASE_FLAGS_CLEAR1_RAW_OCCURRENCES);",
+    "5u);",
+    (w) => { assert.equal(w.isaac_log_base_flags_clear1_raw_occurrences() >>> 0, 6); });
+  /* M6: slot identity drifts off the set/clear adjacency pair */
+  breakAndCheck("ISAAC_LOG_BASE_FLAGS_CLEAR1_SLOT_4_VA);",
+    "0x00b9fdd0u);",
+    (w) => { assert.equal(w.isaac_log_base_flags_clear1_slot_4_va() >>> 0, 0xb9fdd4); });
+  assert.equal(loadExports().isaac_log_pure_helpers_abi_version(), 25,
+    "fresh green build after restore");
+});

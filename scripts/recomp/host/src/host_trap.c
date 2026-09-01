@@ -1,0 +1,371 @@
+/* host_trap.c -- the loud-stub engine.
+ *
+ * The rule this file enforces: an unimplemented import is OBSERVABLE.
+ * There is no path through this code that returns a plausible value without
+ * first saying so. Two behaviours, chosen per symbol:
+ *
+ *   isaac_stub_hit()  report once, keep counting, let the guest continue.
+ *                     For calls whose result genuinely does not matter
+ *                     (EnterCriticalSection in a single-threaded build).
+ *   isaac_trap()      report and abort. For calls whose result cannot be
+ *                     faked -- returning 0 from EOS_Platform_Create would
+ *                     produce a null-deref 40 frames later with no clue why.
+ *
+ * Both print the guest return address, so a report names the CALL SITE, not
+ * just the symbol. That is the difference between "EOS_Lobby_JoinLobby was
+ * called" and "EOS_Lobby_JoinLobby was called from 0x0089f1a2".
+ */
+
+#include "isaac_host.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Register dump for the mem-fault handler (recomp_rt.c calls this when
+ * recomp_last_cpu is set). Order: EAX ECX EDX EBX ESP EBP ESI EDI EIP. */
+void isaac_dump_regs(const CpuState *s, const char *tag) {
+    fprintf(stderr, "[recomp][MEM] ---- %s:\n", tag);
+    fprintf(stderr, "[recomp][MEM]   EAX=0x%08x ECX=0x%08x EDX=0x%08x EBX=0x%08x\n",
+            s->EAX, s->ECX, s->EDX, s->EBX);
+    fprintf(stderr, "[recomp][MEM]   ESP=0x%08x EBP=0x%08x ESI=0x%08x EDI=0x%08x\n",
+            s->ESP, s->EBP, s->ESI, s->EDI);
+    fprintf(stderr, "[recomp][MEM]   EIP=0x%08x  (this state was captured at the last shim call;\n"
+            "[recomp][MEM]    the dispatcher has since added 4+arg_bytes to ESP)\n",
+            s->EIP);
+}
+
+/* Weak so the host layer links standalone; the real ones live in
+ * host_shims_module.c and host_shims_heap.c. */
+__attribute__((weak)) void isaac_module_report(void) {}
+__attribute__((weak)) void isaac_heap_report(void) {}
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+#define ISAAC_MAX_TRACKED 1024
+
+typedef struct {
+    const isaac_import *imp;
+    uint32_t hits;
+    uint32_t first_caller;
+} stub_record;
+
+static stub_record g_records[ISAAC_MAX_TRACKED];
+static unsigned g_record_count;
+static unsigned g_total_stub_calls;
+
+void isaac_log(const char *fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+#ifdef __EMSCRIPTEN__
+    /* console.warn keeps these out of the ordinary stdout stream so they are
+     * still visible when the game is spamming its own logging. */
+    EM_ASM({ console.warn(UTF8ToString($0)); }, buf);
+#else
+    fputs(buf, stderr);
+    fputc('\n', stderr);
+#endif
+}
+
+
+/* The value on the guest stack is the RETURN address the `call` pushed, not
+ * the call itself. Reporting it sends whoever is debugging to the instruction
+ * AFTER the one they want -- for `_set_app_type` that is 0x00aefa07 when the
+ * call is at 0x00aefa02. Recover the call site by checking, at each plausible
+ * length, whether the bytes there decode as a call of exactly that length.
+ * Returns 0 if nothing matches, and the caller then reports only the return
+ * address rather than inventing one. */
+uint32_t isaac_call_site_from_return(uint32_t ret) {
+    if (!isaac_in_image(ret) || ret < ISAAC_TEXT_VA + 8)
+        return 0;
+    const uint8_t *p;
+    /* E8 rel32                  -> 5 bytes */
+    p = (const uint8_t *)isaac_g(ret - 5);
+    if (p[0] == 0xE8) return ret - 5;
+    /* FF 15 disp32  call [imm]  -> 6 bytes  (the IAT form) */
+    p = (const uint8_t *)isaac_g(ret - 6);
+    if (p[0] == 0xFF && p[1] == 0x15) return ret - 6;
+    /* FF 95 disp32  call [ebp+d32] */
+    if (p[0] == 0xFF && p[1] == 0x95) return ret - 6;
+    /* FF 94 sib disp32 */
+    p = (const uint8_t *)isaac_g(ret - 7);
+    if (p[0] == 0xFF && p[1] == 0x94) return ret - 7;
+    /* FF 55 disp8   call [ebp+d8] */
+    p = (const uint8_t *)isaac_g(ret - 3);
+    if (p[0] == 0xFF && (p[1] & 0xF8) == 0x50) return ret - 3;
+    /* FF 54 sib disp8 */
+    p = (const uint8_t *)isaac_g(ret - 4);
+    if (p[0] == 0xFF && p[1] == 0x54) return ret - 4;
+    /* FF D0..D7     call reg    -> 2 bytes */
+    p = (const uint8_t *)isaac_g(ret - 2);
+    if (p[0] == 0xFF && (p[1] & 0xF8) == 0xD0) return ret - 2;
+    /* FF 10..17     call [reg]  -> 2 bytes */
+    if (p[0] == 0xFF && (p[1] & 0xF8) == 0x10) return ret - 2;
+    return 0;
+}
+
+/* Formats "0x... (returns to 0x...)" or just the return address. */
+static const char *fmt_site(uint32_t ret, char *buf, size_t n) {
+    uint32_t site = isaac_call_site_from_return(ret);
+    if (site)
+        snprintf(buf, n, "0x%08x (returns to 0x%08x)", site, ret);
+    else
+        snprintf(buf, n, "return-address 0x%08x (call site not decodable)", ret);
+    return buf;
+}
+
+static stub_record *record_for(const isaac_import *imp) {
+    for (unsigned i = 0; i < g_record_count; ++i)
+        if (g_records[i].imp == imp)
+            return &g_records[i];
+    if (g_record_count >= ISAAC_MAX_TRACKED)
+        return NULL;
+    stub_record *r = &g_records[g_record_count++];
+    r->imp = imp;
+    r->hits = 0;
+    r->first_caller = 0;
+    return r;
+}
+
+static const char *verdict_name(unsigned v) {
+    switch (v) {
+    case ISAAC_V_REAL:          return "REAL";
+    case ISAAC_V_PROVIDED:      return "PROVIDED";
+    case ISAAC_V_STUB:          return "STUB";
+    case ISAAC_V_UNIMPLEMENTED: return "UNIMPLEMENTED";
+    case ISAAC_V_NEVER_CALLED:  return "NEVER-CALLED(census said 0 sites)";
+    default:                    return "?";
+    }
+}
+
+void isaac_stub_hit(const isaac_import *imp, const CpuState *restrict cpu) {
+    { extern struct CpuState *recomp_last_cpu; recomp_last_cpu = (struct CpuState *)cpu; }
+    stub_record *r = record_for(imp);
+    uint32_t caller = cpu ? isaac_retaddr(cpu) : 0;
+    ++g_total_stub_calls;
+    if (!r) {
+        isaac_log("[isaac][stub] %s!%s (record table full)", imp->dll, imp->symbol);
+        return;
+    }
+    if (r->hits++ == 0) {
+        r->first_caller = caller;
+        char sb[96];
+        isaac_log("[isaac][stub] FIRST CALL  %s!%s  <- called from %s   "
+                  "verdict=%s sites=%u  (inert: returns 0)",
+                  imp->dll, imp->symbol, fmt_site(caller, sb, sizeof sb),
+                  verdict_name(imp->verdict), imp->call_sites);
+        if (imp->verdict == ISAAC_V_NEVER_CALLED) {
+            isaac_log("[isaac][stub] ^^ census measured 0 call sites for this "
+                      "symbol. Reaching it means the census or the lift is "
+                      "wrong. Investigate before trusting anything downstream.");
+        }
+    }
+}
+
+void isaac_trap(const isaac_import *imp, const CpuState *restrict cpu) {
+    uint32_t caller = cpu ? isaac_retaddr(cpu) : 0;
+    char sb[96];
+    isaac_log("[isaac][TRAP] %s!%s is not implemented.\n"
+              "              called from %s\n"
+              "              verdict=%s, measured call sites=%u\n"
+              "              Returning a fake value here would corrupt state "
+              "silently, so execution stops instead.",
+              imp->dll, imp->symbol, fmt_site(caller, sb, sizeof sb),
+              verdict_name(imp->verdict), imp->call_sites);
+    isaac_shutdown("unimplemented import reached");
+    abort();   /* unreachable: isaac_shutdown does not return */
+}
+
+/* How many distinct stubbed imports have been reached. The selftest uses this
+ * to prove that THIS layer's weak definitions are the ones the linker kept:
+ * both this layer and the lifter emitted weak definitions for the same 591
+ * imports, and two weak symbols do not collide -- the linker silently picks
+ * one. If the lifter's had won, its stub returns without recording anything
+ * and this counter would stay at zero. Neither layer's own tests could catch
+ * that, because the bug exists only in the pair. */
+unsigned isaac_stub_record_count(void) { return g_record_count; }
+
+
+/* ---------------------------------------------------------- shutdown ----- */
+/* abort() inside wasm tears the module down under node's feet and produces
+ *   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src\win\async.c:76
+ * which is a libuv teardown artefact, not a port bug -- but it lands AFTER the
+ * real diagnosis and becomes the last thing on screen. An orderly stop prints
+ * every report and then exits, so the actual failure is what the reader sees.
+ *
+ * exit() still runs atexit handlers and flushes; _Exit would not. Neither
+ * unwinds guest state, which is correct: once we stop, guest state is not
+ * meant to be resumed. */
+void isaac_shutdown(const char *reason) {
+    static int in_shutdown;
+    if (in_shutdown) return;          /* a report must never re-enter this */
+    in_shutdown = 1;
+    isaac_log("[isaac] ================ STOPPING ================");
+    isaac_log("[isaac] reason: %s", reason ? reason : "(unspecified)");
+    isaac_module_report();
+    isaac_heap_report();
+    isaac_stub_report();
+    isaac_log("[isaac] ==========================================");
+    fflush(stdout);
+    fflush(stderr);
+    exit(1);
+}
+
+void isaac_stub_report(void) {
+    if (!g_record_count) {
+        isaac_log("[isaac] stub report: no stubbed import was ever reached.");
+        return;
+    }
+    /* Sort by hit count, descending -- the loudest offender first. */
+    for (unsigned i = 1; i < g_record_count; ++i) {
+        stub_record k = g_records[i];
+        unsigned j = i;
+        while (j && g_records[j - 1].hits < k.hits) {
+            g_records[j] = g_records[j - 1];
+            --j;
+        }
+        g_records[j] = k;
+    }
+    isaac_log("[isaac] ---- stub report: %u distinct symbols, %u total calls ----",
+              g_record_count, g_total_stub_calls);
+    for (unsigned i = 0; i < g_record_count; ++i) {
+        stub_record *r = &g_records[i];
+        char sb[96];
+        isaac_log("[isaac]   %8u x  %-30s %-24s first call %s  [%s]",
+                  r->hits, r->imp->symbol, r->imp->dll,
+                  fmt_site(r->first_caller, sb, sizeof sb),
+                  verdict_name(r->imp->verdict));
+    }
+}
+
+/* --------------------------------------------------------- dispatch ------ */
+
+isaac_import *isaac_resolve_shim(uint32_t target) {
+    if (target < ISAAC_SHIM_BASE)
+        return NULL;
+    uint32_t idx = (target - ISAAC_SHIM_BASE) / ISAAC_SHIM_STRIDE;
+    if (idx >= isaac_import_count)
+        return NULL;
+    if (isaac_imports[idx].shim_va != target)
+        return NULL;               /* misaligned token: not ours */
+    return &isaac_imports[idx];
+}
+
+/* Kept as an alias: earlier revisions of this file exported this name. */
+isaac_import *isaac_find_import_by_shim(uint32_t shim_va) {
+    return isaac_resolve_shim(shim_va);
+}
+
+int isaac_indirect_call(uint32_t target, CpuState *restrict cpu) {
+    isaac_import *imp = isaac_resolve_shim(target);
+    if (!imp)
+        return 0;
+
+    uint32_t ret = isaac_retaddr(cpu);
+    int dbg = (ret >= 0x00a6c000u && ret <= 0x00a6fac0u) ||
+              (imp->dll[0]=='d' && imp->symbol[0]=='D');
+    if (dbg) {
+        fprintf(stderr, "[dsp] ENTER %s!%s eax=%08x ebx=%08x ecx=%08x edx=%08x "
+                        "esi=%08x edi=%08x esp=%08x ret=%08x\n",
+                imp->dll, imp->symbol, cpu->EAX, cpu->EBX, cpu->ECX, cpu->EDX,
+                cpu->ESI, cpu->EDI, cpu->ESP, ret);
+        imp->fn(cpu);
+        fprintf(stderr, "[dsp] EXIT  %s!%s eax=%08x ebx=%08x ecx=%08x edx=%08x "
+                        "esi=%08x edi=%08x esp=%08x (purge %u)\n",
+                imp->dll, imp->symbol, cpu->EAX, cpu->EBX, cpu->ECX, cpu->EDX,
+                cpu->ESI, cpu->EDI, cpu->ESP, (unsigned)imp->arg_bytes);
+    } else {
+        imp->fn(cpu);
+    }
+
+    /* Emulate the callee's own `ret [N]`: pop the return address, then the
+     * arguments if the callee cleans them (stdcall/thiscall). arg_bytes is 0
+     * for cdecl because the CALLER cleans there. */
+    if (imp->arg_bytes == 0xFFFF) {
+        isaac_log("[isaac][TRAP] %s!%s returned but its stack purge is unknown; "
+                  "continuing would desynchronise the guest stack.",
+                  imp->dll, imp->symbol);
+        isaac_trap(imp, cpu);
+    }
+    cpu->ESP += 4u + imp->arg_bytes;
+    cpu->EIP = ret;
+    return 1;
+}
+
+/* ------------------------------------------------------------------------- *
+ * THE SHARED CONTRACT WITH scripts/recomp/lift/
+ *
+ * The lifter emits `recomp_call_indirect(s, target)` for every dynamic
+ * indirect call, and `recomp_jump_indirect(s, target)` for indirect tail
+ * calls. Its own definitions in recomp_rt.c are __attribute__((weak)) and
+ * abort(); these STRONG definitions replace them at link time.
+ *
+ * Order matters. A shim token (0x0F000000+) is deliberately outside the PE
+ * image, so the lifter's VA -> wasm function table has no entry for it and
+ * would report "unresolved indirect call". Shims are therefore tried FIRST,
+ * and only ordinary guest VAs reach the function table.
+ *
+ * Why both mechanisms exist, given the lifter already resolves `call [IAT
+ * slot]` to a direct imp_* call at lift time: because code also takes the
+ * ADDRESS of an import and calls it later. Measured example at 0x00a24ce2:
+ *     mov eax, dword ptr [0x00c10ed4]   ; load epoxy_glVertexAttribPointer
+ *     ...
+ *     call eax
+ * That load reads whatever isaac_boot_bind_iat() wrote into the slot, and the
+ * value arrives here. If the boot path wrote a token the lifter cannot
+ * resolve, the call dies; if it wrote nothing, the on-disk name RVA is
+ * interpreted as a code address. Both mechanisms are required and they must
+ * name the SAME function -- which is why gen_shims.py:c_ident() is a copy of
+ * the lifter's emit.py:load_imports() naming, asserted by the test suite.
+ * ------------------------------------------------------------------------- */
+
+/* Provided by the lifted module (dispatch_tbl.h). Weak so the host layer links
+ * standalone for compile-checking with no lifted module present. */
+__attribute__((weak)) int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
+    (void)va; (void)cpu;
+    return 0;
+}
+
+void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
+    if (isaac_indirect_call(target, s))
+        return;
+    if (isaac_lifted_dispatch(target, s))
+        return;
+    {
+        extern volatile uint32_t recomp_va_trace_idx;
+        extern volatile uint32_t recomp_va_trace[512];
+        isaac_log("[isaac][TRAP] indirect call to 0x%08x from 0x%08x resolves to "
+                  "neither a host shim nor a lifted function.%s",
+                  target, s ? isaac_retaddr(s) : 0,
+                  isaac_in_image(target)
+                      ? " It is inside the image, so the function was not lifted."
+                      : " It is outside the image -- a corrupt pointer, or an IAT "
+                        "slot the boot path never bound.");
+        if (s) {
+            uint32_t idx = recomp_va_trace_idx;
+            isaac_log("[isaac][TRAP] va trace (last 24):");
+            for (int k = 24; k >= 1; --k) {
+                isaac_log("[isaac][TRAP]   %08x",
+                          recomp_va_trace[(idx - k) & 511u]);
+            }
+            isaac_log("[isaac][TRAP] eax=%08x ecx=%08x edx=%08x esi=%08x edi=%08x "
+                      "esp=%08x ebp=%08x", s->EAX, s->ECX, s->EDX, s->ESI, s->EDI,
+                      s->ESP, s->EBP);
+        }
+    }
+    isaac_shutdown("unresolved indirect call");
+    abort();
+}
+
+void recomp_jump_indirect(CpuState *restrict s, uint32_t target) {
+    /* An indirect TAIL call. The callee's `ret` consumes the caller's return
+     * address off the shared guest stack, exactly as on x86, so this is the
+     * same operation as a call from the host's point of view. */
+    recomp_call_indirect(s, target);
+}

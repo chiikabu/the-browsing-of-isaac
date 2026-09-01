@@ -1,0 +1,437 @@
+"""Driver: lift a set of functions from the PE and write compilable C."""
+
+import argparse
+import io
+import json
+import os
+import re
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import pypcode                                        # noqa: E402
+from pe import PE32                                   # noqa: E402
+from lift import (RegMap, Decoder, LiftError, FuncEmitter, UTYPE,   # noqa: E402
+                  discover_body, LANG)
+from jumptables import JumpTables                       # noqa: E402
+import scan                                            # noqa: E402
+
+
+def load_fragments(path):
+    """Mid-function fragments from Ghidra's gap-recovery pass.
+
+    Ghidra's recovery split single functions into pieces; only rows with a
+    real prologue are genuine entry points.  The rest must not be used as
+    function boundaries -- every branch into them would turn into a tail
+    call and one function would silently become many.
+    """
+    frags = set()
+    with io.open(path, encoding="utf8") as fh:
+        head = fh.readline().rstrip("\n").split("\t")
+        i_va = head.index("va")
+        i_pro = head.index("looksLikePrologue")
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) <= i_pro:
+                continue
+            if f[i_pro].strip().lower() != "true":
+                frags.add(int(f[i_va], 16))
+    return frags
+
+
+def load_imports(path, shim_table=None):
+    """Read the host-boundary census -> {iat_va: (shim_c_name, arg_bytes, shim_token)}.
+
+    arg_bytes is the stdcall purge (0 for cdecl: the caller cleans). The
+    shim-table sidecar written by gen_shims.py also carries the shim token,
+    which an UNKNOWN-PURGE import needs so the lifted code can route the call
+    through isaac_indirect_call, the one place that knows how to report it.
+    """
+    d = json.load(open(path, encoding="utf8"))
+    out = {}
+    if shim_table and os.path.exists(shim_table):
+        st = json.load(open(shim_table, encoding="utf8"))
+        meta = {r["cident"]: (r["argBytes"], r["shimVa"])
+                for r in st.get("imports", [])}
+    else:
+        meta = {}
+    for sym in d.get("symbols", []):
+        va = sym.get("iatVa")
+        if not va:
+            continue
+        stem = sym["dll"].lower()
+        for suf in (".dll", "-l1-1-0", ".drv"):
+            stem = stem.replace(suf, "")
+        stem = "".join(c if c.isalnum() else "_" for c in stem)
+        name = "".join(c if c.isalnum() or c == "_" else "_" for c in sym["symbol"])
+        cname = "imp_%s__%s" % (stem, name)
+        arg_bytes, token = meta.get(cname, (0, 0))
+        out[int(va, 16)] = (cname, arg_bytes, token)
+    return out
+
+
+def load_ghidra(path):
+    """Read the Ghidra headless inventory -> (starts, extents)."""
+    starts = set()
+    extents = {}
+    with open(path, encoding="utf8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            if not d.get("inText") or d.get("external"):
+                continue
+            va = int(d["va"], 16)
+            starts.add(va)
+            extents[va] = (int(d["minVa"], 16), int(d["endVa"], 16))
+    return starts, extents
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def gen_state_header(regmap):
+    out = ["/* generated: guest CPU state (SLEIGH x86:LE:32 root registers) */",
+           "#ifndef RECOMP_STATE_H", "#define RECOMP_STATE_H",
+           "#include <stdint.h>", "", "typedef struct CpuState {"]
+    skipped = []
+    for off, (roff, rsize, rname) in regmap.roots.items():
+        if rsize in UTYPE:
+            out.append("  %s %s;" % (UTYPE[rsize], rname))
+        else:
+            out.append("  uint8_t %s[%d];" % (rname, rsize))
+            skipped.append(rname)
+    out.append("} CpuState;")
+    out.append("")
+    out.append("#endif")
+    return "\n".join(out) + "\n", skipped
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--exe", default="tools/isaac-ng.unpacked.exe")
+    ap.add_argument("--va", action="append", default=[],
+                    help="function VA to lift (repeatable)")
+    ap.add_argument("--va-file", help="file with one VA per line")
+    ap.add_argument("--out", required=True, help="output directory")
+    ap.add_argument("--module", default="lifted", help="base name of the .c")
+    ap.add_argument("--follow", action="store_true",
+                    help="also lift direct callees, transitively")
+    ap.add_argument("--follow-depth", type=int, default=99)
+    ap.add_argument("--split", type=int, default=0,
+                    help="split output into N-function translation units")
+    ap.add_argument("--split-bytes", type=int, default=0,
+                    help="split on cumulative emitted C bytes instead of "
+                         "function count; body sizes span 37 B (p50) to "
+                         "64 KB, so counting functions produces wildly "
+                         "uneven TUs and one huge TU dominates build time")
+    ap.add_argument("--spill-flags", action="store_true",
+                    help="spill/reload EFLAGS across calls (default: keep "
+                         "flags function-local, valid for compiler output)")
+    ap.add_argument("--ghidra-functions",
+                    help="Ghidra headless functions.jsonl; supplies function "
+                         "starts and body extents instead of the local scanner")
+    ap.add_argument("--fragments-tsv",
+                    help="Ghidra recovered-functions.tsv; rows without a real "
+                         "prologue are treated as mid-function fragments")
+    ap.add_argument("--fragments", default="absorb",
+                    choices=("absorb", "split"),
+                    help="absorb = fragments are not function boundaries and "
+                         "are folded into their parent (lifted standalone "
+                         "only if nothing else covers them); "
+                         "split = treat every inventory row as a function")
+    ap.add_argument("--imports",
+                    help="host-boundary census imports.json; turns "
+                         "`call [IAT slot]` into a direct shim call")
+    ap.add_argument("--shim-table", default=None,
+                    help="gen_shims.py sidecar (output/recomp/host/"
+                         "shim-table.json); provides each import's stdcall "
+                         "purge so lifted imp_* calls pop the return address "
+                         "the way the real callee's `ret` would")
+    ap.add_argument("--dispatch", default="auto"
+,
+                    choices=("off", "auto", "all", "force"),
+                    help="per-function pc dispatch loop for computed jumps: "
+                         "off = trap, auto = only functions with an "
+                         "unresolved intra-function computed jump, "
+                         "all = every function with any computed jump, "
+                         "force = every function (cost measurement only)")
+    ap.add_argument("--trace-va", action="store_true",
+                    help="emit RECOMP_VA(addr) before every instruction. "
+                         "Compiles to nothing unless the TU is also built "
+                         "with -DRECOMP_MEM_CHECK=1, in which case a bad "
+                         "guest pointer reports the instruction that made it "
+                         "-- a wasm OOB trap otherwise names only a function.")
+    ap.add_argument("--state-only", action="store_true",
+                    help="no local register cache: every access goes through "
+                         "the shared CpuState pointer (the remill/rev.ng shape)")
+    ap.add_argument("--max-insns", type=int, default=20000)
+    ap.add_argument("--stats", help="write per-function stats JSON here")
+    args = ap.parse_args()
+
+    t0 = time.time()
+    pe = PE32(args.exe)
+    ctx = pypcode.Context(LANG)
+    regmap = RegMap(ctx)
+    dec = Decoder(pe, ctx)
+    text = pe.text()
+    lo, hi = text.vaddr, text.vaddr + text.vsize
+
+    extents = {}
+    if args.ghidra_functions:
+        func_starts, extents = load_ghidra(args.ghidra_functions)
+    else:
+        func_starts = scan.call_targets(pe)
+    frags = set()
+    if args.fragments_tsv and args.fragments == "absorb":
+        frags = load_fragments(args.fragments_tsv)
+        func_starts -= frags
+    jt = JumpTables(pe)
+    imports = (load_imports(args.imports, args.shim_table)
+               if args.imports else {})
+    t_scan = time.time()
+
+    want = [int(v, 0) for v in args.va]
+    if args.va_file:
+        with open(args.va_file) as fh:
+            for line in fh:
+                line = line.split("#")[0].strip()
+                if line:
+                    want.append(int(line, 0))
+    want = list(dict.fromkeys(want))
+    deferred = [v for v in want if v in frags]
+    want = [v for v in want if v not in frags]
+    for v in want:
+        func_starts.add(v)
+
+    opts = dict(local_flags=not args.spill_flags, max_insns=args.max_insns,
+                state_only=args.state_only, imports=imports,
+                shim_table=args.shim_table,
+                trace_va=args.trace_va)
+
+    lifted = {}
+    stats = []
+    failures = []
+    callothers = []
+    imports_used = set()
+    covered = set()
+    pending = list(want)
+    depth = {v: 0 for v in want}
+    while pending:
+        va = pending.pop(0)
+        if va in lifted:
+            continue
+        try:
+            ext = extents.get(va)
+            body, jumps = discover_body(dec, va, func_starts, lo, hi,
+                                        max_insns=args.max_insns, jt=jt,
+                                        extent=ext)
+            fopts = dict(opts)
+            kinds = {k for k, _t in jumps.values()}
+            if args.dispatch == "force":
+                fopts["dispatch"] = True
+            elif args.dispatch == "all" and jumps:
+                fopts["dispatch"] = True
+            elif args.dispatch == "auto" and "unknown" in kinds:
+                fopts["dispatch"] = True
+            em = FuncEmitter(regmap, "sub_%08x" % va, va, body, fopts, jumps)
+            src = em.run()
+        except LiftError as e:
+            failures.append((va, str(e)))
+            continue
+        except Exception as e:                          # noqa: BLE001
+            failures.append((va, "%s: %s" % (type(e).__name__, e)))
+            continue
+        lifted[va] = src
+        callothers.extend(em.callother)
+        imports_used.update(em.imports_used)
+        for a, (ln, _ops) in body.items():
+            covered.update(range(a, a + ln))
+        st = dict(em.stats)
+        st["va"] = va
+        st["bytes"] = sum(v[0] for v in body.values())
+        st["csize"] = len(src)
+        st["clines"] = src.count("\n") + 1
+        stats.append(st)
+        if args.follow and depth.get(va, 0) < args.follow_depth:
+            for t in sorted(em.direct_calls | em.tailcalls):
+                if t not in lifted and lo <= t < hi:
+                    depth.setdefault(t, depth.get(va, 0) + 1)
+                    pending.append(t)
+
+    # coverage safety net: a fragment nothing reached still has to be lifted
+    rescued = 0
+    for va in deferred:
+        if va in covered or va in lifted:
+            continue
+        func_starts.add(va)
+        try:
+            body, jumps = discover_body(dec, va, func_starts, lo, hi,
+                                        max_insns=args.max_insns, jt=jt,
+                                        extent=extents.get(va))
+            fopts = dict(opts)
+            kinds = {k for k, _t in jumps.values()}
+            if args.dispatch == "force":
+                fopts["dispatch"] = True
+            elif args.dispatch == "all" and jumps:
+                fopts["dispatch"] = True
+            elif args.dispatch == "auto" and "unknown" in kinds:
+                fopts["dispatch"] = True
+            em = FuncEmitter(regmap, "sub_%08x" % va, va, body, fopts, jumps)
+            src = em.run()
+        except LiftError as e:
+            failures.append((va, str(e)))
+            continue
+        except Exception as e:                          # noqa: BLE001
+            failures.append((va, "%s: %s" % (type(e).__name__, e)))
+            continue
+        lifted[va] = src
+        rescued += 1
+        callothers.extend(em.callother)
+        imports_used.update(em.imports_used)
+        st = dict(em.stats)
+        st["va"] = va
+        st["bytes"] = sum(v[0] for v in body.values())
+        st["csize"] = len(src)
+        st["clines"] = src.count("\n") + 1
+        stats.append(st)
+        for a, (ln, _ops) in body.items():
+            covered.update(range(a, a + ln))
+
+    t_lift = time.time()
+
+    os.makedirs(args.out, exist_ok=True)
+    hdr, big = gen_state_header(regmap)
+    with open(os.path.join(args.out, "recomp_state.h"), "w") as fh:
+        fh.write(hdr)
+
+    # references that were not lifted -> extern stubs
+    refs = set()
+    for src in lifted.values():
+        refs.update(int(m, 16) for m in re.findall(r"\bsub_([0-9a-f]{8})\(", src))
+    missing = sorted(refs - set(lifted))
+    others = {}
+    for name, arity in callothers:
+        others[name] = max(others.get(name, 0), arity)
+
+    decls = ["/* generated */", '#include "recomp_state.h"',
+             '#include "recomp_rt.h"', ""]
+    for va in sorted(set(lifted) | set(missing)):
+        decls.append("void sub_%08x(CpuState *restrict s);" % va)
+    for o in sorted(others):
+        params = ", ".join(["CpuState *restrict s"] +
+                           ["uint32_t"] * others[o])
+        decls.append("uint32_t recomp_other_%s(%s);" % (o, params))
+    for n in sorted(imports_used):
+        decls.append("void %s(CpuState *restrict s);" % n)
+    decls.append("")
+    with open(os.path.join(args.out, "lifted_decls.h"), "w") as fh:
+        fh.write("\n".join(decls) + "\n")
+
+    order = sorted(lifted)
+    chunks = []
+    if args.split_bytes:
+        cur, cur_bytes = [], 0
+        for va in order:
+            n = len(lifted[va])
+            if cur and cur_bytes + n > args.split_bytes:
+                chunks.append(cur)
+                cur, cur_bytes = [], 0
+            cur.append(va)
+            cur_bytes += n
+        if cur:
+            chunks.append(cur)
+    elif args.split and len(order) > args.split:
+        for i in range(0, len(order), args.split):
+            chunks.append(order[i:i + args.split])
+    else:
+        chunks = [order]
+
+    total_c = 0
+    files = []
+    for ci, chunk in enumerate(chunks):
+        name = ("%s_%03d.c" % (args.module, ci)) if len(chunks) > 1 \
+            else ("%s.c" % args.module)
+        path = os.path.join(args.out, name)
+        with open(path, "w") as fh:
+            fh.write('#include "lifted_decls.h"\n\n')
+            for va in chunk:
+                fh.write(lifted[va])
+                fh.write("\n\n")
+        total_c += os.path.getsize(path)
+        files.append(name)
+
+    with open(os.path.join(args.out, "missing.txt"), "w") as fh:
+        for va in missing:
+            fh.write("%#010x\n" % va)
+    with open(os.path.join(args.out, "failures.txt"), "w") as fh:
+        for va, msg in failures:
+            fh.write("%#010x %s\n" % (va, msg))
+
+    summary = dict(
+        exe=args.exe,
+        func_starts_scanned=len(func_starts),
+        requested=len(want),
+        lifted=len(lifted),
+        failed=len(failures),
+        missing_callees=len(missing),
+        callother_kinds=sorted(others),
+        x86_bytes=sum(s["bytes"] for s in stats),
+        x86_insns=sum(s["insns"] for s in stats),
+        pcode_ops=sum(s["pcode_ops"] for s in stats),
+        c_bytes=total_c,
+        c_lines=sum(s["clines"] for s in stats),
+        files=files,
+        scan_s=round(t_scan - t0, 2),
+        lift_s=round(t_lift - t_scan, 2),
+        big_regs=big,
+        text_bytes_covered=len(covered),
+        text_vsize=text.vsize,
+        text_coverage_pct=round(100.0 * len(covered) / text.vsize, 2),
+        import_shims_used=len(imports_used),
+        fragments_excluded=len(frags),
+        fragments_rescued=rescued,
+        jt_tables=sum(x.get("jt_tables", 0) for x in stats),
+        jt_entries=sum(x.get("jt_entries", 0) for x in stats),
+        jt_tailcalls=sum(x.get("jt_tailcalls", 0) for x in stats),
+        jt_unresolved=sum(x.get("jt_unresolved", 0) for x in stats),
+        dispatch_loop_funcs=sum(x.get("dispatch", 0) for x in stats),
+        callind_remaining=sum(x.get("callind", 0) for x in stats),
+        callind_const_unresolved=sum(x.get("callind_const", 0) for x in stats),
+    )
+    if stats:
+        summary["c_bytes_per_x86_byte"] = round(
+            total_c / max(1, summary["x86_bytes"]), 2)
+        summary["c_lines_per_x86_insn"] = round(
+            summary["c_lines"] / max(1, summary["x86_insns"]), 2)
+    with open(os.path.join(args.out, "summary.json"), "w") as fh:
+        json.dump(summary, fh, indent=2)
+    try:
+        import ctypes
+        class PMC(ctypes.Structure):
+            _fields_ = [("cb", ctypes.c_uint32), ("PageFaultCount", ctypes.c_uint32),
+                        ("PeakWorkingSetSize", ctypes.c_size_t),
+                        ("WorkingSetSize", ctypes.c_size_t),
+                        ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                        ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                        ("PagefileUsage", ctypes.c_size_t),
+                        ("PeakPagefileUsage", ctypes.c_size_t)]
+        c = PMC(); c.cb = ctypes.sizeof(PMC)
+        ctypes.WinDLL("psapi").GetProcessMemoryInfo(
+            ctypes.WinDLL("kernel32").GetCurrentProcess(), ctypes.byref(c), c.cb)
+        summary["peak_rss_mb"] = round(c.PeakWorkingSetSize / 1048576.0, 1)
+        with open(os.path.join(args.out, "summary.json"), "w") as fh:
+            json.dump(summary, fh, indent=2)
+    except Exception:
+        pass
+    if args.stats:
+        with open(args.stats, "w") as fh:
+            json.dump(stats, fh, indent=1)
+    print(json.dumps(summary, indent=2))
+
+
+if __name__ == "__main__":
+    main()
