@@ -235,7 +235,20 @@ const EXPORTS = [
   "isaac_game_render_slice_continuation_needs_recapture",
 ];
 
+import { withWasmBuildCache } from "./wasm-build-cache.mjs";
+/* Content-hash build cache: skips the clang+em++ spawns when the
+   EXACT source bytes (mutants included) were built before. Disable
+   with ISAAC_WASM_BUILD_CACHE=0. See tests/wasm-build-cache.mjs. */
 function buildWasm() {
+  withWasmBuildCache({
+    tag: "game-render-slice",
+    files: [sliceSource, helperSource, join(root, "native", "decomp", "game_render_slice.h"), join(root, "native", "decomp", "render_shell_pure_helpers.h")],
+    extra: typeof EXPORTS !== "undefined" ? JSON.stringify(EXPORTS) : "",
+    wasmPath,
+    build: buildWasmUncached,
+  });
+}
+function buildWasmUncached() {
   mkdirSync(outDir, { recursive: true });
   const emsdk = process.env.EMSDK || join(homedir(), "emsdk");
   const clang = firstExisting([

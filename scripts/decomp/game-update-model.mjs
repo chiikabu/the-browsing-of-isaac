@@ -5867,6 +5867,79 @@ export function normalizeRuntimeInputsForLayout(inputRuntimeInputs = {}) {
   return out;
 }
 
+/* ---- fused runtime-struct writer (hot path) ------------------------------
+   writeStruct(view, base, RUNTIME_INPUTS_LAYOUT,
+               normalizeRuntimeInputsForLayout(x)) materializes a 4000-key
+   object per call. This writer resolves each layout key through the SAME
+   precedence chain — menu-aux lanes (always computed, isnil defaults to 1),
+   timer lanes (only when the array form is present), caller keys, door-slot
+   flatten, packed zero — and hands the value to the SAME writeField, so the
+   bytes written are identical by construction. Byte-equivalence against the
+   normalize+writeStruct pair is pinned by
+   tests/decomp-frame-path-fastpath.test.js. */
+const MENU_AUX_FIELD_PROPS = Object.freeze({
+  Left: ["left", 0], Right: ["right", 0], Flag1c: ["flag1c", 0],
+  Isnil: ["isnil", 1], PayloadPresent: ["payloadPresent", 0],
+  PayloadSize: ["payloadSize", 0],
+});
+let RUNTIME_LANE_TAGS = null;
+function runtimeLaneTags() {
+  if (RUNTIME_LANE_TAGS) return RUNTIME_LANE_TAGS;
+  RUNTIME_LANE_TAGS = layoutEntries(RUNTIME_INPUTS_LAYOUT).map(([name, field]) => {
+    let m = name.match(/^menuAuxTree(Left|Right|Flag1c|Isnil|PayloadPresent|PayloadSize)(\d+)$/);
+    if (m && Number(m[2]) < MENU_AUX_TREE_MAX_NODES) {
+      const [prop, dflt] = MENU_AUX_FIELD_PROPS[m[1]];
+      return { name, field, kind: 1, prop, dflt, i: Number(m[2]) };
+    }
+    m = name.match(/^updateListTimer(\d+)$/);
+    if (m && Number(m[1]) < UPDATE_LIST_MAX_NODES) {
+      return { name, field, kind: 2, i: Number(m[1]) };
+    }
+    m = name.match(/^doorSlot([0-7])(Present|Field3a0|Field8|FieldC)$/);
+    if (m) {
+      const prop = { Present: "present", Field3a0: "field3a0", Field8: "field8", FieldC: "fieldC" }[m[2]];
+      return { name, field, kind: 3, prop, i: Number(m[1]) };
+    }
+    if (name === "engineAnm2LayerNames") {
+      return { name, field, kind: 4, max: ISAAC_GAME_UPDATE_ANM2_MAX_LAYERS };
+    }
+    if (name === "engineAnm2ExtraNames") {
+      return { name, field, kind: 4, max: ISAAC_GAME_UPDATE_ANM2_MAX_EXTRAS };
+    }
+    return { name, field, kind: 0 };
+  });
+  return RUNTIME_LANE_TAGS;
+}
+const hasOwn = Object.prototype.hasOwnProperty;
+export function writeRuntimeInputsForLayout(view, base, inputRuntimeInputs = {}) {
+  const input = inputRuntimeInputs;
+  const nodes = Array.isArray(input.menuAuxTreeNodes) ? input.menuAuxTreeNodes : [];
+  const timers = Array.isArray(input.updateListTimers) ? input.updateListTimers : null;
+  const slots = input.doorSlots;
+  for (const t of runtimeLaneTags()) {
+    let v;
+    if (t.kind === 1) {
+      const n = nodes[t.i] || {};
+      v = t.prop === "isnil"
+        ? (((n.isnil ?? 1) ? 1 : 0) >>> 0)
+        : ((n[t.prop] ?? 0) >>> 0);
+    } else if (t.kind === 2 && timers) {
+      v = (timers[t.i] ?? 0) | 0;
+    } else if (hasOwn.call(input, t.name)) {
+      v = input[t.name];
+      if (t.kind === 4 && Array.isArray(v) && typeof v[0] === "string") {
+        v = flattenAnm2NameCells(v, t.max);
+      }
+    } else if (t.kind === 3 && slots) {
+      const s = slots[t.i] || {};
+      v = s[t.prop] ?? 0;
+    } else {
+      v = 0;
+    }
+    writeField(view, base, t.field, v);
+  }
+}
+
 export function playerFlag410Broadcast(flag, count) {
   const n = count | 0;
   if (n <= 0) return [];

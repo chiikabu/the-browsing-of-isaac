@@ -12,6 +12,8 @@ emulation and runtime behavior is verified against the original.
    open-boundary worklist, verification freshness, warnings). **Docs lag the
    tree by design; the tree wins.** Three units in one session were wasted
    opening already-landed targets because they trusted a checkpoint narrative.
+   For a specific target, `node scripts/decomp/brief.mjs <VA|idx>` is the
+   one-call orientation (target status + function shape + next commands).
 2. Read `decomp/frontier.json` — the last unit's hand-off pointer. If status
    warns it is stale, re-rank from the open-boundary list instead.
 3. Census with the prebuilt index, never a new script:
@@ -265,6 +267,17 @@ behavioural mutant that drops the mask.
   LCG's **high** bits, never `% n`.
 
 ## Required verification for every ABI work unit
+
+One call runs the whole gate with compact output and the emsdk environment
+set up (family suites self-build wasm and fail en masse without emcc):
+
+```powershell
+node scripts/decomp/verify-unit.mjs --suite tests/decomp-<family>.test.js
+```
+
+Add `--full` before a hand-off to include the entire `npm test`. Family-suite
+wasm builds are content-hash cached (`tests/wasm-build-cache.mjs`;
+`ISAAC_WASM_BUILD_CACHE=0` forces real builds). The individual gates:
 
 ```powershell
 node --test tests/decomp-game-update-slice.test.js tests/decomp-pipeline.test.js

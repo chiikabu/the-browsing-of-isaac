@@ -22,6 +22,12 @@ import {
   createResidualHostHandler,
   runNativeGameUpdateTickWasmOnly,
 } from "../scripts/decomp/frame-path.mjs";
+import {
+  RUNTIME_INPUTS_LAYOUT,
+  normalizeRuntimeInputsForLayout,
+  writeRuntimeInputsForLayout,
+  writeStruct,
+} from "../scripts/decomp/game-update-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const wasmPath = join(root, "output", "decomp", "wasm-slice", "game-update-slice.wasm");
@@ -93,6 +99,49 @@ test("fast driver actually exercises continuation resumes (not just the trivial 
   assert.ok(kinds.size >= 1, "continuation kinds recorded");
   // Host events flowing proves collectHostEvents ran on the fast path.
   assert.ok(hostTotals && Object.keys(hostTotals).length > 0, "host events collected");
+});
+
+test("fused runtime writer is byte-identical to normalize+writeStruct", () => {
+  // The live tick writes runtime inputs with writeRuntimeInputsForLayout
+  // (no 4000-key object per call); this pins it byte-for-byte against the
+  // reference normalize+writeStruct pair across the tricky input shapes:
+  // array forms (menu-aux nodes / timers / door slots), string anm2 names,
+  // explicit flat keys that must lose to lane expansion, and undefined.
+  const size = 1 << 16;
+  const rnd = lcg(0xbeef);
+  const cases = [
+    {},
+    { monotonicCounterLow: 5, frameOpaque4257b0IdCount: 3 },
+    {
+      doorSlots: [{ present: 1, field3a0: 7 }, {}, { field8: 9 }],
+      doorSlot0Present: 0xdead, // explicit flat key must WIN over the flatten
+    },
+    {
+      menuAuxTreeNodes: [
+        { left: 1, right: 2, isnil: 0, payloadPresent: 1, payloadSize: 8 },
+        {},
+      ],
+      menuAuxTreeLeft0: 0x1234, // must LOSE to the lane expansion
+      updateListTimers: [3, -1, 0x7fffffff],
+      updateListTimer1: 0x55, // must LOSE while the array form is present
+    },
+    { updateListTimer2: 0x66 }, // no array form -> flat key must WIN
+    { engineAnm2LayerNames: ["head", "body"], engineAnm2Loaded: 1 },
+    { shortTimer: undefined, transitionMode: null },
+    Object.fromEntries(
+      Object.keys(RUNTIME_INPUTS_LAYOUT)
+        .filter(() => rnd() % 7 === 0)
+        .map((k) => [k, rnd()]),
+    ),
+  ];
+  for (const [ci, input] of cases.entries()) {
+    const a = new Uint8Array(size).fill(0xa5);
+    const b = new Uint8Array(size).fill(0xa5);
+    writeStruct(new DataView(a.buffer), 64, RUNTIME_INPUTS_LAYOUT,
+      normalizeRuntimeInputsForLayout(input));
+    writeRuntimeInputsForLayout(new DataView(b.buffer), 64, input);
+    assert.deepEqual(Buffer.from(b), Buffer.from(a), `case ${ci} diverges`);
+  }
 });
 
 test("session default stays lockstep; fast mode is an explicit opt-in", { skip: !haveWasm }, async () => {

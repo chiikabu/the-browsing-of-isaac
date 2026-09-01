@@ -43,6 +43,7 @@ import {
   continueGameUpdateTimedTransition,
   resumeGameUpdate4257b0PassA,
   normalizeRuntimeInputsForLayout,
+  writeRuntimeInputsForLayout,
   overlayHostOwnedState,
   STATE_TO_BINARY_ALIASES,
   stepGameUpdateSlice,
@@ -6729,12 +6730,7 @@ export function runNativeGameUpdateTickWasmOnly(slice, {
   paths.reset();
   writeStruct(view, paths.stateAddress(), STATE_LAYOUT, state);
   writeStruct(view, paths.constantsAddress(), CONSTANTS_LAYOUT, constants);
-  writeStruct(
-    view,
-    paths.runtimeInputsAddress(),
-    RUNTIME_INPUTS_LAYOUT,
-    normalizeRuntimeInputsForLayout(runtimeInputs),
-  );
+  writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), runtimeInputs);
 
   const kindOff = paths.eventsAddress() + EVENTS_LAYOUT.continuationKind.offset;
   const readKind = () => view.getInt32(kindOff, true);
@@ -6807,7 +6803,7 @@ export function runNativeGameUpdateTickWasmOnly(slice, {
       engineCallDim: runtimeInputs.engineCallDim ?? readEventU32("roomTransitionDimension") ?? 0,
       engineGame18304: runtimeInputs.engineGame18304 ?? 0,
     };
-    writeStruct(view, paths.runtimeInputsAddress(), RUNTIME_INPUTS_LAYOUT, normalizeRuntimeInputsForLayout(engineRuntime));
+    writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), engineRuntime);
     advance("enginePrefix", paths.resumeEnginePrefix);
   }
   if (readKind() === UPDATE_CONTINUATION.RESUME_AFTER_ROOM_TRANSITION_EFFECT) {
@@ -6849,7 +6845,7 @@ export function runNativeGameUpdateTickWasmOnly(slice, {
       ...runtimeInputs,
       frameOpaque4257b0PostPassAListCount: effectiveF4PostCount,
     };
-    writeStruct(view, paths.runtimeInputsAddress(), RUNTIME_INPUTS_LAYOUT, normalizeRuntimeInputsForLayout(postPassA));
+    writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), postPassA);
     advance("4257b0PassA", paths.resume4257b0PassA);
   }
   if (readKind() === UPDATE_CONTINUATION.RESUME_AFTER_FRAME_MANAGER_UPDATES) {
@@ -6897,12 +6893,7 @@ export function runNativeGameUpdateTick(slice, {
   paths.reset();
   writeStruct(view, paths.stateAddress(), STATE_LAYOUT, state);
   writeStruct(view, paths.constantsAddress(), CONSTANTS_LAYOUT, constants);
-  writeStruct(
-    view,
-    paths.runtimeInputsAddress(),
-    RUNTIME_INPUTS_LAYOUT,
-    normalizeRuntimeInputsForLayout(runtimeInputs),
-  );
+  writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), runtimeInputs);
 
   // Independent JS oracle drives expected control flow; Wasm is stepped in lockstep.
   let expected = stepGameUpdateSlice(state, constants, runtimeInputs);
@@ -6993,7 +6984,7 @@ export function runNativeGameUpdateTick(slice, {
       engineCallDim: runtimeInputs.engineCallDim ?? expected.events.roomTransitionDimension ?? 0,
       engineGame18304: runtimeInputs.engineGame18304 ?? 0,
     };
-    writeStruct(view, paths.runtimeInputsAddress(), RUNTIME_INPUTS_LAYOUT, normalizeRuntimeInputsForLayout(engineRuntime));
+    writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), engineRuntime);
     advance(
       "enginePrefix",
       (s, e) => resumeGameUpdateEnginePrefix(s, engineRuntime, e),
@@ -7085,7 +7076,7 @@ export function runNativeGameUpdateTick(slice, {
       ...runtimeInputs,
       frameOpaque4257b0PostPassAListCount: effectiveF4PostCount,
     };
-    writeStruct(view, paths.runtimeInputsAddress(), RUNTIME_INPUTS_LAYOUT, normalizeRuntimeInputsForLayout(postPassA));
+    writeRuntimeInputsForLayout(view, paths.runtimeInputsAddress(), postPassA);
     advance(
       "4257b0PassA",
       (s, e) => resumeGameUpdate4257b0PassA(s, postPassA, e),

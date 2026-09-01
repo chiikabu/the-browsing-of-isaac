@@ -7,6 +7,7 @@
     "test": "node --test --test-concurrency=2 tests/*.test.js",
     "decomp:status": "node scripts/decomp/status.mjs",
     "decomp:index": "python scripts/decomp/tools/build-pe-index.py",
+    "decomp:gate": "node scripts/decomp/verify-unit.mjs",
     "decomp:inventory": "node scripts/decomp/run-ghidra.mjs --inventory-only",
     "decomp:analyze": "node scripts/decomp/run-ghidra.mjs",
     "decomp:build-slice": "node scripts/decomp/build-game-update-slice.mjs",

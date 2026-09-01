@@ -39,6 +39,10 @@ Commands (all addresses hex, 0x prefix optional):
   funcs-in VA END         function starts within a VA band.
   meta                    decode config + build stats.
   verify                  acceptance ground truths (measured in AGENTS.md).
+  batch "Q ;; Q ;; ..."   run several queries in ONE process/tool call —
+                          the token-lean form for an evidence pass, e.g.
+                          batch "func 0x9a2690 ;; callers 0x9a1a30 ;; writers 0xc7163c"
+                          Each result is prefixed with `== <query>`.
 
 Notes:
  - mem_* xrefs cover ABSOLUTE displacements only. [reg+disp] with a small disp
@@ -443,7 +447,27 @@ def cmd_verify(args):
             print(f"- {desc}\n    -> ERROR {e}")
 
 
+def cmd_batch(args):
+    script = " ".join(args)
+    for query in script.split(";;"):
+        parts = query.split()
+        if not parts:
+            continue
+        fn = COMMANDS.get(parts[0])
+        print(f"== {query.strip()}")
+        if fn is None or fn is cmd_batch:
+            print(f"  unknown command {parts[0]!r}")
+            continue
+        try:
+            fn(parts[1:])
+        except SystemExit as e:  # sub-command sys.exit must not kill the batch
+            print(f"  error: {e}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  error: {e}")
+
+
 COMMANDS = {
+    "batch": cmd_batch,
     "writers": cmd_writers,
     "readers": cmd_readers,
     "xrefs-to": cmd_xrefs_to,

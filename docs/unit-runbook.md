@@ -10,22 +10,24 @@ through the toolkit and finishes with the verification block green.
 
 ```powershell
 node scripts/decomp/status.mjs
+node scripts/decomp/brief.mjs <0xVA | boundary-idx>
 ```
 
-- Confirms your target is still OPEN (units have been wasted on landed
-  targets). If it is not in the open list, report that and take the frontier
-  pointer instead.
+- status confirms your target is still OPEN (units have been wasted on
+  landed targets); brief gives target status + function shape + the next
+  commands in one call. If the target is resolved, report that and take the
+  frontier pointer instead.
 - If the PE index is missing: `npm run decomp:index` (≈1 min, one-time).
 
 ## 1. Evidence pass (batched, from the index)
 
 ```powershell
-python scripts/decomp/tools/pequery.py addr 0x<VA>        # orientation
-python scripts/decomp/tools/pequery.py body 0x<VA>        # annotated disasm
-python scripts/decomp/tools/pequery.py callers 0x<VA>     # all call forms
-python scripts/decomp/tools/pequery.py callees 0x<VA>
+python scripts/decomp/tools/pequery.py batch "addr 0x<VA> ;; body 0x<VA> ;; callers 0x<VA> ;; callees 0x<VA>"
 node scripts/decomp/identify-zhl-address.mjs 0x<VA1> 0x<VA2> ...   # one batch
 ```
+
+Batch EVERY index query into as few `batch` calls as possible — one process,
+one tool call, one combined output.
 
 Census questions (writers/readers of a global, address escapes, byte
 patterns) go through `pequery.py writers|readers|xrefs-to|sig`. Do NOT write
@@ -64,15 +66,19 @@ Sanity habits that have paid off (all measured):
 5. Mutation check every new assertion: break translation, watch it fail,
    restore byte-identical (hash bytes, not text).
 
-## 4. Verify (all of it, name the harness in your report)
+## 4. Verify (one call, compact output)
 
 ```powershell
-node --test tests/decomp-game-update-slice.test.js tests/decomp-pipeline.test.js
-npm run decomp:verify-slice
-npm test
-node scripts/check-repo-safety.mjs
-git diff --check
+node scripts/decomp/verify-unit.mjs --suite tests/decomp-<family>.test.js
 ```
+
+Runs the whole required gate (slice+pipeline tests, the named family suite,
+the 5387-case differential, repo safety, `git diff --check`) with the emsdk
+environment set up for you, and prints one PASS/FAIL line per gate. Add
+`--full` for the whole `npm test` before a hand-off. Family suites cache
+their wasm builds by source hash (`tests/wasm-build-cache.mjs`), so a warm
+gate is minutes, not tens of minutes; `ISAAC_WASM_BUILD_CACHE=0` forces
+real builds.
 
 Plus: abi.json zero imports + new exports listed; verification.json
 `result: "pass"`; JSON parses; no stale ABI constants tracked anywhere.

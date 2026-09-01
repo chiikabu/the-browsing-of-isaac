@@ -10458,7 +10458,20 @@ const EXPORTS = [
   "isaac_lua_engine_899ba10_return_value",
 ];
 
+import { withWasmBuildCache } from "./wasm-build-cache.mjs";
+/* Content-hash build cache: skips the clang+em++ spawns when the
+   EXACT source bytes (mutants included) were built before. Disable
+   with ISAAC_WASM_BUILD_CACHE=0. See tests/wasm-build-cache.mjs. */
 function buildWasm() {
+  withWasmBuildCache({
+    tag: "lua-engine-pure-helpers",
+    files: [source, header],
+    extra: typeof EXPORTS !== "undefined" ? JSON.stringify(EXPORTS) : "",
+    wasmPath,
+    build: buildWasmUncached,
+  });
+}
+function buildWasmUncached() {
   mkdirSync(outDir, { recursive: true });
   const emsdk = process.env.EMSDK || join(homedir(), "emsdk");
   const clang = firstExisting([
