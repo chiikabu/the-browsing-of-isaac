@@ -47,6 +47,11 @@ if (rec) {
       .sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)))
       .slice(-1)
       .map((k) => `${k}: ${String(rec[k]).slice(0, 400)}`)[0] ?? null,
+    // Standing verdicts (stays-host / narrow-only / declined) — read these
+    // BEFORE planning a unit; they exist to stop re-derivation.
+    assessments: Object.keys(rec)
+      .filter((k) => /^assessment/.test(k))
+      .map((k) => `${k}: ${String(rec[k]).slice(0, 500)}`),
     status: "OPEN",
   };
 } else if (asIdx != null || asVa != null) {
@@ -125,6 +130,7 @@ if (wantJson) {
     const b = out.boundary;
     console.log(`boundary: ${b.status}${b.idx != null ? `  idx ${b.idx}` : ""}${b.va ? `  ${b.va}` : ""}${b.name ? `  ${b.name}` : ""}`);
     if (b.operation) console.log(`  op: ${b.operation}`);
+    for (const a of b.assessments ?? []) console.log(`  ! ${a}`);
     if (b.latestEvidence) console.log(`  ${b.latestEvidence}`);
   }
   if (out.func) {
