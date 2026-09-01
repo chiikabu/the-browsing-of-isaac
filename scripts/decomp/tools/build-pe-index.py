@@ -22,6 +22,12 @@ Decode config (record with any number you cite): linear+skipdata+jtab-mask v1
    xref (address-escape evidence: function-pointer loads, pushed addresses)
  - `call [slot]` where the slot is file-backed and holds a .text VA is resolved
    at build time to a `call_slot` xref to the real target
+ - every register-relative memory operand (`[reg+disp]`, `[reg+idx*s+disp]`,
+   base != esp/ebp) recorded in the `fld` table as (va, disp, r/w/rw/addr,
+   base register, operand size) — the OBJECT-FIELD census (`pequery.py
+   fieldrefs 0x2654c [FUNC]`) that absolute-displacement xrefs cannot answer
+   ("does anything in this function write [Game+0x1ba84]?"). Locals and
+   arguments (esp/ebp-relative) are deliberately excluded as noise.
 Known limitation: byte-index tables that follow some dword jump tables are not
 masked; a handful of misdecoded instructions can remain near switch heads.
 Always confirm a surprising census result with `pequery.py disasm` around it.
@@ -51,6 +57,7 @@ CREATE TABLE func (start INTEGER PRIMARY KEY, end INTEGER, ninsn INTEGER);
 CREATE TABLE imp (va INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE str (va INTEGER PRIMARY KEY, s TEXT);
 CREATE TABLE seg (start INTEGER, end INTEGER, kind TEXT);
+CREATE TABLE fld (va INTEGER, disp INTEGER, kind TEXT, base TEXT, size INTEGER);
 """
 
 
@@ -158,15 +165,20 @@ def main() -> int:
 
     insn_rows: list[tuple] = []
     xref_rows: list[tuple] = []
+    fld_rows: list[tuple] = []
+    # capstone register ids for the frame/stack pointers (excluded from fld)
+    import capstone.x86 as _x86
+    stack_regs = {_x86.X86_REG_ESP, _x86.X86_REG_EBP, _x86.X86_REG_SP, _x86.X86_REG_BP}
     call_targets: set[int] = set()
     int3_starts: list[int] = []   # VA right after an int3/pad run
     total, resync = 0, 0
 
     def flush():
-        nonlocal insn_rows, xref_rows
+        nonlocal insn_rows, xref_rows, fld_rows
         db.executemany("INSERT OR REPLACE INTO insn VALUES (?,?,?,?)", insn_rows)
         db.executemany("INSERT INTO xref VALUES (?,?,?)", xref_rows)
-        insn_rows, xref_rows = [], []
+        db.executemany("INSERT INTO fld VALUES (?,?,?,?,?)", fld_rows)
+        insn_rows, xref_rows, fld_rows = [], [], []
 
     branch_mn_call = {"call", "lcall"}
     first_gap = True
@@ -210,6 +222,16 @@ def main() -> int:
                     m = op.mem
                     disp = m.disp & 0xFFFFFFFF
                     absolute = m.base == 0 and m.index == 0
+                    if m.base != 0 and m.base not in stack_regs and m.segment == 0:
+                        # object-field census row: signed displacement off a
+                        # register base; kind from the access bits (lea = addr)
+                        if mn == "lea":
+                            fkind = "addr"
+                        else:
+                            fr = bool(op.access & CS_AC_READ)
+                            fw = bool(op.access & CS_AC_WRITE)
+                            fkind = "rw" if (fr and fw) else ("w" if fw else "r")
+                        fld_rows.append((insn.address, m.disp, fkind, insn.reg_name(m.base), op.size))
                     in_img = image_base <= disp < image_end
                     if grp_call:
                         if absolute and in_img:
@@ -276,10 +298,12 @@ def main() -> int:
     db.execute("CREATE INDEX ix_xref_dst ON xref(dst, kind)")
     db.execute("CREATE INDEX ix_xref_src ON xref(src)")
     db.execute("CREATE INDEX ix_func_end ON func(end)")
+    db.execute("CREATE INDEX ix_fld_disp ON fld(disp)")
+    db.execute("CREATE INDEX ix_fld_va ON fld(va)")
 
     meta = {
         "sha256": pe.sha256,
-        "decode_config": "linear+skipdata+jtab-mask v1",
+        "decode_config": "linear+skipdata+jtab-mask v2 (+fld object-field census)",
         "capstone": __import__("capstone").__version__,
         "insn_total": str(total),
         "resync_bytes": str(resync),

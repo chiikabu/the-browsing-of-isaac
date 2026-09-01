@@ -61,3 +61,7 @@ scripts/decomp/*.mutbak
 native/decomp/*.bak*
 native/decomp/*.tmp
 native/decomp/*.new
+
+# mutate.mjs crash-safety trail (local state; stash lives under output/decomp/_scratch/mutants/)
+/.mutation-journal.jsonl
+/.mutation-journal/

@@ -1240,6 +1240,13 @@ import {
 } from "../scripts/decomp/frame-effect-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "frame_effect_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "frame_effect_pure_helpers.h");
 const source = join(root, "native", "decomp", "frame_effect_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "frame-effect-pure");
@@ -2131,8 +2138,8 @@ const SRC = readFileSync(source, "utf8");
 /* ------------------------------------------------------------------ */
 
 test("v21 header pins ABI 21 and matches the model's ABI constant", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
 });
 
@@ -3049,7 +3056,7 @@ test("v12 mutants: signed type gate, mask drop, NaN miss, ABI pin", () => {
   /* M3 NaN miss: comiss jb on NaN must be 1, not 0. */
   assert.equal(W.comissJb81e9d0(bitsToF32(0x7fc00000), 0), 1);
   /* M4 ABI pin. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   /* M5 byte-len / insn census pins (header + model). */
   assert.equal(FRAME_EFFECT_81E9D0_INSN_COUNT, 169);
@@ -3315,7 +3322,7 @@ test("v13 mutants: signed type, signed bounds, imul, AABB add, ABI pin", () => {
   assert.equal(i32At(W.memory, V13_SCRATCH.sampleX), 13);
   assert.equal(i32At(W.memory, V13_SCRATCH.sampleY), 24);
   /* M5 ABI pin + census. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_81ECC0_INSN_COUNT, 103);
   assert.equal(FRAME_EFFECT_81ECC0_BYTE_LEN, 269);
@@ -3483,7 +3490,7 @@ test("v14 mutants: signed mode, AL-only, field-drop, ABI pin", () => {
   /* M4 slow still 2 even when field would be 1 (the live caller test). */
   assert.equal(W.result81edd0(0x16, 1) >>> 0, 2);
   /* M5 ABI pin + census. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_81EDD0_INSN_COUNT, 6);
   assert.equal(FRAME_EFFECT_81EDD0_BYTE_LEN, 26);
@@ -3659,7 +3666,7 @@ test("v15 mutants: AL-only store, wrap drop, scale convert, ABI pin", () => {
   assert.equal(readPlan81edf0(W.memory, V15_SCRATCH.plan).host7ea2d0, 1);
   assert.equal(readPlan81edf0(W.memory, V15_SCRATCH.plan).pureComplete, 0);
   /* M5 ABI pin + census. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_81EDF0_INSN_COUNT, 11);
   assert.equal(FRAME_EFFECT_81EDF0_BYTE_LEN, 37);
@@ -3674,8 +3681,8 @@ test("v15 mutants: AL-only store, wrap drop, scale convert, ABI pin", () => {
 /* ------------------------------------------------------------------ */
 
 test("0x0081ee20 stays irreducible; v16 peels callee 0x0081fb20", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.match(HDR, /FUN_0081ee20 IRREDUCIBLE/);
   assert.match(HDR, /first_ret 0x0081eebf/);
@@ -3874,7 +3881,7 @@ test("v16 mutants: shl-4, wrap drop, 7-dword copy, L-room gate, ABI pin", () => 
   assert.equal(p.hostCalls, 0);
   assert.equal(p.pureComplete, 1);
   /* M7 ABI pin + census. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_81FB20_INSN_COUNT, 29);
   assert.equal(FRAME_EFFECT_81FB20_BYTE_LEN, 78);
@@ -4186,9 +4193,9 @@ test("v17 mutants: signed pick, umod-zero, INT_MIN abs, ABI pin, parked next", (
   assert.equal(z.applyXy, 0);
   assert.equal(z.hostCalls, 1);
   /* M5 ABI pin + census + parked next. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_81FB70_INSN_COUNT, 203);
   assert.equal(FRAME_EFFECT_81FB70_BYTE_LEN, 484);
   assert.equal(FRAME_EFFECT_81FB70_DIRECT_CALLERS, 1);
@@ -4336,9 +4343,9 @@ test("v18 mutants: receiver offset, loop slot, seeds, rare modulus, ABI pin", ()
   /* M5 gate: mode 4 only — 0x100 wide value must miss. */
   assert.equal(W.mode4SfxEarly(0x100), 0);
   /* M6 ABI pin. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(SRC, /0x006fd858 lea ecx, \[esi \+ 0x2a324\]/);
 });
 
@@ -4855,9 +4862,9 @@ test("v19 mutants: mask complement, bump, clamp, 705ee0, partner, slot, prize, A
   assert.equal(W.prizeEntryBumpGate(0, 0x80000000, 0x2000, 0x1000), 1);
   assert.equal(W.prizeEntryBumpGate(0, 0x100, 0x2000, 0x1000), 0);
   /* M8 ABI pin + v19 source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /isaac_frame_effect_6fdc10_kind_needs_705ee0/);
   assert.match(SRC, /kind_needs_705ee0\(kind\)/); /* entry_plan BY REFERENCE */
   assert.match(SRC, /0x006fdd5c: cmp esi,5; je skip/);
@@ -5097,9 +5104,9 @@ test("v20 mutants: signed mode, mask pair, low-byte leaks, pointer count, ABI", 
   assert.equal(W.registryHeadLogNeeded(-1), 0);
   assert.notEqual(W.registryHeadLogNeeded(-1), 1);
   /* M6 ABI pin + v20 source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(SRC, /0x006fde8e: cmp dword \[eax\+0x26614\],2/);
   assert.match(SRC, /0x006fdea6: and ecx,eax/);
   assert.match(SRC, /0x006fded2: test al,al/);
@@ -5453,9 +5460,9 @@ test("v21 mutants: word/low-byte leaks, signedness pair, pointer flip, ABI", () 
   assert.equal(W.freeInvalidParam81fd60(0xfff >>> 0, 0x20 >>> 0), 0);
   assert.equal(W.freeInvalidParam81fd60(0x80000000 >>> 0, 0x20 >>> 0), 1);
   /* M9 ABI pin + v21 census + source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_81FD60_INSN_COUNT, 341);
   assert.equal(FRAME_EFFECT_81FD60_BYTE_LEN, 1038);
   assert.equal(FRAME_EFFECT_81FD60_CALL_INSNS, 23);
@@ -5608,9 +5615,9 @@ test("v22 mutants: full-dword zero-test discriminators + ABI", () => {
   assert.equal(W.deltaGate81fb70(0x80000000 >>> 0), 1);
   assert.equal(W.deltaGate81fb70(0), 0);
   /* M5 ABI pin + v22 census + source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_81FB70_V22_INSN_COUNT, 202);
   assert.equal(FRAME_EFFECT_81FB70_V22_BYTE_LEN, 482);
   assert.equal(FRAME_EFFECT_81FB70_V22_CALL_INSNS, 5);
@@ -5840,9 +5847,9 @@ test("v23 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(W.rngValidGate820170(0x10000 >>> 0), 1);
   assert.equal(W.rngValidGate820170(0), 0);
   /* M-ABI pin + v23 census + source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_820170_V23_VA, 0x00820170);
   assert.equal(FRAME_EFFECT_820170_V23_END_VA, 0x00820445);
   assert.equal(FRAME_EFFECT_820170_V23_NEXT_VA, 0x008204b0);
@@ -6065,9 +6072,9 @@ test("v24 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(W.boundSelect8204b0(0xb, 1, 0, 0, 2, 0xff), 0xb); /* (b) precedes (f) */
   assert.equal(W.boundSelect8204b0(0xb, 0, 0, 0, 2, 0), 0xb); /* else arm */
   /* M8 ABI pin + v24 census + source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_8204B0_V24_VA, 0x008204b0);
   assert.equal(FRAME_EFFECT_8204B0_V24_END_VA, 0x0082061e);
   assert.equal(FRAME_EFFECT_8204B0_V24_NEXT_VA, 0x008206e0);
@@ -6255,9 +6262,9 @@ test("v25 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(W.resultGate44bfb0(0), 0);
   assert.equal(W.walkContinue44bfb0(1, 0), 1);
   /* M9 ABI pin + v25 census + source pins. */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_EFFECT_44BFB0_V25_VA, 0x0044bfb0);
   assert.equal(FRAME_EFFECT_44BFB0_V25_END_VA, 0x0044c06d);
   assert.equal(FRAME_EFFECT_44BFB0_V25_NEXT_VA, 0x0044c070);
@@ -6438,9 +6445,9 @@ test("v26 mutants: discriminators + ABI + census + source pins", () => {
   /* M6 grid_index wrap. */
   assert.equal(W.gridIndex7ee7e0(0xffffffff, 1, 1) >>> 0, 0);
   /* M7 ABI pin: 27 (the v26 bump was superseded — v27 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M8 v26 census pins. */
   assert.equal(FRAME_EFFECT_7EE7E0_V26_VA, 0x007ee7e0);
   assert.equal(FRAME_EFFECT_7EE7E0_V26_END_VA, 0x007eea8f);
@@ -6651,9 +6658,9 @@ test("v27 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(W.filter7eed10(0x3e8, 0x8d, 0, 0x3c0, 0, 0, 0), 1);
   assert.equal(W.filter7eed10(0x3e8, 0x8d, 0, 0x3bf, 0, 0, 0), 0);
   /* M7 ABI pin: 27 (atomic bump fired — v27 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M8 v27 census pins. */
   assert.equal(FRAME_EFFECT_7EECE0_V27_VA, 0x007eece0);
   assert.equal(FRAME_EFFECT_7EECE0_V27_END_VA, 0x007eed03);
@@ -6980,9 +6987,9 @@ test("v28 mutants: discriminators + ABI + census + source pins", () => {
   /* M6 nullable out: entry_plan with out == 0 must not trap. */
   W.entryPlan8206e0(0, 0, 0);
   /* M7 ABI pin: 28 (atomic bump fired — v28 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M8 v28 census pins. */
   assert.equal(FRAME_EFFECT_8206E0_VA, 0x008206e0);
   assert.equal(FRAME_EFFECT_8206E0_END_VA, 0x00820711);
@@ -7468,9 +7475,9 @@ test("v29 mutants: discriminators + ABI + census + source pins", () => {
   /* M8 nullable out: entry_plan with out == 0 must not trap. */
   W.entryPlan820720(0, 0, 0, 0, 0, 0, 0, 0);
   /* M9 ABI pin: 29 (atomic bump fired — v29 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M10 v29 census + ZHL pins. */
   assert.equal(FRAME_EFFECT_820720_VA, 0x00820720);
   assert.equal(FRAME_EFFECT_820720_END_VA, 0x0082079c);
@@ -8005,9 +8012,9 @@ test("v30 mutants: discriminators + ABI + census + source pins", () => {
   assert.notEqual(W.above8208c0(bitsToF32(0x7fc00000)), 1);
   assert.notEqual(W.above8208c0(bitsToF32(0xc1900000)), 1);
   /* M9 ABI pin: 31 (atomic bump fired — v31 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M10 v30 census pins. */
   assert.equal(FRAME_EFFECT_8207A0_VA, 0x008207a0);
   assert.equal(FRAME_EFFECT_8207A0_END_VA, 0x008208b3);
@@ -8532,9 +8539,9 @@ test("v31 mutants: discriminators + ABI + census + source pins", () => {
   assert.notEqual(W.packArg820910(0, 0xdeadbeef) >>> 0, 1);
   assert.notEqual(W.packArg820910(1, 0xdeadbeef) >>> 0, 0xdeadbeef >>> 0);
   /* M6 ABI pin: 31 (atomic bump fired — v31 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M7 v31 census pins (spot). */
   assert.equal(FRAME_EFFECT_8208E0_VA, 0x008208e0);
   assert.equal(FRAME_EFFECT_8208E0_END_VA, 0x00820905);
@@ -9049,9 +9056,9 @@ test("v32 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(u32At(W.memory, V32_SCRATCH.packOut + 4), 3);
   assert.notEqual(u32At(W.memory, V32_SCRATCH.packOut + 4), 0);
   /* M7 ABI pin: 32 (atomic bump fired — v32 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M8 v32 census pins (spot). */
   assert.equal(FRAME_EFFECT_820AA0_VA, 0x00820aa0);
   assert.equal(FRAME_EFFECT_820AA0_END_VA, 0x00820abc);
@@ -9316,9 +9323,9 @@ test("v33 mutants: discriminators + ABI + census + source pins", () => {
   assert.equal(frameEffect820c00EntryPlan().hostCalls, 2);
   assert.equal(frameEffect820c00EntryPlan().pureComplete, 0);
   /* M5 ABI pin: 33 (atomic bump fired — v33 laws landed). */
-  assert.equal(W.abi(), 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* M6 v33 census pins (spot) — model consts mirror the PE census. */
   assert.equal(FRAME_EFFECT_820C00_VA, 0x00820c00);
   assert.equal(FRAME_EFFECT_820C00_END_VA, 0x00820d28);
@@ -9392,8 +9399,8 @@ test("v33 mutants: discriminators + ABI + census + source pins", () => {
 });
 
 test("v34 0x820d30 skip-gate census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_820D30_VA, 0x00820d30);
   assert.equal(FRAME_EFFECT_820D30_RET_VA, 0x00820f6f);
@@ -9520,8 +9527,8 @@ test("v34 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v35 0x821940 store+ret census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_821940_VA, 0x00821940);
   assert.equal(FRAME_EFFECT_821940_RET_VA, 0x00821947);
@@ -9634,8 +9641,8 @@ test("v35 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v36 0x822cf0 index gate + slot addr census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_822CF0_VA, 0x00822cf0);
   assert.equal(FRAME_EFFECT_822CF0_RET_VA, 0x00822d1b);
@@ -9748,8 +9755,8 @@ test("v36 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v37 0x822d20 SIGNED in-bounds census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_822D20_VA, 0x00822d20);
   assert.equal(FRAME_EFFECT_822D20_RET_VA, 0x00822d54);
@@ -9876,8 +9883,8 @@ test("v37 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v38 0x820fd0 skip-prefix census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_820FD0_VA, 0x00820fd0);
   assert.equal(FRAME_EFFECT_820FD0_RET_VA, 0x00821939);
@@ -10036,8 +10043,8 @@ function readPlan823370(memory, base) {
 }
 
 test("v39 0x823370 snapshot/easing census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_823370_VA, 0x00823370);
   assert.equal(FRAME_EFFECT_823370_RET_VA, 0x00823536);
@@ -10383,8 +10390,8 @@ function readPlan823540(memory, base) {
 }
 
 test("v40 0x823540 SetColorModifier wrapper census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_823540_VA, 0x00823540);
   assert.equal(FRAME_EFFECT_823540_RET_VA, 0x00823585);
@@ -10532,8 +10539,8 @@ test("v40 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v41 0x8242d0 pure leaf + 0x824800 prefix census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   /* (A) 8242d0 pure leaf pins */
   assert.equal(FRAME_EFFECT_8242D0_VA, 0x008242d0);
@@ -10728,8 +10735,8 @@ test("v41 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v42 0x824ee0 skip-gate census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_824EE0_VA, 0x00824ee0);
   assert.equal(FRAME_EFFECT_824EE0_RET_VA, 0x008253d3);
@@ -10864,8 +10871,8 @@ test("v42 mutants: break translation, fail, sha256-restore", () => {
 });
 
 test("v43 0x825730 CanPickupGridEntity census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_825730_VA, 0x00825730);
   assert.equal(FRAME_EFFECT_825730_RET_VA, 0x00825796);
@@ -11059,8 +11066,8 @@ function setSlots48(memory, base, norm) {
 }
 
 test("v44 0x827180 nearest-slot census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_827180_VA, 0x00827180);
   assert.equal(FRAME_EFFECT_827180_RET_VA, 0x008271d5);
@@ -11264,8 +11271,8 @@ test("v44 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v45 0x008279c0 getter census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_8279C0_VA, 0x008279c0);
   assert.equal(FRAME_EFFECT_8279C0_RET_VA, 0x008279cd);
@@ -11382,8 +11389,8 @@ test("v45 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v46 0x00827b70 window-gate census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_827B70_VA, 0x00827b70);
   assert.equal(FRAME_EFFECT_827B70_RET_VA, 0x00827ba3);
@@ -11507,8 +11514,8 @@ test("v46 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v47 0x00827bb0 HasCurseMist census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_827BB0_VA, 0x00827bb0);
   assert.equal(FRAME_EFFECT_827BB0_RET_VA, 0x00827bbb);
@@ -11619,8 +11626,8 @@ test("v47 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v48 0x00827bc0 window-gate census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_827BC0_VA, 0x00827bc0);
   assert.equal(FRAME_EFFECT_827BC0_RET_VA, 0x00827be3);
@@ -11789,8 +11796,8 @@ function v49Seed(dv, winBase, imgBase, kind) {
 }
 
 test("v49 0x00829920 record-move census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_829920_VA, 0x00829920);
   assert.equal(FRAME_EFFECT_829920_RET_VA, 0x008299da);
@@ -12015,8 +12022,8 @@ test("v49 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v50 0x008299e0 pair-less census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_8299E0_VA, 0x008299e0);
   assert.equal(FRAME_EFFECT_8299E0_RET_FALSE_VA, 0x00829a05);
@@ -12136,8 +12143,8 @@ test("v50 mutants: break translation, fail, sha256-restore", () => {
 /* ------------------------------------------------------------------ */
 
 test("v51 0x00829a10 stage-mode map census + wasm-vs-oracle", () => {
-  assert.equal(W.abi(), 51);
-  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, 51);
+  assert.equal(W.abi(), FRAME_EFFECT_PURE_ABI_VERSION);
+  assert.equal(FRAME_EFFECT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(HDR, /ISAAC_FRAME_EFFECT_PURE_HELPERS_ABI_VERSION = 51/);
   assert.equal(FRAME_EFFECT_829A10_VA, 0x00829a10);
   assert.equal(FRAME_EFFECT_829A10_END_VA, 0x00829ad4);

@@ -2433,6 +2433,13 @@ const assert = new Proxy(rawAssert, {
 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "pgd_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "pgd_pure_helpers.h");
 const source = join(root, "native", "decomp", "pgd_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "pgd-pure");
@@ -3842,7 +3849,7 @@ test("build PGD pure helpers wasm (zero imports, ABI v35)", () => {
     assert.ok(scratch >= SCRATCH_MIN, `scratch ${scratch} is below 0x100000`);
   }
   assert.equal(wasm.isaac_pgd_pure_helpers_abi_version(), PGD_PURE_ABI_VERSION);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("wasm module declares no imports", () => {
@@ -7254,7 +7261,7 @@ test("header records the v5 evidence and the toolchain guard", () => {
     "utf8",
   );
   assert.match(m, /Helpers ABI v5/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // v5 changed no law — the v4 shape is still the law
   assert.equal(pgdSec3RestoreRemap(9), 10);
   assert.equal(pgdSec3RestoreRemap(10), 0);
@@ -7895,7 +7902,7 @@ test("header and model record the v8 PGDTAIL law and the reader correction", () 
   );
   assert.match(m, /Helpers ABI v8/);
   assert.match(m, /reader-identity correction/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 
@@ -8690,7 +8697,7 @@ test("header records the v12 PGDTREE evidence", () => {
   assert.match(h, /0x00414a80/);
   assert.match(h, /134 call sites/);
   assert.match(h, /isnil@0xd/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_TREE_NEXT_VA, PGD_HOST_VA_TREE_NEXT);
   assert.equal(PGD_TREE_NEXT_VA, 0x00414a80);
   assert.equal(PGD_TREE_LEFT_OFF, 0);
@@ -8879,7 +8886,7 @@ test("header records the v13 PGDTROW evidence", () => {
   assert.match(h, /PGDTROW/);
   assert.match(h, /begin\s*==\s*cell/);
   assert.match(h, /stride 0x18/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_TREE_ROW_KEY_OFF, 0x10);
   assert.equal(PGD_TREE_ROW_VALUE_OFF, 0x14);
   assert.equal(PGD_TREE_ROW_STRIDE, 0x18);
@@ -9192,7 +9199,7 @@ test("header records the v14 PGDSC11 evidence", () => {
   assert.match(h, /sub-block count 4/);
   assert.match(h, /dead store/);
   assert.match(h, /0x009276e1/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_SEC11_HEADER_ID, 11);
   assert.equal(PGD_SEC11_SUB_BLOCKS, 4);
   assert.equal(PGD_SEC11_TOTAL_VA, 0x00928aa6);
@@ -9573,7 +9580,7 @@ test("header records the v15 PGDCP evidence", () => {
   assert.match(h, /ucomiss/);
   assert.match(h, /0xc7f508/);
   assert.match(h, /0x9595e0/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_COUNT_PROBE_VA, 0x0092aea0);
   assert.equal(PGD_COUNT_GLOBAL_VA, 0x00c7f508);
   assert.equal(PGD_COUNT_GAME_VA, 0x00c7169c);
@@ -9875,7 +9882,7 @@ test("header records the v16 PGDDEATH evidence", () => {
      MID-INSTRUCTION of this getter and has 0 callers. */
   assert.match(h, /CORRECTED from/);
   assert.match(h, /0x92b0c0 \(mid-instruction decode; 0 callers\)/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_DEATH_VA, 0x0092b070);
   assert.equal(PGD_DEATH_RET_OK_VA, 0x0092b0dd);
   assert.equal(PGD_DEATH_RET_NODE_FAIL_VA, 0x0092b0e7);
@@ -10185,7 +10192,7 @@ test("header records the v17 PGDKILL + PGDENC evidence", () => {
   assert.match(h, /0x92b110 decodes MID-INSTRUCTION/);
   assert.match(h, /0xf74/);
   assert.match(h, /0xf64/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_KILL_VA, 0x0092b100);
   assert.equal(PGD_ENC_VA, 0x0092b190);
   const m = readFileSync(source, "utf8");
@@ -10594,7 +10601,7 @@ test("header records the v18 PGDADDKILL evidence", () => {
   assert.match(h, /0x92ae10/);
   assert.match(h, /0x92ca70/);
   assert.match(h, /0x929a20/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_ADDKILL_VA, 0x0092acb0);
   assert.equal(PGD_ADDKILL_RET_OK_VA, 0x0092adf2);
   assert.equal(PGD_ADDKILL_RET_FAIL_VA, 0x0092adfd);
@@ -11102,7 +11109,7 @@ test("header records the v19 PGDADDSIB evidence", () => {
   const s = readFileSync(source, "utf8");
   assert.match(s, /PGDADDSIB2/);
   assert.match(s, /PGDADDSIB3/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_ADDSIB2_VA, 0x0092aaf0);
   assert.equal(PGD_ADDSIB3_VA, 0x0092abd0);
   /* v19 advanced the probe's next-island record past the landed
@@ -11399,7 +11406,7 @@ test("header records the v20 PGDADDCH evidence", () => {
   const s = readFileSync(source, "utf8");
   assert.match(s, /PGDADDCH/);
   assert.match(s, /ABI v35. Chronology:/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGD_ADDCH_VA, 0x0092a7b0);
   /* header flag-array cross-check: +0xe6f is the challenges byte map
      (0x2e = 46 values, args 0..0x2d = 0x2e values). */
@@ -11692,7 +11699,7 @@ test("header records the v21 PGDADDBOSS evidence", () => {
   assert.match(s, /PGDADDBOSS/);
   assert.match(s, /ABI v35. Chronology:/);
   assert.match(s, /kAddBossBlocks/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* header flag-array cross-checks: +0xe07 is the bosses byte map
      (0x68 = 104 values, args 0..0x67 = 0x68 values), the dirty byte
      is pgd+0, and the eight blocks match the 8 unlock ids. */
@@ -12008,7 +12015,7 @@ test("header records the v22 PGDADDMINI evidence", () => {
   assert.match(s, /PGDADDMINI/);
   assert.match(s, /ABI v35. Chronology:/);
   assert.match(s, /isaac_pgd_addmini_va/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* header flag-array cross-checks: +0xe00 is the sec5 byte map
      (7 slots), the dirty byte is pgd+0, the unlock id matches the
      PGDX sec5 record, and the id window / alias / remap shape match
@@ -12443,7 +12450,7 @@ test("header records the v23 PGDADSED + PGDK41 evidence", () => {
   assert.match(s, /ABI v35. Chronology:/);
   assert.match(s, /isaac_pgd_adsed_va/);
   assert.match(s, /isaac_pgd_k41_popcount/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* header cross-checks vs the PGDX v2-era records. */
   assert.equal(PGD_ADSED_VA, PGD_SEC10_HOST_VA_MUTATOR);
   assert.equal(PGD_ADSED_SLOT_BASE, PGD_OFF_SEC10_BYTES);
@@ -12976,7 +12983,7 @@ test("header records the v24 PGDITAG + PGDIDISP evidence", () => {
   assert.match(s, /ABI v35. Chronology:/);
   assert.match(s, /isaac_pgd_import_tag_first_match/);
   assert.match(s, /isaac_pgd_import_dispatch_index/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* the reader is reachable: exactly one caller, the v6 import. */
   assert.equal(pgdImportReaderVa(), 0x009e4260);
   assert.equal(PGD_IMPORT_READER_VA, 0x009e4260);
@@ -13748,7 +13755,7 @@ test("header records the v25p PGDROWSEC evidence", () => {
   assert.match(s, /isaac_pgd_import_section_loop_iterations/);
   /* NO ABI bump per wave-16: the family ABI stays at 24 (the Part-C
      coordinator merges). */
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGDROWSEC_ROWS, 9);
   assert.equal(PGDROWSEC_FIRST_SECTION, 1);
   assert.equal(PGDROWSEC_LAST_SECTION, 9);
@@ -14022,7 +14029,7 @@ test("header records the v25n PGDTALLY evidence", () => {
   assert.match(s, /v25n \(this unit\) lands PGDTALLY/);
   assert.match(s, /isaac_pgd_import_tally_coll_bucket/);
   assert.match(s, /isaac_pgd_import_tally_sett_store_8c/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35); /* family ABI now 29 (v29 PGDISP); v25n itself did not bump */
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION); /* family ABI now 29 (v29 PGDISP); v25n itself did not bump */
   assert.equal(pgdImportTallyRunVa(), 0x009e4618);
   assert.equal(PGDTALLY_RUN_VA, 0x009e4618);
   /* the frontier record still points at the reader (boundary NOT
@@ -14248,7 +14255,7 @@ test("PE truth: v25n mutant guards — PGDTALLY laws stay machine-exact", () => 
   assert.equal(wasm.isaac_pgd_import_tally_sett_iters(), 0xb2);
   /* Model and rebuilt module agree at ABI 34 (v25n group rides the
      family ABI; the in-test rebuild is 34). */
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_pgd_pure_helpers_abi_version(), 35);
 });
 
@@ -14400,7 +14407,7 @@ test("header records the v26 PGDIVER + PGDREADER2 evidence (ABI 25 -> 26)", () =
   assert.match(s, /isaac_pgd_sibling_size_gate/);
   assert.match(s, /isaac_pgd_sibling_section_loop_iterations/);
   assert.match(s, /isaac_pgd_import_version_gate_row/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);           /* bumped 25 -> 26 */
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);           /* bumped 25 -> 26 */
   assert.equal(PGDIVER_VERSION_OFF, 0x4a0);
   assert.equal(PGDIVER_FINISH_OFF, 0x4a4);
   assert.equal(PGDIVER_FINISH_DEFAULT, 1);
@@ -14692,7 +14699,7 @@ test("PE truth: v26 mutant guards — PGDIVER + PGDREADER2 stay machine-exact", 
   assert.equal(pgdSiblingSectionLoopIterations(1, 0xffffffff, 0xffffffff), 0x115);
   assert.notEqual(pgdSiblingSectionLoopIterations(9, 0x200, 0x1000), 0x200);
   /* ABI 26 on both sides. */
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(pgdSiblingReaderVa(), 0x0041d670);
   assert.equal(pgdImportReaderVa(), 0x009e4260);
 });
@@ -14989,7 +14996,7 @@ test("header and model record the exact PGDIEC constants (ABI 26 -> 27)", () => 
   const m = readFileSync(join(root, "scripts", "decomp", "pgd-pure-model.mjs"), "utf8");
   assert.match(m, /PGDIEC/);
   assert.match(m, /v27: PGDIEC/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGDIEC_VA, 0x00929b40);
   assert.equal(PGDIEC_RET_VA, 0x0092a2c8);
   assert.equal(PGDIEC_BODY_BYTES, 1928);
@@ -15255,7 +15262,7 @@ test("PGDHOST cookie + checksum law pins (verified bodies)", () => {
   assert.match(m, /v28-hostleaf/);
   assert.match(m, /PGDULD_VA = 0x009296c0/);
   assert.match(m, /BigInt\(x\) \* BigInt\(PGDULD_DIV_MAGIC\)/);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PGDULD_LADDER_TABLE_VA, 0x00b7b0b0);
 });
 
@@ -15337,7 +15344,7 @@ test("ABI v33 — PGDISP const evidence (save dispatcher 0x929660)", () => {
   assert.equal(PGDISP_CLOUD_DWORD_CMP_VA, 0x00929697);
   assert.equal(PGDISP_CLOUD_BYTE_CMP_VA, 0x0092969c);
   assert.equal(PGDISP_RETURN_STACK, 4);
-  assert.equal(PGD_PURE_ABI_VERSION, 35);
+  assert.equal(PGD_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("ABI v33 — PGDISP proceed gate truth table (this[0] & this[0xf8c] BYTE)", () => {

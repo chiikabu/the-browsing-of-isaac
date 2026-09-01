@@ -9,18 +9,26 @@ emulation and runtime behavior is verified against the original.
 ## Session start — do these before anything else
 
 1. `node scripts/decomp/status.mjs` — the live state (family ABI versions, the
-   open-boundary worklist, verification freshness, warnings). **Docs lag the
-   tree by design; the tree wins.** Three units in one session were wasted
-   opening already-landed targets because they trusted a checkpoint narrative.
-   For a specific target, `node scripts/decomp/brief.mjs <VA|idx>` is the
-   one-call orientation (target status + function shape + next commands).
+   open-boundary worklist, verification freshness, warnings) plus the
+   tree-consistency checks (`scripts/decomp/lib/consistency.mjs`): an
+   `ERRORS` block means a stranded mutant, JSON/layout drift or header/model
+   ABI skew — somebody's unfinished unit; repair before anything else.
+   **Docs lag the tree by design; the tree wins.** Three units in one session
+   were wasted opening already-landed targets because they trusted a
+   checkpoint narrative. For a specific target,
+   `node scripts/decomp/brief.mjs <VA|idx>` is the one-call orientation
+   (target status + function shape + live-bridge lane delivery + next
+   commands). A boundary whose `*Ready` lane the bridge never captures is
+   dormant in the shipped tick no matter what lands in the module.
 2. Read `decomp/frontier.json` — the last unit's hand-off pointer. If status
    warns it is stale, re-rank from the open-boundary list instead.
 3. Census with the prebuilt index, never a new script:
    `python scripts/decomp/tools/pequery.py <cmd>` (writers / readers /
    xrefs-to / callers / callees / body / disasm / sig / addr / strings /
-   imports / verify). Build once per binary hash with
-   `npm run decomp:index` (≈1 min). Every prior session that hand-rolled a
+   imports / verify, and `fieldrefs DISP [FUNC]` for object-field
+   `[reg+disp]` reads/writes — the census absolute-displacement xrefs
+   cannot do). Build once per binary hash with `npm run decomp:index`
+   (≈50 s; decode config v2 carries the `fld` table). Every prior session that hand-rolled a
    census re-hit the same measured traps (decode halting at the first bad
    byte, phantom back-scan sites, jump-table bytes decoded as code,
    register-held call sites invisible to a static-disp census). The index
@@ -234,8 +242,19 @@ deliberately, confirm the test fails, revert, report.
 Never hardcode the current ABI number in a test (`assert.equal(abi(), 87)`).
 Every bump then requires a whole-file sed, and the one missed sweep left the
 room suite 82-red for days (stale "wasm ABI 75" message strings recorded three
-generations of that sed). Pin against the family's exported
-`*_ABI_VERSION` constant.
+generations of that sed); the ABI-101 bump left the slice suite 93-red the
+same way (72 `spec.abiVersion, 100` literals). Pin against the family's
+exported `*_ABI_VERSION` constant, and pin that constant against the header
+enum (`HEADER_ABI_VERSION`, parsed from the `.h`) — model-vs-header agreement
+is the assertion. The gate's preflight lists every remaining literal pin and
+refuses them under `--handoff`.
+
+Mutation checks go THROUGH `scripts/decomp/mutate.mjs`, never by hand-editing
+a tracked file: it stashes the bytes, journals the write, tags the mutant
+`/* MUTANT */`, runs the command that must fail, and restores sha256-identical
+in a finally/signal handler. The ABI-101 unit did it by hand, died between
+"watch it fail" and "put it back", and the inverted cpp was built and sat on
+disk overnight. `mutate.mjs check|restore` and the preflight see the trail.
 
 ## Known toolchain defect: `uint8_t` parameters are silently wrong
 
@@ -272,12 +291,21 @@ One call runs the whole gate with compact output and the emsdk environment
 set up (family suites self-build wasm and fail en masse without emcc):
 
 ```powershell
-node scripts/decomp/verify-unit.mjs --suite tests/decomp-<family>.test.js
+node scripts/decomp/verify-unit.mjs               # family suites auto-detected from the dirty tree
+node scripts/decomp/verify-unit.mjs --handoff     # + full npm test, strict preflight
 ```
 
-Add `--full` before a hand-off to include the entire `npm test`. Family-suite
-wasm builds are content-hash cached (`tests/wasm-build-cache.mjs`;
-`ISAAC_WASM_BUILD_CACHE=0` forces real builds). The individual gates:
+Stage 0 is the ≈1 s preflight (header/model/JSON ABI agreement, cpp size
+pins, JSON layout drift + canonical form, stranded mutants, literal ABI pins,
+frontier freshness) — it fails before any 15-minute suite runs. Stage 1
+builds the slice wasm once and checks `abi.json` (zero imports, tree ABI).
+Stage 2 runs every remaining gate in parallel; wall time is the differential
+(~3.5 min), not the sum. Family-suite wasm builds are content-hash cached
+(`tests/wasm-build-cache.mjs`; `ISAAC_WASM_BUILD_CACHE=0` forces real builds).
+`decomp/game-update-slice.json` is written ONLY through
+`node scripts/decomp/slice-json.mjs sync` (canonical indent 1; rows mirror
+the model layouts) — the preflight refuses drift and non-canonical form.
+The individual gates:
 
 ```powershell
 node --test tests/decomp-game-update-slice.test.js tests/decomp-pipeline.test.js

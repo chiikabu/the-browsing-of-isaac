@@ -1204,6 +1204,13 @@ import {
 } from "../scripts/decomp/alloc-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "exit_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "exit_pure_helpers.h");
 const source = join(root, "native", "decomp", "exit_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "exit-pure");
@@ -2874,7 +2881,7 @@ const LB_TRIPLE = {
 };
 
 test("header declares exit pure helpers ABI v48 and tracked paths exist", () => {
-  assert.equal(EXIT_PURE_ABI_VERSION, 48);
+  assert.equal(EXIT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.ok(existsSync(header));
   assert.ok(existsSync(source));
   const h = readFileSync(header, "utf8");
@@ -13222,7 +13229,7 @@ test("v35+v36+v37+v38+v39+v40+v41+v42+v43 guards are not vacuous (self-check)", 
   }
   assert.ok(h.includes("IsaacExitRootMapWalkPlan"), "plan struct in header");
   // 2. The ABI version is a single loud number everywhere tested here.
-  assert.equal(EXIT_PURE_ABI_VERSION, 48);
+  assert.equal(EXIT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(h, /ISAAC_EXIT_PURE_HELPERS_ABI_VERSION = 48/);
   //    the model contract so a broken import cannot silently pass.
   assert.equal(exitRootMapWalkFlagActive(0x100), false);

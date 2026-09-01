@@ -1885,6 +1885,13 @@ const assert = new Proxy(rawAssert, {
 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "log_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "log_pure_helpers.h");
 const source = join(root, "native", "decomp", "log_pure_helpers.cpp");
 /* Wave-26 hardening (update-v102-hardening GAP B): 120-attempt retried
@@ -3233,7 +3240,7 @@ test("build log pure helpers wasm (zero imports, ABI v13)", () => {
     "linear memory too small for the scratch region",
   );
   assert.equal(wasm.isaac_log_pure_helpers_abi_version(), LOG_PURE_ABI_VERSION);
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(logAbiVersion(), 25);
 });
 
@@ -7345,7 +7352,7 @@ test("LAD: v5 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -7701,7 +7708,7 @@ test("LAI: v6 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -8090,7 +8097,7 @@ test("LAN: v7 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -8454,7 +8461,7 @@ test("LAS: v8 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -9126,7 +9133,7 @@ test("LAX: v10 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -9432,7 +9439,7 @@ test("LBE: v11 header, source and oracle record the PE evidence", () => {
   assert.match(h, /GUEST-FREE GATE/);
   assert.match(h, /0x00b12420/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -9738,7 +9745,7 @@ test("LBE: v12 header, source and oracle record the PE evidence", () => {
   assert.match(h, /_EOS_LobbyDetails_Release@4/);
   assert.match(h, /UNCONDITIONAL/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -10803,7 +10810,7 @@ test("LBH: v17 header, source and oracle record the PE evidence", () => {
   assert.match(h, /ISAAC_LOG_VA_DISPATCH_STRLEN_PASS = 0x00a11440u/);
   assert.match(h, /ISAAC_LOG_VA_TAIL_NEWLINE_CMP = 0x00a11469u/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -11107,7 +11114,7 @@ test("LBH: v18 header, source and oracle record the PE evidence", () => {
   assert.match(h, /ISAAC_LOG_SUB_DTOR_HEADER_DELTA_MAX = 0x1fu/);
   assert.match(h, /_invalid_parameter/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -11427,7 +11434,7 @@ test("LBH: v19 header, source and oracle record the PE evidence", () => {
   assert.match(h, /0x00b187e0/);
   assert.match(h, /strncpy_s/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -11763,7 +11770,7 @@ test("LBH: v20 header, source and oracle record the PE evidence", () => {
   assert.match(h, /0x00b16c80/);
   assert.match(h, /dangles/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -12127,7 +12134,7 @@ test("LBH: v21 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -12429,7 +12436,7 @@ test("LBH: v22 header, source and oracle record the PE evidence", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");
@@ -12609,7 +12616,7 @@ test("LBH: v23 constants — engine-binding census final and cluster closure", (
   /* ZERO laws this unit: the ABI must NOT move (no pure decision was
      found — the 0x43eec0 getter is a typed-host LEASE row, the cluster
      is closed). Every pin below is PE-truth from census-binding.out. */
-  assert.equal(LOG_PURE_ABI_VERSION, 25, "no laws -> no ABI bump since v27");
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION, "no laws -> no ABI bump since v27");
   assert.equal(logAbiVersion(), 25);
 
   /* path getter body identity: `mov eax,[ecx+8]; ret` — 2 insns, 4
@@ -12708,7 +12715,7 @@ test("LBH: v23 header records the typed-host LEASE row and the closure", () => {
     h,
     new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`),
   );
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const model = readFileSync(
@@ -12729,7 +12736,7 @@ test("LBH: v24 constants — engine-family owner identified, lease transfer prop
      family's OWN body LuaEngine::RegisterClasses (0x866960..0x86e4c9) —
      no log-owned pure decision exists there, so the ABI must NOT move.
      Every pin below is PE-truth from census-megablock.py (fresh decode). */
-  assert.equal(LOG_PURE_ABI_VERSION, 25, "no laws -> no ABI bump since v27");
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION, "no laws -> no ABI bump since v27");
   assert.equal(logAbiVersion(), 25);
 
   /* the two 0x43eec0 registration rows: push fn; push name; call binder */
@@ -12799,7 +12806,7 @@ test("LBH: v25 constants — base-class tables closed, four laws land at ABI 23"
      flags-set1 0xa649b0, flush-clear 0xa24ea0, open twins 0xa253e0 /
      0xa25410. The megablock lease row is VERIFIED live (the shared
      cell+0x18 leaf 0x67efc0 is lua-registered: push @ 0x86b763). */
-  assert.equal(LOG_PURE_ABI_VERSION, 25,
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION,
     "four laws landed at ABI 24 (v26); v27's clear1 sweeps it to 25");
   assert.equal(logAbiVersion(), 25);
 
@@ -13047,7 +13054,7 @@ test("LBH: v25 header, source and oracle record the PE evidence", () => {
   assert.match(h, /0x0086b763/);                             /* lua reg push */
   assert.match(h, /ISAAC_LOG_BASE_OPEN1_ARG2_DEAD = 1/);
   assert.match(h, new RegExp(`ISAAC_LOG_PURE_HELPERS_ABI_VERSION = ${LOG_PURE_ABI_VERSION}\\b`));
-  assert.equal(LOG_PURE_ABI_VERSION, 25);
+  assert.equal(LOG_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(u(loadExports().isaac_log_pure_helpers_abi_version()), 25);
 
   const src = readFileSync(source, "utf8");

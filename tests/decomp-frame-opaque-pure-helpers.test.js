@@ -1671,6 +1671,13 @@ import {
 } from "../scripts/decomp/exit-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "frame_opaque_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "frame_opaque_pure_helpers.h");
 const source = join(root, "native", "decomp", "frame_opaque_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "frame-opaque-pure");
@@ -3221,7 +3228,7 @@ function approxEqual(a, b, name) {
 }
 
 test("frame opaque pure JS oracle matches recovered 4212c0 / 4257b0 / MenuGate_Update control flow", () => {
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   for (const c of cases) {
     const got = tryFrameOpaque4212c0Pure(c.input);
     assert.deepEqual(got, c.expect, c.name);
@@ -10265,7 +10272,7 @@ function a4214b0SkipRef(haveEq, keyFlag, playingFlag) {
 
 test("frame opaque 4214b0 set-overlay-animation-by-mode plan (ABI v34)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_4214B0_VA, 0x004214b0);
   assert.equal(FRAME_OPAQUE_4214B0_END_VA, 0x00421591);
   assert.equal(FRAME_OPAQUE_4214B0_NEXT_VA, 0x004215a0);
@@ -10460,7 +10467,7 @@ test("frame opaque 4214b0 set-overlay-animation-by-mode plan (ABI v34)", () => {
 
 test("frame opaque 4215a0 std::string move-assign plan (ABI v35)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_4215A0_VA, 0x004215a0);
   assert.equal(FRAME_OPAQUE_4215A0_END_VA, 0x004215d9);
   assert.equal(FRAME_OPAQUE_4215A0_NEXT_VA, 0x004215e0);
@@ -10549,7 +10556,7 @@ test("frame opaque 4215a0 std::string move-assign plan (ABI v35)", () => {
 
 test("frame opaque 4215e0 std::string copy-assign plan (ABI v36)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_4215E0_VA, 0x004215e0);
   assert.equal(FRAME_OPAQUE_4215E0_END_VA, 0x00421611);
   assert.equal(FRAME_OPAQUE_4215E0_NEXT_VA, 0x00421618);
@@ -10638,7 +10645,7 @@ function a421620GrowRef(request) {
 
 test("frame opaque 421620 string assign + 421680 growth plan (ABI v37)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_421620_VA, 0x00421620);
   assert.equal(FRAME_OPAQUE_421620_END_VA, 0x0042167b);
   assert.equal(FRAME_OPAQUE_421680_VA, 0x00421680);
@@ -10752,7 +10759,7 @@ test("frame opaque 421620 string assign + 421680 growth plan (ABI v37)", () => {
 
 test("frame opaque 421720 bitset membership test plan (ABI v38)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_421720_VA, 0x00421720);
   assert.equal(FRAME_OPAQUE_421720_END_VA, 0x00421767);
   assert.equal(FRAME_OPAQUE_421720_NEXT_VA, 0x00421770);
@@ -10840,7 +10847,7 @@ test("frame opaque 421720 bitset membership test plan (ABI v38)", () => {
 
 test("frame opaque 421770..4217a0 getter group + bitset-set plan (ABI v39)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_421770_VA, 0x00421770);
   assert.equal(FRAME_OPAQUE_421770_END_VA, 0x00421776);
   assert.equal(FRAME_OPAQUE_421770_FIELD_OFF, 0x26584);
@@ -10974,7 +10981,7 @@ function a4218e0HashRef(x) {
 
 test("frame opaque 4218e0 delegate-table bitmap constructor plan (ABI v40)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_4218E0_VA, 0x004218e0);
   assert.equal(FRAME_OPAQUE_4218E0_RECORD_COUNT, 0x25);
   assert.equal(FRAME_OPAQUE_4218E0_RECORD_STRIDE, 0x3c);
@@ -11092,7 +11099,7 @@ const aShuffleSamples = [
 
 test("frame opaque 4218e0 Fisher-Yates shuffle loop plan (ABI v41)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_SHUFFLE_LOOP_VA, 0x00421a50);
   assert.equal(FRAME_OPAQUE_SHUFFLE_END_VA, 0x00421b43);
   assert.equal(FRAME_OPAQUE_SHUFFLE_COLLECTION_STRIDE, 0x3c);
@@ -11216,7 +11223,7 @@ function a4253d0WalkRef(elems, count, key) {
 
 test("frame opaque 4253b0/4253c0/4253d0 pure id-vector trio (ABI v42)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(FRAME_OPAQUE_4253B0_VA, 0x004253b0);
   assert.equal(FRAME_OPAQUE_4253B0_END_VA, 0x004253b6);
   assert.equal(FRAME_OPAQUE_4253B0_CALL_SITES, 14);
@@ -11423,7 +11430,7 @@ function a425430CopyRef(view, base) {
 
 test("frame opaque 421800/424530/423950/423960/423970 getter band + 425430 copy-ctor (ABI v43)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   /* ---- 0x421800 lea-getter: +0x14, no deref (47 callers). ---- */
   assert.equal(FRAME_OPAQUE_421800_VA, 0x00421800);
@@ -11945,8 +11952,8 @@ function a423aa0RdataStr(va) {
 
 test("frame opaque 4254b0 narrowed filter: Pass-A pop + magic count + Pass-B element law (ABI v44)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- VA / caller / table-geometry pins ---- */
   assert.equal(FRAME_OPAQUE_4254B0_VA, 0x004254b0);
@@ -12216,8 +12223,8 @@ test("frame opaque 4254b0 narrowed filter: Pass-A pop + magic count + Pass-B ele
 
 test("frame opaque 4239b0 pure state initializer: byte-gate clear + 17-offset store table (ABI v45)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- VA / callers / pool pins ---- */
   assert.equal(FRAME_OPAQUE_4239B0_VA, 0x004239b0);
@@ -12331,8 +12338,8 @@ test("frame opaque 4239b0 pure state initializer: byte-gate clear + 17-offset st
 });
 test("frame opaque 423990 wrapper conduct + 423aa0 SEH band gates (ABI v46)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- wrapper conduct: SEH body first, then v45 init with arg 0 ---- */
   assert.equal(FRAME_OPAQUE_423990_VA, 0x00423990);
@@ -12696,8 +12703,8 @@ function a424130VecYRef(iter, f260, f128, f114, f12c, f244, f258, f25c,
 
 test("frame opaque 423cc0 slot band + 424130 vec leaf (ABI v47)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- body identity / bounds (ret @0x4240ad, end 0x4240ae) ---- */
   assert.equal(FRAME_OPAQUE_423CC0_VA, 0x00423cc0);
@@ -13016,8 +13023,8 @@ function a4240b0ResultYRef(scaleBits, base1Bits, vec1Bits) {
 
 test("frame opaque 4240b0 icon-pos composer laws (ABI v48)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census ---- */
   assert.equal(FRAME_OPAQUE_4240B0_VA, 0x004240b0);
@@ -13165,8 +13172,8 @@ function a424220B2ResultRef(view, res) {
 
 test("frame opaque 424220 mode dispatch selection laws (ABI v49)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / layout pins ---- */
   assert.equal(FRAME_OPAQUE_424220_VA, 0x00424220);
@@ -13270,8 +13277,8 @@ test("frame opaque 424220 mode dispatch selection laws (ABI v49)", () => {
 
 test("frame opaque 424220 CASE_B deref laws b1_entry / b2_result (ABI v49)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const view = new DataView(wa.memory.buffer);
   const memU8 = new Uint8Array(wa.memory.buffer);
 
@@ -13324,8 +13331,8 @@ test("frame opaque 424220 CASE_B deref laws b1_entry / b2_result (ABI v49)", () 
 
 test("frame opaque 424220 header pins + host leaf contract (ABI v49)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -13385,8 +13392,8 @@ function a4242b0FireCbRef(sub, al, fnptr) {
 
 test("frame opaque 4242b0 SEH dispatch selection laws (ABI v50)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / layout pins ---- */
   assert.equal(FRAME_OPAQUE_4242B0_VA, 0x004242b0);
@@ -13506,8 +13513,8 @@ test("frame opaque 4242b0 SEH dispatch selection laws (ABI v50)", () => {
 
 test("frame opaque 4242b0 header + C++ law pins (ABI v50)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -13570,8 +13577,8 @@ function a424310NodeSelfLinkRef(node) {
 
 test("frame opaque 424310 SEH ctor selection laws (ABI v51)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / layout pins ---- */
   assert.equal(FRAME_OPAQUE_424310_VA, 0x00424310);
@@ -13722,8 +13729,8 @@ test("frame opaque 424310 SEH ctor selection laws (ABI v51)", () => {
 
 test("frame opaque 424310 header + C++ law pins (ABI v51)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -13796,8 +13803,8 @@ function a424440NodeSelfLinkRef(node) {
 
 test("frame opaque 424440 sub-init selection laws (ABI v52)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / layout pins ---- */
   assert.equal(FRAME_OPAQUE_424440_VA, 0x00424440);
@@ -13928,8 +13935,8 @@ test("frame opaque 424440 sub-init selection laws (ABI v52)", () => {
 
 test("frame opaque 424440 independent PE-truth (ABI v52)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const buf = readFileSync(join(root, "tools", "isaac-ng.unpacked.exe"));
   /* .text VA 0x401000 raw 0x400 -> 0x424440 lands at file+0x23840. */
   const base = 0x400 + (0x00424440 - 0x00401000);
@@ -14000,8 +14007,8 @@ test("frame opaque 424440 independent PE-truth (ABI v52)", () => {
 
 test("frame opaque 424440 header + C++ law pins (ABI v52)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -14056,8 +14063,8 @@ function a424510ReturnThisRef(t) {
 
 test("frame opaque 424510 zero-ctor selection laws (ABI v53)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / layout pins ---- */
   assert.equal(FRAME_OPAQUE_424510_VA, 0x00424510);
@@ -14135,8 +14142,8 @@ test("frame opaque 424510 zero-ctor selection laws (ABI v53)", () => {
 
 test("frame opaque 424510 independent PE-truth (ABI v53)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const buf = readFileSync(join(root, "tools", "isaac-ng.unpacked.exe"));
   /* .text VA 0x401000 raw 0x400 -> 0x424510 lands at file+0x23910. */
   const base = 0x400 + (0x00424510 - 0x00401000);
@@ -14199,8 +14206,8 @@ test("frame opaque 424510 independent PE-truth (ABI v53)", () => {
 
 test("frame opaque 424510 header + C++ law pins (ABI v53)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -14309,8 +14316,8 @@ function a424580RdataBits(va) {
 
 test("frame opaque 424580 light-quad selection laws (ABI v54)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- VA / callers / host leaves / body bounds ---- */
   assert.equal(FRAME_OPAQUE_424580_VA, 0x00424580);
@@ -14477,8 +14484,8 @@ test("frame opaque 424580 light-quad selection laws (ABI v54)", () => {
 
 test("frame opaque 424580 independent PE-truth (ABI v54)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* Every law ref already equals the JS model above; this group
      RE-transcribes each branch from the raw byte stream and cross-checks
      against both the model and the wasm export on boundary-sensitive
@@ -14538,8 +14545,8 @@ test("frame opaque 424580 independent PE-truth (ABI v54)", () => {
 
 test("frame opaque 424580 header + C++ law pins (ABI v54)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -14670,8 +14677,8 @@ function a4248a0Loop2EnterRef(bBits) {
 
 test("frame opaque 499d60 atan2 wrapper laws (ABI v55)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / CRT leaf pins ---- */
   assert.equal(FRAME_OPAQUE_499D60_VA, 0x00499d60);
@@ -14760,8 +14767,8 @@ test("frame opaque 499d60 atan2 wrapper laws (ABI v55)", () => {
 
 test("frame opaque 4248a0 transitional seam laws (ABI v55)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / band pins ---- */
   assert.equal(FRAME_OPAQUE_4248A0_VA, 0x004248a0);
@@ -14912,8 +14919,8 @@ test("frame opaque 4248a0 transitional seam laws (ABI v55)", () => {
 
 test("frame opaque 499d60 + 4248a0 independent PE-truth (ABI v55)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -14998,8 +15005,8 @@ test("frame opaque 499d60 + 4248a0 independent PE-truth (ABI v55)", () => {
 
 test("frame opaque 499d60 + 4248a0 header + C++ law pins (ABI v55)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -15046,8 +15053,8 @@ test("frame opaque 499d60 + 4248a0 header + C++ law pins (ABI v55)", () => {
 
 test("frame opaque 424c40 pair-ctor seam laws (ABI v56)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / SEH pins ---- */
   assert.equal(FRAME_OPAQUE_424C40_VA, 0x00424c40);
@@ -15122,8 +15129,8 @@ test("frame opaque 424c40 pair-ctor seam laws (ABI v56)", () => {
 
 test("frame opaque 424c40 independent PE-truth (ABI v56)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -15215,8 +15222,8 @@ test("frame opaque 424c40 independent PE-truth (ABI v56)", () => {
 
 test("frame opaque 424c40 + 40c4a0 header + C++ law pins (ABI v56)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -15270,8 +15277,8 @@ test("frame opaque 424c40 + 40c4a0 header + C++ law pins (ABI v56)", () => {
 
 test("frame opaque 424cd0 twin-ctor seam laws (ABI v57)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census / SEH pins ---- */
   assert.equal(FRAME_OPAQUE_424CD0_VA, 0x00424cd0);
@@ -15350,8 +15357,8 @@ test("frame opaque 424cd0 twin-ctor seam laws (ABI v57)", () => {
 
 test("frame opaque 424cd0 independent PE-truth (ABI v57)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -15442,8 +15449,8 @@ test("frame opaque 424cd0 independent PE-truth (ABI v57)", () => {
 
 test("frame opaque 424d70 float-gate + arg-doubling seam laws (ABI v57)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* ---- identity / census pins ---- */
   assert.equal(FRAME_OPAQUE_424D70_VA, 0x00424d70);
@@ -15565,8 +15572,8 @@ test("frame opaque 424d70 float-gate + arg-doubling seam laws (ABI v57)", () => 
 
 test("frame opaque 424d70 independent PE-truth (ABI v57)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -15678,8 +15685,8 @@ test("frame opaque 424d70 independent PE-truth (ABI v57)", () => {
 
 test("frame opaque 424cd0 + 424d70 header + C++ law pins (ABI v57)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"), "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"), "utf8");
 
@@ -15795,8 +15802,8 @@ test("frame opaque 424cd0 + 424d70 header + C++ law pins (ABI v57)", () => {
 
 test("frame opaque 424e60 array-getter seam laws (ABI v58)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* identity / census / geometry pins */
   assert.equal(FRAME_OPAQUE_424E60_VA, 0x00424e60);
   assert.equal(FRAME_OPAQUE_424E60_END_VA, 0x00424e71);
@@ -15827,8 +15834,8 @@ test("frame opaque 424e60 array-getter seam laws (ABI v58)", () => {
 
 test("frame opaque 424e80 dtor geometry laws (ABI v58)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* identity / census / SEH / callee pins */
   assert.equal(FRAME_OPAQUE_424E80_VA, 0x00424e80);
   assert.equal(FRAME_OPAQUE_424E80_END_VA, 0x00424ee4);
@@ -15888,8 +15895,8 @@ test("frame opaque 424e80 dtor geometry laws (ABI v58)", () => {
 
 test("frame opaque 424ef0 attach-loop signed gate (ABI v58)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* identity / census / SEH / loop pins */
   assert.equal(FRAME_OPAQUE_424EF0_VA, 0x00424ef0);
   assert.equal(FRAME_OPAQUE_424EF0_END_VA, 0x0042512c);
@@ -15927,8 +15934,8 @@ test("frame opaque 424ef0 attach-loop signed gate (ABI v58)", () => {
 
 test("frame opaque 424e60 + 424e80 + 424ef0 independent PE-truth (ABI v58)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -16033,8 +16040,8 @@ test("frame opaque 424e60 + 424e80 + 424ef0 independent PE-truth (ABI v58)", () 
 
 test("frame opaque 424e60 + 424e80 + 424ef0 header + C++ law pins (ABI v58)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"), "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"), "utf8");
 
@@ -16124,8 +16131,8 @@ test("frame opaque 424e60 + 424e80 + 424ef0 header + C++ law pins (ABI v58)", ()
 });
 test("frame opaque 425130 pair gate + mode compares (ABI v59)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* Identity + seam pins. */
   assert.equal(FRAME_OPAQUE_425130_VA, 0x00425130);
   assert.equal(FRAME_OPAQUE_425130_END_VA, 0x004252e6);
@@ -16207,8 +16214,8 @@ test("frame opaque 425130 pair gate + mode compares (ABI v59)", () => {
 
 test("frame opaque 425130 lane tables + address geometry (ABI v59)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* lane1 = the 12 dwords the loop reads at [ebp+esi-0x64]:
      vec A lanes + the 0/4 splat offsets, then vec B lanes. */
@@ -16264,8 +16271,8 @@ test("frame opaque 425130 lane tables + address geometry (ABI v59)", () => {
 
 test("frame opaque 425130 score transform + counter (ABI v59)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* score_base: `and eax,1` (FULL bit0) + `test bl,2; cmovne 2`
      (LOW-BYTE bit1) — 0x100 must answer 0 (byte gate). */
@@ -16329,8 +16336,8 @@ test("frame opaque 425130 score transform + counter (ABI v59)", () => {
 
 test("frame opaque 425130 independent PE-truth (ABI v59)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000; .rdata raw 0x716600 = VA
      0xb18000; .data raw 0x7f6000 = VA 0xbf8000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
@@ -16458,8 +16465,8 @@ test("frame opaque 425130 independent PE-truth (ABI v59)", () => {
 
 test("frame opaque 425130 header + C++ law pins (ABI v59)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"), "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"), "utf8");
 
@@ -16563,8 +16570,8 @@ test("frame opaque 425130 header + C++ law pins (ABI v59)", () => {
 
 test("frame opaque 4252f0 render gate + order + pair copy (ABI v60)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* Identity + seam pins (CompletionWidget::Render(Vector*,Vector*),
      ret 8 @0x425357; END = first int3 of the 0x42535a pad). */
@@ -16635,8 +16642,8 @@ test("frame opaque 4252f0 render gate + order + pair copy (ABI v60)", () => {
 
 test("frame opaque 4252f0 independent PE-truth (ABI v60)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -16738,8 +16745,8 @@ test("frame opaque 4252f0 independent PE-truth (ABI v60)", () => {
 
 test("frame opaque 4252f0 header + C++ law pins (ABI v60)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"), "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"), "utf8");
 
@@ -16805,8 +16812,8 @@ test("frame opaque 4252f0 header + C++ law pins (ABI v60)", () => {
 });
 test("frame opaque 425360 element-ctor init-store table laws (ABI v61)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* Identity + seam pins (array element default ctor; ret @0x4253a6;
      END = first byte after the c3 — resolves the v59/v60 0x4253a6-vs-
@@ -16912,8 +16919,8 @@ test("frame opaque 425360 element-ctor init-store table laws (ABI v61)", () => {
 
 test("frame opaque 425360 independent PE-truth (ABI v61)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -17013,8 +17020,8 @@ test("frame opaque 425360 independent PE-truth (ABI v61)", () => {
 
 test("frame opaque 425360 header + C++ law pins (ABI v61)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"), "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"), "utf8");
 
@@ -17078,8 +17085,8 @@ test("frame opaque 425360 header + C++ law pins (ABI v61)", () => {
 });
 test("frame opaque 425b70 coop-award ctor seed + record table laws (ABI v62)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* Identity + census pins (sub-object ctor; ret @0x4264b0; END = first
      byte after the c3; int3 pad 0x4264b1..0x4264bf; next body 0x4264c0
@@ -17245,8 +17252,8 @@ test("frame opaque 425b70 coop-award ctor seed + record table laws (ABI v62)", (
 
 test("frame opaque 425b70 independent PE-truth (ABI v62)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000; .rdata raw 0x716600 = VA 0xb18000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -17350,8 +17357,8 @@ test("frame opaque 425b70 independent PE-truth (ABI v62)", () => {
 
 test("frame opaque 425b70 header + cpp pins (ABI v62)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),
@@ -17414,8 +17421,8 @@ test("frame opaque 425b70 header + cpp pins (ABI v62)", () => {
 test("frame opaque 425a70 duplicate-seam finder laws (ABI v63)", () => {
   const wa = loadExports();
   const view = new DataView(wa.memory.buffer);
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
 
   /* Identity + census pins (pair finder; two `ret 8` exits; END = first
      byte after the found-exit ret; 8-byte int3 pad; next body 0x425ac0
@@ -17520,8 +17527,8 @@ test("frame opaque 425a70 duplicate-seam finder laws (ABI v63)", () => {
 
 test("frame opaque 425a70 independent PE-truth (ABI v63)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   /* .text raw 0x400 = VA 0x401000. */
   const textOff = (va) => 0x400 + ((va >>> 0) - 0x00401000);
   const rdU8 = (va) => PE_BYTES[textOff(va)];
@@ -17586,8 +17593,8 @@ test("frame opaque 425a70 independent PE-truth (ABI v63)", () => {
 
 test("frame opaque 425a70 header + cpp pins (ABI v63)", () => {
   const wa = loadExports();
-  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, 64);
-  assert.equal(wa.abi(), 64);
+  assert.equal(FRAME_OPAQUE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(wa.abi(), FRAME_OPAQUE_PURE_ABI_VERSION);
   const h = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.h"),
     "utf8");
   const s = readFileSync(join(root, "native/decomp/frame_opaque_pure_helpers.cpp"),

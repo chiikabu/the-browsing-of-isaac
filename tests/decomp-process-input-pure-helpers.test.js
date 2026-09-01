@@ -5623,6 +5623,13 @@ import {
 
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "process_input_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 
 
 
@@ -22595,7 +22602,7 @@ test("JS oracle: audit F8 â€” NaN timer survives the clamp (ABI v20)", () =
 
 
 
-  assert.equal(PROCESS_INPUT_PURE_ABI_VERSION, 52);
+  assert.equal(PROCESS_INPUT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
 
 
@@ -53728,10 +53735,10 @@ function v52A9c6110NextStatePe(state, field8) {
 
 test("v52 A9C6110: 0x009c6110 pure out-state decision island (build + ABI + census + laws + differential)", async () => {
   const w = await loadWasm();
-  assert.equal(w.abi(), 52);
+  assert.equal(w.abi(), PROCESS_INPUT_PURE_ABI_VERSION);
 
-  assert.equal(PROCESS_INPUT_PURE_ABI_VERSION, 52);
-  assert.equal(w.abi(), 52);
+  assert.equal(PROCESS_INPUT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
+  assert.equal(w.abi(), PROCESS_INPUT_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   /* v52 A9C6110 island needles. */
   assert.match(h, /ABI v52 -- 0x009c6110/);

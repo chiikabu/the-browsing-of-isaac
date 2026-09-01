@@ -37,6 +37,15 @@ Commands (all addresses hex, 0x prefix optional):
                           zero-at-load status, containing func, insn, xref
                           summary, import/string hit.
   funcs-in VA END         function starts within a VA band.
+  fieldrefs DISP [FUNC]   OBJECT-FIELD census: every [reg+DISP] / [reg+idx*s+DISP]
+                          operand in .text (base != esp/ebp), classified r/w/rw/
+                          addr(lea) with base register + operand size. With FUNC,
+                          only inside the function containing FUNC. DISP is the
+                          field offset (e.g. 0x2654c for Game+0x2654c). This is
+                          the census that `writers` cannot do — it answers "does
+                          anything in this function write [this+0x1ba84]?"
+                          exactly instead of by eyeballing `body`. Needs an
+                          index built at decode config v2 (npm run decomp:index).
   meta                    decode config + build stats.
   verify                  acceptance ground truths (measured in AGENTS.md).
   batch "Q ;; Q ;; ..."   run several queries in ONE process/tool call —
@@ -45,9 +54,11 @@ Commands (all addresses hex, 0x prefix optional):
                           Each result is prefixed with `== <query>`.
 
 Notes:
- - mem_* xrefs cover ABSOLUTE displacements only. [reg+disp] with a small disp
-   (object fields) is invisible here by nature; census object-field writers via
-   `sig` on the displacement bytes or `body` on candidate functions.
+ - mem_* xrefs cover ABSOLUTE displacements only. [reg+disp] object fields are
+   censused by `fieldrefs` (the `fld` table). A field census is complete for
+   the DISPLACEMENT — the same offset on two different object types collides
+   (Game+0x8 vs Room+0x8), so read the base register / containing function
+   before you count a hit.
  - jtab masking removes dword switch tables from the decode; byte-index tables
    may still shadow a few instructions near switch heads — confirm surprising
    results with `disasm` around the site.
@@ -391,6 +402,40 @@ def cmd_addr(args):
         print("  xrefs to: none (check a range: xrefs-to ADDR END)")
 
 
+def cmd_fieldrefs(args):
+    if not db().execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='fld'"
+    ).fetchone():
+        sys.exit("index has no fld table — rebuild: python scripts/decomp/tools/build-pe-index.py")
+    disp = int(args[0], 0)
+    if disp >= 0x80000000:
+        disp -= 0x100000000
+    if len(args) > 1:
+        f = func_of(h(args[1]))
+        if not f:
+            sys.exit(f"no function contains {args[1]}")
+        lo, hi = f[0], f[1]
+        scope = f"in func 0x{lo:08x}..0x{hi:08x}"
+    else:
+        lo, hi, scope = 0, 0xFFFFFFFF, "whole .text"
+    rows = db().execute(
+        "SELECT va,kind,base,size FROM fld WHERE disp=? AND va>=? AND va<? ORDER BY va",
+        (disp, lo, hi),
+    ).fetchall()
+    kinds: dict[str, int] = {}
+    for _, k, _, _ in rows:
+        kinds[k] = kinds.get(k, 0) + 1
+    summary = ", ".join(f"{k}={n}" for k, n in sorted(kinds.items()))
+    print(f"{len(rows)} field ref(s) for [reg+0x{disp & 0xFFFFFFFF:x}] ({scope})" + (f": {summary}" if rows else ""))
+    for va, kind, base, size in rows[:400]:
+        row = insn_at(va)
+        f = func_of(va)
+        floc = f" (in 0x{f[0]:08x})" if f else ""
+        print(f"  {fmt_insn(row) if row else f'0x{va:08x}'}    ; {kind} base={base} size={size}{floc}")
+    if len(rows) > 400:
+        print(f"  ... {len(rows) - 400} more (narrow with FUNC)")
+
+
 def cmd_funcs_in(args):
     lo, hi = h(args[0]), h(args[1])
     for s, e, n in db().execute(
@@ -486,12 +531,19 @@ COMMANDS = {
     "sig": cmd_sig,
     "addr": cmd_addr,
     "funcs-in": cmd_funcs_in,
+    "fieldrefs": cmd_fieldrefs,
     "meta": cmd_meta,
     "verify": cmd_verify,
 }
 
 
 def main() -> int:
+    # UTF-8 output regardless of the console code page (em dashes in the
+    # verify notes otherwise print as ?); a closed pipe (| head) is not an error.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print(__doc__)
         return 0
@@ -504,4 +556,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (BrokenPipeError, OSError) as e:  # stdout closed by a pager/head
+        if getattr(e, "errno", None) not in (22, 32):
+            raise
+        try:
+            sys.stdout = None  # noqa: avoid the flush-on-exit error
+        finally:
+            sys.exit(0)

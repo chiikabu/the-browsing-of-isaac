@@ -940,6 +940,13 @@ import {
 } from "../scripts/decomp/pe-signatures.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "room_transition_engine_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "room_transition_engine_pure_helpers.h");
 const source = join(root, "native", "decomp", "room_transition_engine_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "room-transition-engine-pure");
@@ -1402,7 +1409,7 @@ function readU8(view, offset) {
 const MEM = 0x100000;
 
 test("room transition engine pure JS oracle matches recovered control flow", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   assert.equal(roomTransitionEngine82ee40EarlySkipSetup(0, 20), 0);
   assert.equal(roomTransitionEngine82ee40EarlySkipSetup(1, 20), 1);
@@ -1479,7 +1486,7 @@ test("room transition engine pure JS oracle matches recovered control flow", () 
 
 test("room transition engine pure Wasm matches JS oracle and is zero-import", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
 
   assert.equal(api.earlySkip(1, 20), roomTransitionEngine82ee40EarlySkipSetup(1, 20));
   assert.equal(api.earlySkip(1, 0xf), roomTransitionEngine82ee40EarlySkipSetup(1, 0xf));
@@ -1702,7 +1709,7 @@ test("room transition engine pure helpers source is freestanding; dual-gate earl
 });
 
 test("transition engine v3 fix: player loop bound is re-derived every iteration", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   // sar 2 on the byte difference.
   assert.equal(roomTransitionEngine82ee40PlayerCount(0x1000, 0x1000), 0);
@@ -1784,7 +1791,7 @@ test("transition engine v3 player loop C++/Wasm lockstep (ABI v11)", () => {
     abi, memory, playerCount, playerLoopEnter, playerLoopStep,
     playerLoopContinue, playerEntryEligible,
   } = loadExports();
-  assert.equal(abi(), 30);
+  assert.equal(abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(memory.buffer);
   const ptr = MEM + 0x5000;
 
@@ -1863,7 +1870,7 @@ test("transition engine v3 player loop C++/Wasm lockstep (ABI v11)", () => {
 });
 
 test("transition engine v4: in-loop host-call selection (JS oracle, ABI v11)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_PLAYER_173_OFF, 0x173);
   assert.equal(ROOM_TRANSITION_ENGINE_HOST_VA_173_GATE, 0x0082f05a);
   assert.equal(ROOM_TRANSITION_ENGINE_HOST_VA_ANIM_ARG, 0x0082f063);
@@ -1943,7 +1950,7 @@ test("transition engine v4: player call plan C++/Wasm lockstep (ABI v11)", () =>
   const {
     abi, memory, call7abcc0Needed, call7abcc0Arg, call7abe20Needed, callPlan,
   } = loadExports();
-  assert.equal(abi(), 30);
+  assert.equal(abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(memory.buffer);
   const ptr = MEM + 0x6000;
 
@@ -2024,7 +2031,7 @@ test("transition engine v4: player call plan C++/Wasm lockstep (ABI v11)", () =>
 });
 
 test("transition engine v5: per-entry body FUN_007abe20 pure core (JS oracle, ABI v11)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // Entry object offsets and body call sites recovered from the raw PE
   // (section table .text raw 0x400 + (VA - 0x401000), VA 0x007abe20).
   assert.equal(ROOM_TRANSITION_ENGINE_ENTRY_8C_OFF, 0x8c);
@@ -2092,7 +2099,7 @@ test("transition engine v5: per-entry body C++/Wasm lockstep (ABI v11)", () => {
   const {
     abi, memory, rewindNeeded, rewindDecision, storePlan,
   } = loadExports();
-  assert.equal(abi(), 30);
+  assert.equal(abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(memory.buffer);
   const DEC = MEM + 0x7000;
   const PLAN = MEM + 0x7100;
@@ -2195,7 +2202,7 @@ test("transition engine v5: per-entry body C++/Wasm lockstep (ABI v11)", () => {
 });
 
 test("transition engine v6: FUN_007abcc0 pure shell + SFX pack (JS oracle, ABI v11)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // The three param_2 consts are animation-name strings (PE .rdata verified
   // by the PE-truth test below); v6 names the direction explicitly.
   assert.equal(ROOM_TRANSITION_ENGINE_PARAM2_82F07D, 0x00b6ce1c); // "DeathTeleport"
@@ -2318,7 +2325,7 @@ test("transition engine v6: 7abcc0 shell + SFX pack C++/Wasm lockstep (ABI v11)"
   const {
     abi, memory, param2, sfxNeeded, wrapperPlan, sfxPack,
   } = loadExports();
-  assert.equal(abi(), 30);
+  assert.equal(abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(memory.buffer);
   const PLAN = MEM + 0x8000;
   const PACK = MEM + 0x8100;
@@ -2595,7 +2602,7 @@ test("transition engine v7: PE-truth for the new VAs, strings and the 82f07d pus
 });
 
 test("transition engine v7/N1: PE-exact loop step (three reads) - JS oracle", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   // Stable vector: all three reads agree, so the exact step must reproduce the
   // v3 folded step exactly. Cross-helper differential (AGENTS.md: two helpers
@@ -3871,7 +3878,7 @@ test("transition engine v7/D2: every header enum literal is pinned and matches t
 
 test("transition engine v7: C++/Wasm lockstep for every new export (ABI v11)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const STEP = MEM + 0x9000;
   const TAIL = MEM + 0x9100;
@@ -4432,7 +4439,7 @@ test("transition engine v8: FUN_0040a5d0 JS oracle (needle reload both direction
 
 test("transition engine v8: FUN_0040a5d0 C++/Wasm lockstep (ABI v11)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const REGION = MEM + 0x10000; // above every other scratch block in this file
   const REGION_LEN = 0x4000;
@@ -5200,7 +5207,7 @@ test("transition engine v9: 830/970 JS oracle (divergence table V1..V9)", () => 
 
 test("transition engine v9: 830/970 C++/Wasm lockstep (ABI v11)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const OUT9 = MEM + 0x24000;
 
@@ -5834,7 +5841,7 @@ test("transition engine v10: 0x0082ee40 whole-body PE truth (frame, stores, call
 });
 
 test("transition engine v10: setup stores, frame and composed 7abe20 body (JS oracle, ABI v11)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   // ---- N7: the nine setup stores, in PE order, with the Game write ----
   const setup = roomTransitionEngine82ee40SetupStorePlan(0x11, -1, 20, 3, 0x7a);
@@ -6070,7 +6077,7 @@ test("transition engine v10: setup stores, frame and composed 7abe20 body (JS or
 
 test("transition engine v10: setup/frame/receivers/body C++/Wasm lockstep (ABI v11)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const OUT10 = MEM + 0x30000;
   const D830 = MEM + 0x31000;
@@ -6423,7 +6430,7 @@ test("transition engine v11: player-reset lane JS oracle (index law + store plan
 
 test("transition engine v11: player-reset lane C++/Wasm lockstep (ABI v11)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const OUT11 = MEM + 0x34000; // above every earlier scratch block
 
@@ -6507,7 +6514,7 @@ test("transition engine v11: player-reset lane C++/Wasm lockstep (ABI v11)", () 
 
 
 test("transition engine v12: 0x0040a1b0 Rewind PE truth + JS oracle (ABI v12)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_HOST_VA_408C90, 0x00408c90);
   assert.equal(ROOM_TRANSITION_ENGINE_40A1B0_END_VA, 0x0040a214);
   assert.equal(ROOM_TRANSITION_ENGINE_40A1B0_RESET_STORE_COUNT, 3);
@@ -6672,7 +6679,7 @@ test("transition engine v12: 0x0040a1b0 Rewind PE truth + JS oracle (ABI v12)", 
 
 test("transition engine v12: 0x0040a1b0/0x00408c90 C++/Wasm lockstep (ABI v12)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const R = MEM + 0x50000; // fresh region above every other scratch block
   const RLEN = 0x4000;
@@ -6831,7 +6838,7 @@ test("transition engine v12: 0x0040a1b0/0x00408c90 C++/Wasm lockstep (ABI v12)",
 });
 
 test("transition engine v13: 0x00956780 xorshift core PE truth + JS oracle", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_956780_VA, 0x00956780);
   assert.equal(ROOM_TRANSITION_ENGINE_956780_END_VA, 0x00956885);
   assert.equal(ROOM_TRANSITION_ENGINE_HOST_VA_4288A0, 0x004288a0);
@@ -6931,7 +6938,7 @@ test("transition engine v13: 0x00956780 xorshift core PE truth + JS oracle", () 
 
 test("transition engine v13: 0x00956780 C++/Wasm lockstep", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const OUT = MEM + 0x70000;
   const PLAN_KEYS = ["ran", "seedWarn", "seedFault", "seedAfter", "remainder", "idOut", "store25", "store12d"];
@@ -7023,7 +7030,7 @@ test("transition engine v13: 0x00956780 C++/Wasm lockstep", () => {
  * ========================================================================== */
 
 test("transition engine v14: 0x004288a0 map walk PE truth + JS oracle (ABI v14)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_4288A0_VA, 0x004288a0);
   assert.equal(ROOM_TRANSITION_ENGINE_4288A0_END_VA, 0x004288e8);
   assert.equal(ROOM_TRANSITION_ENGINE_4288A0_RET_BYTES, 8);
@@ -7154,7 +7161,7 @@ test("transition engine v14: 0x004288a0 map walk PE truth + JS oracle (ABI v14)"
 
 test("transition engine v14: 0x004288a0 map walk C++/Wasm lockstep (ABI v14)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const R = MEM + 0x80000; // fresh region
   const RLEN = 0x2000;
@@ -7288,7 +7295,7 @@ test("transition engine v14: 0x004288a0 map walk C++/Wasm lockstep (ABI v14)", (
  * ========================================================================== */
 
 test("transition engine v15: 0x004288f0/0x00428910 getters PE truth + JS oracle (ABI v15)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_4288F0_VA, 0x004288f0);
   assert.equal(ROOM_TRANSITION_ENGINE_4288F0_END_VA, 0x00428908);
   assert.equal(ROOM_TRANSITION_ENGINE_4288F0_RET_BYTES, 4);
@@ -7371,7 +7378,7 @@ test("transition engine v15: 0x004288f0/0x00428910 getters PE truth + JS oracle 
 
 test("transition engine v15: 0x004288f0/0x00428910 getters C++/Wasm lockstep (ABI v15)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   const R = MEM + 0x90000; // fresh region above every other scratch block
   const RLEN = 0x2000;
@@ -7440,7 +7447,7 @@ test("transition engine v15: 0x004288f0/0x00428910 getters C++/Wasm lockstep (AB
  * ========================================================================== */
 
 test("transition engine v16: 0x00428940 xorshift core + 0x00428a80 bit setter PE truth + JS oracle (ABI v16)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_428940_VA, 0x00428940);
   assert.equal(ROOM_TRANSITION_ENGINE_428940_END_VA, 0x00428a4a);
   assert.equal(ROOM_TRANSITION_ENGINE_428940_RET_BYTES, 4);
@@ -7654,7 +7661,7 @@ test("transition engine v16: 0x00428940 xorshift core + 0x00428a80 bit setter PE
 
 test("transition engine v16: 0x00428940 / 0x00428a80 C++/Wasm lockstep (ABI v16)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const view = new DataView(api.memory.buffer);
   // 0x428940: region R940 (state + plans).
   const R940 = MEM + 0xa0000;
@@ -7744,7 +7751,7 @@ test("transition engine v16: 0x00428940 / 0x00428a80 C++/Wasm lockstep (ABI v16)
 });
 
 test("transition engine v17: 0x00428a50 field getter PE truth + JS oracle (ABI v17)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_428A50_VA, 0x00428a50);
   assert.equal(ROOM_TRANSITION_ENGINE_428A50_END_VA, 0x00428a56);
   assert.equal(ROOM_TRANSITION_ENGINE_428A50_RET_BYTES, 0);
@@ -7782,7 +7789,7 @@ test("transition engine v17: 0x00428a50 field getter PE truth + JS oracle (ABI v
 
 test("transition engine v17: 0x00428a50 C++/Wasm lockstep (ABI v17)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   // The law is an address add - no memory is dereferenced, so any region
   // works; only the receiver offset matters.
   const R = MEM + 0xc0000;
@@ -7804,7 +7811,7 @@ test("transition engine v17: 0x00428a50 C++/Wasm lockstep (ABI v17)", () => {
 });
 
 test("transition engine v18: 0x00428a60/0x00428a70 getters PE truth + JS oracle (ABI v18)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_428A60_VA, 0x00428a60);
   assert.equal(ROOM_TRANSITION_ENGINE_428A60_END_VA, 0x00428a66);
   assert.equal(ROOM_TRANSITION_ENGINE_428A60_RET_BYTES, 0);
@@ -7867,7 +7874,7 @@ test("transition engine v18: 0x00428a60/0x00428a70 getters PE truth + JS oracle 
 
 test("transition engine v18: 0x00428a60/0x00428a70 C++/Wasm lockstep (ABI v18)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const R = MEM + 0xd0000;
   const view = new DataView(api.memory.buffer);
 
@@ -7934,7 +7941,7 @@ test("transition engine v18: 0x00428a60/0x00428a70 C++/Wasm lockstep (ABI v18)",
 });
 
 test("transition engine v19: 0x428930/0x428ae0/0x428b10/0x428b50/0x428cd0/0x429550/0x429560/0x429f20/0x42a020 PE truth + JS oracle (ABI v19)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_428930_VA, 0x00428930);
   assert.equal(ROOM_TRANSITION_ENGINE_428930_END_VA, 0x00428933);
   assert.equal(ROOM_TRANSITION_ENGINE_428930_RET_BYTES, 0);
@@ -8150,7 +8157,7 @@ test("transition engine v19: 0x428930/0x428ae0/0x428b10/0x428b50/0x428cd0/0x4295
 
 test("transition engine v19: 0x428930/0x428ae0/0x428b10/0x428b50/0x428cd0/0x429550/0x429560/0x429f20/0x42a020 C++/Wasm lockstep (ABI v19)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const R = MEM + 0x120000;
   const view = new DataView(api.memory.buffer);
   let lcg = 0x19a3c71;
@@ -8316,7 +8323,7 @@ test("transition engine v19: 0x428930/0x428ae0/0x428b10/0x428b50/0x428cd0/0x4295
 });
 
 test("transition engine v20: 0x42a030 throw stub + 0x42a040 found-prefix seam PE truth + JS oracle (ABI v20)", () => {
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TRANSITION_ENGINE_42A030_VA, 0x0042a030);
   assert.equal(ROOM_TRANSITION_ENGINE_42A030_THROW_PUSH_VA, 0x0042a030);
   assert.equal(ROOM_TRANSITION_ENGINE_42A030_CALL_VA, 0x0042a035);
@@ -8447,7 +8454,7 @@ test("transition engine v20: 0x42a030 throw stub + 0x42a040 found-prefix seam PE
 
 test("transition engine v20: 0x42a030/0x42a040 bound-dispatch C++/Wasm lockstep (ABI v20)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION);
   const R = MEM + 0x150000;
   const view = new DataView(api.memory.buffer);
 
@@ -8527,8 +8534,8 @@ test("transition engine v20: 0x42a030/0x42a040 bound-dispatch C++/Wasm lockstep 
 
 test("v21 POST: build + ABI pin + census (post-band cluster 0x42a250/0x42a260/0x42a270)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip: header enum + wasm agree at 20
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip: header enum + wasm agree at 20
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v21 — POST/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_VA = 0x0042a250u/);
@@ -8687,8 +8694,8 @@ const v22Le32 = (m, o) =>
 
 test("v22 POOL: build + ABI pin + census + declines", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v22 — POOL/);
   assert.match(h, /DECLINED: EXACT ZHL/);
@@ -8820,8 +8827,8 @@ test("v22 POOL: deterministic randomized differential corpus (500 draws)", () =>
 
 test("v23 42b020: build + ABI pin + census + table pins match the PE", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v23 — 0x0042b020/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_VA = 0x0042b020u/);
@@ -8936,8 +8943,8 @@ test("v23 42b020: exhaustive + randomized differential corpus vs PE truth", () =
 
 test("v24 PAIR: build + ABI pin + census + table pins match the PE", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v24 — PAIR/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_VA = 0x0042b340u/);
@@ -9061,8 +9068,8 @@ test("v24 PAIR: exhaustive + randomized differential corpus vs PE truth", () => 
 
 test("v25: build + ABI pin + census + table pins match the PE", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v25 — 0x0042b480/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B480_VA = 0x0042b480u/);
@@ -9147,8 +9154,8 @@ test("v25: exhaustive + randomized differential corpus vs PE truth", () => {
 
 test("v26: build + ABI pin + census (multi-case setter 0x42b940)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v26 — 0x0042b940/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B940_VA = 0x0042b940u/);
@@ -9230,8 +9237,8 @@ test("v26: exhaustive differential corpus vs model", () => {
 
 test("v31: build + ABI pin + census (pop-head 0x42c6e0)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42C6E0_VA = 0x0042c6e0u/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42C6E0_BODY_BYTES = 15u/);
@@ -9259,8 +9266,8 @@ test("v31: scalar laws (identity retire through host store sites)", () => {
 
 test("v32: build + ABI pin + census", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v32 — POST/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42C700_VA = 0x0042c700u/);
@@ -9336,8 +9343,8 @@ test("v32: randomized differential corpus (500 draws)", () => {
 
 test("v34: build + ABI pin + census (element address getter 0x42c810)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v34/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42C810_VA = 0x0042c810u/);
@@ -9390,8 +9397,8 @@ test("v34: randomized differential corpus (500 draws)", () => {
 
 test("v35: build + ABI pin + census (conditional getter 0x42d040)", () => {
   const api = loadExports();
-  assert.equal(api.abi(), 30); // pre-flip
-  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, 30);
+  assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
+  assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v35/);
   assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42D040_VA = 0x0042d040u/);

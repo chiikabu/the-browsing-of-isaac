@@ -199,6 +199,13 @@ const assert = new Proxy(rawAssert, {
 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "alloc_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "alloc_pure_helpers.h");
 const source = join(root, "native", "decomp", "alloc_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "alloc-pure");
@@ -628,7 +635,7 @@ test("build alloc pure helpers wasm (zero imports, ABI v4)", () => {
     "linear memory too small for the scratch region",
   );
   assert.equal(wasm.isaac_alloc_pure_helpers_abi_version(), ALLOC_PURE_ABI_VERSION);
-  assert.equal(ALLOC_PURE_ABI_VERSION, 4);
+  assert.equal(ALLOC_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("wasm module declares no imports", () => {

@@ -6441,6 +6441,13 @@ import {
 } from "../scripts/decomp/lua-engine-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "lua_engine_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "lua_engine_pure_helpers.h");
 const source = join(root, "native", "decomp", "lua_engine_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "lua-engine-pure");
@@ -15739,7 +15746,7 @@ test("layout constants match ZHL struct + PE Init store", () => {
 test("native/Wasm differential: pure helpers vs JS oracle", () => {
   const native = loadExports();
   assert.equal(native.abi(), LUA_ENGINE_PURE_ABI_VERSION);
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   // v19 byte-width sweep: wide, UNMASKED values must cross the Wasm
   // boundary — a pre-masked corpus structurally cannot catch a deleted
@@ -21908,7 +21915,7 @@ test("header pins every v27 band-C primary constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v28 band-C primary template covers all 10 sites", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineBandCPrimaryStride(), 0x60);
   assert.equal(luaEngineBandCPrimaryIdenticalBytes(), 87);
   assert.equal(LUA_BAND_C_PRIMARY_DIFF_OFF_KEY, 0x1f);
@@ -22023,7 +22030,7 @@ test("header pins every v28 band-C primary template constant to its PE literal",
 });
 
 test("JS oracle: ABI v29 band-C secondary template covers all 16 sites", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineBandCSecondaryStride(), 0xc0);
   assert.equal(luaEngineBandCSecondaryIdenticalBytes(), 158);
   assert.equal(LUA_BAND_C_SECONDARY_DIFF_OFF_FLAG, 0x25);
@@ -22203,7 +22210,7 @@ test("header pins every v29 band-C secondary template constant to its PE literal
 });
 
 test("JS oracle: ABI v30 leftover extra BODY 0x008a0600 pure islands", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineLeftoverExtraVa(), 0x008a0600);
   assert.equal(luaEngineLeftoverExtraVa(), LUA_INLINE_RESIDUAL_EXTRA_VA);
   assert.equal(luaEngineLeftoverExtraVa(), LUA_FOURTH_STRADDLER_VA);
@@ -22346,7 +22353,7 @@ test("header pins every v30 leftover extra constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v31 fourth-region string getter BODY 0x008976a0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthGetterVa(), 0x008976a0);
   assert.equal(luaEngineFourthGetterVa(), LUA_FOURTH_GETTER_BODY_VA);
   assert.equal(luaEngineFourthGetterVa(), luaEngineFourthVa(1));
@@ -22505,7 +22512,7 @@ test("header pins every v31 fourth-getter constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v32 fourth-region integer setter BODY 0x008976f0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthSetterVa(), 0x008976f0);
   assert.equal(luaEngineFourthSetterVa(), LUA_FOURTH_SETTER_BODY_VA);
   assert.equal(luaEngineFourthSetterVa(), luaEngineFourthVa(2));
@@ -22655,7 +22662,7 @@ test("header pins every v32 fourth-setter constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v33 fourth-region boolean setter BODY 0x00897730", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthBoolSetterVa(), 0x00897730);
   assert.equal(luaEngineFourthBoolSetterVa(), LUA_FOURTH_BOOL_SETTER_BODY_VA);
   assert.equal(luaEngineFourthBoolSetterVa(), luaEngineFourthVa(3));
@@ -22843,7 +22850,7 @@ test("header pins every v33 fourth-bool-setter constant to its PE literal", () =
 });
 
 test("JS oracle: ABI v34 fourth-region boolean getter BODY 0x00897770", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthBoolGetterVa(), 0x00897770);
   assert.equal(luaEngineFourthBoolGetterVa(), LUA_FOURTH_BOOL_GETTER_BODY_VA);
   assert.equal(luaEngineFourthBoolGetterVa(), luaEngineFourthVa(4));
@@ -23026,7 +23033,7 @@ test("header pins every v34 fourth-bool-getter constant to its PE literal", () =
 });
 
 test("JS oracle: ABI v35 fourth-region number setter BODY 0x008977a0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthNumberSetterVa(), 0x008977a0);
   assert.equal(luaEngineFourthNumberSetterVa(), LUA_FOURTH_NUMBER_SETTER_BODY_VA);
   assert.equal(luaEngineFourthNumberSetterVa(), luaEngineFourthVa(5));
@@ -23220,7 +23227,7 @@ test("header pins every v35 fourth-number-setter constant to its PE literal", ()
 });
 
 test("JS oracle: ABI v36 fourth-region number getter BODY 0x00897930", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthNumberGetterVa(), 0x00897930);
   assert.equal(luaEngineFourthNumberGetterVa(), LUA_FOURTH_NUMBER_GETTER_BODY_VA);
   assert.equal(luaEngineFourthNumberGetterVa(), luaEngineFourthVa(6));
@@ -23382,7 +23389,7 @@ test("header pins every v36 fourth-number-getter constant to its PE literal", ()
 });
 
 test("JS oracle: ABI v37 sequential indexed bool setter BODY 0x00897f00", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthIntBoolSetterVa(), 0x00897f00);
   assert.equal(luaEngineFourthIntBoolSetterVa(), LUA_FOURTH_INT_BOOL_SETTER_BODY_VA);
   assert.equal(luaEngineFourthIntBoolSetterBodyBytes(), 0x49);
@@ -23626,7 +23633,7 @@ test("header pins every v37 indexed-bool-setter constant to its PE literal", () 
 
 
 test("JS oracle: ABI v38 sequential indexed integer getter BODY 0x008984e0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthIntGetterVa(), 0x008984e0);
   assert.equal(luaEngineFourthIntGetterVa(), LUA_FOURTH_INT_GETTER_BODY_VA);
   assert.equal(luaEngineFourthIntGetterBodyBytes(), 0x41);
@@ -23892,7 +23899,7 @@ test("header pins every v38 indexed-int-getter constant to its PE literal", () =
 });
 
 test("JS oracle: ABI v39 fourth-region i32 getter BODY 0x00898f50", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthI32GetterVa(), 0x00898f50);
   assert.equal(luaEngineFourthI32GetterVa(), LUA_FOURTH_I32_GETTER_BODY_VA);
   assert.equal(luaEngineFourthI32GetterVa(), luaEngineFourthVa(7));
@@ -24156,7 +24163,7 @@ test("header pins every v39 i32-getter constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v40 fourth-region i32 sign-extend getter BODY 0x008991a0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthI32SextGetterVa(), 0x008991a0);
   assert.equal(luaEngineFourthI32SextGetterVa(), LUA_FOURTH_I32_SEXT_GETTER_BODY_VA);
   assert.equal(luaEngineFourthI32SextGetterVa(), luaEngineFourthVa(8));
@@ -24469,7 +24476,7 @@ test("header pins every v40 i32-sext-getter constant to its PE literal", () => {
 
 
 test("JS oracle: ABI v41 sequential no-arg setter-shaped BODY 0x008991d0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(luaEngineFourthNoargSetterVa(), 0x008991d0);
   assert.equal(luaEngineFourthNoargSetterVa(), LUA_FOURTH_NOARG_SETTER_BODY_VA);
   assert.equal(luaEngineFourthNoargSetterBodyBytes(), 0x1c);
@@ -24715,7 +24722,7 @@ test("header pins every v41 no-arg-setter constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v42 class-create template BODY control flow (8 sites)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // Body geometry: first ret 0x8a8017 - 0x8a7e10 = 0x207; span 0x210.
   assert.equal(luaEngineClassCreateBodyBytes(), 0x207);
   assert.equal(luaEngineClassCreateFirstRetVa(), 0x008a8017);
@@ -25033,7 +25040,7 @@ test("header pins every v42 class-create body constant to its PE literal", () =>
 });
 
 test("JS oracle: ABI v43 std::vector<T>::at family (3 sites)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // Family geometry, transcribed from the three PE instruction streams:
   //   0x008a8020: mov eax,[ecx+4]; mov edx,[ecx]; sub eax,edx;
   //               mov ecx,[ebp+8]; sar eax,4; cmp eax,ecx; jbe OOB;
@@ -25243,7 +25250,7 @@ test("header pins every v43 at() constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v44 LuaRef-holder destructor body 0x008a80b0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from
    * cpu-dump/008a80b0.txt — NOT derived from the model or the C++:
    *   0x008a80b0: 56                push esi
@@ -25425,7 +25432,7 @@ test("header pins every v44 LuaRef dtor constant to its PE literal", () => {
 });
 
 test("JS oracle: ABI v45 SetReference wrapper successors (0x8a8180/0x8a81d0/0x8a8270)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from
    * cpu-dump/008a8180.txt / 008a81d0.txt / 008a8270.txt (and the
    * helpers 008baa50.txt / 0085c050.txt) — NOT derived from the model
@@ -25781,7 +25788,7 @@ test("header pins every v45 wrapper-successor constant to its PE literal", () =>
 });
 
 test("JS oracle: ABI v47 closure-install helpers 0x8a0460..0x89fee0 (12 bodies)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from
    * cpu-dump/008a0460.txt / 008a0500.txt / 008a05a0.txt (lua-v49 notes)
    * and cpu-dump/008a0400.txt / 008a0360.txt / 008a0220.txt /
@@ -26412,7 +26419,7 @@ test("ABI v47 install-helper mutants: eight translation errors are tripwires", (
 });
 
 test("JS oracle: ABI v48 wrapper bodies 0x8a8310..0x8a88f0 (9 closures)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * cpu-dump/008a8310.txt / 008a8430.txt / 008a8510.txt / 008a8580.txt /
    * 008a8610.txt / 008a8680.txt / 008a8740.txt / 008a8810.txt /
@@ -26845,7 +26852,7 @@ test("ABI v48 wrapper-body mutants: eight translation errors are tripwires", () 
 });
 
 test("JS oracle: ABI v49 FontRenderSettings wrapper bodies 0x8a89e0 + 0x8a8a40", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * cpu-dump/008a89e0.txt (lua-v52 notes) — NOT derived from the model
    * or the C++.
@@ -27234,7 +27241,7 @@ test("ABI v49 FontRenderSettings wrapper mutants: five translation errors are tr
   assert.notEqual(native.fontsettingsWrapperCheckFlags(1) | 0, 0x01);
 });
 test("JS oracle: ABI v51 FontRenderSettings Load wrapper 0x8a8ce0 + band bodies 0x8a8970..0x8a9180", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * cpu-dump/008a8970.txt / 008a8ab0.txt / 008a8b10.txt / 008a8b80.txt /
    * 008a8c10.txt / 008a8c80.txt / 008a8ce0.txt + 008a8d54.txt (Load full
@@ -27561,7 +27568,7 @@ test("ABI v51 Load-band mutants: seven translation errors are tripwires", () => 
 });
 
 test("JS oracle: ABI v51 install-run helpers 14..28 + sites 25..41", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth from cpu-dump/0089fe80.txt + 0089fce0.txt +
    * 0089fc40.txt + 0089fbe0.txt + 0089fb40.txt + 0089fae0.txt +
    * 0089fa40.txt + 0089f9e0.txt + 0089f980.txt + 0089f8e0.txt +
@@ -27657,7 +27664,7 @@ test("header pins every ABI v51 install-run helper/site constant to its PE liter
   }
 });
 test("JS oracle: ABI v52 DrawString wrapper 0x8a8fc0 + vec helper 0x8baab0 + getRef 0x8bb070", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * cpu-dump/008a8fc0.txt (127 insns, SEH frame) + 008baab0.txt (100
    * insns, ret 4) + 008bb070.txt + 008bb0a0.txt (getRef 36-insn true
@@ -28065,7 +28072,7 @@ test("ABI v52 DrawString mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v53 pusher leaf stubs 0x85c050/0x85bff0/0x85c010 + 0x85c590 body bounds", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * cpu-dump/0085c050.txt (13 insns, ret 0x85c072) + 0085bff0.txt (11
    * insns, ret 0x85c006) + 0085c010.txt (13 insns, ret 0x85c029) +
@@ -28875,7 +28882,7 @@ test("v25g PUSH_I64_PAIR mutants: five translation errors are tripwires", () => 
  */
 
 test("JS oracle: ABI v25i pusher row consolidation + width/hi row laws", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103); // v55: row 3 landed
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION); // v55: row 3 landed
   // Re-pointed getter push rows (v36 number getter -> row 0, v39 i32
   // getter -> row 1); pins == the landed pusher VAs.
   assert.equal(LUA_FOURTH_NUMBER_GETTER_PUSH_ROW, 0);
@@ -29227,7 +29234,7 @@ test("ABI v25i mutants: row/width folds + tail CF/IAT folds are tripwires", () =
  */
 
 test("JS oracle: v55 PUSH_I32_SEXT 0x85bfd0 completes the pusher table at ROW 3", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // ---- table record ----
   assert.equal(LUA_PUSHER_COUNT, 4);
   assert.equal(LUA_PUSHER_VAS[3], 0x0085bfd0);
@@ -29384,7 +29391,7 @@ test("v55 PUSH_I32_SEXT mutants: sext-law folds + band folds are tripwires", () 
 });
 
 test("JS oracle: ABI v56 EntityRef vec-helper band (GetAmbush 0x8b91d0 + Fadein 0x8b9270 + Fadeout 0x8b9380)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from fresh
    * cpu-dump/008b91d0.txt + 008b9258.txt (wrapper, DUAL ret, trap
    * @0x8b9257) + 008b9270.txt + 008b9290.txt (VEC-A) + 008b9380.txt
@@ -29840,7 +29847,7 @@ test("ABI v56 vecband mutants: seven translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v57 sibling band (MakeShockwave 0x8b9490 + Play 0x8b95a0)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from fresh
    * cpu-dump/008b9490.txt + 008b95a0.txt (and the installer dumps
    * 00895250.txt / 00895450.txt) — NOT derived from the model or C++.
@@ -30188,7 +30195,7 @@ test("ABI v57 sibling mutants: seven translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v58 wrapper 0x8b96d0 (AdjustVolume/AdjustPitch shared body)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from fresh
    * cpu-dump/008b96d0.txt + the installer dump 008954b0.txt — NOT
    * derived from the model or C++.
@@ -30420,7 +30427,7 @@ test("ABI v58 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v59 wrapper 0x8b9760 (Stop/Preload shared body)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from fresh
    * cpu-dump/008b9760.txt + the installer dump 00895510.txt — NOT
    * derived from the model or C++.
@@ -30645,7 +30652,7 @@ test("ABI v59 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v60 wrapper 0x8b97d0 (StopLoopingSounds — ZERO-ARG)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b97d0..0x8b981f) + installer dump
    * 00895570.txt — NOT derived from the model or C++.
@@ -30835,7 +30842,7 @@ test("ABI v60 wrapper mutants: five translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v61 wrapper 0x8b9820 (IsPlaying — int arg + byte-gated bool return)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b9820..0x8b98a0) + installer dump — NOT
    * derived from the model or C++.
@@ -31090,7 +31097,7 @@ test("ABI v61 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v62 wrapper 0x8b98b0 (SetAmbientSound — int + 2 float lanes, ret 0)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b98b0..0x8b9948) — NOT derived from the
    * model or C++.
@@ -31347,7 +31354,7 @@ test("ABI v62 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v63 Lua-registered getter bodies 0x85e370 + 0x85e380", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed from the fresh capstone TRUE bodies
    * + the registration run (lua-v62-getters NOTES) — NOT derived from the
    * model or C++:
@@ -31508,7 +31515,7 @@ test("ABI v63 getter mutants: six translation errors are tripwires", () => {
    * lua-v62-getters NOTES. (No wasm this wave — mutants are exercised on
    * the model + header, which the oracle and header-pin tests observe
    * directly; the next wave's wasm build picks up the 30 new exports.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: sar -> logical shr (>>> 3): 0x80000000 -> 0x10000000 instead of
   // 0xf0000000. PE `sar eax,3` @0x85e37c is SIGNED.
   assert.equal(luaEngineV63NumBossesCount(0x80000000, 0x00000000), 0xf0000000);
@@ -31536,7 +31543,7 @@ test("ABI v63 getter mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v64 wrapper 0x8b9950 (GetAmbientSoundVolume — int arg + pushnumber return)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b9950..0x8b99e3, 50 insns, body 0x93 =
    * RET_VA - VA) — NOT derived from the model or C++ (lua-v64-8b9950
@@ -31746,7 +31753,7 @@ test("ABI v64 wrapper mutants: six translation errors are tripwires", () => {
    * permanent tripwire is the assert.equal/notEqual pair + explicit PE
    * truth. (Applied-and-restored sha256-identical runs recorded in
    * lua-v64-8b9950 NOTES.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: object_resolve type gate -> byte mask (0x100 -> 0). PE `test
   // eax,eax` @0x8b996a is FULL-WORD.
   assert.equal(luaEngineV64ObjectResolve(0x100, 0x1234), 0x1234);
@@ -31777,7 +31784,7 @@ test("ABI v64 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v65 wrapper 0x8b99f0 (Play/Crossfade DOUBLE-literal — int + float lane, ret 0)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b99f0..0x8b9a71) — NOT derived from the
    * model or C++.
@@ -31965,7 +31972,7 @@ test("ABI v65 wrapper mutants: nine translation errors are tripwires", () => {
    * lua-v65-lit2 NOTES. No wasm this wave — mutants are exercised on
    * the model + header, which the oracle and header-pin tests observe
    * directly.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: object_resolve type gate -> byte mask (0x100 -> 0). PE `test
   // eax,eax` @0x8b9a07 is FULL-WORD.
   assert.equal(luaEngineV65ObjectResolve(0x100, 0x1234), 0x1234);
@@ -32008,7 +32015,7 @@ test("ABI v65 wrapper mutants: nine translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v66 wrapper 0x8b9a80 (MusicManager Fadein — int + TWO float lanes, ret 0)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b9a80..0x8b9b18) — NOT derived from the
    * model or C++.
@@ -32198,7 +32205,7 @@ test("ABI v66 wrapper mutants: five translation errors are tripwires", () => {
    * lua-v66-8b9a80 NOTES. No wasm this wave — mutants are exercised on
    * the model + header, which the oracle and header-pin tests observe
    * directly.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: object_resolve type gate -> byte mask (0x100 -> 0). PE `test
   // eax,eax` @0x8b9a97 is FULL-WORD.
   assert.equal(luaEngineV66ObjectResolve(0x100, 0x1234), 0x1234);
@@ -32225,7 +32232,7 @@ test("ABI v66 wrapper mutants: five translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v67 Queue wrapper 0x8b9b20 (MusicManager int-arg setter, ret 0)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed branch-by-branch from the fresh
    * capstone TRUE body (0x8b9b20..0x8b9b8b) — NOT derived from the
    * model or C++.
@@ -32305,7 +32312,7 @@ test("JS oracle: ABI v67 Queue wrapper 0x8b9b20 (MusicManager int-arg setter, re
 });
 
 test("JS oracle: ABI v67 band siblings 0x8b9b90/0x8b9c20/0x8b9c70 (Fadeout/Pause/EnableLayer)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Fadeout 0x8b9b90: 45 insns ret @0x8b9c11 body 0x81; aligned-ebp
    * frame (sub esp,0x10 — NOT 8); L = esi = [ebp+8]; obj1 [esp+0xc];
    * FULL-WORD test @0x8b9baa; CHKFLAGS 0; KEY 0xc82a19; touserdata ->
@@ -32408,7 +32415,7 @@ test("JS oracle: ABI v67 band siblings 0x8b9b90/0x8b9c20/0x8b9c70 (Fadeout/Pause
 });
 
 test("JS oracle: ABI v67 band siblings 0x8b9cf0/0x8b9d80/0x8b9df0/0x8b9e80 (IsLayerEnabled/IsEnabled/VolumeSlide/GetCurrentMusicID)", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* IsLayerEnabled 0x8b9cf0: 48 insns ret @0x8b9d70 body 0x80;
    * aligned ebp; L = edi; obj1 [esp+0xc]; CHKFLAGS 1 (the v61-style
    * flag); FULL-WORD test @0x8b9d0a; arg0 = checkinteger(L,2)
@@ -32656,7 +32663,7 @@ test("ABI v67 wrapper mutants: six translation errors are tripwires", () => {
    * permanent tripwire is the assert.equal/notEqual pair + explicit PE
    * truth. (Applied-and-restored sha256-identical runs recorded in
    * lua-v67-8b9b20 NOTES.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: Queue gate folded to BYTE mask (0x100 -> 0). PE `test
   // eax,eax` @0x8b9b3a is FULL-WORD.
   assert.equal(luaEngineV67QueueObjectResolve(0x100, 0x1234), 0x1234);
@@ -32688,7 +32695,7 @@ test("ABI v67 wrapper mutants: six translation errors are tripwires", () => {
 });
 
 test("JS oracle: ABI v68 input/callback wrappers 0x897870/0x8978d0/0x89e300", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* Independent PE-truth, transcribed from fresh capstone TRUE bodies —
    * NOT derived from the model/C++. NO lua_type gate, NO 0x85c590 check
    * helper (the fourth-region direct-ud shape).
@@ -32804,7 +32811,7 @@ test("JS oracle: ABI v68 input/callback wrappers 0x897870/0x8978d0/0x89e300", ()
 });
 
 test("JS oracle: ABI v68 class-singleton closures 0x898d90/0x898e00/0x898e70 + RandomVector 0x898ee0", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* MusicManager 0x898d90 (32, ret @0x898de8, body 0x58): ud =
    * touserdata; real_fn = [ud] @0x898da7; call eax @0x898da9 cdecl 0
    * args -> obj; FULL-WORD null gate `test edi,edi; je` @0x898dad/
@@ -32931,7 +32938,7 @@ test("JS oracle: ABI v68 class-singleton closures 0x898d90/0x898e00/0x898e70 + R
 });
 
 test("JS oracle: ABI v68 GetRoomEntities 0x898490", () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* GetRoomEntities 0x898490 (23 insns, ret @0x8984d6, body 0x46): ud
    * = touserdata @0x89849e; lea ecx,[ebp-8]; push ecx @0x8984a4/
    * @0x8984a7 (1 cdecl arg &vec8); real_fn = [ud] @0x8984a8; call eax
@@ -33076,7 +33083,7 @@ test("ABI v68 wrapper mutants: nine translation errors are tripwires", () => {
    * permanent tripwire is the assert.equal/notEqual pair + explicit PE
    * truth. (Applied-and-restored sha256-identical runs recorded in
    * lua-v68-8b9b20 NOTES.) */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // M1: IsButtonTriggered return gate folded to FULL-WORD normalize
   // (0x100 -> 1). PE `test al,al` @0x897907 is a BYTE gate — 0x100 has
   // AL=0x00 -> 0.
@@ -34036,7 +34043,7 @@ const V69_FN_PAIRS = [
   ["v69SaveModDataRefnilGate", "luaEngineV69SaveModDataRefnilGate", "isaac_lua_engine_v69_savemoddata_refnil_gate", [-1]],
 ];
 test("ABI v69: model pins + native==model sweep + header pin table", async () => {
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const native = loadExports();
   const m = await import("../scripts/decomp/lua-engine-pure-model.mjs");
   // Every model constant pins its PE literal.
@@ -35601,7 +35608,7 @@ test("ABI v72 wrapper real-fn twins 0x899770/0x899790 bounds-gated indexers", ()
      predicates. Wrapper rows {0x8c59d0,key 0xc82a30,helper 0x891750}
      / {0x8c5910,key 0xc82a3c,helper 0x891490}; slot stores
      `mov [eax],imm` @0x891946 / @0x891686. ZERO direct E8/E9. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins (int3 pads 0x89978a-8f / 0x8997ad-af). */
@@ -35731,7 +35738,7 @@ test("ABI v73 wrapper-band 0x8997b0/0x899850: HOST imms + pure islands", () => {
      gate, check/get args, touserdata(0xfff0b9d7), setne bool word.
      NEXT frontier 0x008998c0. Evidence
      section-notes/lua-v73-8997b0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins. */
@@ -35889,7 +35896,7 @@ test("ABI v74 wrapper-band 0x8998c0/0x899930: bool getter + box constructor isla
      payload{lo,hi}}, rawgetp(0xfff0b9d8, 0xc82a33) + setmetatable(-2).
      NEXT frontier 0x008999e0. Evidence
      section-notes/lua-v74-8998c0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v73. */
@@ -36060,7 +36067,7 @@ test("ABI v75 wrapper-band 0x8999e0/0x899a50: integer getter + box-ctor clone is
      constructor clone of the 0x899930 band with key 0xc829fe, vtable
      0xb7354c, metatable rawgetp key 0xc82a36. NEXT frontier
      0x00899b00. Evidence section-notes/lua-v75-8999e0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v74. */
@@ -36221,7 +36228,7 @@ test("ABI v76 wrapper-band 0x899b00/0x899b70: checkinteger call + sext-pusher is
      method(obj) no stack args, result -> 0x85bfd0 v55 ROW-3 SEXT
      PUSHER (ecx=L, edx=r), ret 1. NEXT frontier 0x00899bd0. Evidence
      section-notes/lua-v76-899b00/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v75. */
@@ -36368,7 +36375,7 @@ test("ABI v77 wrapper-band 0x899bd0/0x899c70: dynamic-cast getter twins", () => 
      (1 vs 0) and metatable rawgetp key (0xc829f1 vs 0xc829f2).
      NEXT frontier 0x00899d10. Evidence
      section-notes/lua-v77-899bd0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v76. */
@@ -36531,7 +36538,7 @@ test("ABI v78 wrapper-band 0x899d10/0x899db0: dynamic-cast getter twins", () => 
      (1 vs 0) and metatable rawgetp key (0xc829f7 vs 0xc829f8).
      NEXT frontier 0x00899e50. Evidence
      section-notes/lua-v78-899d10/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v76. */
@@ -36692,7 +36699,7 @@ test("ABI v79 wrapper-band 0x899e50/0x0x899ef0: dynamic-cast getter twins", () =
      setmetatable(-2) + ret 1. Twins differ ONLY in:
      VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METATABLE_RAWGETP_KEY. NEXT frontier 0x899fa0. Evidence
      section-notes/lua-v79-899e50/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from v78. */
@@ -36854,7 +36861,7 @@ test("ABI v80 wrapper-band 0x899fa0/0x0x89a040: dynamic-cast getter twins", () =
      setmetatable(-2) + ret 1. Twins differ ONLY in:
      VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METATABLE_RAWGETP_KEY. NEXT frontier 0x89a0e0. Evidence
      section-notes/lua-v80-899fa0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37017,7 +37024,7 @@ test("ABI v81 wrapper-band 0x89a0e0/0x0x89a180: dynamic-cast getter twins", () =
      setmetatable(-2) + ret 1. Twins differ ONLY in:
      VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METATABLE_RAWGETP_KEY. NEXT frontier 0x89a220. Evidence
      section-notes/lua-v81-89a0e0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37180,7 +37187,7 @@ test("ABI v82 wrapper-band 0x89a220/0x0x89a2c0: dynamic-cast getter twins", () =
      setmetatable(-2) + ret 1. Twins differ ONLY in:
      VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METATABLE_RAWGETP_KEY. NEXT frontier 0x89a360. Evidence
      section-notes/lua-v82-89a220/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37343,7 +37350,7 @@ test("ABI v83 wrapper-band 0x89a360/0x0x89a400: dynamic-cast getter twins", () =
      setmetatable(-2) + ret 1. Twins differ ONLY in:
      VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METATABLE_RAWGETP_KEY. NEXT frontier 0x89a4a0. Evidence
      section-notes/lua-v83-89a360/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37505,7 +37512,7 @@ test("ABI v84 wrapper-band 0x89a4a0/0x0x89a510: checkinteger call + sext-pusher 
      result -> 0x85bfd0 v55 ROW-3 SEXT PUSHER, ret 1). Twins differ
      ONLY in: VA, END_VA, NEXT_VA, ALIGNED_PROLOGUE, CHECKGET_DEF_ARG, METHOD_STACK_ARGS, RETURN_VALUE. NEXT frontier 0x89a570. Evidence
      section-notes/lua-v84-89a4a0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37647,7 +37654,7 @@ test("ABI v85 wrapper-band 0x89a570/0x0x89a5d0: sext-pusher + box-constructor is
      rawgetp(registry, 0xc82980) + setmetatable(-2), ret 1.
      Twins differ ONLY in: VA, END_VA, NEXT_VA, METHOD_STACK_ARGS. NEXT frontier 0x89a670.
      Evidence section-notes/lua-v85-89a570/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37788,7 +37795,7 @@ test("ABI v86 wrapper-band 0x89a670/0x89a700: checknumber float-lane + float-pus
      ret 1. Twins differ ONLY in: VA, END_VA, NEXT_VA, ALIGNED_PROLOGUE,
      CHECKGET_DEF_ARG, METHOD_STACK_ARGS, RETURN_VALUE. NEXT frontier
      0x0089a770. Evidence section-notes/lua-v86-89a670/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -37930,7 +37937,7 @@ test("ABI v87 wrapper-band 0x89a770/0x89a810: struct-return call + 24-byte box i
      method through [ud+0] with obj in ECX.
      Twins differ ONLY in: VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, RETURN_VALUE. NEXT frontier 0x89a8b0.
      Evidence section-notes/lua-v87-89a770/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38087,7 +38094,7 @@ test("ABI v88 wrapper-band 0x89a8b0/0x89aa50: multi-vector math + float-lane isl
      GATE_INVERTED_ENCODING, CHECKGET_KEY, CHECKGET_INDEX, CHECKGET_DEF_ARG,
      METHOD_STACK_ARGS, RETURN_VALUE, CHECKNUMBER_INDEX. NEXT frontier
      0x0089aae0. Evidence section-notes/lua-v88-89a8b0/NOTES.md. */
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38245,7 +38252,7 @@ test("ABI v89 wrapper-band 0x89aae0/0x89ab50: float-pusher + struct-return twins
 // 0x89ab50..0x89abe3 (pad to 0x89abf0) — struct-return call: SECOND gate on key 0xc8299b index 2 def 0, 16-byte struct arg via movups, ret 0;
 // Twins differ ONLY in: VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METHOD_STACK_ARGS, RETURN_VALUE. NEXT frontier 0x89abf0.
 // Evidence section-notes/lua-v89-89aae0/NOTES.md. 
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38381,7 +38388,7 @@ test("ABI v90 wrapper-band 0x89abf0/0x89ac90: 0x18-box + helper-box twins", () =
 // 0x89ac90..0x89ad6d (pad to 0x89ad70) — helper-box: NO type gate, frame realignment, PRE-GATE touserdata(0xfff0b9d7), struct helper 0x8b1c80 fills a local, 7-arg method through [ud+0], null result -> lua_pushnil, 8-byte box {vtable 0xb753c8, result ptr +4}, rawgetp key 0xc829dd, ret 1;
 // Twins differ ONLY in: VA, END_VA, NEXT_VA, METHOD_STACK_ARGS, NEWUSERDATA_SIZE, UD_VTABLE_VA, UD_PAYLOAD_BYTES, METATABLE_RAWGETP_KEY. NEXT frontier 0x89ad70.
 // Evidence section-notes/lua-v90-89abf0/NOTES.md.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38513,7 +38520,7 @@ test("ABI v91 wrapper-band 0x89ad70/0x89ae00: 0x18-box + helper-box twins", () =
 // 0x89ae00..0x89ae69 (pad to 0x89ae70) — float-pusher band: non-inverted gate (jne), key 0xc829da def 1, method(obj) zero stack args -> ST0 double -> f32 via fstp, helper 0x85c050, ret 1;
 // Twins differ ONLY in: VA, END_VA, NEXT_VA, CHECKGET_DEF_ARG, METHOD_STACK_ARGS, RETURN_VALUE. NEXT frontier 0x89ae70.
 // Evidence section-notes/lua-v91-89ad70/NOTES.md.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38641,7 +38648,7 @@ test("ABI v92 wrapper-band 0x89ae70/0x89aee0: boolean-getter + pushboolean twins
 // 0x89aee0..0x89af45 (pad to 0x89af50) — pushboolean tail: non-inverted gate, key 0xc829da def 1, method(obj) zero stack args -> BYTE gate on AL (`test al,al; setne cl`), lua_pushboolean(L, b) IAT 0xb183ec, ret 1;
 // Twins differ ONLY in: VA, END_VA, NEXT_VA, METHOD_STACK_ARGS, RETURN_VALUE. NEXT frontier 0x89af50.
 // Evidence section-notes/lua-v92-89ae70/NOTES.md.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38781,7 +38788,7 @@ test("ABI v93 wrapper-band 0x89af50/0x89aff0: setter + 0x18-box islands", () => 
   // box {vtable 0xb7364c, self-ptr +4, 16-byte payload +8}, rawgetp
   // key 0xc8299b, ret 1.
   // NEXT frontier 0x89b090. Evidence: PE decode cpu-dump/0089b070.txt.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -38893,7 +38900,7 @@ test("ABI v94 wrapper-band 0x89b090/0x89b140: two-gate wrap setter + vcall-boxin
   // (0xc829d7); no census row — next unit. NEXT frontier 0x89b1e0.
   // Evidence: PE decode cpu-dump/0089b090.txt + 0089b119.txt +
   // 0089b140.txt.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39033,7 +39040,7 @@ test("ABI v95 wrapper-band 0x89b1e0/0x89b280: census-gap box twin + float-lane s
   // float stack arg spilled fstp/movss; xor eax,eax; ret 0.
   // NEXT frontier 0x89b310. Evidence: PE decode cpu-dump/
   // 0089b1e0.txt + 0089b280.txt + 0089b310.txt.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39153,7 +39160,7 @@ test("ABI v96 wrapper-band 0x89b310: float-pusher getter completes census slot-1
   // own unit: unverified IAT 0xb183e8 name, wrap ctor 0x8baa50,
   // sret float-component pushes). Evidence: PE decode cpu-dump/
   // 0089b310.txt (zero-resync exact span, 39 insns).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39268,7 +39275,7 @@ test("ABI v97 wrapper-band 0x89b380: multi-vector math setter-box, full pins", (
   // Zero-resync exact span 0x1b3 bytes (131 insns). NEXT frontier
   // 0x89b540. Evidence: PE decode cpu-dump/0089b380.txt + import-
   // directory walk.
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39420,7 +39427,7 @@ test("ABI v98 wrapper-band 0x89b540/0x89b5b0: boolean setter + pushboolean gette
   // (import-directory resolved); ret 1.
   // NEXT frontier 0x89b620. Evidence: PE decode cpu-dump/0089b540.txt
   // + 0089b5b0.txt (both zero-resync exact spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39535,7 +39542,7 @@ test("ABI v99 wrapper-band 0x89b620/0x89b690: int64 setter + int64 getter (censu
   // IAT names import-directory resolved: 0xb183f4=luaL_checkinteger.
   // NEXT frontier 0x89b6f0. Evidence: PE decode cpu-dump/0089b620.txt
   // + 0089b690.txt (both zero-resync exact spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39651,7 +39658,7 @@ test("ABI v100 wrapper-band 0x89b6f0/0x89b760: i32 setter + i32 sext getter (cen
   // `mov eax,edx; cdq` closure; ret 1.
   // NEXT frontier 0x89b7c0. Evidence: PE decode cpu-dump/0089b6f0.txt
   // + 0089b760.txt (both zero-resync exact spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39768,7 +39775,7 @@ test("ABI v101 wrapper-band 0x89b7c0/0x89b850: float-lane setter + float-pusher 
   // NEXT frontier 0x89b8c0 (uncensused gap body). Evidence: PE
   // decode cpu-dump/0089b7c0.txt + 0089b850.txt (zero-resync exact
   // spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -39891,7 +39898,7 @@ test("ABI v102 wrapper-band 0x89b8c0/0x89b940: sret-box constructor (census gap)
   // stack arg; ret 0.
   // NEXT frontier 0x89b9b0. Evidence: PE decode cpu-dump/
   // 0089b8c0.txt + 0089b940.txt (both zero-resync exact spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */
@@ -40030,7 +40037,7 @@ test("ABI v103 wrapper-band 0x89b9b0/0x89ba10: i32 sext getter (slot-96 pair com
   // NEXT frontier 0x89bac0 (uncensused gap body). Evidence: PE
   // decode cpu-dump/0089b9b0.txt + 0089ba10.txt (zero-resync exact
   // spans).
-  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, 103);
+  assert.equal(LUA_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.abiVersion() | 0, 103);
   /* Span pins + chain continuity from the prior unit. */

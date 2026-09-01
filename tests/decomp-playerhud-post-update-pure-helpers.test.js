@@ -1091,6 +1091,13 @@ import {
 } from "../scripts/decomp/playerhud-post-update-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "playerhud_post_update_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "playerhud_post_update_pure_helpers.h");
 const source = join(root, "native", "decomp", "playerhud_post_update_pure_helpers.cpp");
 /* Wave-26 hardening (update-v102-hardening GAP C): 120-attempt retried
@@ -2501,7 +2508,7 @@ test("header declares PlayerHUD pure helpers ABI v30; Update-wired at ABI v40", 
   assert.match(h, /isaac_playerhud_trinket_gfx_plan/);
   assert.match(h, /isaac_playerhud_trinket_mask_id/);
   assert.match(h, /isaac_playerhud_trinket_apply_0x4b_remask/);
-  assert.equal(PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION, 44);
+  assert.equal(PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(h, /isaac_playerhud_pocket_gfx_plan/);
   assert.match(h, /isaac_playerhud_pocket_resolved_id/);
   assert.match(h, /isaac_playerhud_pocket_cache_apply_at/);
@@ -2526,7 +2533,7 @@ test("header declares PlayerHUD pure helpers ABI v30; Update-wired at ABI v40", 
   assert.match(h, /0x00694fb0/);
   assert.match(h, /0x0040bd50/);
   assert.match(h, /0x00407f10/);
-  assert.equal(PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION, 44);
+  assert.equal(PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(PLAYERHUD_HOST_VA_HAS_COLLECTIBLE, 0x007706e0);
   assert.equal(PLAYERHUD_HOST_VA_LOAD_IMAGE, 0x009588a0);
   assert.equal(PLAYERHUD_HOST_VA_SMART_PTR_CLEAR, 0x0040c7f0);
@@ -7742,7 +7749,7 @@ test("v20 Wasm ≡ JS — action-id string select (high-bit randomized)", () => 
   }
   const view = new DataView(exp.memory.buffer);
   assert.equal(exp.hostVaLog(), PLAYERHUD_HOST_VA_LOG);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
 
   let rng = (0x84d740 ^ 0x20) >>> 0;
   const next = () => {
@@ -7971,7 +7978,7 @@ test("v21 Wasm ≡ JS — 2-segment SSE intersect (high-bit randomized)", () => 
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
 
   const seedOut = (hit, x, y, wx, wy) => {
     view.setInt32(base + 0, hit, true);
@@ -8181,7 +8188,7 @@ test("v22 Wasm ≡ JS — SSO-string + zero-tail init (high-bit randomized)", ()
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84da20ObjectSize(), PLAYERHUD_84DA20_OBJECT_SIZE);
   assert.equal(exp.hud84da20SsoCapacity(), PLAYERHUD_84DA20_SSO_CAPACITY);
   assert.equal(exp.hud84da20NextVa() >>> 0, PLAYERHUD_84DA20_NEXT_VA);
@@ -8376,7 +8383,7 @@ test("v23 Wasm ≡ JS — SEH ctor prefix stores (high-bit randomized)", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84dad0ObjectSize(), PLAYERHUD_84DAD0_OBJECT_SIZE);
   assert.equal(exp.hud84dad0SsoCapacity(), PLAYERHUD_84DAD0_SSO_CAPACITY);
   assert.equal(exp.hud84dad0HostVa() >>> 0, PLAYERHUD_84DAD0_HOST_VA);
@@ -8569,7 +8576,7 @@ test("v24 Wasm ≡ JS — 4-subobject dtor host plan", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84db90CallCount(), PLAYERHUD_84DB90_CALL_COUNT);
   assert.equal(exp.hud84db90NextVa() >>> 0, PLAYERHUD_84DB90_NEXT_VA);
 
@@ -8749,7 +8756,7 @@ test("v25 Wasm ≡ JS — 7-subobject dtor host plan", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84dbc0CallCount(), PLAYERHUD_84DBC0_CALL_COUNT);
   assert.equal(exp.hud84dbc0NextVa() >>> 0, PLAYERHUD_84DBC0_NEXT_VA);
 
@@ -8948,7 +8955,7 @@ test("v26 Wasm ≡ JS — range wipe needed/count/plan", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud856840CallCount(), PLAYERHUD_856840_CALL_COUNT);
   assert.equal(exp.hud856840Stride() >>> 0, PLAYERHUD_856840_STRIDE);
   assert.equal(exp.hud856840NextVa() >>> 0, PLAYERHUD_856840_NEXT_VA);
@@ -9137,7 +9144,7 @@ test("v27 Wasm ≡ JS — GATE needed + six-call plan", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84dea0CallCount(), PLAYERHUD_84DEA0_CALL_COUNT);
   assert.equal(exp.hud84dea0HostVa() >>> 0, PLAYERHUD_84DEA0_HOST_VA);
   assert.equal(exp.hud84dea0NextVa() >>> 0, PLAYERHUD_84DEA0_NEXT_VA);
@@ -9440,7 +9447,7 @@ test("v28 Wasm ≡ JS — predicate islands + plan", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84e5b0Stride() >>> 0, PLAYERHUD_84E5B0_STRIDE);
   assert.equal(exp.hud84e5b0NextVa() >>> 0, PLAYERHUD_84E5B0_NEXT_VA);
 
@@ -9799,7 +9806,7 @@ test("v29 Wasm ≡ JS — counter islands + plan", () => {
   if (exp.memory.buffer.byteLength < base + 0x80) {
     exp.memory.grow(1);
   }
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud84e820Stride() >>> 0, PLAYERHUD_84E820_STRIDE);
   assert.equal(exp.hud84e820NextVa() >>> 0, PLAYERHUD_84E820_NEXT_VA);
 
@@ -10115,7 +10122,7 @@ test("v30 Wasm ≡ JS — copy-ctor plan + tail copy", () => {
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hud8568a0CallCount(), PLAYERHUD_8568A0_CALL_COUNT);
   assert.equal(exp.hud8568a0TailBeginOff() >>> 0, PLAYERHUD_8568A0_TAIL_BEGIN_OFF);
   assert.equal(exp.hud8568a0TailDwordCount() >>> 0, PLAYERHUD_8568A0_TAIL_DWORD_COUNT);
@@ -10697,7 +10704,7 @@ test("v33 per-player stats-pack updater 0x84cc40 fixed edges (VA 0x0084cc40..0x0
 
 test("v33 Wasm ≡ JS — 0x84cc40 gate/plan laws (randomized wide values)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va84cc40() >>> 0, PLAYERHUD_84CC40_VA);
   assert.equal(exp.retVa84cc40() >>> 0, PLAYERHUD_84CC40_RET_VA);
   assert.equal(exp.nextVa84cc40() >>> 0, PLAYERHUD_84CC40_NEXT_VA);
@@ -10884,7 +10891,7 @@ test("v34 leaf gate 0x856f50 fixed edges (VA 0x00856f50..0x00856f61)", () => {
 
 test("v34 Wasm ≡ JS — 0x856f50 leaf gate (randomized wide values)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va856f50() >>> 0, PLAYERHUD_856F50_VA);
   assert.equal(exp.retVa856f50() >>> 0, PLAYERHUD_856F50_RET_VA);
   assert.equal(exp.nextVa856f50() >>> 0, PLAYERHUD_856F50_NEXT_VA);
@@ -11096,7 +11103,7 @@ test("v35 FUN_0085af30 time-pack leaf fixed edges (VA 0x0085af30..0x0085afaf)", 
 
 test("v35 Wasm ≡ JS — 0x85af30 time-pack leaf (randomized wide values)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va85af30() >>> 0, PLAYERHUD_85AF30_VA);
   assert.equal(exp.retVa85af30() >>> 0, PLAYERHUD_85AF30_RET_VA);
   assert.equal(exp.nextVa85af30() >>> 0, PLAYERHUD_85AF30_NEXT_VA);
@@ -11246,7 +11253,7 @@ test("v35 mutation checks: rem100 store, flag byte, div10000 shift", () => {
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   const view = new DataView(exp.memory.buffer);
   if (exp.memory.buffer.byteLength < base + 0x38) exp.memory.grow(1);
   for (let i = 0; i < PLAYERHUD_85AF30_PACK_DWORD_COUNT; i += 1) {
@@ -11372,7 +11379,7 @@ test("v36 FUN_00858870 ordinal-suffix leaf fixed edges (VA 0x00858870..0x008588e
 
 test("v36 Wasm ≡ JS — 0x858870 ordinal-suffix leaf (randomized wide values)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va858870() >>> 0, PLAYERHUD_858870_VA);
   assert.equal(exp.retVa858870() >>> 0, PLAYERHUD_858870_RET_VA);
   assert.equal(exp.nextVa858870() >>> 0, PLAYERHUD_858870_NEXT_VA);
@@ -11483,7 +11490,7 @@ test("v36 mutation checks: 11/12/13 guard, st/nd swap, next-VA drift", () => {
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.suffixVa858870(1) >>> 0, PLAYERHUD_858870_ST_VA);
   assert.equal(exp.suffixVa858870(11) >>> 0, PLAYERHUD_858870_TH_VA);
   assert.equal(exp.nextVa858870() >>> 0, PLAYERHUD_858870_NEXT_VA);
@@ -11580,7 +11587,7 @@ test("v37 Wasm ≡ JS — 0x857400 type->entry getter (randomized wide values)",
     exp.memory.grow(1);
   }
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va857400() >>> 0, PLAYERHUD_857400_VA);
   assert.equal(exp.retVa857400() >>> 0, PLAYERHUD_857400_RET_VA);
   assert.equal(exp.nextVa857400() >>> 0, PLAYERHUD_857400_NEXT_VA);
@@ -11713,7 +11720,7 @@ test("v37 mutation checks: byte-gate, signed gate, next-VA drift", () => {
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.entry857400(2, ...s) >>> 0, s[2]);
   assert.equal(exp.entry857400(0x101, ...s) >>> 0, 0);
   assert.equal(exp.entry857400(0x80000000, ...s) >>> 0, 0);
@@ -11812,7 +11819,7 @@ test("v38 FUN_0085e360 float getter fixed edges (VA 0x0085e360..0x0085e366)", ()
 
 test("v38 Wasm ≡ JS — 0x85e360 float getter (randomized wide values)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va85e360() >>> 0, PLAYERHUD_85E360_VA);
   assert.equal(exp.retVa85e360() >>> 0, PLAYERHUD_85E360_RET_VA);
   assert.equal(exp.nextVa85e360() >>> 0, PLAYERHUD_85E360_NEXT_VA);
@@ -11965,7 +11972,7 @@ test("v38 mutation checks: field offset, numeric conversion, endian swap, next-V
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.fieldOff85e360() >>> 0, PLAYERHUD_85E360_FIELD_OFF);
   assert.equal(exp.nextVa85e360() >>> 0, PLAYERHUD_85E360_NEXT_VA);
   assert.equal(f32Bits(exp.float85e360(0x3f800000)), 0x3f800000);
@@ -12128,7 +12135,7 @@ test("v39 9bfc00 cluster fixed edges (VA 0x009bfc00..0x009bfd38)", () => {
 
 test("v39 Wasm ≡ JS — 9bfc00 cluster (randomized wide values, <=500 draws)", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va9bfc00() >>> 0, PLAYERHUD_9BFC00_VA);
   assert.equal(exp.retVa9bfcd0() >>> 0, PLAYERHUD_9BFCD0_RET_VA);
   assert.equal(exp.nextVa9bfd20() >>> 0, PLAYERHUD_9BFD20_NEXT_VA);
@@ -12334,7 +12341,7 @@ test("v39 mutation checks: op order, gate polarity, constant drift, gate omissio
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.law9bfc00(0x3f800000) >>> 0, playerHud9bfc00Law(0x3f800000));
   assert.equal(exp.law9bfc80(0xc0400000, 0x3f800000) >>> 0,
     PLAYERHUD_9BFC_10000F_BITS);
@@ -12771,7 +12778,7 @@ test("v41 mutation checks: K2 drop, component swap, direction flip, mul-add swap
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
   if (exp.memory.buffer.byteLength < 0x3000) exp.memory.grow(1);
   const view = new DataView(exp.memory.buffer);
   exp.law9c06a0(A, B, C, D, G1, G2, 0x2400);
@@ -13048,7 +13055,7 @@ test("v42 mutation checks: fail drift, probe kill, stride drift, pin drift x2", 
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
 });
 
 /* ---------- v43: 0x009c0870 merged slot-search/clear (NOTES
@@ -13356,7 +13363,7 @@ test("v43 mutation checks: lane copy, advance compose, ordinal drift, empty skip
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
 });
 
 /* ---------- v44: 0x009c2370 probe-threshold gate (NOTES ADDENDUM
@@ -13516,5 +13523,5 @@ test("v44 mutation checks: threshold drift, polarity flip, next-VA drift", () =>
   const after = sha(readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
   assert.equal(after, before, "mutation restore must be byte-identical");
   const exp = loadExports();
-  assert.equal(exp.abi(), 44);
+  assert.equal(exp.abi(), PLAYERHUD_POST_UPDATE_PURE_ABI_VERSION);
 });

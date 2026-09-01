@@ -112,14 +112,44 @@ if (va != null && Number.isFinite(va)) {
   }
 }
 
+// -- live-bridge delivery of this boundary's runtime lanes -----------------
+// A narrow that lands in the module is DORMANT in the shipped tick until the
+// bridge captures its *Ready lane (measured: idx 3's six 92f1c0 receiver lanes
+// had 0 delivered at ABI 101 — the whole try_pure ladder was inert live).
+// Surface that before the unit is planned, not after it lands.
+if (va != null) {
+  const suffix = va.toString(16).padStart(8, "0").slice(-6);
+  const lanes = (slice.runtimeInputs ?? [])
+    .filter((r) => r.name.toLowerCase().includes(suffix)).map((r) => r.name);
+  if (lanes.length) {
+    const live = ["web/js/native-update-bridge.js", "scripts/decomp/frame-input-bridge.mjs"]
+      .map((p) => join(ROOT, p)).filter(existsSync)
+      .map((p) => readFileSync(p, "utf8")).join("\n");
+    const delivered = lanes.filter((n) => live.includes(n));
+    out.liveBridge = {
+      lanes: lanes.length,
+      delivered: delivered.length,
+      undelivered: lanes.filter((n) => !delivered.includes(n)).slice(0, 8),
+    };
+    if (delivered.length === 0) {
+      out.warnings.push(
+        `live bridge delivers 0 of ${lanes.length} runtime lanes named for this boundary — ` +
+        `in-module narrows here are DORMANT in the shipped tick until the bridge captures ` +
+        `${lanes.find((n) => /Ready$/.test(n)) ?? lanes[0]}`);
+    }
+  }
+}
+
 // -- next commands --------------------------------------------------------
 out.next = [
   va != null
     ? `python scripts/decomp/tools/pequery.py batch "body 0x${va.toString(16)} ;; callers 0x${va.toString(16)}"`
     : "node scripts/decomp/status.mjs   # pick an OPEN boundary first",
   va != null ? `node scripts/decomp/identify-zhl-address.mjs 0x${va.toString(16)}` : null,
+  "python scripts/decomp/tools/pequery.py fieldrefs 0x<fieldDisp> 0x<funcVA>   # exact [reg+disp] field census (writers/readers) inside a function",
   "docs/unit-runbook.md — the order of operations",
-  "node scripts/decomp/verify-unit.mjs — the completion gate",
+  "node scripts/decomp/mutate.mjs --file <src> --from '<text>' --to '<mutant>' -- <command>   # crash-safe mutation check",
+  "node scripts/decomp/verify-unit.mjs — the completion gate (preflight -> build -> parallel suites+differential)",
 ].filter(Boolean);
 
 if (wantJson) {
@@ -136,6 +166,11 @@ if (wantJson) {
   if (out.func) {
     const f = out.func;
     console.log(`func: ${f.start}..${f.end}  insns ${f.insns}  directCallers ${f.directCallers}  callSites ${f.callSites} (${f.distinctCallees} distinct)  indirectEvidence ${f.indirectEvidence}`);
+  }
+  if (out.liveBridge) {
+    const l = out.liveBridge;
+    console.log(`live bridge: delivers ${l.delivered}/${l.lanes} runtime lanes named for this boundary` +
+      (l.undelivered.length ? `  (undelivered: ${l.undelivered.join(", ")}${l.lanes - l.delivered > l.undelivered.length ? ", …" : ""})` : ""));
   }
   for (const w of out.warnings) console.log(`! ${w}`);
   console.log("next:");

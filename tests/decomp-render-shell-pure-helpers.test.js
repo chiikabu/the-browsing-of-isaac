@@ -2933,6 +2933,13 @@ import {
 } from "../scripts/decomp/render-shell-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "render_shell_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "render_shell_pure_helpers.h");
 const source = join(root, "native", "decomp", "render_shell_pure_helpers.cpp");
 const outDir = join(root, "output", "decomp", "render-shell-pure");
@@ -4944,7 +4951,7 @@ test("render shell pure helpers: header + source exist", () => {
 });
 
 test("render shell pure helpers: ABI version oracle matches constant", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_STAGE_SPECIAL_39, 0x39);
   assert.equal(RENDER_SHELL_OVERLAY_ROOM_TYPE_59, 0x59);
   assert.equal(RENDER_SHELL_OVERLAY_GAME_MODE_5, 5);
@@ -5149,7 +5156,7 @@ test("render shell pure helpers: ABI version oracle matches constant", () => {
 test("render shell pure helpers: build zero-import Wasm", () => {
   exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("G0 main_body_needed fixed cases", () => {
@@ -8450,7 +8457,7 @@ test("81f8b0 GetLRoomAreaDesc pure islands (ABI v8)", () => {
 });
 
 test("81f8b0 live-row sparsify plan/read/resume (ABI v30)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_81F8B0_PLAN_FALLBACK, 0);
   assert.equal(RENDER_SHELL_81F8B0_PLAN_PURE, 1);
@@ -8611,7 +8618,7 @@ test("81f8b0 live-row sparsify plan/read/resume (ABI v30)", () => {
 });
 
 test("a14050 whole-body chain plan/resume + full-body differential (ABI v31)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A14050_CHAIN_PLAN_FAIL, 0);
   assert.equal(RENDER_SHELL_A14050_CHAIN_PLAN_FOUND, 1);
@@ -10397,7 +10404,7 @@ test("deterministic random differential (500)", () => {
 });
 
 test("GetSourceQuad 0x4098a0 pure body + dest-quad 0x409cb0 CF (ABI v22)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_SOURCE_QUAD_SIZE, 0x24);
   assert.equal(RENDER_SHELL_SOURCE_QUAD_SPACE_UV, 1);
@@ -10862,7 +10869,7 @@ test("GetSourceQuad 0x4098a0 pure body + dest-quad 0x409cb0 CF (ABI v22)", () =>
 });
 
 test("color-ring 0x40c6f0 pure body (ABI v23)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_40C6F0_PLAN_PURE, 0);
   assert.equal(renderShell40c6f0Plan(), RENDER_SHELL_40C6F0_PLAN_PURE);
@@ -10993,7 +11000,7 @@ test("color-ring 0x40c6f0 pure body (ABI v23)", () => {
 });
 
 test("dest-quad nested a10d00/a10950/a10760 pure bodies (ABI v24)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_DEST_QUAD_SIZE, 0x20);
   assert.equal(RENDER_SHELL_A10D00_OBJ_SIZE, 0x70);
@@ -11236,7 +11243,7 @@ test("dest-quad nested a10d00/a10950/a10760 pure bodies (ABI v24)", () => {
 });
 
 test("409cb0 whole-body dest-quad pure compute (ABI v25)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_409CB0_PLAN_PURE, 0);
   assert.equal(RENDER_SHELL_409CB0_COLOR_ARG, -1);
@@ -11682,7 +11689,7 @@ test("409cb0 whole-body dest-quad pure compute (ABI v25)", () => {
 });
 
 test("40c550 chain + 408590 recapture + af0917 floor (ABI v26)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_40C550_SRC_VT_ADDREF_OFF, 0x04);
   assert.equal(RENDER_SHELL_40C550_DEST_VT_RELEASE_OFF, 0x0c);
@@ -12021,7 +12028,7 @@ test("40c550 chain + 408590 recapture + af0917 floor (ABI v26)", () => {
 });
 
 test("74f690 post-call stage + 740bc0 once-init/walk/recursion (ABI v27)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_74F690_STAGE_RELOAD_VA, 0x0074f6f0);
   assert.equal(exp.isaac_render_shell_74f690_stage_reload_va() >>> 0, 0x0074f6f0);
@@ -12346,7 +12353,7 @@ test("74f690 post-call stage + 740bc0 once-init/walk/recursion (ABI v27)", () =>
 });
 
 test("RoomDescriptor::constructor 0x006ef590 layout (ABI v28)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_6EF590_VA, 0x006ef590);
   assert.equal(exp.isaac_render_shell_6ef590_host_va() >>> 0, 0x006ef590);
@@ -12673,7 +12680,7 @@ test("RoomDescriptor::constructor 0x006ef590 layout (ABI v28)", () => {
 });
 
 test("entity loop re-derived bound + array base (ABI v29 stale-state fix)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_ENTITY_COUNT_OFF, 0x1264);
   assert.equal(RENDER_SHELL_ENTITY_ARRAY_OFF, 0x125c);
@@ -13218,7 +13225,7 @@ function a140c0PlanRef(shaderId, isnil, key, bound, head, value, byte4,
 }
 
 test("a140c0 ring-matrix bind pure narrowing (ABI v34)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A140C0_PLAN_FALSE, 0);
   assert.equal(RENDER_SHELL_A140C0_PLAN_GROW, 1);
@@ -13513,7 +13520,7 @@ function a14200PopRef(cursor, writeIdx, peeked) {
 }
 
 test("a14200 shader-stack pop + 684fc0 peek (ABI v35)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A14200_PLAN_EMPTY_LOG, 0);
   assert.equal(RENDER_SHELL_A14200_PLAN_PURE, 1);
@@ -13699,7 +13706,7 @@ function a14250ResumeRef(pairNode) {
 }
 
 test("a14250 thin +0x14 wrap over a143f0 (ABI v36)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A14250_PLAN_HOST, 0);
   assert.equal(RENDER_SHELL_HOST_A14250_VA, 0x00a14250);
@@ -13776,7 +13783,7 @@ function a14330ValuePtrRef(nodePtr) {
 }
 
 test("a14330 map operator[] residual (ABI v37)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A14330_PLAN_FOUND, 0);
   assert.equal(RENDER_SHELL_A14330_PLAN_THROW, 1);
@@ -13963,7 +13970,7 @@ function a143f0PlanRef(nodeIsnil, searchKey, nodeKey, mapSize) {
 }
 
 test("a143f0 map find-or-insert residual (ABI v38)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A143F0_PLAN_FOUND, 0);
   assert.equal(RENDER_SHELL_A143F0_PLAN_THROW, 1);
@@ -14164,7 +14171,7 @@ function a145e0CallRef(index) {
 }
 
 test("a145e0 scalar deleting dtor plan (ABI v39)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A145E0_HOST_VA, 0x00a145e0);
   assert.equal(RENDER_SHELL_A145E0_HOST_VA, RENDER_SHELL_A143F0_NEXT_VA);
@@ -14289,7 +14296,7 @@ function a14620AllocSizeRef(count) {
 }
 
 test("a14620 string/pair-table object init plan (ABI v40)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A14620_HOST_VA, 0x00a14620);
   assert.equal(RENDER_SHELL_A14620_END_VA, 0x00a147cb);
   assert.equal(RENDER_SHELL_A14620_NEXT_VA, 0x00a147e0);
@@ -14508,7 +14515,7 @@ function a147e0RefLocalFlagOff(index) {
 }
 
 test("a147e0 vertex/pixel shader string wrapper plan (ABI v41)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A147E0_HOST_VA, 0x00a147e0);
   assert.equal(RENDER_SHELL_A147E0_END_VA, 0x00a1498f);
   assert.equal(RENDER_SHELL_A147E0_NEXT_VA, 0x00a149a0);
@@ -14689,7 +14696,7 @@ function a149a0InnerCountRef(beginPtr, endPtr) {
 }
 
 test("a149a0 a14620-object virtual dtor body plan (ABI v42)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A149A0_HOST_VA, 0x00a149a0);
   assert.equal(RENDER_SHELL_A149A0_END_VA, 0x00a14be4);
   assert.equal(RENDER_SHELL_A149A0_NEXT_VA, 0x00a14bf0);
@@ -14921,7 +14928,7 @@ function a14c00MsgRef(type) {
 }
 
 test("a14c00 render-shell item add/update method plan (ABI v43)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A14C00_HOST_VA, 0x00a14c00);
   assert.equal(RENDER_SHELL_A14C00_END_VA, 0x00a14f0f);
   assert.equal(RENDER_SHELL_A14C00_NEXT_VA, 0x00a14f90);
@@ -15191,7 +15198,7 @@ function a14f90OffRef(index) {
 }
 
 test("a14f90 render-shell class method plan (ABI v44)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A14F90_HOST_VA, 0x00a14f90);
   assert.equal(RENDER_SHELL_A14F90_END_VA, 0x00a15037);
   assert.equal(RENDER_SHELL_A14F90_NEXT_VA, 0x00a15040);
@@ -15496,7 +15503,7 @@ function a150d0RetainEndRef(begin) {
 }
 
 test("a150d0 render-shell class method plan (ABI v45)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A150D0_HOST_VA, 0x00a150d0);
   assert.equal(RENDER_SHELL_A150D0_END_VA, 0x00a15296);
   assert.equal(RENDER_SHELL_A150D0_NEXT_VA, 0x00a152a0);
@@ -16108,7 +16115,7 @@ function a152a0AppendRef(end) {
 }
 
 test("a152a0 vec18 push element helper plan (ABI v46)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A152A0_HOST_VA, 0x00a152a0);
   assert.equal(RENDER_SHELL_A152A0_END_VA, 0x00a15301);
   assert.equal(RENDER_SHELL_A152A0_NEXT_VA, 0x00a153a0);
@@ -16529,7 +16536,7 @@ function a153a0FreeGateRef(bytes) {
 }
 
 test("a153a0 vec18 grow IAT growth-factor laws plan (ABI v47)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A153A0_HOST_VA, 0x00a153a0);
   assert.equal(RENDER_SHELL_A153A0_END_VA, 0x00a15522);
   assert.equal(RENDER_SHELL_A153A0_NEXT_VA, 0x00a15550);
@@ -17169,7 +17176,7 @@ function a15550ClampRef(bits) {
 }
 
 test("a15550 float clamp01 plan (ABI v48)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A15550_HOST_VA, 0x00a15550);
   assert.equal(RENDER_SHELL_A15550_END_VA, 0x00a15560);
   assert.equal(RENDER_SHELL_A15550_NEXT_VA, 0x00a15570);
@@ -17430,7 +17437,7 @@ function a15590NextPow2Ref(n) {
 }
 
 test("a15590 next-pow2 plan (ABI v49)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A15590_HOST_VA, 0x00a15590);
   assert.equal(RENDER_SHELL_A15590_END_VA, 0x00a155b0);
   assert.equal(RENDER_SHELL_A15590_NEXT_VA, 0x00a155c0);
@@ -17713,7 +17720,7 @@ function a155c0ClampedLerpRef(y0Bits, y1Bits, tBits, clampFlag) {
 }
 
 test("a155c0 clamped lerp plan (ABI v50)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A155C0_HOST_VA, 0x00a155c0);
   assert.equal(RENDER_SHELL_A155C0_END_VA, 0x00a155e0);
   assert.equal(RENDER_SHELL_A155C0_NEXT_VA, 0x00a155f0);
@@ -18142,7 +18149,7 @@ function a155f0InverseLerpRef(y0Bits, y1Bits, tBits) {
 }
 
 test("a155f0 inverse lerp plan (ABI v51)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A155F0_HOST_VA, 0x00a155f0);
   assert.equal(RENDER_SHELL_A155F0_END_VA, 0x00a1563e);
   assert.equal(RENDER_SHELL_A155F0_NEXT_VA, 0x00a15640);
@@ -18549,7 +18556,7 @@ function a15640ApplyLerpRef(baseBits, targetBits, fBits) {
 }
 
 test("a15640 nested lerp plan (ABI v52)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A15640_HOST_VA, 0x00a15640);
   assert.equal(RENDER_SHELL_A15640_END_VA, 0x00a156c4);
   assert.equal(RENDER_SHELL_A15640_NEXT_VA, 0x00a156d0);
@@ -19068,7 +19075,7 @@ function a156e0FlagsClearRef(flags) {
 }
 
 test("a156e0 CS-owning scalar deleting dtor plan (ABI v53)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A156E0_HOST_VA, 0x00a156e0);
   assert.equal(RENDER_SHELL_A156E0_END_VA, 0x00a1572d);
@@ -19403,7 +19410,7 @@ function a15770FlagsSetBit0Ref(flags) {
 }
 
 test("a15770 vftable-slot-1 lazy CS-init getter plan (ABI v54)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A15770_HOST_VA, 0x00a15770);
   assert.equal(RENDER_SHELL_A15770_END_VA, 0x00a157b7);
@@ -19735,7 +19742,7 @@ function a159a0ReportArgRef(index) {
 test("a159a0 vftable-slot-4 (LAST) lazy-leave / CS teardown arm plan (v25l)", () => {
   /* Wave-16: ABI stays 54 — the coordinator merges the per-family ABI
      bump at the end; this unit adds only banner v25l exports. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A159A0_HOST_VA, 0x00a159a0);
   assert.equal(RENDER_SHELL_A159A0_END_VA, 0x00a159c7);
@@ -20040,7 +20047,7 @@ function a157c0FlagsClearBit0Ref(fl) {
 }
 
 test("a157c0 vftable-slot-2 destroy arm plan (v25j)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A157C0_HOST_VA, 0x00a157c0);
   assert.equal(RENDER_SHELL_A157C0_END_VA, 0x00a157ea);
@@ -20403,7 +20410,7 @@ function a157f0DeadlineExceededRef(base_hi, base_lo, now_hi, now_lo, arg) {
 }
 
 test("a157f0 vftable-slot-3 CS acquire plan (v25k)", () => {
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   assert.equal(RENDER_SHELL_A157F0_HOST_VA, 0x00a157f0);
   assert.equal(RENDER_SHELL_A157F0_END_VA, 0x00a15996);
@@ -20911,7 +20918,7 @@ test("a15570 is-power-of-two gate plan (ABI v56)", () => {
   /* v56: the v48 record misread 0xa15570..0xa15580 as a "bare ret
      stub"; it is a real body — test ecx,ecx / je / lea eax,[ecx-1] /
      test ecx,eax / jne / mov al,1 / ret / xor al,al / ret. PURE. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A15570_HOST_VA, 0x00a15570);
   assert.equal(RENDER_SHELL_A15570_END_VA, 0x00a15580);
   assert.equal(RENDER_SHELL_A15570_NEXT_VA, 0x00a15590);
@@ -21112,7 +21119,7 @@ test("a13fa0 shader-object factory plan (ABI v57)", () => {
      hash + HOST-MARKED a14330 find-or-insert on map 0xc379bc), and it
      had NO written census anywhere. 6 direct callers (registry-loader
      band), 0 address-taken. NARROWED: pure scalar laws only. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A13FA0_HOST_VA, 0x00a13fa0);
   assert.equal(RENDER_SHELL_A13FA0_END_VA, 0x00a14043);
   assert.equal(RENDER_SHELL_A13FA0_NEXT_VA, 0x00a14050);
@@ -21432,7 +21439,7 @@ test("a180a0 SEH loader plan (ABI v58)", () => {
      via 0xa0f550, [0xc379b4]/[0xc37984]|=1, this+4|=1, hooks
      0xc7163c/0xc71644 = 0xa12240. E8 callers 0, address-taken 1.
      Only gate: FULL-dword alloc; no byte gates in this body. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A180A0_HOST_VA, 0xa180a0);
   assert.equal(RENDER_SHELL_A180A0_END_VA, 0xa18229);
   assert.equal(RENDER_SHELL_A180A0_NEXT_VA, 0xa18230);
@@ -21625,7 +21632,7 @@ test("a18e10 ctor chain plan (ABI v58)", () => {
      over slots 0xf0/0xe8/0xe0/0xd8, tail jmp 0xa12f20 (same tail as
      the a180a0 thunk). 1 direct caller 0xa18dc6, 0 address-taken.
      Pure scalars only (host: a1a500/aef15c). */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A18E10_HOST_VA, 0xa18e10);
   assert.equal(RENDER_SHELL_A18E10_END_VA, 0xa18e8a);
   assert.equal(RENDER_SHELL_A18E10_NEXT_VA, 0xa18e90);
@@ -21713,7 +21720,7 @@ test("a18e90 SEH loader + a18f7d tail plan (ABI v58)", () => {
      1 direct caller 0xa71284, address-taken 1 (vtable slot).
      Gates: flag/win/tail are BYTE (uint32_t + & 0xff); alloc is
      FULL-dword. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A18E90_HOST_VA, 0xa18e90);
   assert.equal(RENDER_SHELL_A18E90_END_VA, 0xa1912c);
   assert.equal(RENDER_SHELL_A18E90_NEXT_VA, 0xa19130);
@@ -22045,7 +22052,7 @@ test("a172e0 registry caller plan (ABI v59)", () => {
      release_gate (BYTE cl&4; dead path for cl in {5,6}),
      append_full (FULL pos==cap), release2/FULL, field470/FULL.
      Byte gates take uint32_t and mask & 0xff; NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A172E0_HOST_VA, 0xa172e0);
   assert.equal(RENDER_SHELL_A172E0_END_VA, 0xa17621);
   assert.equal(RENDER_SHELL_A172E0_NEXT_VA, 0xa17630);
@@ -22700,7 +22707,7 @@ test("a17860 registry release probe plan (ABI v60)", () => {
      found_gate — FULL dword (test eax,eax), both test sites on the
      same value; NO byte gates in this body, so the byte-gate
      &0xff discipline is vacuous; NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A17860_HOST_VA, 0xa17860);
   assert.equal(RENDER_SHELL_A17860_END_VA, 0xa178c1);
   assert.equal(RENDER_SHELL_A17860_NEXT_VA, 0xa178d0);
@@ -22849,7 +22856,7 @@ test("v61 ColorMod band plan (ABI v61)", () => {
      0x4071f0 guarded 0x2c copy (175c), getters 0x4073c0 (60c) /
      0x4073b0 (38c) / 0x4074b0 (34c) + 10 smaller pure helpers.
      Byte gates take uint32_t and mask & 0xff; NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A407170_HOST_VA, 0x407170);
   assert.equal(RENDER_SHELL_A407170_END_VA, 0x4071bf);
   assert.equal(RENDER_SHELL_A407170_NEXT_VA, 0x4071c0);
@@ -23293,7 +23300,7 @@ test("v62 Color RO/GO/BO fld getter trio plan (ABI v62)", () => {
      precedent). Byte-gate discipline: params uint32_t, f32 reads via
      f32_load; NO uint8_t. NEXT chain 4072b0 -> 4072c0 -> 4072d0 ->
      4072e0 (v21 HOST blend). */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A4072B0_HOST_VA, 0x4072b0);
   assert.equal(RENDER_SHELL_A4072B0_END_VA, 0x4072b4);
   assert.equal(RENDER_SHELL_A4072B0_NEXT_VA, 0x4072c0);
@@ -23590,7 +23597,7 @@ test("v63 A18230 band-start pure body plan (ABI v63)", () => {
      VA_RT_A19180 bodies are LEASE rows, NOT landed here). NEXT
      0xa182c0 (vtable slot 18, OPEN). Byte-gate discipline: uint32
      params, NO uint8_t (the only gate is a FULL-dword cmp). */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A18230_HOST_VA, 0xa18230);
   assert.equal(RENDER_SHELL_A18230_END_VA, 0xa182b5);
   assert.equal(RENDER_SHELL_A18230_NEXT_VA, 0xa182c0);
@@ -23835,7 +23842,7 @@ test("v64 A182C0 vtable-slot method plan (ABI v64)", () => {
      0xa18300 = game_render_slice VA_RT_A18300 LEASE (stays typed-
      host). Byte-gate discipline: uint32 param masked & 0xffu — NO
      uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A182C0_HOST_VA, 0xa182c0);
   assert.equal(RENDER_SHELL_A182C0_END_VA, 0xa182fb);
   assert.equal(RENDER_SHELL_A182C0_NEXT_VA, 0xa18300);
@@ -24100,7 +24107,7 @@ test("v65 A18460 vtable-slot method plan (ABI v65)", () => {
      leaves — OPEN, not this unit). Byte-gate discipline: uint32
      params, full-dword guards (PE has no byte test in this body) —
      NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A18460_HOST_VA, 0xa18460);
   assert.equal(RENDER_SHELL_A18460_END_VA, 0xa184d5);
   assert.equal(RENDER_SHELL_A18460_NEXT_VA, 0xa184e0);
@@ -24401,7 +24408,7 @@ test("v66 A18530 float body + A19340/A193C0 stubs plan (ABI v66)", () => {
      0x3c0) / 0xa193c0 (slot 13, imm 0x21c). HOST row pins close
      a18750/a18a20/a19530/a19600/a196b0 (v64 HOST-3 shape).
      Byte-gate discipline: uint32 params, &0xffu masks, NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A18530_HOST_VA, 0xa18530);
   assert.equal(RENDER_SHELL_A18530_END_VA, 0xa186e6);
   assert.equal(RENDER_SHELL_A18530_NEXT_VA, 0xa186f0);
@@ -24907,7 +24914,7 @@ test("v67 A19BC0 trunc/sel + A18DC0/A18DF0 dtor rows plan (ABI v67)", () => {
      selectors + selector-0..4 arm table, receiver = flag-family
      vtable slot 25, not an ANM2). Byte-gate discipline: uint32
      params, &0xffu masks, NO uint8_t. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_A19BC0_HOST_VA, 0xa19bc0);
   assert.equal(RENDER_SHELL_A19BC0_END_VA, 0xa19bef);
   assert.equal(RENDER_SHELL_A19BC0_NEXT_VA, 0xa19bf0);
@@ -25292,7 +25299,7 @@ test("v68 A19BF0 host-row census plan (ABI v67)", () => {
      0xa1a187; identify-zhl exactMatches []; seam pin carried:
      0xa188f0 ANM2::ReplaceSpritesheet ZHL prolog match remains
      REFUTED (v67, name kept). */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_HOST_A19BF0_VA, 0xa19bf0);
 
   const exp = loadExports();
@@ -25445,7 +25452,7 @@ test("v69 A19CA0/A19D40 host-row census plan + a1xxxx band close (ABI 68)", () =
      0xa1a1b1 (+0x270) / 0xa1a26b (+0x280); identify-zhl [] both.
      Band 0xa18230..0xa1a000 fully closed (0xa1a000 interior to the
      a19df0 body 0xa19df0..0xa1a2dc). */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(RENDER_SHELL_HOST_A19CA0_VA, 0xa19ca0);
   assert.equal(RENDER_SHELL_HOST_A19D40_VA, 0xa19d40);
   assert.equal(RENDER_SHELL_A19CA0_END_VA, 0xa19d3c);
@@ -25629,7 +25636,7 @@ test("v69 FontSettings band a1a160..a1a600 pure rows + host pins (ABI 69)", () =
      a1a6f0 dtor, a1a730 SEH host) — OPEN, not this unit.
      Byte-gate discipline: uint32 params; these bodies have NO PE byte
      tests — full-dword guards only; word accessors mask 0xffff. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   /* VA/end/next chain pins (PE truth; int3 pads 0xa1a57a-7f/0xa1a5cc-
@@ -26101,7 +26108,7 @@ test("v70 FontSettings trio a1a600/a1a620/a1a630 + host rows close v69 OPEN (ABI
      3 cold jmp tails), a1a730 SEH giant (17 E8 callers). Registration
      identity via the lua FontRenderSettings install run: pushes at
      0x866e31/0x866e46/0x866e85 + wrapper slot-store @0x89faf5. */
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version(), 74);
   /* VA/end/next chain pins (int3 pads 0xa1a616-1f / 0xa1a628-2f /
@@ -26393,7 +26400,7 @@ test("v70 FontSettings mutation round-trips (ABI 70)", () => {
 test("v71 sort-cluster band census + med3/heap laws close a1c480 handoff (ABI 71)", () => {
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version() >>> 0, 74);
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   /* Pin laws: wasm == model on every accessor. */
   const pairs = [
@@ -26813,7 +26820,7 @@ test("v71 sort-cluster mutation round-trips (ABI 71)", async () => {
 test("v72 a1d600 double-zero law + a1d610 SEH ctor HOST pin (ABI 72)", () => {
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version() >>> 0, 74);
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   const pairs = [
     ["isaac_render_shell_a1d600_host_va", RENDER_SHELL_A1D600_HOST_VA],
@@ -27086,7 +27093,7 @@ function a1dfd0F32Bits(x) {
 test("v73 a1dfd0 float-gate law + HOST pin (ABI 73)", () => {
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version() >>> 0, 74);
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   const pairs = [
     ["isaac_render_shell_host_a1dfd0_va", RENDER_SHELL_HOST_A1DFD0_VA],
@@ -27389,7 +27396,7 @@ import {
 test("v74 a1e490 two-dword setter law (ABI 74)", () => {
   const exp = loadExports();
   assert.equal(exp.isaac_render_shell_pure_helpers_abi_version() >>> 0, 74);
-  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, 74);
+  assert.equal(RENDER_SHELL_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 
   const pairs = [
     ["isaac_render_shell_a1e490_host_va", RENDER_SHELL_A1E490_HOST_VA],

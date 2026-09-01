@@ -2308,6 +2308,13 @@ import {
 } from "../scripts/decomp/room-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "room_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "room_pure_helpers.h");
 const source = join(root, "native", "decomp", "room_pure_helpers.cpp");
 /* Windows transient locks (OneDrive/AV) intermittently fail the source
@@ -3572,7 +3579,7 @@ function readF32(view, offset) {
 }
 
 test("room pure helper JS oracle matches recovered camera/FX and clear-delay control flow", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const cam = stepRoomCameraFxLerp({
     counter70d8: 0,
     limit70dc: 2,
@@ -8168,7 +8175,7 @@ test("native/Wasm room pure helpers differential-match the independent JS oracle
 });
 
 test("room pure helpers ABI v35 B9B11 freestanding pure CF islands match JS oracle", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_b9b11_residual_plan/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_b9b11_b10_fatal_needs_host/);
@@ -8427,7 +8434,7 @@ test("room pure helpers ABI v35 B9B11 freestanding pure CF islands match JS orac
 });
 
 test("room pure helpers ABI v37 TailMid curse-suite freestanding pure islands match JS oracle", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_tailmid_needs_curse_host/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_tailmid_residual_plan/);
@@ -8913,7 +8920,7 @@ test("room pure helpers ABI v37 TailMid curse-suite freestanding pure islands ma
 
 
 test("room pure B3B7 freestanding pure CF oracle (helpers ABI v37)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B3_COLLECTIBLE_ID, 0x28d);
   assert.equal(ROOM_B3_CHALLENGE_ID, 0x2a5);
   assert.equal(ROOM_B3_TE_VARIANT, 0x40);
@@ -9252,7 +9259,7 @@ test("room pure B3B7 C++/Wasm lockstep (helpers ABI v37)", () => {
 });
 
 test("room pure B4 deepen genrand-consumer posts oracle (helpers ABI v37)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B4_HOST_VA_G0, 0x0080341f);
   assert.equal(ROOM_B4_HOST_VA_G1, 0x0080357d);
   assert.equal(ROOM_B4_HOST_VA_G2A, 0x00803665);
@@ -9362,7 +9369,7 @@ test("room pure B4 deepen genrand-consumer posts oracle (helpers ABI v37)", () =
 });
 
 test("room pure B4 host-deepen2 spawn/pos/cleanup posts oracle (helpers ABI v39)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B4_LOOKUP_SUBTYPE, -1);
   assert.equal(ROOM_B4_LOOKUP_THIS_OFF, 0x1218);
   assert.equal(ROOM_B4_LOOKUP_COUNT_OFF, 0xc);
@@ -9809,7 +9816,7 @@ test("room pure B4 host-deepen2 C++/Wasm lockstep (helpers ABI v39)", () => {
 });
 
 test("room pure B5/B7 deepen residual pure posts oracle (helpers ABI v39)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B5_VCALL_OFF_48, 0x48);
   assert.equal(ROOM_B5_VCALL_OFF_4C, 0x4c);
   assert.equal(ROOM_B5_LIST_PTR_STRIDE, 4);
@@ -10152,7 +10159,7 @@ test("room pure B5/B7 deepen C++/Wasm lockstep (helpers ABI v39)", () => {
 
 
 test("room pure B3 host deepen pure CF oracle (helpers ABI v39)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B3_HOST_VA_OWNER, 0x009be080);
   assert.equal(ROOM_B3_HOST_VA_CHALLENGE, 0x009305f0);
   assert.equal(ROOM_B3_HOST_VA_CHALLENGE_BODY, 0x007ea2d0);
@@ -10321,7 +10328,7 @@ test("room pure B3 host deepen pure CF oracle (helpers ABI v39)", () => {
 });
 
 test("room pure B9 free-body residual pure CF oracle (helpers ABI v39)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /isaac_room_b9_free_helper_needed/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_b9_free_body_plan/);
   assert.match(readFileSync(source, "utf8"), /isaac_room_b9_free_heap_account/);
@@ -10723,7 +10730,7 @@ test("room pure B3 host deepen C++/Wasm lockstep (helpers ABI v39)", () => {
 });
 
 test("room genrand MT core oracle matches recovered PE constants (helpers ABI v40)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(
     readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/,
@@ -11180,7 +11187,7 @@ test("room genrand MT core C++/Wasm lockstep (helpers ABI v40)", () => {
 });
 
 test("room genrand debug ring is unconditional and structurally pure (helpers ABI v41)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(
     readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/,
@@ -11705,7 +11712,7 @@ test("room genrand ring + CRT override + 7230 finish C++/Wasm lockstep (helpers 
 });
 
 test("room GetGridCollision complete translation oracle (helpers ABI v42)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(
     readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/,
@@ -12065,7 +12072,7 @@ test("room v42 GetGridCollision + 813520 host set C++/Wasm lockstep (helpers ABI
 });
 
 test("room v43 fix: SFX Play id is the post-remap value, not the seeded literal", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(
     readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/,
@@ -12236,7 +12243,7 @@ test("room v43 pre-play remap C++/Wasm lockstep (helpers ABI v43)", () => {
 });
 
 test("room v44 L-room clamp body oracle (helpers ABI v44)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(
     readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/,
@@ -12679,7 +12686,7 @@ test("room 7230 spawn-position plan + search transition oracle (helpers ABI v47)
   /* FUN_00813460 full pure surface as a typed continuation: plan struct,
      host-step machine, VA table. The earlier spawn_spans/center labels are
      corrected here (X span = +0x1c-+0x14, Y span = +0x20-+0x18). */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   /* ABI v47: no byte-wide SCALAR parameter may survive (a uint8_t parameter
      lets -O2 delete the in-body mask; wide gates must be uint32_t + masked). */
   {
@@ -14563,7 +14570,7 @@ test("room v54 FUN_00428b20 spawn relay arg-relayout (helpers ABI v54)", () => {
   } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   /* PE constants. */
@@ -14775,7 +14782,7 @@ test("room v55 B15 rain loop CF + spawn-site provenance (helpers ABI v55)", () =
     b15RainLoopWalk, b15RainSpawnArgs, spawn428b20FrameAt } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
 
@@ -15183,7 +15190,7 @@ test("room v55 mutation checks (helpers ABI v55)", () => {
 /* ---- ABI v56: 0x007ef420 B15 rain bind pure laws ---- */
 
 test("room v56: 0x007ef420 B15 bind pure laws (PE 0x7ef420..0x7ef697)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_VA, 0x007ef420);
   assert.equal(ROOM_B15_BIND_RET_VA, 0x007ef697);
   assert.equal(ROOM_B15_BIND_CLAMP_MIN, -2);
@@ -15309,7 +15316,7 @@ test("room v56: B15 bind laws mutation discrimination", () => {
 /* ---- ABI v57: 0x007ef5d5..0x007ef60f B15 bind sub-list copy law ---- */
 
 test("room v57: 0x007ef5d5 sub-list copy (PE 0x7ef5d5..0x7ef60f)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_SUB_COUNT_OFF, 0x5c0);
   assert.equal(ROOM_B15_BIND_SUB_LIST_OFF, 0x5a0);
   assert.equal(ROOM_B15_BIND_SUB_MAX, 8);
@@ -15483,7 +15490,7 @@ function v58ReadOut(view, base) {
 }
 
 test("room v58: 0x007ef4a2 store-pack relayout (PE 0x7ef4a2..0x7ef5d5)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_STORE_PACK_VA, 0x007ef4a2);
   assert.equal(ROOM_B15_BIND_STORE_TYPE5_HEAD_VA, 0x007ef4e5);
   assert.equal(ROOM_B15_BIND_STORE_SUB_LIST_VA, 0x007ef5d5);
@@ -15759,7 +15766,7 @@ function v59ReadType6Out(view, base) {
 }
 
 test("room v59: type-6 dispatch tail + 0x6c-stride chain (PE 0x7ef611..0x7ef6c7)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_CHAIN_VA, 0x007ef611);
   assert.equal(ROOM_B15_BIND_CHAIN_EPILOGUE_VA, 0x007ef630);
   assert.equal(ROOM_B15_BIND_CHAIN_STRIDE, 0x6c);
@@ -16044,7 +16051,7 @@ function v60F32(view, bits) {
 }
 
 test("room v60: type-1000 dispatch head (PE 0x7ef6ca..0x7ef817)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_TYPE1000_VA, 0x007ef6ca);
   assert.equal(ROOM_B15_BIND_TYPE1000_NEXT_VA, 0x007ef817);
   assert.equal(ROOM_B15_BIND_TYPE1000_DEFAULT_VA, 0x007efa3d);
@@ -16442,7 +16449,7 @@ function v61F32(view, bits) {
 }
 
 test("room v61: B15 bind dispatch tail (PE 0x7ef817..0x7efa43)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_B15_BIND_TAIL_VA, 0x007ef817);
   assert.equal(ROOM_B15_BIND_TAIL_PACK_VA, 0x007ef835);
   assert.equal(ROOM_B15_BIND_TAIL_OTHER_VA, 0x007ef924);
@@ -16935,7 +16942,7 @@ function v62GridDstBytes(f0c, f10, garbage, srcFlags, payloads) {
 }
 
 test("room v62: FUN_007efa50 head gates (PE 0x7efa7f..0x7efb66)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_706C_HEAD_VA, 0x007efa50);
   assert.equal(ROOM_706C_HEAD_RET_VA, 0x007eff48);
   assert.equal(ROOM_706C_RESTOCK_HOST_VA, 0x008158a0);
@@ -17543,7 +17550,7 @@ function v63WriteGridSrc(view, base, s) {
 
 test("room v63: Room::RestoreState counter guard + loop8 (PE 0x7eff50.."
      + "0x7eff6c, 0x7f018d..0x7f019e)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_RESTORE_VA, 0x007eff50);
   assert.equal(ROOM_RESTORE_RET_VA, 0x007f01aa);
   assert.equal(ROOM_RESTORE_RET_EARLY_VA, 0x007f01b8);
@@ -18125,7 +18132,7 @@ test("room v64 ambient 7f01c0 pure islands (helpers ABI v64)", () => {
     ambient7f01c0Bounds } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ambient7f01c0Va() >>> 0, ROOM_AMBIENT_7F01C0_VA);
@@ -18856,7 +18863,7 @@ test("room v25s payload-shape tail arg-prep (helpers ABI stays 64)", () => {
   const { abi, memory, ambient7f01c0PayloadBounds } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_AMBIENT_7F01C0_PAYLOAD_CALL_VA, 0x007f070c);
@@ -19280,7 +19287,7 @@ test("room v25q range-hit tail 7f0544 (helpers ABI 64)", () => {
     rangeHit7f0544Va, rangeHit7f0544Eval } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(rangeHit7f0544Va() >>> 0, ROOM_RANGE_HIT_7F0544_VA);
@@ -19684,7 +19691,7 @@ test("room v25t TLS-fail re-entry 7f072f (helpers ABI 67)", () => {
     failReentryVa, failReentry } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(failReentryVa() >>> 0, ROOM_AMBIENT_7F01C0_FAIL_REENTRY_VA);
@@ -20082,7 +20089,7 @@ test("room v67a trigger-clear audio 7f7a40 gates (helpers ABI 67)", () => {
   const { abi, memory, tca7f7a40Va, tca7f7a40Gates } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(tca7f7a40Va() >>> 0, ROOM_TRIGGER_CLEAR_AUDIO_7F7A40_VA);
@@ -20719,7 +20726,7 @@ function v68ReadFrame(view, base) {
 }
 
 test("room v68: FUN_007f8190 head gate + slot law + path (PE 0x7f8190..0x7f8240)", () => {
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_8190_VA, 0x007f8190);
   assert.equal(ROOM_8190_RET_VA, 0x007f83a3);
   assert.equal(ROOM_8190_NEXT_VA, 0x007f83b0);
@@ -21049,7 +21056,7 @@ test("room v69: FUN_007f83b0 trigger-clear audio constants + music decision law 
      jae); L2 rnd = xorshift32 {2,0x15,9} + u32->double sign-fix
      (0xbacb00 {0, 2^32}) + cvtpd2ps + mulss 0x2f7ffffe; L3 flag store;
      L4 skip gate; L5 seed fatal. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_TCA83B0_VA, 0x007f83b0);
   assert.equal(ROOM_TCA83B0_RET_VA, 0x007f8506);
@@ -21231,7 +21238,7 @@ test("room v69: music-path item laws + noise dir + signed mod + chapter cap (PE 
      0.0f,vel / jbe (0x7f8922..0x7f89ac); L10 signed mod
      (0x7f85c5..0x7f85d1 mod 8 / 0x7f86fc..0x7f8708 mod 4); L11 chapter
      cap clamp 0..13 (0x7f8ac4..0x7f8aef). */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TCA83B0_SCALE_POW2M32_VA, 0x00ba9ff4);
   assert.equal(ROOM_TCA83B0_SCALE_POW2M32_BITS, 0x2f800000);
   assert.equal(ROOM_TCA83B0_VOL_MUL_VA, 0x00baa784);
@@ -21440,7 +21447,7 @@ test("room v70: FUN_007f92b0 value leaf constants + stage scale law (PE 0x7f92b0
      [room+0x120c], stage/chapter scale, byte [game+9], modes). V2
      stage scale: stage==0 -> none; d = chapter_adj - stage (u32);
      d==0/1 -> 0.25f; d==2 -> 0.5f. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_VALUE_92B0_VA, 0x007f92b0);
   assert.equal(ROOM_VALUE_92B0_RET_VA, 0x007f96e6);
@@ -21898,7 +21905,7 @@ test("room v71: 0x7f96f0 luck/chance leaf constants + law pins (PE 0x7f96f0..0x7
      (owner259 && flags26548&0x20) || owner248b; else acc = 0 unless
      (flags26548&0x20 && game26568==0) keeps acc; G8 owner_1f3 ->
      77.0f else acc; maxss 0.0 / minss 1.0. All pins hand-verified. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_LUCK_96F0_VA, 0x007f96f0);
   assert.equal(ROOM_LUCK_96F0_RET_VA, 0x007f9955);
@@ -22062,7 +22069,7 @@ test("room v71: door-walk selection + seed fatal (0x7f8c0f..0x7f8d81)", () => {
      idx>=0 success else PASS2 bm1+slot -> idx>=0 else -1. bm1 words
      +0x38/+0x3c, bm2 words +0x38 (idx2>=0) / +0x34 (idx2<0). V8 seed
      fatal: seed==0. Truth table hand-verified against the machine. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_TCA83B0_DOOR_WALK_VA, 0x007f8c0f);
   assert.equal(ROOM_TCA83B0_DOOR_WALK_END_VA, 0x007f8d89);
   assert.equal(ROOM_TCA83B0_DOOR_WALK_GAME_GLOBAL, 0x00c71678);
@@ -22209,7 +22216,7 @@ test("room v71: StatHUD clamp/gate recipe (0x84cb4d..0x84cb86, 0x84d18e..0x84d1c
   /* V9: value -> maxss 0.0 -> minss 1.0 -> gate749830==0 -> 0.0. SSE
      MAXSS/MINSS: (a >= b) ? a : b / (a <= b) ? a : b — -0.0 kept by
      the equality, NaN -> second operand (0.0 here). */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(ROOM_VALUE_92B0_HUD_CLAMP_VA_1, 0x0084cb4d);
   assert.equal(ROOM_VALUE_92B0_HUD_CLAMP_END_1, 0x0084cb86);
   assert.equal(ROOM_VALUE_92B0_HUD_CLAMP_VA_2, 0x0084d18e);
@@ -22355,7 +22362,7 @@ test("room v72: MUSIC-path door collect walk + count gate (PE 0x7f85c0..0x7f8643
      ALT door-walk label 0x7f8b80). Count law params: rnd (host
      RandomInt 0x7e9020 result, bound 8), bm1 dwords +0x38/+0x3c,
      slot_free_mask bits 0..7. See room-v72-music/NOTES.md. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_TCA83B0_DOOR_WALK_MUSIC_VA, 0x007f85c0, "walk head");
   assert.equal(ROOM_TCA83B0_DOOR_WALK_MUSIC_END_VA, 0x007f8649, "first post-gate insn");
@@ -22504,7 +22511,7 @@ test("room v73: devil/angel 9960 constants + init-gates/state-inc/slot-mark/comb
      callers; census section-notes/room-v73-devilangel/NOTES.md §4).
      All SIGNED gates via int32 (wasm32 i64 sign-extend compare form);
      byte gates & 0xff; no uint8_t scalars. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_DEVIL_ANGEL_9960_VA, 0x007f9960);
   assert.equal(ROOM_DEVIL_ANGEL_9960_RET_FAIL_VA, 0x007f9b27, "first ret 8 (al=0)");
@@ -23021,7 +23028,7 @@ test("room v74: door-create 9df0 constants + init-gates/slot-gate pins (PE 0x7f9
      [slot+0x394] = -7 @0x7f9e98, door op 0x710fa0 (args
      [room4->0x10+8], 5) @0x7f9eb1. All u32 params, byte gates
      & 0xff, no uint8_t scalars. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_DOOR_CREATE_9DF0_VA, 0x007f9df0);
   assert.equal(ROOM_DOOR_CREATE_9DF0_RET_OK_VA, 0x007f9ebc, "ret 4 (al=1)");
@@ -23271,7 +23278,7 @@ test("room v75: grid 9ee0/a0e0 constants + pos-index/gate/effects pins (PE 0x7f9
      bit2 same cell_c block (idx2 = *arg re-read), bit3 snap flow.
      NO byte gates in either body; type compares FULL dword; NO
      uint8_t scalars. NOTES: room-v75-grid §3/§5/§6. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_GRID_9EE0_VA, 0x007f9ee0);
   assert.equal(ROOM_GRID_9EE0_RET_VA, 0x007fa0d9, "ret 4");
@@ -23599,7 +23606,7 @@ test("room v76: grid a2a0 pos-snap body constants + idx->pos oracle pins (PE 0x7
      callers 0x7fa316 + 0x7fbf8c..0x7fd002. Compare-flip class:
      SIGNED division REQUIRED (unsigned mutant flips for negative
      idx). No byte gates; no uint8_t. NOTES: room-v76-a2a0. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_grid_a2a0_idx_to_pos/);
   assert.equal(ROOM_GRID_A2A0_VA, 0x007fa2a0);
@@ -23793,7 +23800,7 @@ test("room v77: grid-half 7fa7d0 constants + scale/idx/dist2/store oracle pins (
      rel32 caller 0x7fbd16 (`mov ecx,esi; call` — the room-type
      dispatch band 0x7fbcf0..0x7fd759). Next 0x7fa920 = /GS SEH.
      NOTES: room-v77-7fa7d0. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_grid_half_scale/);
   assert.match(readFileSync(header, "utf8"), /isaac_room_grid_half_idx/);
@@ -24150,7 +24157,7 @@ test("room v80: Update 7fec00 skip gate + diet flag mutation discrimination", ()
     }
   };
   try {
-    assert.equal(ROOM_PURE_ABI_VERSION, 88);
+    assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
     assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
     assert.match(readFileSync(header, "utf8"), /isaac_room_update_entity_skip_gate/);
     assert.match(readFileSync(header, "utf8"), /isaac_room_update_diet_flag/);
@@ -24226,7 +24233,7 @@ const _bitsf32T = (b) => new Float32Array(new Uint32Array([b >>> 0]).buffer)[0];
 test("room v81 constants (7f7a40 tail + greed probes) pins", () => {
   /* .rdata float constants re-read through the section table
      (.rdata VA 0xb18000 / raw 0x716600), sha256 5129df723e64. */
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"), /ISAAC_ROOM_PURE_HELPERS_ABI_VERSION = 88/);
   assert.equal(ROOM_TCA40_TAIL_VA, 0x007f7e34);
   assert.equal(ROOM_TCA40_ANGLE_BITS_VA, 0x00baa54c);
@@ -27487,7 +27494,7 @@ test("room v88 spikes Update 0x71e9b0 fixed edges (hand-computed)", () => {
     spikes71e9b0Cost, spikes71e9b0AnimVa, spikes71e9b0Plan,
   } = loadExports();
   assert.equal(abi(), ROOM_PURE_ABI_VERSION);
-  assert.equal(ROOM_PURE_ABI_VERSION, 88);
+  assert.equal(ROOM_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.match(readFileSync(header, "utf8"),
     /ISAAC_ROOM_SPIKES_UPDATE_VA = 0x0071e9b0/);
   assert.equal(ROOM_SPIKES_UPDATE_VA, 0x0071e9b0);

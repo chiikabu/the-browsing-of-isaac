@@ -13,8 +13,10 @@
 // Options: --json for machine-readable output.
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runConsistencyChecks } from "./lib/consistency.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wantJson = process.argv.includes("--json");
@@ -73,9 +75,21 @@ for (const [key, rel] of [
   out.localBuild[key] = {
     mtime: statSync(p).mtime.toISOString(),
     ...(key === "abi"
-      ? { abiVersion: d.abiVersion, imports: (d.imports ?? []).length, exports: (d.exports ?? []).length }
+      ? {
+          imports: (d.imports ?? []).length,
+          exports: (d.exports ?? []).length,
+          // abi.json records the sha256 of the cpp it was built from; compare
+          // with the cpp on disk so a module built from a mutant (or from a
+          // since-edited source) is visible here instead of in a red suite.
+          wasmMatchesSource: d.sourceSha256
+            ? createHash("sha256").update(readFileSync(join(ROOT, d.source ?? "native/decomp/game_update_slice.cpp"))).digest("hex") === d.sourceSha256
+            : null,
+        }
       : { abiVersion: d.abiVersion, result: d.result, cases: d.cases ?? d.caseCount }),
   };
+  if (key === "abi" && out.localBuild[key].wasmMatchesSource === false) {
+    out.warnings.push("output/decomp/wasm-slice/game-update-slice.wasm was built from a DIFFERENT game_update_slice.cpp than the one on disk — rebuild before trusting a differential result");
+  }
 }
 
 // -- recomp (machine) track ----------------------------------------------
@@ -107,15 +121,19 @@ if (existsSync(idxBase)) {
 if (!out.peIndex) out.warnings.push(
   "PE index missing — build once: python scripts/decomp/tools/build-pe-index.py");
 
-// -- consistency warnings -------------------------------------------------
+// -- consistency checks (shared with verify-unit.mjs gate 0 + toolkit test) -
+// header/model/JSON ABI agreement, cpp size pins, JSON layout drift + canonical
+// form, stranded mutants, hardcoded ABI pins in tests, frontier freshness,
+// uncommitted unit files. Errors are things the gate refuses; warnings inform.
 const live = out.families["game-update"];
-if (out.updateSlice && live != null && out.updateSlice.abiVersion !== live) {
-  out.warnings.push(
-    `game-update-slice.json abiVersion=${out.updateSlice.abiVersion} != game-update-model.mjs ABI_VERSION=${live} — trust the model, fix the JSON`);
-}
-if (out.frontier?.updatedAbi != null && live != null && out.frontier.updatedAbi < live) {
-  out.warnings.push(
-    `frontier.json written at ABI ${out.frontier.updatedAbi}, tree is at ${live} — pointer may be stale`);
+out.errors = [];
+try {
+  const cc = await runConsistencyChecks(ROOT);
+  out.errors.push(...cc.errors);
+  out.warnings.push(...cc.warnings);
+  out.dirtyTracked = cc.info.dirtyTracked ?? [];
+} catch (e) {
+  out.warnings.push(`consistency checks could not run: ${e.message}`);
 }
 const agents = readFileSync(join(ROOT, "AGENTS.md"), "utf8");
 for (const m of agents.matchAll(/Update ABI \*\*(\d+)\*\*/g)) {
@@ -158,6 +176,10 @@ if (wantJson) {
       ` memimage=${r.memimage ? "built" : "absent"}` +
       ` bootModule=${r.bootModule ? `${r.bootModule.mb} MB (${r.bootModule.mtime.slice(0, 10)})` : "absent"}`);
     if (r.bootModule) console.log(`  run: ${r.run}`);
+  }
+  if (out.errors?.length) {
+    console.log("\nERRORS (the unit gate refuses these):");
+    for (const e of out.errors) console.log(`  ✖ ${e}`);
   }
   if (out.warnings.length) {
     console.log("\nWARNINGS:");

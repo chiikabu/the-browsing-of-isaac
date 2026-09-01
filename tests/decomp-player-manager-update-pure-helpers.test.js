@@ -776,6 +776,13 @@ const {
 } = PM;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "player_manager_update_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "player_manager_update_pure_helpers.h");
 const source = join(root, "native", "decomp", "player_manager_update_pure_helpers.cpp");
 const outDir = join(root, ".scratch", "pm-wasm");
@@ -1385,7 +1392,7 @@ test("build PM update pure helpers wasm", () => {
     wasm.isaac_player_manager_update_pure_helpers_abi_version(),
     PM_UPDATE_PURE_ABI_VERSION,
   );
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("header documents freestanding PM0/PM1 + PM2 peel + Update ABI v44 wire", () => {
@@ -7153,7 +7160,7 @@ test("v15 URH: every new literal pinned in the header AND the model", () => {
   }
   /* ABI moved to 15 in the header enum. */
   assert.match(h, /ISAAC_PLAYER_MANAGER_UPDATE_PURE_HELPERS_ABI_VERSION = 45/);
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
 });
 
 test("v15 URH: header transcribes the body, censuses and verdicts", () => {
@@ -8254,7 +8261,7 @@ function v16HealInputs(size) {
 }
 
 test("v16 HEAL: build + ABI pin", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(),
                PM_UPDATE_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
@@ -8609,7 +8616,7 @@ function v17EmitPlanFromModel(p) {
 }
 
 test("v17 HEAL-EMIT: build + ABI pin", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(),
                PM_UPDATE_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
@@ -8784,7 +8791,7 @@ const V18_WALK_PLAN_KEYS = [
 ];
 
 test("v18 PM-WALK: build + ABI pin + plan census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(),
                PM_UPDATE_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
@@ -9193,7 +9200,7 @@ const V19_TICK_PLAN_KEYS = [
 ];
 
 test("v19 PM-TICK: build + ABI pin + plan census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(),
                PM_UPDATE_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
@@ -9504,7 +9511,7 @@ const V20_CHAIN_PLAN_KEYS = [
 ];
 
 test("v20 PM-CHAIN: build + ABI pin + plan census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(),
                PM_UPDATE_PURE_ABI_VERSION);
   const h = readFileSync(header, "utf8");
@@ -9791,7 +9798,7 @@ test("v20 PM-CHAIN: deterministic randomized differential corpus", () => {
 
 
 test("v21 ABH: build + ABI pin + prefix census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ABI_VERSION = 45 }/);
@@ -10109,7 +10116,7 @@ function v22GhtModelFromMemory(view, base, startAddr, game26614, probes, walkCap
 
 
 test("v22 GHT: build + ABI pin + plan census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ABI_VERSION = 45 }/);
@@ -10475,7 +10482,7 @@ function v23BttPeTruth(v1d88, bits, bitIndex) {
 }
 
 test("v23 BTT: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ABI_VERSION = 45 }/);
@@ -10648,7 +10655,7 @@ function v24TpdPeTruth(v1d88, v1344, v134c, healthType, v13c0,
 }
 
 test("v24 TPD: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v24 — TPD/);
@@ -10874,7 +10881,7 @@ function v25GfPeTruth(game26614, ecx) {
 }
 
 test("v25 GF: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v25 — GF/);
@@ -11058,7 +11065,7 @@ function v26BfFlagNextPe(flag) {
 }
 
 test("v26 BF: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v26 — BF/);
@@ -11332,7 +11339,7 @@ function v27BqFlagStorePe(count, flag, reloaded) {
 }
 
 test("v27 BQ: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v27 — BQ/);
@@ -11681,7 +11688,7 @@ function v28BrFlagStorePe(count, flag) {
 }
 
 test("v28 BR: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v28 — BR/);
@@ -11908,7 +11915,7 @@ function v29BsValuePe(arg, mode) {
 }
 
 test("v29 BS: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v29 — BS/);
@@ -12153,7 +12160,7 @@ function v30BtValuePe(soul, fatal, mode) {
 }
 
 test("v30 BT: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v30 — BT/);
@@ -12455,7 +12462,7 @@ function v31BuLoopNeededPe(local0, local1) {
 }
 
 test("v31 BU: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v31 — BU/);
@@ -12706,7 +12713,7 @@ function v32BvValuePe(char13c0, has) {
 }
 
 test("v32 BV: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v32 — BV/);
@@ -12919,7 +12926,7 @@ function v33BwValuePe(flag1519, char13c0, tags, ids) {
 }
 
 test("v33 BW: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v33 island needles. */
@@ -13221,7 +13228,7 @@ function v34B3ValuePe(arg, slot, size, cfg) {
 }
 
 test("v34 B3: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v34 B3 island needles. */
@@ -13420,7 +13427,7 @@ function v34B5ValuePe(v194c, v1348, v1344, v1d88, v134c, v1da4) {
 }
 
 test("v34 B5: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v34 B5 island needles. */
@@ -13619,7 +13626,7 @@ function v35B9HostNeededPe(begin, end, slot) {
 }
 
 test("v35 B9: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v35 B9 island needles. */
@@ -13910,7 +13917,7 @@ function v37FbOwnerFoundPe(begin, end, states, chars, has, type, count) {
 }
 
 test("v37 FB: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v37 FB island needles. */
@@ -14246,7 +14253,7 @@ function v38B18HostNeededPe(mode, count) {
 }
 
 test("v38 B18: build + ABI pin + census", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   /* v38 B18 island needles. */
@@ -14880,7 +14887,7 @@ function v39B19FlagStorePe(h1, h2, a0, a1, d4) {
 }
 
 test("v39 B19: build + ABI pin + census (item-278 flag gate 0x7dba30)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v39 — B19 0x7dba30/);
@@ -15151,7 +15158,7 @@ function v41B23ResultPe(type, flags) {
 }
 
 test("v41 B23: build + ABI pin + census (revive-queue predicate 0x7dbe70)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v41 — B23/);
@@ -15346,7 +15353,7 @@ function v42EndAfterPopPe(endNow) {
 }
 
 test("v42 VEC: build + ABI pin + census (container-cursor leaves 0x7dc610 + 0x7dc650)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v42 — VEC/);
@@ -15503,7 +15510,7 @@ function v43SelectsBPe(aByte, bByte) {
 }
 
 test("v43 SEL: build + ABI pin + census (byte-min select 0x7dd3a0 + record copy 0x7dd490)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v43 — SEL/);
@@ -15651,7 +15658,7 @@ function v44StoreCountPe(count) {
 }
 
 test("v44 FILL: build + ABI pin + census (zero-fill leaf 0x7de2f0)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v44 — FILL/);
@@ -15762,7 +15769,7 @@ test("v44 FILL: deterministic randomized differential corpus (500 draws)", () =>
  * ===================================================================== */
 
 test("v45 INIT: build + ABI pin + census (constant initializer 0x7df200)", () => {
-  assert.equal(PM_UPDATE_PURE_ABI_VERSION, 45);
+  assert.equal(PM_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(wasm.isaac_player_manager_update_pure_helpers_abi_version(), 45);
   const h = readFileSync(header, "utf8");
   assert.match(h, /v45 — INIT/);

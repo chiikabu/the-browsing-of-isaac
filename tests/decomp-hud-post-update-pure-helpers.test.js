@@ -1508,6 +1508,13 @@ import {
 } from "../scripts/decomp/hud-post-update-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+/* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
+   test). The header enum is the deliberate pin; the model constant must
+   agree with it — that is the assertion each former literal now makes. */
+const HEADER_ABI_VERSION = Number(
+  readFileSync(join(root, "native", "decomp", "hud_post_update_pure_helpers.h"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "hud_post_update_pure_helpers.h");
 const source = join(root, "native", "decomp", "hud_post_update_pure_helpers.cpp");
 /* Wave-26 hardening (update-v102-hardening GAP A): 120-attempt retried
@@ -4384,7 +4391,7 @@ test("header declares HUD post-update pure helpers ABI v5 and tracked paths exis
   assert.match(h, /0x4b3d8/);
   /* ABI v36 wires try_pure into safe Update HUD sites; nested residual stays host. */
   assert.match(h, /ABI v36 wires isaac_hud_post_update_try_pure|wires isaac_hud_post_update_try_pure/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(STAT_HUD_COLLECTIBLE_ID, 0x1f2);
   assert.equal(STAT_HUD_RECOMPUTE_FLAGS, 0xfffffeff >>> 0);
   assert.equal(HUD_HOST_VA_HISTORY_RECOMPUTE, 0x0083b280);
@@ -6482,7 +6489,7 @@ test("v18 per-slot flag loop: JS oracle + native/Wasm differential + mutation pi
   assert.match(h, /SIGNED loop-back/);
   assert.match(h, /isaac_hud_history_slot_loop_plan/);
   assert.match(h, /ISAAC_HUD_HISTORY_SLOT_LOOP_RECOMPUTE_HOST = 0x0083b280u/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HISTORY_HUD_SLOT0_FLAG_OFFSET, 0x5c58);
   assert.equal(HISTORY_HUD_SLOT_LOOP_VA_HEAD, 0x009a2b83);
   assert.equal(HISTORY_HUD_SLOT_LOOP_VA_FLAG_GATE, 0x009a2b90);
@@ -7785,7 +7792,7 @@ test("header documents v13 GetCollectible + FCO prefix (0x0072fd10 / 0x009be080)
   assert.match(s, /Helpers ABI v13/);
   assert.match(s, /0x007706e0/);
   assert.match(s, /narrowed != removed/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_HOST_VA_GET_COLLECTIBLE, 0x0072fd10);
   assert.equal(HUD_HOST_VA_HAS_COLLECTIBLE, 0x007706e0);
   assert.equal(ITEM_CONFIG_TRINKET_BEGIN_OFF, 0x67758);
@@ -7992,7 +7999,7 @@ test("JS oracle: v13 FCO twin flag / walk CF / node + plan", () => {
 test("v13 GetCollectible + FCO native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.vaGetCollectible(), 0x0072fd10);
   assert.equal(exp.vaHasCollectible(), 0x007706e0);
   assert.equal(exp.itemCfgTrinketBeginOff(), 0x67758);
@@ -8182,7 +8189,7 @@ test("header documents v14 HasCollectible prefix + Game::GetPlayer (0x007706e0 /
   assert.match(s, /Helpers ABI v14/);
   assert.match(s, /0x007706e0/);
   assert.match(s, /cmp dword \[edi\+0x2c\],1/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_HOST_VA_GAME_GET_PLAYER, 0x00417870);
   assert.equal(HUD_HOST_VA_HAS_TRINKET, 0x009e04b0);
   assert.equal(HAS_COLLECTIBLE_PLAYER_FIELD_2C_OFF, 0x2c);
@@ -8353,7 +8360,7 @@ test("JS oracle: v14 HasCollectible prefix / quest / held / inventory", () => {
 test("v14 HasCollectible + GetPlayer native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.vaGameGetPlayer(), 0x00417870);
   assert.equal(exp.vaHasTrinket(), 0x009e04b0);
   assert.equal(exp.hcField2cOff(), 0x2c);
@@ -8487,7 +8494,7 @@ test("header documents v15 ignoreModifiers==0 modifier ladder (0x007707de)", () 
   assert.match(src, /Helpers ABI v15/);
   assert.match(src, /0x007db8d0/);
   assert.match(src, /and eax,0x80000003/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_HOST_VA_HAS_COLLECTIBLE_771550, 0x00771550);
   assert.equal(HUD_HOST_VA_HAS_COLLECTIBLE_7CB6E0, 0x007cb6e0);
   assert.equal(HUD_HOST_VA_TEMPFX_HAS_NULL, 0x00930680);
@@ -8632,7 +8639,7 @@ test("JS oracle: v15 HasNullEffect + modifier plan gates", () => {
 test("v15 modifier ladder native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va771550() >>> 0, 0x00771550);
   assert.equal(exp.va7cb6e0() >>> 0, 0x007cb6e0);
   assert.equal(exp.vaTempfxHasNull() >>> 0, 0x00930680);
@@ -8730,7 +8737,7 @@ test("header documents v16 0x007db8d0 resolver gates (narrowed)", () => {
   const src = readFileSync(source, "utf8");
   assert.match(src, /Helpers ABI v16/);
   assert.match(src, /0x7db987/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_HOST_VA_HAS_COLLECTIBLE_7DB860, 0x007db860);
   assert.equal(HUD_HOST_VA_HAS_COLLECTIBLE_SCAN_4288A0, 0x004288a0);
   assert.equal(HAS_COLLECTIBLE_MOD_SCAN_LIST_OFF, 0x1bbd8);
@@ -8836,7 +8843,7 @@ test("JS oracle: v16 mod scan / fast dispatch / slow hash / resolve plan", () =>
 test("v16 mod resolver native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.va7db860() >>> 0, 0x007db860);
   assert.equal(exp.vaScan4288a0() >>> 0, 0x004288a0);
   // wasm pinned vectors mirror the JS oracle
@@ -8924,7 +8931,7 @@ test("header documents v17 0x00771550 narrowed gates", () => {
   assert.match(s, /0x00771612/);
   assert.match(s, /setg/);
   assert.match(s, /0x1ca/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HAS_COLLECTIBLE_771550_FIELD_OFF, 0x2ef8);
   assert.equal(HAS_COLLECTIBLE_771550_BYTE_OFF, 0x2ef0);
   assert.equal(HAS_COLLECTIBLE_771550_SLOT_BASE_OFF, 0x16c0);
@@ -8978,7 +8985,7 @@ test("JS oracle: v17 0x00771550 owned / strict / count / scan gates", () => {
 test("v17 0x00771550 native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hc771550FieldOff() >>> 0, HAS_COLLECTIBLE_771550_FIELD_OFF);
   assert.equal(exp.hc771550ByteOff() >>> 0, HAS_COLLECTIBLE_771550_BYTE_OFF);
   assert.equal(exp.hc771550SlotBaseOff() >>> 0, HAS_COLLECTIBLE_771550_SLOT_BASE_OFF);
@@ -9117,7 +9124,7 @@ test("header documents v19 0x007cb6e0 count resolver (narrowed)", () => {
   assert.match(s, /jae/);
   assert.match(s, /jge/);
   assert.match(s, /0x7cb9f6/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_COUNT_7CB6E0_VA_HEAD, 0x007cb6e0);
   assert.equal(HUD_COUNT_7CB6E0_VA_RET, 0x007cba1f);
   assert.equal(HUD_COUNT_7CB6E0_VA_SAMPLING, 0x007cb8d8);
@@ -9453,7 +9460,7 @@ test("JS oracle: v19 count plan (0x007cb6e0) behavioural", () => {
 test("v19 0x007cb6e0 native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.cntTableVa() >>> 0, HUD_COUNT_7CB6E0_TABLE_VA);
   assert.equal(exp.cntSamplingVa() >>> 0, HUD_COUNT_7CB6E0_VA_SAMPLING);
   assert.equal(exp.cntTableSize(), HUD_COUNT_7CB6E0_TABLE_SIZE);
@@ -9831,7 +9838,7 @@ test("header documents v20 0x008318a0 signed advance + rewrite + common tail", (
   assert.match(s, /0x832670/);
   assert.match(s, /cmovg ecx,edx/);
   assert.match(s, /FULL-WORD test/);
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_8318A0_VA_HEAD, 0x008318a0);
   assert.equal(HUD_8318A0_JUMP_TABLE_VA, 0x008327bc);
   assert.equal(HUD_8318A0_CASE_VA_MODE1, 0x00831915);
@@ -10003,7 +10010,7 @@ test("JS oracle: v20 advance plan + rewrite plan", () => {
 test("v20 0x008318a0 native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.aVaHead() >>> 0, HUD_8318A0_VA_HEAD);
   assert.equal(exp.aVaModeGate() >>> 0, HUD_8318A0_VA_MODE_GATE);
   assert.equal(exp.aJumpTableVa() >>> 0, HUD_8318A0_JUMP_TABLE_VA);
@@ -10281,7 +10288,7 @@ test("v20 0x008318a0 mutation round-trips (write -> fail -> restore)", () => {
 /* ---- ABI v21: 0x008318a0 mode-2 slow-path _Tree successor-walk gates ---- */
 
 test("hud v21: 0x008318a0 mode-2 _Tree walk gates (PE 0x831fa1..0x832022)", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_8318A0_TREE_HEAD_OFF, 0x224);
   assert.equal(HUD_8318A0_TREE_NODE_LEFT_OFS, 0x00);
   assert.equal(HUD_8318A0_TREE_NODE_PARENT_OFS, 0x04);
@@ -10470,7 +10477,7 @@ const hudWalkWord = (kind, payload) =>
   (((kind << 24) | ((payload >>> 0) & 0xffffff)) >>> 0) >>> 0;
 
 test("hud v22: 0x008318a0 mode-2 slow-path WALK-ORDER plan", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const exp = loadExports();
 
   // --- header/model contract pins ---
@@ -10999,7 +11006,7 @@ function readWalkPlan3(view, base) {
 }
 
 test("header documents v23 0x007cb6e0 walk / RNG / twin PREP laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ABI v23: 0x007cb6e0 preamble walk/);
   assert.match(h, /ISAAC_HUD_COUNT_7CB6E0_VA_WALK_GATE = 0x007cb6fbu/);
@@ -11169,7 +11176,7 @@ test("JS oracle: v23 RNG-draw + twin/recursion PREP laws (0x7cb865..0x7cb8b7)", 
 test("v23 0x007cb6e0 walk/RNG/twin native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.cntRngConstVa() >>> 0, HUD_COUNT_7CB6E0_RNG_CONST_VA);
@@ -11401,7 +11408,7 @@ test("v23 0x007cb6e0 walk/RNG/twin mutation round-trips (write -> fail -> restor
   assert.equal(readFileSync(source, "utf8"), original, "source restored");
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.cntWalkActive(0x101), 0);
   assert.equal(exp.cnt4bChain(0, 1, 0xa, 3, 0xb), 0);
   exp.cntRngPrep(0x1234, planOut);
@@ -11425,7 +11432,7 @@ test("v23 0x007cb6e0 walk/RNG/twin mutation round-trips (write -> fail -> restor
 const RNG7 = { value: 0, seedAfter: 4, fatal: 8 };
 
 test("header documents v24 0x007e9020 RNG::RandomInt body law", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /ABI v24: RNG::RandomInt BODY/);
   assert.match(h, /ISAAC_HUD_RNG_7E9020_VA = 0x007e9020u/);
@@ -11503,7 +11510,7 @@ test("JS oracle: v24 RNG::RandomInt body (0x7e9020) — xorshift + state + max",
 test("v24 0x007e9020 RNG::RandomInt native/Wasm differential + mutation pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.rngVa() >>> 0, HUD_RNG_7E9020_VA);
@@ -11628,7 +11635,7 @@ test("v24 0x007e9020 RNG::RandomInt mutation round-trips (write -> fail -> resto
   assert.equal(readFileSync(source, "utf8"), original, "source restored");
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.rngSeedZero(0x100), 0);
   assert.equal(exp.rngXorshift(0x12345678, 2, 7, 0x19) >>> 0, 0x4a18b0c3);
   exp.rngRandomInt(0x12345678, 2, 7, 0x19, 0, out);
@@ -11670,7 +11677,7 @@ function writeHcSample(view, base, idx, ck, cr, gk, gr) {
 }
 
 test("header documents v24 0x007706e0 query accept gate + redirect walk", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v24 \(0x007706e0\): the HasCollectible QUERY accept gate/);
   assert.match(h, /ISAAC_HAS_COLLECTIBLE_QUERY_ARG_ID = 0x1b7/);
@@ -11790,7 +11797,7 @@ test("JS oracle: v24 accept gate + walk plan (0x77070d..0x770758)", () => {
 test("v24 0x007706e0 accept/walk native/Wasm differential + pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constants / call-site accessors
   assert.equal(exp.hcQueryArgId(), HAS_COLLECTIBLE_QUERY_ARG_ID);
@@ -12002,7 +12009,7 @@ test("v24 0x007706e0 accept/walk mutation round-trips (write -> fail -> restore)
   assert.equal(readFileSync(source, "utf8"), original, "source restored");
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.hcQueryHit(0x100), 0);
   assert.equal(exp.hcAcceptGate(0x100, 1), 0);
 });
@@ -12048,7 +12055,7 @@ function readA915Plan(view, base) {
 }
 
 test("header documents v25 0x007706e0 RNG-path preps (0x770a7e + 0x770942)", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v25 \(0x007706e0\): the two RNG-path PREPs/);
   assert.match(h, /ISAAC_HUD_770A7E_VA = 0x00770a7eu/);
@@ -12153,7 +12160,7 @@ test("JS oracle: v25 RNG-path preps (0x770a7e ladder + 0x770915 arm-9)", () => {
 test("v25 0x007706e0 RNG-path preps native/Wasm differential + pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors (Region A)
   assert.equal(exp.a7eVa() >>> 0, HUD_770A7E_VA);
@@ -12404,7 +12411,7 @@ test("v25 0x007706e0 RNG-path preps mutation round-trips (write -> fail -> resto
   assert.equal(readFileSync(source, "utf8"), original, "source restored");
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.a7eOpen(0xffffffff), 0);
   assert.equal(exp.a7eSeed(0xfffffffe, 1) >>> 0, 0xffffffff);
   assert.equal(exp.a7eTableEntry(6) >>> 0, 0xffffffff);
@@ -12424,7 +12431,7 @@ test("v25 0x007706e0 RNG-path preps mutation round-trips (write -> fail -> resto
    0x770c3e counter epilogue is the next frontier. */
 
 test("header documents v26 0x007706e0 tail scalar gate (0x770ba1) + sampled tail-gate laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v26 \(0x007706e0\): the tail true-chain window/);
   assert.match(h, /ISAAC_HUD_770BA1_VA_GATE = 0x00770ba1u/);
@@ -12504,7 +12511,7 @@ test("JS oracle: v26 0x007706e0 tail true-chain laws", () => {
 test("v26 0x007706e0 tail true-chain native/Wasm differential + pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.bVaGate() >>> 0, HUD_770BA1_VA_GATE);
@@ -12733,7 +12740,7 @@ test("v26 0x007706e0 tail true-chain mutation round-trips (write -> fail -> rest
   }
   assert.equal(readFileSync(source, "utf8"), original, "source restored");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.bScalarGate(0, 0), 0);
   assert.equal(exp.bScalarGate(0x100, 0), 0);
   assert.equal(exp.b9e0650Open(0xffffffff), 0);
@@ -12758,7 +12765,7 @@ test("v26 0x007706e0 tail true-chain mutation round-trips (write -> fail -> rest
    Evidence: section-notes/hud-v27-770c3e/NOTES.md; cpu-dump/007706e0.txt. */
 
 test("header documents v27 0x007706e0 counter epilogue (0x770c3e) + composed tail plan", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v27 \(0x00770c3e\): the HasCollectible counter epilogue/);
   assert.match(h, /ISAAC_HUD_770C3E_VA_HEAD = 0x00770c3eu/);
@@ -12829,7 +12836,7 @@ test("JS oracle: v27 0x007706e0 counter epilogue laws + composed tail plan", () 
 test("v27 0x007706e0 counter epilogue native/Wasm differential + pins", () => {
   const exp = loadExports();
   const view = new DataView(exp.memory.buffer);
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.cVaHead() >>> 0, HUD_770C3E_VA_HEAD);
@@ -13212,7 +13219,7 @@ test("v27 0x007706e0 counter epilogue mutation round-trips (write -> fail -> res
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.cStrict(0, 0, 0), 0);
   assert.equal(exp.cStrict(5, 5, 0x100), 1);
   assert.equal(exp.cCountGt1(0xffffffff), 0);
@@ -13237,7 +13244,7 @@ test("v27 0x007706e0 counter epilogue mutation round-trips (write -> fail -> res
    00771200.txt + 007706e0.txt. */
 
 test("header documents v28 0x00771200 tail gate (0x770ae2) + mode-dispatch body laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v28 \(0x00771200 \+ the 0x770ae2 tail gate\)/);
   assert.match(h, /ISAAC_HUD_771200_VA_HEAD = 0x00771200u/);
@@ -13476,7 +13483,7 @@ test("JS oracle: v28 0x00771200 mode dispatch + case laws + tail gate", () => {
 
 test("v28 0x00771200 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.mVaHead() >>> 0, HUD_771200_VA_HEAD);
@@ -13861,7 +13868,7 @@ test("v28 0x00771200 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.mModeOpen(0xb), 1);
   assert.equal(exp.mRoomGameOpen(2, 1, 0xffffffff, 0), 1);
   assert.equal(exp.mCaseA(0x139, 0x100, 0, 0, 0, 0), 0);
@@ -13904,7 +13911,7 @@ test("v28 0x00771200 mutation round-trips (write -> fail -> restore sha256)", ()
    00771410.txt + 0077153f.txt. */
 
 test("header documents v29 0x00771410 id-walk loop laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   const h = readFileSync(header, "utf8");
   assert.match(h, /Helpers ABI v29 \(0x00771410\): the 0x2dd id-walk loop/);
   assert.match(h, /ISAAC_HUD_771410_VA_HEAD = 0x00771410u/);
@@ -14154,7 +14161,7 @@ test("JS oracle: v29 0x00771410 walk bounds + per-iteration dispatch + tail", ()
 
 test("v29 0x00771410 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
 
   // constant accessors
   assert.equal(exp.wVaHead() >>> 0, HUD_771410_VA_HEAD);
@@ -14573,7 +14580,7 @@ test("v29 0x00771410 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.wWalkContinue(0xffffffff), 1);
   assert.equal(exp.wWalkContinue(0x2dd), 0);
   assert.equal(exp.wPathAOpen(0x100), 0);
@@ -14622,7 +14629,7 @@ test("header documents v30 0x007706e0 branch selection laws", () => {
 });
 
 test("JS oracle: v30 0x007706e0 branch selection laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // A1 interior gate: byte gate + SIGNED 26614 jge + cfg 0x8000
   assert.equal(hud7706e0InteriorFalse(1, 1, 0), 1, "26614 -1 < 2 opens");
   assert.equal(hud7706e0InteriorFalse(1, 2, 0), 0, "26614 2 jge skips");
@@ -14738,7 +14745,7 @@ test("JS oracle: v30 0x007706e0 branch selection laws", () => {
 
 test("v30 0x007706e0 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.wVaInteriorHead() >>> 0, HUD_7706E0_VA_INTERIOR_HEAD);
   assert.equal(exp.wVaInterior26614Jge() >>> 0, HUD_7706E0_VA_INTERIOR_26614_JGE);
@@ -15150,7 +15157,7 @@ test("v30 0x007706e0 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.wInteriorFalse(1, 0xffffffff, 0), 1);
   assert.equal(exp.wInteriorFalse(0x100, 1, 0), 0);
   assert.equal(exp.wHeldTrue(0x147, 0x147, 0x100), 0);
@@ -15355,7 +15362,7 @@ test("header documents v31 0x00771620 sibling leaf laws", () => {
 });
 
 test("JS oracle: v31 0x00771620 sibling leaf laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // width: byte gates on the two 0x7706e0 results
   assert.equal(hud771620EightBOpen(1), 1);
   assert.equal(hud771620EightBOpen(0x100), 0, "0x77163d test al,al");
@@ -15418,7 +15425,7 @@ test("JS oracle: v31 0x00771620 sibling leaf laws", () => {
 
 test("v31 0x00771620 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w1620VaHead() >>> 0, HUD_771620_VA_HEAD);
   assert.equal(exp.wVaCall8b() >>> 0, HUD_771620_VA_CALL_8B);
@@ -15672,7 +15679,7 @@ test("v31 0x00771620 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w8bOpen(0x100), 0);
   assert.equal(exp.wScanWidth(0, 0x100), 1);
   assert.equal(exp.wSlotHit(0x18139, 0x139), 1);
@@ -15704,7 +15711,7 @@ test("header documents v32 0x007716c0 leaf laws", () => {
 });
 
 test("JS oracle: v32 0x007716c0 leaf laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // masked: FULL dword and 0x7fff (0x7716c6)
   assert.equal(hud7716c0IdMasked(0x29), 0x29);
   assert.equal(hud7716c0IdMasked(0x8029), 0x29, "bit 0x8000 cleared");
@@ -15745,7 +15752,7 @@ test("JS oracle: v32 0x007716c0 leaf laws", () => {
 
 test("v32 0x007716c0 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w16c0VaHead() >>> 0, HUD_7716C0_VA_HEAD);
   assert.equal(exp.w16c0VaAnd() >>> 0, HUD_7716C0_VA_AND);
@@ -15918,7 +15925,7 @@ test("v32 0x007716c0 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w16c0IdMasked(0x8029) >>> 0, 0x29);
   assert.equal(exp.w16c0OpenA(0x129), 0);
   assert.equal(exp.w16c0OpenB(0x8087), 1);
@@ -16000,7 +16007,7 @@ test("header documents v33 0x007717c0 width-leaf laws", () => {
 });
 
 test("JS oracle: v33 0x007717c0 width-leaf laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // 8b_open: LOW byte of HasCollectible(p,0x8b,0) (0x7717cf test al,al)
   assert.equal(hud7717c0EightBOpen(0), 0);
   assert.equal(hud7717c0EightBOpen(1), 1);
@@ -16044,7 +16051,7 @@ test("JS oracle: v33 0x007717c0 width-leaf laws", () => {
 
 test("v33 0x007717c0 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w17c0VaHead() >>> 0, HUD_7717C0_VA_HEAD);
   assert.equal(exp.w17c0VaCall8b() >>> 0, HUD_7717C0_VA_CALL_8B);
@@ -16247,7 +16254,7 @@ test("v33 0x007717c0 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w17c0EightBOpen(0x100), 0);
   assert.equal(exp.w17c0OneCaOpen(0x100), 0);
   assert.equal(exp.w17c0Width(0, 0), 1);
@@ -16288,7 +16295,7 @@ test("header documents v34 0x007716f0 loop-control laws", () => {
 });
 
 test("JS oracle: v34 0x007716f0 loop-control laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // loop_continue: 0x771738 cmp edi,esi ; 0x77173a jae — UNSIGNED
   assert.equal(hud7716f0LoopContinue(0, 1), 1);
   assert.equal(hud7716f0LoopContinue(1, 1), 0);
@@ -16419,7 +16426,7 @@ test("JS oracle: v34 0x007716f0 loop-control laws", () => {
 
 test("v34 0x007716f0 native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w16f0VaHead() >>> 0, HUD_7716F0_VA_HEAD);
   assert.equal(exp.w16f0VaLoopCmp() >>> 0, HUD_7716F0_VA_LOOP_CMP);
@@ -16809,7 +16816,7 @@ test("v34 0x007716f0 mutation round-trips (write -> fail -> restore sha256)", ()
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w16f0LoopContinue(0xffffffff, 1), 0);
   assert.equal(exp.w16f0Masked35(0x8035), 1);
   assert.equal(exp.w16f0IsoOpen(0x100), 0);
@@ -16851,7 +16858,7 @@ for (const name of [
 });
 
 test("JS oracle: v35 0x76143f caller-guard laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // class_226: 0x7613fa / 0x761418 cmp dword,0x226 — FULL 32-bit equality
   assert.equal(hud76143fClass226(0x226), 1);
   assert.equal(hud76143fClass226(0x100226), 0, "FULL — 0x100226 != 0x226");
@@ -16939,7 +16946,7 @@ test("JS oracle: v35 0x76143f caller-guard laws", () => {
 
 test("v35 0x76143f native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w76143fVaGate15c0() >>> 0, HUD_76143F_VA_GATE_15C0);
   assert.equal(exp.w76143fVaGate15e0() >>> 0, HUD_76143F_VA_GATE_15E0);
@@ -17211,7 +17218,7 @@ test("v35 0x76143f mutation round-trips (write -> fail -> restore sha256)", () =
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w76143fClass226(0x100226), 0);
   assert.equal(exp.w76143fHasOpen(0x100), 0);
   assert.equal(exp.w76143fScanContinue(0xffffffff), 0);
@@ -17257,7 +17264,7 @@ assert.match(h, /count > 1 \(SIGNED jle 0x762806\) && FULL \[p\+0x1ef0\] == 0/);
 });
 
 test("JS oracle: v36 0x7616ad caller-guard laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // 1550_open: 0x7616a5 test al,al — LOW byte (0x100 CLOSED)
   assert.equal(hud7616ad1550Open(0), 0);
   assert.equal(hud7616ad1550Open(1), 1);
@@ -17325,7 +17332,7 @@ test("JS oracle: v36 0x7616ad caller-guard laws", () => {
 
 test("v36 0x7616ad native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w7616adVaCase() >>> 0, HUD_7616AD_VA_CASE);
   assert.equal(exp.w7616adVaPushId1550() >>> 0, HUD_7616AD_VA_PUSH_ID_1550);
@@ -17538,7 +17545,7 @@ test("v36 0x7616ad mutation round-trips (write -> fail -> restore sha256)", () =
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w7616ad1550Open(0x100), 0);
   assert.equal(exp.w7616ad1620EdgeNeeded(0), 0);
   assert.equal(exp.w7616ad1620Open(0x100), 0);
@@ -17591,7 +17598,7 @@ test("header documents v37 0x76280f + span-B caller-guard laws", () => {
 });
 
 test("JS oracle: v37 0x76280f + span-B caller-guard laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   // has_open: 0x762814 test al,al — LOW byte (0x100 CLOSED)
   assert.equal(hud76280fHasOpen(0), 0);
   assert.equal(hud76280fHasOpen(1), 1);
@@ -17692,7 +17699,7 @@ test("JS oracle: v37 0x76280f + span-B caller-guard laws", () => {
 
 test("v37 0x76280f + span-B native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   // constant accessors (representative pin set)
   assert.equal(exp.w76280fVaCall7706e0() >>> 0, HUD_76280F_VA_CALL_7706E0);
   assert.equal(exp.w76280fVaCall5b1500() >>> 0, HUD_76280F_VA_CALL_5B1500);
@@ -17957,7 +17964,7 @@ test("v37 0x76280f + span-B mutation round-trips (write -> fail -> restore sha25
   assert.equal(sha(after.replace(/\r\n/g, "\n")), before,
     "source sha256 byte-identical after round-trips");
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.w76280fHasOpen(0x100), 0);
   assert.equal(exp.w76280fClamp1e74(0xffffffff), 0x384);
   assert.equal(exp.w76280fStoreNeeded(1, 1, 0), 0);
@@ -17991,7 +17998,7 @@ test("header documents v38 span-B far-guarded caller-guard laws", () => {
 });
 
 test("JS oracle: v38 span-B far-guarded caller-guard laws", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(hudSpanbFarCount(), 67);
   assert.equal(SPANB_FAR_SITES.length, 67);
   assert.equal(HUD_SPANB_FAR_VA_FIRST, 0x763c42);
@@ -18049,7 +18056,7 @@ test("JS oracle: v38 span-B far-guarded caller-guard laws", () => {
 
 test("v38 span-B far-guarded native/Wasm differential + pins", () => {
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.wSpanbFarCount() >>> 0, HUD_SPANB_FAR_COUNT);
   assert.equal(exp.wSpanbFarCountConst() >>> 0, HUD_SPANB_FAR_COUNT);
   assert.equal(exp.wSpanbFarSiteRowStride() >>> 0, HUD_SPANB_FAR_SITE_ROW_STRIDE);
@@ -18197,7 +18204,7 @@ test("v38 span-B far-guarded mutation round-trips (write -> fail -> restore sha2
   }
   // residue sweep: the landed laws hold on a fresh post-restore build
   const exp = loadExports();
-  assert.equal(exp.abi(), 39);
+  assert.equal(exp.abi(), HUD_POST_UPDATE_PURE_ABI_VERSION);
   assert.equal(exp.wSpanbFarCount() >>> 0, 67);
   assert.equal(exp.wSpanbFarSampleOpen(0x100), 0);
   assert.equal(exp.wSpanbFarContinuation(1, 0), 1);
@@ -18214,7 +18221,7 @@ test("v38 span-B far-guarded mutation round-trips (write -> fail -> restore sha2
    ============================================================ */
 
 test("ABI v39 — span-B residual pins (sites, bases, census rows)", () => {
-  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, 39);
+  assert.equal(HUD_POST_UPDATE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(HUD_SPANB_ARG_D13_SITE_VA, 0x00763c58);
   assert.equal(HUD_SPANB_ARG_D13_BASE, 0xd);
   assert.equal(HUD_SPANB_ARG_2N5_SITE_VA, 0x00763d41);

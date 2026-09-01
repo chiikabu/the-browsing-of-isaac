@@ -29,6 +29,28 @@ test("status.mjs --json derives families, boundaries, and slice state", () => {
   assert.ok(Array.isArray(s.warnings));
 });
 
+test("tree consistency: header/model/JSON ABI agree, no stranded mutants, JSON canonical + in sync", async () => {
+  /* Every item here is a measured failure class (see lib/consistency.mjs):
+     the ABI-101 unit shipped a cpp still carrying its mutation marker, 72
+     literal `abiVersion, 100` pins went red at the bump, and the JSON spec
+     had drifted 254 offsets from the model layout with nothing checking it. */
+  const { runConsistencyChecks } = await import("../scripts/decomp/lib/consistency.mjs");
+  const r = await runConsistencyChecks(ROOT);
+  assert.deepEqual(r.errors, [], "consistency errors");
+  assert.equal(r.info.layoutDrift, 0, "JSON runtimeInputs/events mirror the model layout");
+});
+
+test("slice-json.mjs canonical form is the committed form (indent 1 + LF)", async () => {
+  const { isCanonical, canonical } = await import("../scripts/decomp/slice-json.mjs");
+  assert.equal(isCanonical(), true, "decomp/game-update-slice.json is canonical");
+  assert.equal(canonical({ a: [1] }), '{\n "a": [\n  1\n ]\n}\n');
+});
+
+test("mutate.mjs reports no stranded mutant on the tree", () => {
+  const out = execFileSync(process.execPath, [join(ROOT, "scripts", "decomp", "mutate.mjs"), "check"], { encoding: "utf8" });
+  assert.match(out, /clean — no stranded mutants/);
+});
+
 test("frontier.json carries the hand-off contract", () => {
   const f = JSON.parse(
     readFileSync(join(ROOT, "decomp", "frontier.json"), "utf8"),
