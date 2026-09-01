@@ -3118,3 +3118,508 @@ __attribute__((weak)) void imp_vcruntime140___purecall(CpuState *restrict cpu) {
     if (!self) self = &isaac_imports[621];
     isaac_stub_hit(self, cpu); cpu->EAX = 0;
 }
+__attribute__((weak)) void imp_version__VerifyVersionInfoA(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[622];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_ntdll__RtlVerifyVersionInfo(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[623];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglCreateContext(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[624];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglDeleteContext(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[625];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglGetCurrentDC(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[626];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglGetCurrentContext(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[627];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglMakeCurrent(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[628];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__wglShareLists(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[629];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetIntegerv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[630];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetString(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[631];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetStringi(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[632];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glClear(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[633];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glActiveTexture(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[634];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glAttachShader(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[635];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glBindFramebuffer(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[636];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glBindRenderbuffer(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[637];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glBindTexture(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[638];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glBlendEquation(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[639];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glBlendFuncSeparate(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[640];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glCheckFramebufferStatus(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[641];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glClampColorARB(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[642];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glClearColor(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[643];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glClearDepth(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[644];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glCompileShader(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[645];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glCreateProgram(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[646];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glCreateShader(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[647];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glCullFace(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[648];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDeleteFramebuffers(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[649];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDeleteProgram(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[650];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDeleteRenderbuffers(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[651];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDeleteShader(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[652];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDeleteTextures(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[653];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDepthFunc(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[654];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDisable(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[655];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDisableVertexAttribArray(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[656];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDrawArraysInstancedEXT(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[657];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glDrawElements(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[658];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glEnable(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[659];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glEnableVertexAttribArray(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[660];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glFramebufferRenderbuffer(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[661];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glFramebufferTexture2D(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[662];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGenFramebuffers(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[663];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGenRenderbuffers(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[664];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGenTextures(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[665];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetAttribLocation(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[666];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetCombinerInputParameterivNV(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[667];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetProgramInfoLog(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[668];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetProgramiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[669];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetRenderbufferParameteriv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[670];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetShaderInfoLog(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[671];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetShaderiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[672];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glGetUniformLocation(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[673];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glLinkProgram(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[674];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glMultiDrawArraysIndirectEXT(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[675];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glProgramUniform1ivEXT(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[676];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glReadPixels(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[677];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glRenderbufferStorage(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[678];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glShaderSource(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[679];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glTexImage2D(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[680];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glTexParameteri(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[681];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glTexSubImage2D(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[682];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform1fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[683];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform1i(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[684];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform1iv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[685];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform1uiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[686];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform2fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[687];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform2iv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[688];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform2uiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[689];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform3fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[690];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform3iv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[691];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform3uiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[692];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform4fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[693];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform4iv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[694];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniform4uiv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[695];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix2fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[696];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix2x3fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[697];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix2x4fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[698];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix3fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[699];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix3x2fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[700];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix3x4fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[701];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix4fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[702];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix4x2fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[703];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUniformMatrix4x3fv(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[704];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glUseProgram(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[705];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glVertexAttribPointer(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[706];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glVertexStream2fATI(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[707];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_opengl32__glViewport(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[708];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__DirectInput8Create(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[709];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__IDirectInput8A_QueryInterface(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[710];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__IDirectInput8A_AddRef(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[711];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__IDirectInput8A_Release(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[712];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__IDirectInput8A_GetDeviceCount(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[713];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_dinput8__IDirectInput8A_EnumDevices(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[714];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_Interface(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[715];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_SteamClient(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[716];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_CreateSteamPipe(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[717];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_GetSteamGenericInterface(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[718];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_ConnectToGlobalUser(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[719];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_ReleaseInterface(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[720];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_Init(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[721];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_steam_api__CSteamAPIContext_Zero(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[722];
+    isaac_trap(self, cpu);
+}

@@ -98,15 +98,18 @@ int main(int argc, char **argv) {
     check(isaac_is_guest_va(ISAAC_IMAGE_END - 1) &&
           isaac_is_guest_va(ISAAC_HEAP_VA + ISAAC_HEAP_SIZE - 1) &&
           isaac_is_guest_va(ISAAC_STACK_TOP_VA - 1) &&
-          isaac_is_guest_va(ISAAC_SHIM_BASE + 622 * ISAAC_SHIM_STRIDE - 1),
+          isaac_is_guest_va(ISAAC_SHIM_BASE + (isaac_import_count - 1) * ISAAC_SHIM_STRIDE),
           "image, heap, stack and shim tokens are all below the guest limit");
     check(ISAAC_HEAP_VA >= ISAAC_IMAGE_END,
           "guest heap is above the image, so a .data overrun hits guest memory");
     check(ISAAC_GUARD_VA + ISAAC_GUARD_SIZE == ISAAC_HOST_BASE_VA,
           "the guard region abuts the host base with no gap");
 
-    /* 1. table shape */
-    check(isaac_import_count == 622, "622 imports linked");
+    /* 1. table shape: 622 static IAT imports + the dynamic (LoadLibrary/
+     * GetProcAddress) exports the game resolves at runtime (RtlVerifyVersionInfo,
+     * wgl*, gl*, xinput, steam ctx, ...). The exact total is a canary that
+     * moves only when gen_shims.py's DYNAMIC_EXPORTS changes. */
+    check(isaac_import_count == 723, "622 IAT + 101 dynamic imports linked");
 
     /* 3. tokens are unique and round-trip */
     unsigned round = 0, uniq = 1;
@@ -126,14 +129,18 @@ int main(int argc, char **argv) {
     /* 3b. IAT binding: needs the .rdata IAT page to be addressable memory. */
     memset(isaac_g(ISAAC_IAT_VA), 0, ISAAC_IAT_SLOTS * 4);
     isaac_boot_bind_iat();
-    unsigned bound = 0;
+    unsigned bound = 0, slotted = 0;
     for (unsigned i = 0; i < isaac_import_count; ++i) {
+        /* Dynamic (LoadLibrary/GetProcAddress) exports have no IAT slot
+         * (iat_slot_va == 0) and are bound at resolve time, not here. */
+        if (!isaac_imports[i].iat_slot_va) continue;
+        ++slotted;
         if (isaac_r32(isaac_imports[i].iat_slot_va) == isaac_imports[i].shim_va)
             ++bound;
     }
-    printf("      %u/%u IAT slots hold their shim token\n",
-           bound, isaac_import_count);
-    check(bound == isaac_import_count, "IAT binding wrote every slot");
+    printf("      %u/%u IAT slots hold their shim token (%u dynamic exports unslotted)\n",
+           bound, slotted, isaac_import_count - slotted);
+    check(bound == slotted, "IAT binding wrote every slotted import");
 
     /* 2. THE OVERRIDE CHECK.
      * imp_..._errno is hand-written and must return the errno cell VA. The weak
@@ -489,6 +496,38 @@ int main(int argc, char **argv) {
               "GetProcAddress returns the SAME shim token the IAT holds");
         check(viaproc && isaac_r32(viaproc->iat_slot_va) == proc,
               "that token is bit-identical to the bound IAT slot");
+
+        /* A DYNAMIC export (not in the static IAT) must ALSO resolve: the game
+         * probes ntdll!RtlVerifyVersionInfo via GetProcAddress and calls the
+         * result unconditionally, so a NULL here is the boot fault at
+         * 0x00a8102c. gen_shims.py emits these dynamic rows into the C table;
+         * this proves GetProcAddress finds one. */
+        uint32_t hntdll = 0;
+        {
+            const char *nt = "ntdll.dll";
+            uint32_t nbuf16 = nbuf + 800;
+            for (unsigned i = 0; ; ++i) { isaac_w32(nbuf16 + 2u * i, nt[i]); if (!nt[i]) break; }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, nbuf16);
+            imp_kernel32__GetModuleHandleW(&cpu);
+            hntdll = cpu.EAX;
+        }
+        const char *rtl = "RtlVerifyVersionInfo";
+        for (unsigned i = 0; ; ++i) {
+            *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)rtl[i];
+            if (!rtl[i]) break;
+        }
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, hntdll);
+        isaac_w32(cpu.ESP + 8, sbuf);
+        imp_kernel32__GetProcAddress(&cpu);
+        isaac_import *rtlimp = isaac_resolve_shim(cpu.EAX);
+        check(cpu.EAX != 0 && rtlimp && !strcmp(rtlimp->symbol, "RtlVerifyVersionInfo"),
+              "GetProcAddress resolves the dynamic ntdll!RtlVerifyVersionInfo export");
 
         /* A symbol we do not have must be NULL -- callers probe deliberately. */
         const char *absent = "SleepConditionVariableCS";

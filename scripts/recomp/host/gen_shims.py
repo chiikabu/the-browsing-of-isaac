@@ -841,15 +841,23 @@ def main():
         ("steam_api.dll", "CSteamAPIContext_Zero", 4),
     ]
     dynamic_rows = []  # runtime-resolved (wglGetProcAddress/steam ctx): NOT IAT symbols
-    for dll, sym, arg_bytes, *conv in DYNAMIC_EXPORTS:
+    # Tokens/indices continue the stride AFTER the last IAT row so
+    # isaac_resolve_shim's (token-base)/stride index math still lands on the
+    # right isaac_imports[] slot. These rows are emitted into the C table
+    # (GetProcAddress must resolve them by name) but are NOT in the IAT, so
+    # isaac_boot_bind_iat skips them (it guards iat_slot_va == 0) and the JSON
+    # report keeps them under a separate "dynamicImports" key so the 622-IAT
+    # invariants the tests assert stay exactly 622.
+    for k, (dll, sym, arg_bytes, *conv) in enumerate(DYNAMIC_EXPORTS):
         is_std = conv[0] if conv else 1
         # argBytes is the runtime PURGE (isaac_indirect_call does ESP +=
         # 4 + arg_bytes): cdecl callers clean their own pushes, so cdecl
         # rows must purge 0 here. The signature size stays in the comment.
         purge = arg_bytes if is_std else 0
+        idx = len(rows) + k
         dynamic_rows.append({
-            "index": len(rows), "dll": dll, "symbol": sym,
-            "iatSlotVa": 0, "shimVa": 0x0F000000 + len(rows) * 16,
+            "index": idx, "dll": dll, "symbol": sym,
+            "iatSlotVa": 0, "shimVa": 0x0F000000 + idx * 16,
             "argBytes": purge, "isStdcall": is_std,
             "argBytesSource": "curated-signature",
             "callSites": 0, "verdict": "PROVIDED",
@@ -897,8 +905,12 @@ def main():
     (OUT_DIR / "shim-table.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
 
     # ---- emit C ----
+    # The C table includes the dynamic (non-IAT) exports so GetProcAddress can
+    # resolve them; the JSON summary above keeps them separate so the IAT
+    # invariants stay 622. isaac_import_count therefore == 622 + dynamic.
+    emit_rows = rows + dynamic_rows
     decls, table = [], []
-    for r in rows:
+    for r in emit_rows:
         decls.append("void %s(CpuState *restrict cpu);" % r["cident"])
         table.append(
             '  { "%s", "%s", 0x%08xu, 0x%08xu, %d, %d, %s, %d, %s },' % (
@@ -917,6 +929,8 @@ def main():
            " *   %s" % json.dumps(dict(by_src)),
            " */",
            '#include "isaac_host.h"', '#include "shim_decls.h"', "",
+           "/* %d IAT imports + %d dynamic (LoadLibrary/GetProcAddress) exports */"
+           % (len(rows), len(dynamic_rows)),
            "isaac_import isaac_imports[] = {"] + table + [
            "};",
            "const unsigned isaac_import_count = "
@@ -932,7 +946,7 @@ def main():
             " */",
             '#include "isaac_host.h"', '#include "shim_decls.h"', "",
             "extern isaac_import *isaac_find_import_by_shim(uint32_t shim_va);", ""]
-    for r in rows:
+    for r in emit_rows:
         weak.append("__attribute__((weak)) void %s(CpuState *restrict cpu) {"
                     % r["cident"])
         weak.append("    static const isaac_import *self;")

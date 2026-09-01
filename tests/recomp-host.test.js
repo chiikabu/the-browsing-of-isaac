@@ -213,13 +213,21 @@ test('generated C is structurally consistent with the shim table', (t) => {
   const decls = readFileSync(join(gen, 'shim_decls.h'), 'utf8');
   const weak = readFileSync(join(gen, 'shim_weak.c'), 'utf8');
 
+  /* The C table = the 622 static IAT imports + the dynamic (LoadLibrary/
+     GetProcAddress) exports gen_shims emits so GetProcAddress can resolve
+     them. The dynamic rows share the sentinel IAT slot 0 (they have no IAT
+     slot); every ident and shim token is still unique across the whole set. */
+  const st = readJson(join(host, 'shim-table.json'));
+  const nIat = st.totalImports;                 // 622
+  const nDyn = st.dynamicImports.length;        // dynamic exports
+  const nAll = nIat + nDyn;
   const rows = [...table.matchAll(/^\s*\{ "(.+?)", "(.*?)", (0x[0-9a-f]+)u, (0x[0-9a-f]+)u, (\d+), (\d+), (\w+), (\d+), (\w+) \},$/gm)];
-  assert.equal(rows.length, 622, 'table must hold every import');
+  assert.equal(rows.length, nAll, 'table must hold every IAT + dynamic import');
 
   const declNames = new Set([...decls.matchAll(/^void (\w+)\(CpuState \*restrict cpu\);$/gm)].map((m) => m[1]));
   const weakNames = new Set([...weak.matchAll(/void (\w+)\(CpuState \*restrict cpu\) \{/g)].map((m) => m[1]));
   const idents = new Set();
-  const slots = new Set();
+  const iatSlots = new Set();
   const tokens = new Set();
   for (const r of rows) {
     const [, , , slot, token, argBytes, isStdcall, , , ident] = r;
@@ -227,19 +235,19 @@ test('generated C is structurally consistent with the shim table', (t) => {
     assert.ok(weakNames.has(ident), `${ident} has a weak fallback`);
     assert.match(ident, /^[A-Za-z_][A-Za-z0-9_]*$/, `${ident} is a valid C identifier`);
     idents.add(ident);
-    slots.add(slot);
+    if (slot !== '0x00000000') iatSlots.add(slot);  // dynamic rows share slot 0
     tokens.add(token);
     // cdecl callees must not pop.
     if (isStdcall === '0') assert.equal(argBytes, '0');
   }
-  assert.equal(idents.size, 622, 'shim identifiers must be unique');
-  assert.equal(slots.size, 622, 'IAT slot VAs must be unique');
-  assert.equal(tokens.size, 622, 'shim tokens must be unique');
-  assert.equal(declNames.size, 622);
+  assert.equal(idents.size, nAll, 'shim identifiers must be unique');
+  assert.equal(iatSlots.size, nIat, 'the 622 IAT slot VAs must be unique');
+  assert.equal(tokens.size, nAll, 'shim tokens must be unique across IAT + dynamic');
+  assert.equal(declNames.size, nAll);
 
   // Every weak fallback must either trap or log; none may just return.
   const bodies = weak.split(/void \w+\(CpuState \*restrict cpu\) \{/).slice(1);
-  assert.equal(bodies.length, 622);
+  assert.equal(bodies.length, nAll);
   for (const b of bodies) {
     const body = b.split('\n}')[0];
     assert.ok(/isaac_trap|isaac_stub_hit/.test(body),
@@ -374,10 +382,14 @@ test('the indirect-call contract matches the lifter, name for name', (t) => {
   if (!existsSync(join(gen, 'shim_decls.h'))) return t.skip('run gen_shims.py');
   const mine = new Set([...readFileSync(join(gen, 'shim_decls.h'), 'utf8')
     .matchAll(/^void (imp_\w+)\(/gm)].map((m) => m[1]));
-  assert.equal(mine.size, 622);
+  // 622 static IAT imports + the dynamic (LoadLibrary/GetProcAddress) exports.
+  const st = readJson(join(host, 'shim-table.json'));
+  assert.equal(mine.size, st.totalImports + st.dynamicImports.length);
   // The lifter turns `call [IAT slot]` into a direct call to these exact
   // symbols at lift time. If the two generators disagree on a name, the module
-  // either fails to link or links against a second parallel definition.
+  // either fails to link or links against a second parallel definition. The
+  // lifter only references the 622 IAT imports; the dynamic exports are host-
+  // only, so this stays a subset check (every lifted imp_ exists in the host).
   const lifted = join(root, 'output', 'recomp', 'lift');
   if (!existsSync(lifted)) return t.skip('no lifted output to compare against');
   let seen = 0;
