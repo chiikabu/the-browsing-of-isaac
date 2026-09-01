@@ -166,6 +166,14 @@ def main():
     ap.add_argument("--state-only", action="store_true",
                     help="no local register cache: every access goes through "
                          "the shared CpuState pointer (the remill/rev.ng shape)")
+    ap.add_argument("--hand-written",
+                    help="C file whose `void sub_XXXXXXXX(CpuState` "
+                         "definitions are AUTHORITATIVE (scripts/recomp/host/"
+                         "src/missing_fns.c). Those VAs are not lifted: they "
+                         "are emitted as externs + weak aborting stubs, so "
+                         "the hand-transcribed definition wins at link. "
+                         "Without this the lifter and missing_fns.c both "
+                         "define them and the link fails on duplicates.")
     ap.add_argument("--max-insns", type=int, default=20000)
     ap.add_argument("--stats", help="write per-function stats JSON here")
     args = ap.parse_args()
@@ -200,6 +208,14 @@ def main():
                 if line:
                     want.append(int(line, 0))
     want = list(dict.fromkeys(want))
+    handwritten = set()
+    if args.hand_written:
+        with io.open(args.hand_written, encoding="utf8") as fh:
+            handwritten = {int(m, 16) for m in re.findall(
+                r"^void sub_([0-9a-f]{8})\(CpuState", fh.read(), re.M)}
+        # still function boundaries, so a caller does not absorb their bodies
+        func_starts |= handwritten
+    want = [v for v in want if v not in handwritten]
     deferred = [v for v in want if v in frags]
     want = [v for v in want if v not in frags]
     for v in want:
@@ -214,6 +230,7 @@ def main():
     stats = []
     failures = []
     callothers = []
+    callothers_wide = []
     imports_used = set()
     covered = set()
     pending = list(want)
@@ -245,6 +262,7 @@ def main():
             continue
         lifted[va] = src
         callothers.extend(em.callother)
+        callothers_wide.extend(em.callother_wide)
         imports_used.update(em.imports_used)
         for a, (ln, _ops) in body.items():
             covered.update(range(a, a + ln))
@@ -263,7 +281,7 @@ def main():
     # coverage safety net: a fragment nothing reached still has to be lifted
     rescued = 0
     for va in deferred:
-        if va in covered or va in lifted:
+        if va in covered or va in lifted or va in handwritten:
             continue
         func_starts.add(va)
         try:
@@ -289,6 +307,7 @@ def main():
         lifted[va] = src
         rescued += 1
         callothers.extend(em.callother)
+        callothers_wide.extend(em.callother_wide)
         imports_used.update(em.imports_used)
         st = dict(em.stats)
         st["va"] = va
@@ -310,10 +329,13 @@ def main():
     refs = set()
     for src in lifted.values():
         refs.update(int(m, 16) for m in re.findall(r"\bsub_([0-9a-f]{8})\(", src))
-    missing = sorted(refs - set(lifted))
+    missing = sorted((refs | handwritten) - set(lifted))
     others = {}
     for name, arity in callothers:
         others[name] = max(others.get(name, 0), arity)
+    others_wide = {}
+    for name, arity in callothers_wide:
+        others_wide[name] = max(others_wide.get(name, 0), arity)
 
     decls = ["/* generated */", '#include "recomp_state.h"',
              '#include "recomp_rt.h"', ""]
@@ -323,6 +345,13 @@ def main():
         params = ", ".join(["CpuState *restrict s"] +
                            ["uint32_t"] * others[o])
         decls.append("uint32_t recomp_other_%s(%s);" % (o, params))
+    for o in sorted(others_wide):
+        # wide (SSE/AVX) CALLOTHER: every operand travels as (bytes, size)
+        params = ", ".join(["CpuState *restrict s", "uint8_t *out",
+                            "unsigned outsz"] +
+                           ["const uint8_t *a%d, unsigned a%dsz" % (i, i)
+                            for i in range(others_wide[o])])
+        decls.append("void recomp_otherw_%s(%s);" % (o, params))
     for n in sorted(imports_used):
         decls.append("void %s(CpuState *restrict s);" % n)
     decls.append("")
@@ -369,14 +398,20 @@ def main():
         for va, msg in failures:
             fh.write("%#010x %s\n" % (va, msg))
 
+    # Reproducibility: the module directory must say how it was produced.
+    # The `gu` tree was rebuilt once without this and the invocation had to be
+    # reconstructed from `requested` counts and TU sizes.
     summary = dict(
+        argv=[sys.argv[0]] + sys.argv[1:],
         exe=args.exe,
         func_starts_scanned=len(func_starts),
         requested=len(want),
         lifted=len(lifted),
         failed=len(failures),
         missing_callees=len(missing),
+        hand_written=sorted(handwritten),
         callother_kinds=sorted(others),
+        callother_wide_kinds=sorted(others_wide),
         x86_bytes=sum(s["bytes"] for s in stats),
         x86_insns=sum(s["insns"] for s in stats),
         pcode_ops=sum(s["pcode_ops"] for s in stats),

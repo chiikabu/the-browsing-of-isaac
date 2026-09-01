@@ -1633,6 +1633,208 @@ layer, the deterministic clock and several more CRT frames.
 **neither has any evidence yet**, and the questions stay open exactly as
 they were.
 
+## 17. Round 8: the wide-varnode gap closed, and a SLEIGH defect it exposed
+
+The boot trapped on `sub_00ab2d80` because the lifter refused wide (>8-byte)
+SSE varnodes in three places. This round closes them, and the harness built
+to prove the new lowerings immediately found a *pre-existing* silent
+miscompile that had nothing to do with them.
+
+### 17.1 What the lifter could not do
+
+`failures.txt` said `subreg size 16 unsupported` / `wide op ... size 16` and
+nothing else. That message named the function but not the instruction, so
+each one cost a probe script to locate; `_emit_all` now tags every
+`LiftError` with the guest VA that raised it (`0x00ab2d80 at 0xab2f9e: ...`).
+With that, the 49 failing bodies classify in one pass:
+
+| gap | instructions | fix |
+|---|---|---|
+| CALLOTHER with a 16/32-byte operand | `pshuflw` `pshufhw` `pmulld` `pshufb` `pmovsxwd` `pmaddubsw` `maxps` `minps` `pabsd` `vpcmpeqb` `vpinsrd` `vcvtt*` … | new `recomp_otherw_*` convention |
+| `INT_NEGATE` size 16 | `pandn` (`~XMM` before the AND) | `recomp_wide_not` |
+| `SUBPIECE` with a >8-byte *output* | the xmm half of a ymm | `memcpy` slice |
+| 6-byte `LOAD` | `les` / `lds` | **not fixed** — 2 bodies, both data misdecoded as code |
+
+**47 of the 49 now lift**, including `sub_00ab2d80` and the three sibling
+`psrad` functions. The two survivors are the far-pointer loads.
+
+### 17.2 The wide CALLOTHER convention
+
+The existing `recomp_other_*` intrinsics are `uint32_t`-shaped, which is why
+the MMX ones are documented as lossy. An XMM operand cannot travel that way
+at all, so wide sites get a parallel namespace:
+
+```c
+void recomp_otherw_pshuflw(CpuState *restrict s, uint8_t *out, unsigned outsz,
+                           const uint8_t *a0, unsigned a0sz,   /* old dest */
+                           const uint8_t *a1, unsigned a1sz,   /* source   */
+                           const uint8_t *a2, unsigned a2sz);  /* imm8     */
+```
+
+Every operand is (pointer, byte size). Small operands are materialised into
+temps by the existing `anyptr`, so one shape covers mixed widths — the imm8
+of `pshuflw`, or `vcvttss2usi`'s 4-byte output from a 16-byte input. SLEIGH
+passes the **old destination first** for the two-operand x86 forms
+(`XmmReg1 = op(XmmReg1, XmmReg2_m128)`), which matters for the ops whose
+result ignores it, `pmovsxwd` among them. Callees must be alias-safe:
+`XMM0 = pshuflw(XMM0, XMM0, imm)` hands one pointer three times.
+
+`mkstubs.py` emits weak self-naming aborts for the rest, so a wide intrinsic
+the port actually executes fails loudly at its own name rather than silently.
+Only `pshuflw` and `pshufhw` are implemented — they are what the boot needs;
+the other 28 declared names stay stubs until something reaches them.
+
+### 17.3 The harness: one instruction at a time
+
+Whole-function replay could not verify any of this. All four `psrad`
+functions call other functions, so a mismatch there names a function, not an
+instruction. `scripts/recomp/oracle/wideops.py` instead:
+
+    assemble one instruction -> lift it with the REAL lifter
+                             -> compile with the REAL recomp_rt.c
+                             -> run over N random XMM inputs
+                             -> diff against Unicorn on the same inputs
+
+12 instructions × 200 vectors, `tests/recomp-wideops.test.js`, 2.7 s. Four
+of the twelve are **controls** (`paddd` `pxor` `pand` `movdqa`) whose
+lowerings the boot already exercises: if the harness breaks, they go red
+too, so a green run cannot mean "nothing was compared". Mutation-checked —
+masking `pshuflw`'s selector to 1 bit reddens `pshuflw` alone; making
+`recomp_wide_not` a copy reddens `pandn` alone.
+
+### 17.4 The defect it found: `PSLLD` / `PSLLQ` shift by the wrong count
+
+Ghidra's `ia.sinc` gives the xmm left shifts a **per-lane** count:
+
+```
+:PSLLD  XmmReg1, XmmReg2 { XmmReg1[0,32]  = XmmReg1[0,32]  << XmmReg2[0,32];
+                           XmmReg1[32,32] = XmmReg1[32,32] << XmmReg2[32,32];
+                           ... }
+```
+
+The hardware shifts **every lane by the low 64 bits of the source**, zeroing
+lanes when that count exceeds the lane width. The right shifts in the same
+file save the count into a local first (`local count:8 = XmmReg2[0,64];`)
+and are correct; only the left shifts are wrong. `vpsllv*`, which *is*
+genuinely per-lane, is a pcodeop, so it cannot be confused with this.
+
+This is not theoretical. The binary has **12 real `pslld xmm, xmm` sites**
+(0x926623, 0x92663f, 0x92665e, 0x926677, 0xad18a7, 0xad18d6, 0xad18f9,
+0xad1915, 0xad1b17, 0xad1b46, 0xad1b69, 0xad1b85), all in vectorised index
+arithmetic of the form `movd xmm2, ecx` → `pshufd` → `paddd` → `pslld` →
+`paddd` → `movups`. Because the count register is loaded with `movd`, lanes
+1..3 hold **zero** — so the defect leaves three of every four lanes
+unshifted and writes them to the output array. No trap, no wrong-looking
+control flow: exactly the failure mode that survives a boot-to-completion
+test and corrupts data.
+
+`packed_shift_defect()` recognises the shape — N consecutive same-size lane
+`INT_LEFT`s whose count operands are the matching consecutive lanes of one
+register — and the lowering then reads the count once as a 64-bit value,
+clamped to the lane width (`recomp_shl*` already returns 0 at or above the
+width). The shape test is what makes it safe: it cannot fire on a shift that
+is per-lane by design.
+
+**How it was found matters.** No amount of reading the lifter would have
+surfaced it; the p-code was lowered exactly as SLEIGH wrote it. It took an
+oracle at instruction granularity, and it was found within a minute of the
+harness first running — against ground truth the project already had but had
+never pointed at a single instruction.
+
+### 17.5 The re-lift, measured
+
+Full re-lift of the 16,282-VA inventory (400 s) into `output/recomp/lift/gu2`:
+
+| | Aug-10 `gu` | this round |
+|---|---|---|
+| lifted | 23,381 | **23,411** |
+| lift failures | 73 | **26** |
+| `.text` coverage | 96.44% | **96.74%** |
+| missing callees | 36 | **14** |
+| wide CALLOTHER kinds declared | — | 30 (2 implemented) |
+
+The 26 survivors are 22 `BadDataError` (SLEIGH cannot decode the body at
+all), 2 bodies over the 20,000-instruction cap, and the 2 far-pointer loads.
+**No wide-varnode failure remains.**
+
+The packed-shift correction fires on exactly **48 lanes = 12 sites × 4**,
+matching the independent byte-pattern census of `pslld xmm, xmm` in `.text`.
+That equality is the evidence the shape test does not over-fire: if it
+matched anything else in 2.02 M instructions, the count would be higher.
+
+### 17.6 Reproducibility gap closed, and two traps in the rebuild
+
+The `gu` module directory recorded what was produced but not how. Rebuilding
+it meant reconstructing the invocation from `requested` counts and TU sizes,
+and the first two attempts were wrong in ways the module only reveals at
+compile time. `summary.json` now carries `argv`, and the boot lift is:
+
+```bash
+python scripts/recomp/lift/emit.py --exe tools/isaac-ng.unpacked.exe     --ghidra-functions output/recomp/export/functions.jsonl     --fragments-tsv    output/recomp/export/recovered-functions.tsv     --imports          output/recomp/census/imports.json     --shim-table       output/recomp/host/shim-table.json     --va-file          output/recomp/lift/starts_union.txt     --hand-written     scripts/recomp/host/src/missing_fns.c     --dispatch auto --split-bytes 12000000 --trace-va     --out output/recomp/lift/gu --module lifted     --stats output/recomp/lift/gu/stats.json
+python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu     --exe tools/isaac-ng.unpacked.exe
+python scripts/recomp/lift/build_boot.py --dir output/recomp/lift/gu
+```
+
+**`--trace-va` is not optional for the boot.** It is documented as a
+debugging aid, but `RECOMP_VA(...)` is also the *marker* `patch_reentry.py`
+and `mkdispatch.py` scan to find call continuations. Lift without it and
+`mkdispatch` reports `re-entry blocks: 0`, emits the re-entry dispatcher
+against `G_NBLOCK` / `g_bva` / `g_bfn` that the `blocks`-guarded branch never
+declared, and `dispatch_tbl.c` fails to compile. (`LIFT_CFLAGS` also carries
+`-DRECOMP_MEM_CHECK=1`, so the markers are live in the boot build anyway.)
+
+**`--hand-written` is new, and it encodes an invariant that was previously
+maintained by hand.** `scripts/recomp/host/src/missing_fns.c` carries six
+instruction-by-instruction transcriptions of callees the lifter could not
+produce, and their contract is "weak aborting placeholder in `stubs.c`,
+strong definition here". Round 8 made **five of the six liftable** — which
+would have made both layers define the same symbol strongly. Worse, the
+lifted bodies of those five reach `vcvtqq2pd` / `vpinsrd` / `vcvtt*2usi`,
+which are declared wide intrinsics with no implementation, so promoting them
+would have traded a verified transcription for an abort. The flag reads the
+VA set out of `missing_fns.c` itself, so there is one source of truth: what
+that file defines, the lifter does not emit. It also fixes a latent hole —
+`0x00aa9350` has no direct caller (it is reached through a data slot), so it
+never appeared in `refs`, and its declaration had been added to
+`lifted_decls.h` by hand. It is now emitted like any other missing callee.
+
+### 17.7 The boot after the re-lift
+
+`sub_00ab2d80` lifts, so the trap it caused is gone. Rebuilt (`liftCompile
+575.8 s`, `link 425.5 s`, **272,269,106 B wasm, 0 undefined, 0 duplicate
+symbols**) and re-run, the boot goes far past where it stopped:
+
+- Steam context faked, **EOS SDK** `EOS_Initialize` / `EOS_Platform_Create`
+  stubbed (the game handles the null platform handle and shuts EOS down),
+- GL 4.6.0, **`SwapBuffers` called twice** — frames are being presented,
+- libtheora 1.2.0alpha and libvorbis 1.3.4 initialise,
+- `CreateThread`, `timeBeginPeriod`, `DragAcceptFiles`, 1,997 stub calls
+  across 14 distinct symbols (899 of them `EnterCriticalSection`),
+- **the guest heap is live for the first time**: 31,423 allocs / 8,431
+  frees, peak 53.5 MiB, largest single 6.7 MiB, 2 failures — earlier rounds
+  reported "0 allocations, peak 0 bytes",
+- the version banner prints: `Binding of Isaac: Repentance+ v1.9.7.17.J460`,
+- guard intact after `main`.
+
+**New stopping point, and it is not the lifter.** After the Lua layer fails
+to find `resources/scripts/main.lua`, the game re-opens the packed archives
+and **every open fails**, including the five that were seeded and read
+successfully during asset load:
+
+```
+[odsa] [ERROR] - Failed to open archive file 'resources/packed/animations.a'
+   ... config.a, fonts.a, graphics.a, music.a, rooms.a, sfx.a, videos.a, afterbirth.a
+```
+
+33 `AnmCache failed to load` follow, and the HUD path dereferences the null
+ANM2 at **`0x009a26c2`** (`guest read of 4 bytes at 0x30`). Two things are
+mixed together there and should be separated before either is "fixed":
+`music.a`, `sfx.a`, `videos.a` and `afterbirth.a` are **never seeded**
+(`BOOT_ARCHIVES` in `boot_integration.mjs` lists five), while `graphics.a`
+and `animations.a` **are** seeded and still fail this second open — so the
+shim FS is refusing a re-open that the first pass allowed. That is the next
+unit, and it is a host-FS question, not a lifting one.
+
 ## Appendix: reproduction
 
 ```bash

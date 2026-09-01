@@ -281,6 +281,65 @@ uint32_t recomp_other_packsswb(CpuState *s, uint32_t a,
        | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
 
+/* ------------------------------------------------------------------ */
+/* Wide CALLOTHER intrinsics (recomp_otherw_*).                        */
+/*                                                                     */
+/* SSE/AVX pcodeops whose operands do not fit the uint32_t by-value    */
+/* convention above.  Every operand arrives as (bytes, size) and the   */
+/* result is written through `out`; `outsz` is the p-code output size. */
+/*                                                                     */
+/* SLEIGH passes the *old destination* as the first operand for the    */
+/* two-operand x86 forms (`XmmReg1 = op(XmmReg1, XmmReg2_m128)`), so   */
+/* a0 is the old dest and a1 the source for anything whose result does */
+/* not read the destination.  Callees must be alias-safe: a site like  */
+/* `XMM0 = pshuflw(XMM0, XMM0, imm)` passes one pointer three times,   */
+/* so read the inputs into locals before touching `out`.               */
+/*                                                                     */
+/* Only the intrinsics the port actually executes are implemented; the */
+/* rest stay weak aborting stubs from mkstubs.py that name themselves. */
+/* ------------------------------------------------------------------ */
+
+/* `out` is a live XMM register slot, so a width the body does not model
+ * would silently scribble past it.  SLEIGH names the ymm/zmm shuffles
+ * separately (vpshuflw_avx2 and friends), so 16 is the only legal width
+ * here and anything else is a lifter change that must be noticed. */
+static void rc_widecheck(const char *who, unsigned sz, unsigned want) {
+  if (sz == want) return;
+  fprintf(stderr, "recomp: %s got a %u-byte operand, models %u\n",
+          who, sz, want);
+  abort();
+}
+
+void recomp_otherw_pshuflw(CpuState *s, uint8_t *out, unsigned outsz,
+                           const uint8_t *a0, unsigned a0sz,
+                           const uint8_t *a1, unsigned a1sz,
+                           const uint8_t *a2, unsigned a2sz) {
+  (void)s; (void)a0; (void)a0sz; (void)a2sz;
+  uint8_t src[16];
+  unsigned imm = a2[0];                 /* imm8, widened by SLEIGH */
+  rc_widecheck("pshuflw", outsz, 16u);
+  rc_widecheck("pshuflw", a1sz, 16u);
+  memcpy(src, a1, 16);                  /* alias-safe: out may be a1 */
+  for (int i = 0; i < 4; ++i)           /* low qword: 4 shuffled words */
+    memcpy(out + 2 * i, src + 2 * ((imm >> (2 * i)) & 3u), 2);
+  memcpy(out + 8, src + 8, 8);          /* high qword copied through */
+}
+
+void recomp_otherw_pshufhw(CpuState *s, uint8_t *out, unsigned outsz,
+                           const uint8_t *a0, unsigned a0sz,
+                           const uint8_t *a1, unsigned a1sz,
+                           const uint8_t *a2, unsigned a2sz) {
+  (void)s; (void)a0; (void)a0sz; (void)a2sz;
+  uint8_t src[16];
+  unsigned imm = a2[0];
+  rc_widecheck("pshufhw", outsz, 16u);
+  rc_widecheck("pshufhw", a1sz, 16u);
+  memcpy(src, a1, 16);
+  memcpy(out, src, 8);                  /* low qword copied through */
+  for (int i = 0; i < 4; ++i)           /* high qword: 4 shuffled words */
+    memcpy(out + 8 + 2 * i, src + 8 + 2 * ((imm >> (2 * i)) & 3u), 2);
+}
+
 uint32_t recomp_other_swi(CpuState *s, uint32_t n) {
   (void)s;
   fprintf(stderr, "recomp: software interrupt %u\n", (unsigned)n);

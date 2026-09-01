@@ -54,6 +54,7 @@ def gen_stubs(d):
                if l.strip()]
     decls = open(os.path.join(d, "lifted_decls.h")).read()
     others = re.findall(r"uint32_t recomp_other_(\w+)\(([^)]*)\);", decls)
+    others_wide = re.findall(r"void recomp_otherw_(\w+)\(([^)]*)\);", decls)
     shims = re.findall(r"void (imp_\w+)\(CpuState", decls)
     path = os.path.join(d, "stubs.c")
     with open(path, "w") as fh:
@@ -67,10 +68,13 @@ def gen_stubs(d):
                              for i, p in enumerate(ps))
             fh.write("uint32_t recomp_other_%s(%s){ (void)s; abort(); "
                      "return 0; }\n" % (name, args))
+        for name, params in others_wide:
+            fh.write("__attribute__((weak)) void recomp_otherw_%s(%s)"
+                     "{ (void)s; abort(); }\n" % (name, params))
         for name in shims:
             fh.write("void %s(CpuState *restrict s)"
                      "{ s->EIP=MEMR32(s->ESP); s->ESP+=4; }\n" % name)
-    return len(missing), len(others) + len(shims)
+    return len(missing), len(others) + len(others_wide) + len(shims)
 
 
 def main():

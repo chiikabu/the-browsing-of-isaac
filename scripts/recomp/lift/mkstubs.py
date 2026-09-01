@@ -49,6 +49,7 @@ def main():
     missing = [l.strip() for l in open(os.path.join(d, "missing.txt"))
                if l.strip()]
     others = re.findall(r"uint32_t recomp_other_(\w+)\(([^)]*)\);", decls)
+    others_wide = re.findall(r"void recomp_otherw_(\w+)\(([^)]*)\);", decls)
     shims = re.findall(r"void (imp_\w+)\(CpuState", decls)
 
     names = set()
@@ -85,6 +86,11 @@ def main():
             fh.write('__attribute__((weak)) uint32_t recomp_other_%s(%s)'
                      ' { (void)s; recomp_missing("intrinsic", "%s"); }\n'
                      % (n, sig, n))
+        for n, params in others_wide:
+            # wide decls already name their parameters
+            fh.write('__attribute__((weak)) void recomp_otherw_%s(%s)'
+                     ' { (void)s; recomp_missing("intrinsic", "%s"); }\n'
+                     % (n, params, n))
         if not args.no_import_stubs:
             for n in shims:
                 # NB: no cdecl epilogue here on purpose -- 315 of the 587

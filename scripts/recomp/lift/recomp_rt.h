@@ -149,6 +149,19 @@ static inline void recomp_wide_shr(uint8_t *d, const uint8_t *a, int n,
   }
 }
 
+static inline void recomp_wide_not(uint8_t *dst, const uint8_t *a, int n) {
+  for (int i = 0; i < n; ++i) dst[i] = (uint8_t)~a[i];
+}
+
+static inline void recomp_wide_2comp(uint8_t *dst, const uint8_t *a, int n) {
+  unsigned carry = 1u;
+  for (int i = 0; i < n; ++i) {
+    unsigned v = (unsigned)(uint8_t)~a[i] + carry;
+    dst[i] = (uint8_t)v;
+    carry = v >> 8;
+  }
+}
+
 /* kind: 0 = xor, 1 = and, 2 = or */
 static inline void recomp_bitop(uint8_t *dst, const uint8_t *a,
                                 const uint8_t *b, int n, int kind) {

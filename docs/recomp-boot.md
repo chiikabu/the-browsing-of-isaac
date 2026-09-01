@@ -1168,7 +1168,33 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
 
 ## 10. Open items, honestly
 
-- **BOOT RUNS DEEP INTO ENGINE INIT (2026-08-31, updated).** After the two
+- **BOOT REACHES THE ARCHIVE RE-OPEN (2026-08-31, round 8).** The lifter gap
+  that stopped the previous run is closed (`sub_00ab2d80` and 46 other
+  wide-varnode bodies now lift; see recomp-architecture.md §17), the module
+  relinks clean (272,269,106 B wasm, 0 undefined / 0 duplicate symbols), and
+  a seeded boot now runs through **Steam + EOS init, GL 4.6.0, two
+  `SwapBuffers`, libtheora/libvorbis, 31,423 guest heap allocations (peak
+  53.5 MiB — the heap is live for the first time), and the version banner
+  `Repentance+ v1.9.7.17.J460`**, guard intact after `main`.
+  **New stopping point:** after the Lua layer misses
+  `resources/scripts/main.lua`, the game re-opens every packed archive and
+  all of them fail — including `graphics.a` and `animations.a`, which the
+  same run seeded and read successfully during asset load. 33
+  `AnmCache failed to load` follow and the HUD dereferences the null ANM2 at
+  `0x009a26c2` (`guest read of 4 bytes at 0x30`).
+  **Next unit, two separable parts:**
+  1. `BOOT_ARCHIVES` in `boot_integration.mjs` seeds five archives;
+     `music.a`, `sfx.a`, `videos.a` and `afterbirth.a` are never seeded.
+  2. The seeded ones still fail this *second* open, so the shim FS is
+     refusing a re-open the first pass allowed — find out why before adding
+     archives, or the added ones will fail the same way.
+  Full log: `output/recomp/lift/boot/run-gu2.log`.
+  Rebuild: the lift invocation is now recorded in
+  `output/recomp/lift/gu/summary.json` (`argv`) and reproduced in
+  recomp-architecture.md §17.6 — note `--trace-va` and `--hand-written` are
+  both load-bearing for the boot build.
+
+- **(superseded 2026-08-31) BOOT RUNS DEEP INTO ENGINE INIT.** After the two
   shim fixes below, a seeded boot passes win32 init, `ntdll!RtlVerifyVersionInfo`,
   all 117 CRT initialisers, Steam context (faked), the GL version parse
   ("4.6.0"), the CreateThread/CriticalSection stubs, and the game's own asset

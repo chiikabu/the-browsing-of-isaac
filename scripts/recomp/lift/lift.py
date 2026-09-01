@@ -225,6 +225,51 @@ def block_starts(body):
 # emitter
 
 
+def packed_shift_defect(ops):
+    """Ghidra's x86 SLEIGH gives PSLLD/PSLLQ (xmm) a PER-LANE shift count:
+
+        XmmReg1[0,32]  = XmmReg1[0,32]  << XmmReg2[0,32]
+        XmmReg1[32,32] = XmmReg1[32,32] << XmmReg2[32,32]
+        ...
+
+    The hardware shifts every lane by the SAME count, the low 64 bits of the
+    source, and produces zero when that count exceeds the lane width.  The
+    right shifts in the same spec file save the count into a local first and
+    are correct; only the left shifts are wrong.  The game binary has twelve
+    real `pslld xmm, xmm` sites (0x926623.., 0xad18a7..), all in vectorised
+    index arithmetic where lanes 1..3 of the count register happen to be
+    zero -- so the defect silently leaves three lanes unshifted instead of
+    trapping.  Found by scripts/recomp/oracle/wideops.py.
+
+    Returns the count varnode whose low 8 bytes are the real count, or None.
+    VPSLLV* is genuinely per-lane, but SLEIGH models it as a pcodeop
+    (CALLOTHER), not INT_LEFT, so it cannot match this shape.
+    """
+    if len(ops) not in (2, 4, 8):
+        return None
+    if any(o.opcode != OpCode.INT_LEFT for o in ops):
+        return None
+    outs = [o.output for o in ops]
+    srcs = [o.inputs[0] for o in ops]
+    cnts = [o.inputs[1] for o in ops]
+    vs = outs + srcs + cnts
+    if any(v is None or v.space.name != "register" for v in vs):
+        return None
+    sz = outs[0].size
+    if sz not in (4, 8) or len(ops) * sz not in (16, 32):
+        return None
+    if any(v.size != sz for v in vs):
+        return None
+    for k in range(len(ops)):
+        if outs[k].offset != outs[0].offset + k * sz:
+            return None
+        if srcs[k].offset != outs[k].offset:
+            return None
+        if cnts[k].offset != cnts[0].offset + k * sz:
+            return None
+    return cnts[0]
+
+
 def vnkey(vn):
     return (vn.space.name, vn.offset, vn.size)
 
@@ -249,6 +294,7 @@ class FuncEmitter:
         self.callind_const = 0
         self.imports_used = set()
         self.const_ptr = {}
+        self.pshift_count = None
         self.uniques = OrderedDict()      # (off,size) -> cname
         self.roots = OrderedDict()        # root_name -> root_size (<=8)
         self.bigs = OrderedDict()         # (off,size) -> cname  (unique >8)
@@ -258,6 +304,7 @@ class FuncEmitter:
         self.labels = set()
         self.sublabels = set()
         self.callother = []
+        self.callother_wide = []
         self.callind = 0
         self.branchind = 0
         self.direct_calls = set()
@@ -400,6 +447,11 @@ class FuncEmitter:
         elif oc == OpCode.STORE:
             self.emit("memcpy(RECOMP_PTR(%s), %s, %d);"
                       % (self.rd(ins[1]), self.bigptr(ins[2]), ins[2].size))
+        elif oc == OpCode.SUBPIECE and o.size > 8:
+            # wide slice of a wider varnode (e.g. the xmm half of a ymm)
+            self.emit("memcpy(%s, %s + %d, %d);"
+                      % (self.bigptr(o, True), self.bigptr(ins[0]),
+                         ins[1].offset, o.size))
         elif oc == OpCode.SUBPIECE and o.size <= 8:
             off = ins[1].offset
             self.wr(o, "recomp_rd%d(%s + %d)"
@@ -413,6 +465,12 @@ class FuncEmitter:
             dst = self.bigptr(o, True)
             self.emit("recomp_zext(%s, %d, %s, %d);"
                       % (dst, o.size, self.anyptr(ins[0]), ins[0].size))
+        elif oc == OpCode.INT_NEGATE:
+            self.emit("recomp_wide_not(%s, %s, %d);"
+                      % (self.bigptr(o, True), self.bigptr(ins[0]), o.size))
+        elif oc == OpCode.INT_2COMP:
+            self.emit("recomp_wide_2comp(%s, %s, %d);"
+                      % (self.bigptr(o, True), self.bigptr(ins[0]), o.size))
         elif oc in (OpCode.INT_XOR, OpCode.INT_AND, OpCode.INT_OR):
             kind = {OpCode.INT_XOR: 0, OpCode.INT_AND: 1, OpCode.INT_OR: 2}[oc]
             self.emit("recomp_bitop(%s, %s, %s, %d, %d);"
@@ -487,6 +545,40 @@ class FuncEmitter:
             raise LiftError("wide op %s size %d unsupported"
                             % (oc, o.size if o is not None else ins[0].size))
 
+    def lower_callother_wide(self, op):
+        """CALLOTHER with a >8-byte operand: the SSE/AVX pcodeops.
+
+        The by-value `recomp_other_*` convention is uint32_t-shaped and
+        cannot carry an XMM/YMM operand, so wide sites get a parallel
+        `recomp_otherw_*` namespace passing every operand as
+        (pointer, byte size).  Small operands are materialised into temps,
+        so one shape covers mixed-width intrinsics -- the imm8 of pshuflw,
+        or vcvttss2usi's 4-byte output from a 16-byte input.
+
+        Callees must be alias-safe: `XMM0 = pshuflw(XMM0, XMM0, imm)`
+        hands the same pointer as both output and input.
+        """
+        name = self.callother_name(op)
+        o = op.output
+        ins = op.inputs
+        args = ["%s, %d" % (self.anyptr(v), v.size) for v in ins[1:]]
+        outt = None
+        if o is None:
+            outp, outsz = "(uint8_t *)0", 0
+        elif o.size > 8:
+            outp, outsz = self.bigptr(o, True), o.size
+        else:
+            outt = "t%d_%d" % (len(self.tmps), o.size)
+            self.tmps.append((outt, o.size))
+            outp, outsz = "(uint8_t *)&%s" % outt, o.size
+        self.callother_wide.append((name, len(ins) - 1))
+        self.spill()
+        self.emit("recomp_otherw_%s(s, %s, %d%s);"
+                  % (name, outp, outsz, (", " + ", ".join(args)) if args else ""))
+        self.reload()
+        if outt is not None:
+            self.wr(o, outt)
+
     def f64_of(self, vn):
         """Read any float varnode as a C double (80-bit becomes double)."""
         if vn.size > 8:
@@ -513,8 +605,11 @@ class FuncEmitter:
 
         wide = (o is not None and o.size > 8) or \
             any(v.space.name != "const" and v.size > 8 for v in ins)
-        if wide and oc not in (OpCode.CALLOTHER,):
-            self.lower_wide(op)
+        if wide:
+            if oc == OpCode.CALLOTHER:
+                self.lower_callother_wide(op)
+            else:
+                self.lower_wide(op)
             return
 
         if oc == OpCode.COPY:
@@ -649,7 +744,8 @@ class FuncEmitter:
         elif oc == OpCode.INT_LEFT:
             sz = o.size
             self.wr(o, "recomp_shl%d(%s, %s)"
-                    % (sz * 8, self.rd(ins[0]), self.rd(ins[1])))
+                    % (sz * 8, self.rd(ins[0]),
+                       self.shift_count(ins[1], sz)))
         elif oc == OpCode.INT_RIGHT:
             sz = o.size
             self.wr(o, "recomp_shr%d(%s, %s)"
@@ -716,6 +812,25 @@ class FuncEmitter:
                        self.rd(ins[0])))
         else:
             raise LiftError("unhandled p-code op %s" % oc)
+
+    def shift_count(self, vn, sz):
+        """Shift count for a narrow shift, correcting the PSLLD/PSLLQ defect.
+
+        `packed_shift_defect` flagged the whole instruction, so every lane
+        reads the same 64-bit count.  Clamping to the lane width reproduces
+        the hardware's zero-on-overshift (recomp_shl* saturates there), and
+        it is the same idiom lower_wide uses for the SSE packed shifts.
+        """
+        cv = self.pshift_count
+        if cv is None:
+            return self.rd(vn)
+        root, rsize, boff = self.rm.resolve(cv.offset, cv.size)
+        if rsize < 8 or boff + 8 > rsize:
+            return self.rd(vn)
+        self.bigroots[root] = rsize
+        c = "recomp_rd64(&s->%s[%d])" % (root, boff)
+        bits = sz * 8
+        return "(%s)((%s) >= %d ? %d : (%s))" % (UTYPE[sz], c, bits, bits, c)
 
     def callother_name(self, op):
         txt = pypcode.PcodePrettyPrinter.fmt_op(op)
@@ -869,10 +984,12 @@ class FuncEmitter:
         self.callind_const = 0
         self.imports_used = set()
         self.const_ptr = {}
+        self.pshift_count = None
         self.lines = []
         self.labels = set()
         self.sublabels = set()
         self.callother = []
+        self.callother_wide = []
         self.callind = 0
         self.branchind = 0
         self.direct_calls = set()
@@ -912,11 +1029,22 @@ class FuncEmitter:
             if need_l is None or va in need_l:
                 self.lines.append("L_%08x: ;" % va)
             self.const_ptr = {}
+            self.pshift_count = packed_shift_defect(ops)
             for idx, op in enumerate(ops):
                 if need_p is None or (va, idx) in need_p:
                     self.lines.append("P_%08x_%d: ;" % (va, idx))
                 self.note_const_ptr(op)
-                self.lower(va, idx, op, next_va)
+                try:
+                    self.lower(va, idx, op, next_va)
+                except LiftError as e:
+                    # Name the guest instruction that failed: failures.txt is
+                    # the lifter's work list, and "subreg size 16" without a
+                    # VA costs a probe script to re-locate.
+                    if not getattr(e, "va_tagged", False):
+                        e2 = LiftError("at %#x: %s" % (va, e))
+                        e2.va_tagged = True
+                        raise e2 from None
+                    raise
             tail_needed = (need_p is None or (va, len(ops)) in need_p)
             if tail_needed:
                 self.lines.append("P_%08x_%d: ;" % (va, len(ops)))
