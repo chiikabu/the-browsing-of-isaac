@@ -201,13 +201,15 @@ void sub_00aefe20(CpuState *restrict s) {
  * definitions are correct for it and are overridden by recomp_rt.c's
  * strong versions in the real boot build. */
 
-/* Set by the shim dispatcher (host_trap.c) for the fault register dump. */
-struct CpuState *recomp_last_cpu;
+/* Set by the shim dispatcher (host_trap.c) for the fault register dump.
+ * Weak so recomp_rt.c's strong definition wins in the boot link. */
+__attribute__((weak)) struct CpuState *recomp_last_cpu;
 
 /* Guest longjmp unwind to isaac_guest_call. The standalone selftest has no
  * guest call frame to unwind to; reaching here in that build is a defect,
- * so fail loudly rather than silently returning. */
-void isaac_guest_longjmp(CpuState *restrict cpu) {
+ * so fail loudly rather than silently returning. Weak so dispatch_tbl.c's
+ * setjmp-backed definition wins in the boot link. */
+__attribute__((weak)) void isaac_guest_longjmp(CpuState *restrict cpu) {
     (void)cpu;
     fprintf(stderr,
             "[selftest] isaac_guest_longjmp reached in the host-only build\n");

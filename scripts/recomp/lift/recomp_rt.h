@@ -77,6 +77,7 @@ void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
   } while (0)
 #else
 #define RECOMP_CHECK(a, n, w) ((void)0)
+#define RECOMP_WATCH(a, n, w) ((void)0)
 #define RECOMP_VA(v) ((void)0)
 #endif
 
