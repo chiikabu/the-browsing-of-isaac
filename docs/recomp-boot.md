@@ -1168,7 +1168,8 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
 
 ## 10. Open items, honestly
 
-- **RAM-FS asset seeding — hook LANDED (2026-08-31), boot relink PENDING.**
+- **BOOT NOW BUILDS + SEEDS + ADVANCES (2026-08-31).** `scripts/recomp/lift/build_boot.py` scripts the boot link for the first time (was the ad-hoc `link_prof.sh`): dispatch gen, host+entry+runtime+dispatch compile, reuse the `gu` lifted objects, link to an ES6 `boot.mjs` with `_isaac_fs_seed` exported (link exit 0, 271 MB). Two link fixes: `recomp_rt.h`'s `RECOMP_MEM_CHECK=0` branch was missing the `RECOMP_WATCH` no-op stub (broke any non-check TU); the selftest's `recomp_last_cpu`/`isaac_guest_longjmp` stubs are now `weak` so `recomp_rt.c` wins in the boot link. A seeded boot run (`node boot_integration.mjs main`) places 5 archives (graphics.a 17.5 MB, config/fonts/animations/rooms), keeps the guard intact through boot, and reaches a NEW trap in GLFW's win32 init (`0x00a80530`): the version gate calls `[0xc75adc]` = `ntdll.dll!RtlVerifyVersionInfo` unconditionally, but `GetProcAddress` returns 0 for it (no shim — `ntdll.dll` is registered as a handle, but this symbol has no implementation), so the slot is NULL and the call traps at `0x00a8102c`. The sibling DPI/xinput/dwmapi/shcore symbols in the same init ARE null-checked by GLFW and are fine to leave 0. **Next unit:** make `GetProcAddress("RtlVerifyVersionInfo")` resolve to a shim that returns the version-compare result for an emulated modern Windows, then `build_boot.py` (~442 s) and re-run to the next trap.
+- **RAM-FS asset seeding — hook LANDED (2026-08-31), used at boot.**
   The empty shim FS made `Manager::LoadImage("gfx/ui/coop menu.png")` return
   NULL and the lifted HUD path fault at `0x009a26c2`. `isaac_fs_seed(path,
   data, len)` in `host_shims_fs.c` now places the packed archives as real
