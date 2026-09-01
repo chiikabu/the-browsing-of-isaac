@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-08-31, round 8)
+# Handoff — read this first (2026-08-31, round 9)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`; `git status` is clean. Do the two session-start steps in
@@ -23,7 +23,7 @@ emsdk env itself). Full family suites REQUIRE emsdk on PATH:
 - Update slice **ABI 100**. `npm test` **3891/3891** (warm ~1m34s; the
   family suites cache their wasm builds — `tests/wasm-build-cache.mjs`).
 - `decomp:verify-slice` differential **5387 cases pass**.
-- recomp host selftest **77/0**, `tests/recomp-host.test.js` **33/33**.
+- recomp host selftest **82/0**, `tests/recomp-host.test.js` **33/33**.
 - recomp lifter wide-op differential vs Unicorn **12 instructions x 200
   vectors, all green** (`scripts/recomp/oracle/wideops.py`,
   `tests/recomp-wideops.test.js`).
@@ -50,36 +50,48 @@ procedure: `docs/unit-runbook.md`.
 ### B. Recomp machine track (the path to a running port — higher leverage)
 `scripts/recomp/` statically recompiles the whole PE to wasm (**96.73%** of
 .text lifted, 26 lift failures left and none of them a wide-varnode gap). A
-seeded boot now gets through win32 init → CRT → Steam → **EOS** → GL "4.6.0"
-→ asset load → libtheora/libvorbis → **two `SwapBuffers`** → 31,423 guest
-heap allocs (peak 53.5 MiB) → the version banner
-`Repentance+ v1.9.7.17.J460`, guard intact after `main`. Reproduce:
+seeded boot gets through win32 init → CRT → Steam → **EOS** → GL "4.6.0" →
+libtheora/libvorbis → **two `SwapBuffers`** → 31,423 guest heap allocs (peak
+53.5 MiB) → the version banner `Repentance+ v1.9.7.17.J460`, guard intact
+after `main`. Reproduce:
 `cd output/recomp/lift/boot && node boot_integration.mjs ../../host/isaac.segs.bin main`
-(log kept at `output/recomp/lift/boot/run-gu2.log`).
+(logs: `run-fix1.log` traced, `run-gu2.log` untraced).
 
-**Exact next unit (B) — host FS, not the lifter.** After the Lua layer misses
-`resources/scripts/main.lua`, the game **re-opens every packed archive and
-every open fails**, including `graphics.a` and `animations.a` which the same
-run seeded and read during asset load. 33 `AnmCache failed to load` follow and
-the HUD dereferences the null ANM2 at `0x009a26c2` (`guest read of 4 bytes at
-0x30`). Two separable parts: (a) `BOOT_ARCHIVES` in `boot_integration.mjs`
-seeds five — `music.a`, `sfx.a`, `videos.a`, `afterbirth.a` are never seeded;
-(b) the seeded ones fail the **second** open, so the shim FS refuses a re-open
-the first pass allowed — diagnose (b) first or the added archives fail the
-same way. Details: `docs/recomp-boot.md §10`, `decomp/frontier.json` →
-`machineTrack`, `docs/recomp-architecture.md §17`.
+**Exact next unit (B) — the archive mount, inside the guest.** The boot fails
+to open every packed archive, 33 `AnmCache` loads fail behind it, and the HUD
+dereferences the null ANM2 at `0x009a26c2`. This is **not** an FS-shim
+problem: `ISAAC_FS_TRACE=1` shows the archives are never `fopen`ed at all.
+The decision happens in `0x00a179c0` → `0x00a17180` → `0x00a16c60`, which
+resolves relative paths only through a per-mount-root `std::map`. In the
+trapped run there is exactly one mount root
+(`[0x00c379e8]`=`0x00d09ca4`, `[0x00c379ec]`=`0x00d09ca8`), its map at
+`0x00d09c30` has `_Mysize == 0`, and the loaded-archive count `[0x00c37b14]`
+is 0 — nothing ever populated the index, and mounting scans nothing
+(`0x00a16e00`, 54 insns, no FS API). Two threads to pull: what fills a mount
+root's map, and the archive list `0x009aa040` walks at `[0x00bfae60]` (no
+writer in `.text`). `0x00a17180` has an absolute drive-letter branch that
+bypasses the VFS — a lever if the names can be made absolute. Full analysis:
+`docs/recomp-architecture.md §18`, `docs/recomp-boot.md §10`.
 
-**Rebuilding the module** (only if you change the lifter):
-`emit.py` (~400 s; the exact invocation is recorded in
-`output/recomp/lift/gu/summary.json` → `argv`, and in recomp-architecture.md
-§17.6) → `patch_reentry.py --dir output/recomp/lift/gu --exe tools/isaac-ng.unpacked.exe`
-→ `build_boot.py --dir output/recomp/lift/gu` (compile ~576 s, link ~425 s).
-`--trace-va` and `--hand-written` are both load-bearing — without `--trace-va`
-`dispatch_tbl.c` does not even compile. Verify a new p-code lowering with
-`python scripts/recomp/oracle/wideops.py` (one x86 instruction at a time vs
-Unicorn) BEFORE that ~17-minute rebuild: it is what caught the Ghidra SLEIGH
-`PSLLD`/`PSLLQ` per-lane-count defect that had been silently miscompiling 12
-real sites.
+**Debugging tools (use these before adding a printf):**
+- `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.
+- `ISAAC_DUMP32=0xc379e8:4,0xc37b14:2` — prints guest dwords after `main`
+  traps. Guest memory is identity-mapped into the wasm heap and the harness
+  still holds the module after the abort, so an engine static costs nothing
+  to read. A relink is ~7 minutes; this is free.
+- `python scripts/recomp/oracle/wideops.py` — one x86 instruction at a time
+  vs Unicorn. Run it before any ~17-minute full rebuild after a lifter
+  change; it is what caught the Ghidra SLEIGH `PSLLD`/`PSLLQ` per-lane-count
+  defect that had been silently miscompiling 12 real sites.
+
+**Rebuilding** (only if you change the lifter): `emit.py` (~400 s; exact
+invocation recorded in `output/recomp/lift/gu/summary.json` → `argv`, and in
+recomp-architecture.md §17.6) → `patch_reentry.py --dir output/recomp/lift/gu
+--exe tools/isaac-ng.unpacked.exe` → `build_boot.py --dir
+output/recomp/lift/gu` (compile ~576 s, link ~425 s). `--trace-va` and
+`--hand-written` are both load-bearing — without `--trace-va`
+`dispatch_tbl.c` does not even compile. **A host-only change needs no
+re-lift**: `build_boot.py` reuses the lifted objects (~16 s + ~355 s link).
 
 ## Ground rules that bite (from AGENTS.md, do not relearn the hard way)
 - The tree wins over any doc "checkpoint" number — status.mjs is truth.

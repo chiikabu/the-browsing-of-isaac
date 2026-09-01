@@ -57,6 +57,17 @@ static uint32_t g_find_cur[FS_FIND_RG];
 static uint32_t g_find_n[FS_FIND_RG];
 static uint32_t g_find_ids[FS_FIND_RG][128];
 
+/* ISAAC_FS_TRACE=1 logs every path this layer is asked about and what it
+ * answered.  The guest builds an in-memory index of its data directories and
+ * then resolves archives against that index, so "Failed to open archive file"
+ * says nothing about which probe actually failed -- or whether one happened
+ * at all.  Off by default: the boot makes thousands of FS calls. */
+static int fs_trace(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("ISAAC_FS_TRACE"); v = (e && *e && *e != '0'); }
+    return v;
+}
+
 __attribute__((unused))
 static uint32_t fs_err_last(void) { return isaac_r32(ISAAC_TEB_VA + 0x34u); }
 static void fs_err_set(uint32_t e) { isaac_w32(ISAAC_TEB_VA + 0x34u, e); }
@@ -82,6 +93,27 @@ static int fs_key(const char *p, char *out, size_t cap) {
     /* drop a single trailing "/" */
     while (n > 1 && tmp[n - 1] == '/') --n;
     tmp[n] = 0;
+    /* drop "." segments.  The leading-"./" strip above cannot handle "./" on
+     * its own (nothing follows it) or a "." in the middle, and the game does
+     * probe the bare cwd -- GetFileAttributesA("./") was landing on the key
+     * "c:/isaac/." and missing. */
+    {
+        size_t base = (n && tmp[0] == '/') ? 1u : 0u;   /* keep a leading '/' */
+        size_t r = base, w = base;
+        while (r < n) {
+            size_t seg = r;
+            while (seg < n && tmp[seg] != '/') ++seg;
+            int dot = (seg - r == 1 && tmp[r] == '.');
+            if (!dot) {
+                if (w > base) tmp[w++] = '/';
+                memmove(tmp + w, tmp + r, seg - r);
+                w += seg - r;
+            }
+            r = (seg < n) ? seg + 1 : n;
+        }
+        n = w;
+        tmp[n] = 0;
+    }
     /* resolve relative paths against the virtual cwd (the game's data root).
      * On Windows the save dir "." IS the cwd, so both spellings must land on
      * the same key. */
@@ -216,6 +248,9 @@ void imp_kernel32__GetFileAttributesA(CpuState *restrict cpu) {
     (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "GetFileAttributesA");
     if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
     fs_entry *e = fs_find(key);
+    if (fs_trace())
+        isaac_log("[isaac][fs] GetFileAttributesA('%s') key='%s' -> %s", p, key,
+                  e ? (e->is_dir ? "DIR" : "FILE") : "MISS");
     if (!e) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; } /* INVALID_FILE_ATTRIBUTES */
     cpu->EAX = e->is_dir ? 0x10u : 0x80u;
 }
@@ -300,6 +335,9 @@ void imp_kernel32__FindFirstFileA(CpuState *restrict cpu) {
     char key[256];
     if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
     fs_entry *dir = fs_find(key);
+    if (fs_trace())
+        isaac_log("[isaac][fs] FindFirstFileA('%s') key='%s' -> %s", p, key,
+                  (dir && dir->is_dir) ? "DIR" : "MISS");
     if (!dir || !dir->is_dir) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
     /* snapshot children (key + "/" + name, no deeper nesting) */
     uint32_t sid = 0xFFFFFFFFu;
@@ -376,6 +414,9 @@ void imp_api_ms_win_crt_stdio__fopen(CpuState *restrict cpu) {
     char mode[16];
     (void)isaac_guest_cstr(isaac_arg(cpu, 1), mode, sizeof mode, "fopen mode");
     fs_entry *e = fs_find(key);
+    if (fs_trace())
+        isaac_log("[isaac][fs] fopen('%s') key='%s' -> %s", p, key,
+                  e ? (e->is_dir ? "DIR" : "hit") : "MISS");
     int reading = 0, writing = 0, append = 0;
     for (const char *m = mode; *m; ++m) {
         char c = *m;

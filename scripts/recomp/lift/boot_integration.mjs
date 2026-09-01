@@ -88,4 +88,29 @@ console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 try { m._isaac_stub_report(); } catch (e) { /* best effort */ }
 try { m._isaac_heap_report(); } catch (e) { /* absent in older host builds */ }
 try { m._isaac_module_report(); } catch (e) { /* absent in older host builds */ }
+
+// --- optional guest-memory dump ---------------------------------------
+// ISAAC_DUMP32=0xc379e8:4,0xc37a10:8 prints guest dwords after main. The
+// guest address space is identity-mapped into the wasm heap, so a static the
+// engine keeps (a vector's begin/end, a manager's this) can be read back
+// without rebuilding the 272 MB module just to add a printf.
+if (process.env.ISAAC_DUMP32) {
+  console.log('\n=== guest dwords (ISAAC_DUMP32) ===');
+  for (const spec of process.env.ISAAC_DUMP32.split(',')) {
+    const [aStr, nStr] = spec.split(':');
+    const va = Number(aStr.trim());
+    const n = Number(nStr ?? 1) || 1;
+    if (!Number.isFinite(va) || va <= 0) { console.log(`  bad spec '${spec}'`); continue; }
+    // HEAPU8 is the only view this link exports; assemble dwords by hand.
+    const rd32 = (a) => (m.HEAPU8[a] | (m.HEAPU8[a + 1] << 8) |
+                         (m.HEAPU8[a + 2] << 16) | (m.HEAPU8[a + 3] << 24)) >>> 0;
+    for (let i = 0; i < n; i += 4) {
+      const row = [];
+      for (let k = 0; k < 4 && i + k < n; k++)
+        row.push(rd32(va + 4 * (i + k)).toString(16).padStart(8, '0'));
+      console.log(`  ${(va + 4 * i).toString(16).padStart(8, '0')}: ${row.join(' ')}`);
+    }
+  }
+}
+
 console.log(`\nRESULT: ${mainRc === null ? 'main trapped' : 'main returned ' + mainRc}`);

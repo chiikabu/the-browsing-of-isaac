@@ -826,6 +826,41 @@ int main(int argc, char **argv) {
         for (unsigned i = 0; i < sizeof payload; ++i)
             if (*(uint8_t *)isaac_g(rbuf + i) != payload[i]) { match = 0; break; }
         check(match, "the bytes read back are byte-for-byte what was seeded");
+
+        /* "." segments must collapse. The game probes its own cwd as "./"
+         * during the save-data setup; that was normalising to the key
+         * "c:/isaac/." and missing, so the probe reported "no such
+         * directory" for the directory everything else resolves against.
+         * Found with ISAAC_FS_TRACE=1 on a boot run. */
+        static const char *const dotforms[] = {
+            "./resources/packed", "resources/./packed", "./resources/./packed/",
+        };
+        for (unsigned k = 0; k < sizeof dotforms / sizeof dotforms[0]; ++k) {
+            for (unsigned i = 0; ; ++i) {
+                *(uint8_t *)isaac_g(dbuf + i) = (uint8_t)dotforms[k][i];
+                if (!dotforms[k][i]) break;
+            }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, dbuf);
+            imp_kernel32__GetFileAttributesA(&cpu);
+            check(cpu.EAX == 0x10u, "a '.' segment collapses to the same dir key");
+        }
+        /* the bare cwd, in both spellings, is the FS root and always exists */
+        static const char *const cwdforms[] = { ".", "./" };
+        for (unsigned k = 0; k < 2; ++k) {
+            for (unsigned i = 0; ; ++i) {
+                *(uint8_t *)isaac_g(dbuf + i) = (uint8_t)cwdforms[k][i];
+                if (!cwdforms[k][i]) break;
+            }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, dbuf);
+            imp_kernel32__GetFileAttributesA(&cpu);
+            check(cpu.EAX == 0x10u, "the bare cwd reads as a directory");
+        }
     }
 
     isaac_module_report();

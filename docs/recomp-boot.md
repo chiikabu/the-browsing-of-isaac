@@ -1168,31 +1168,60 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
 
 ## 10. Open items, honestly
 
-- **BOOT REACHES THE ARCHIVE RE-OPEN (2026-08-31, round 8).** The lifter gap
-  that stopped the previous run is closed (`sub_00ab2d80` and 46 other
-  wide-varnode bodies now lift; see recomp-architecture.md §17), the module
-  relinks clean (272,269,106 B wasm, 0 undefined / 0 duplicate symbols), and
-  a seeded boot now runs through **Steam + EOS init, GL 4.6.0, two
-  `SwapBuffers`, libtheora/libvorbis, 31,423 guest heap allocations (peak
-  53.5 MiB — the heap is live for the first time), and the version banner
-  `Repentance+ v1.9.7.17.J460`**, guard intact after `main`.
-  **New stopping point:** after the Lua layer misses
-  `resources/scripts/main.lua`, the game re-opens every packed archive and
-  all of them fail — including `graphics.a` and `animations.a`, which the
-  same run seeded and read successfully during asset load. 33
-  `AnmCache failed to load` follow and the HUD dereferences the null ANM2 at
-  `0x009a26c2` (`guest read of 4 bytes at 0x30`).
-  **Next unit, two separable parts:**
-  1. `BOOT_ARCHIVES` in `boot_integration.mjs` seeds five archives;
-     `music.a`, `sfx.a`, `videos.a` and `afterbirth.a` are never seeded.
-  2. The seeded ones still fail this *second* open, so the shim FS is
-     refusing a re-open the first pass allowed — find out why before adding
-     archives, or the added ones will fail the same way.
-  Full log: `output/recomp/lift/boot/run-gu2.log`.
-  Rebuild: the lift invocation is now recorded in
-  `output/recomp/lift/gu/summary.json` (`argv`) and reproduced in
-  recomp-architecture.md §17.6 — note `--trace-va` and `--hand-written` are
-  both load-bearing for the boot build.
+- **BOOT REACHES THE ARCHIVE MOUNT (2026-08-31, round 9).** The round-8
+  lifter gap is closed (`sub_00ab2d80` and 46 other wide-varnode bodies now
+  lift; recomp-architecture.md §17), the module relinks clean, and a seeded
+  boot runs through **Steam + EOS init, GL 4.6.0, two `SwapBuffers`,
+  libtheora/libvorbis, 31,423 guest heap allocations (peak 53.5 MiB — the
+  heap is live for the first time), and the version banner
+  `Repentance+ v1.9.7.17.J460`**, guard intact after `main`. It then fails to
+  open every packed archive, 33 `AnmCache` loads fail behind that, and the
+  HUD dereferences the null ANM2 at `0x009a26c2`
+  (`guest read of 4 bytes at 0x30`).
+
+  **Correction to the round-8 entry:** that entry called this a *re-open*
+  failure. It is not. `ISAAC_FS_TRACE=1` shows the archives are **never
+  `fopen`ed at all** — there is no earlier successful open. The complete FS
+  probe list for a whole boot is 16 lines (save-dir setup,
+  `savedatapath.txt`, `log.txt`, `kage_mount_points.dat` twice, two Lua
+  scripts, `options.ini`); `resources/packed/animations.a` is never asked
+  for.
+
+  **Located exactly.** The failure is decided inside the guest before any
+  I/O: `0x00a179c0` → `0x00a17180` → `0x00a16c60`, which resolves relative
+  paths *only* through a per-mount-root `std::map` keyed by a path hash
+  (`0x00a159d0`). Read back from the trapped run with `ISAAC_DUMP32`:
+  the mount-root vector `[0x00c379e8]..[0x00c379ec]` holds **exactly one
+  root** (`0x00d09ca4..0x00d09ca8`); that root's map at `0x00d09c30` has
+  **`_Mysize == 0`**; the loaded-archive count `[0x00c37b14]` is **0**. The
+  root is mounted unconditionally by `0x009abbd0` from the empty string at
+  `0x00b1a4ec`, and mounting scans nothing (`0x00a16e00` is 54 instructions,
+  no FS API). Nothing has ever populated the index.
+
+  **Next unit — two threads, both in the guest:** (1) what fills a mount
+  root's map; (2) the archive list `0x009aa040` walks at `[0x00bfae60]`,
+  which has no writer in `.text`. `0x00a17180` also has an absolute
+  drive-letter branch that bypasses the VFS entirely — a lever if the
+  archive names can be made absolute. Full analysis:
+  recomp-architecture.md §18. Logs: `output/recomp/lift/boot/run-fix1.log`
+  (traced), `run-gu2.log` (untraced).
+
+  **Tools added this round:** `ISAAC_FS_TRACE=1` logs every FS probe and its
+  answer; `ISAAC_DUMP32=0xva:n,...` prints guest dwords after `main` traps,
+  so an engine static can be read without a ~7-minute relink.
+
+  **Also fixed:** `fs_key` never collapsed a `.` path segment, so the game's
+  own `GetFileAttributesA("./")` cwd probe normalised to `c:/isaac/.` and
+  missed. Fixed, mutation-checked, host selftest **77 → 82 checks, 0
+  failures**. It is not the archive blocker and is recorded as its own fix.
+
+  Rebuild: the lift invocation is recorded in
+  `output/recomp/lift/gu/summary.json` (`argv`) and in
+  recomp-architecture.md §17.6 — `--trace-va` and `--hand-written` are both
+  load-bearing. A host-only change needs no re-lift: `build_boot.py` reuses
+  the lifted objects (~16 s host compile + ~355 s link).
+
+- **(superseded, round 8) BOOT REACHES THE ARCHIVE OPEN.** The round-8 entry described this as a re-open failure; §18 corrects that.
 
 - **(superseded 2026-08-31) BOOT RUNS DEEP INTO ENGINE INIT.** After the two
   shim fixes below, a seeded boot passes win32 init, `ntdll!RtlVerifyVersionInfo`,

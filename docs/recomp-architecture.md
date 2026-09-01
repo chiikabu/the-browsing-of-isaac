@@ -1835,6 +1835,83 @@ and `animations.a` **are** seeded and still fail this second open — so the
 shim FS is refusing a re-open that the first pass allowed. That is the next
 unit, and it is a host-FS question, not a lifting one.
 
+## 18. Round 9: the archive blocker, located exactly
+
+Round 8's entry called this a *re-open* failure — archives seeded and read
+during asset load, then failing a second open. **That was wrong**, and the
+tools built here disprove it: there is no earlier successful archive open in
+the run at all. What follows is what the evidence actually says.
+
+### 18.1 Two tools, because guessing was the expensive part
+
+- **`ISAAC_FS_TRACE=1`** (`host_shims_fs.c`) logs every path the FS shim is
+  asked about and what it answered, for `fopen`, `GetFileAttributesA` and
+  `FindFirstFileA`. Off by default: the boot makes thousands of FS calls.
+- **`ISAAC_DUMP32=0xc379e8:4,0xc37b14:2`** (`boot_integration.mjs`) prints
+  guest dwords *after* `main` traps. The guest address space is identity-
+  mapped into the wasm heap and the harness still holds the module after the
+  abort, so any engine static can be read back **without relinking the
+  272 MB module to add a printf** — which is what makes this affordable at
+  ~7 minutes per host-only rebuild.
+
+### 18.2 What the trace actually shows
+
+**The archives are never `fopen`ed.** The complete list of FS probes in a
+boot run is 16 lines: the save-data directory setup, `savedatapath.txt`,
+`log.txt`, `kage_mount_points.dat` (twice), the two Lua scripts, and
+`options.ini`. `resources/packed/animations.a` is never asked for.
+
+So `Failed to open archive file` is decided entirely inside the guest, before
+any I/O. The path is `0x00a179c0` (the error printer) → `0x00a17180` → for a
+relative path `0x00a16c60`, which resolves **only** through a per-mount-root
+`std::map` keyed by a case-insensitive path hash (`0x00a159d0`, djb2 seeded
+0x1505, backslash folded to slash). There is no physical-file fallback on
+that path.
+
+Read back from the trapped run:
+
+| static | value | meaning |
+|---|---|---|
+| `[0x00c379e8]` / `[0x00c379ec]` | `0x00d09ca4` / `0x00d09ca8` | mount-root vector: **exactly one root** |
+| root object `0x00d09c2c` | vtable `0x00b81cf8` | |
+| map at `0x00d09c30` | head `0x00d09c4c`, **`_Mysize = 0`** | the root's index is **empty** |
+| `[0x00c37b14]` | **0** | zero archives loaded |
+
+`0x00a16c60` therefore skips the loaded-archive lookup (guarded on
+`[0x00c37b14] > 0`), searches the one root's empty map, misses, runs out of
+roots and returns 0. Every archive fails identically, 33 `AnmCache` loads
+fail behind them, and the HUD dereferences the null ANM2 at `0x009a26c2`.
+
+The single root is mounted unconditionally by `0x009abbd0` (called from
+`0x009aa040` at `0x009aa74c`) from the **empty string** at `0x00b1a4ec`, and
+mounting does not scan: `0x00a16e00` is 54 instructions and touches no FS
+API. So nothing has ever populated that map.
+
+**Where to resume.** Two threads, both inside the guest: (1) what fills a
+mount root's map — until something does, no relative path resolves; and
+(2) the archive list itself. `0x009aa040` walks a linked list at
+`[0x00bfae60]` calling `0x00a179c0` per node, and that cell has **no writer
+in `.text`** (so it is either NULL at this point or written through a
+register-held pointer). Note `0x00a17180` has a second branch: an absolute
+drive-letter path skips the VFS entirely, which is a lever if the archive
+names can be made absolute.
+
+### 18.3 One real defect found and fixed along the way
+
+`fs_key` collapsed separators and stripped a *leading* `./` only when
+something followed it, and never collapsed a `.` segment elsewhere. So the
+game's probe of its own working directory, `GetFileAttributesA("./")`,
+normalised to the key `c:/isaac/.` and missed — the shim reported "no such
+directory" for the directory every other path resolves against. `.` segments
+now collapse (with the leading `/` of an absolute path preserved), pinned by
+five new host-selftest checks (**77 → 82 checks, 0 failures**) and
+mutation-checked: reverting the collapse reddens four of the five.
+
+It is a genuine fix and it changes the trace — `./` now answers `DIR`, and a
+malformed doubled-USERPROFILE probe disappears — but it is **not** the
+archive blocker, which is unchanged. Recorded as such rather than as
+progress toward the trap.
+
 ## Appendix: reproduction
 
 ```bash
