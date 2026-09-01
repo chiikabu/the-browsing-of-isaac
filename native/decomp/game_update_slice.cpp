@@ -1839,7 +1839,7 @@ constexpr size_t kFrameOpaque98dba0ModeOffset = 0x25ecc;
 constexpr size_t kFrameOpaque98dba0FlagOffset = 0x25ed0;
 constexpr size_t kFrameOpaque98dba0CounterOffset = 0x25ed4;
 constexpr size_t kFrameOpaque98dba0Float170Offset = 0x2603c;
-constexpr size_t kFrameOpaque98dba0Float2d0Offset = 0x261bc;
+constexpr size_t kFrameOpaque98dba0Float2d0Offset = 0x2619c;
 /* HUD_Message at Game+0x216e0 (VA 0x00840c60 text_out receiver). */
 constexpr size_t kHudMessageFlag8Offset = 0x216e8;    /* this+0x8  byte  */
 constexpr size_t kHudMessagePlayed64Offset = 0x21744; /* this+0x64 byte  */

@@ -275,7 +275,7 @@ import {
   SFX_STOP_ALL_GROUP_WALK,
 } from "./sfx-pure-model.mjs";
 
-export const ABI_VERSION = 99;
+export const ABI_VERSION = 100;
 /* ABI v97 (wave-26 merge, PLAN update-v102-abi97-plan): the walker
    freeze-lift — 4 runtime lanes @14276..14292 + 3 walker probe events
    @956..968; record-4 store-plan APPLICATION arm (3 exports); record-12
@@ -5564,7 +5564,7 @@ export const BINARY_LAYOUT = Object.freeze({
   frameOpaque98dba0Flag: Object.freeze({ offset: 155344, type: "u32" }),
   frameOpaque98dba0Counter: Object.freeze({ offset: 155348, type: "u32" }),
   frameOpaque98dba0Float170: Object.freeze({ offset: 155708, type: "f32" }),
-  frameOpaque98dba0Float2d0: Object.freeze({ offset: 156092, type: "f32" }),
+  frameOpaque98dba0Float2d0: Object.freeze({ offset: 156060, type: "f32" }),
   difficulty269c8: Object.freeze({ offset: 158152, type: "u32" }),
   byte67744: Object.freeze({ offset: 423748, type: "u32" }),
   mode26584: Object.freeze({ offset: 157060, type: "u32" }),

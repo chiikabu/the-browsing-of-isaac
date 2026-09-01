@@ -156,7 +156,7 @@ enum {
      frame_opaque_98dba0_entity_surface_accept_pure @980..984; the
      RTTI-block bl-fold law (isaac_game_update_slice_entity_surface_rtti_
      fold) + the walk_step accept-AL byte-gate correction land in-module. */
-  ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 99,
+  ISAAC_GAME_UPDATE_SLICE_ABI_VERSION = 100,
   /* ABI v95 (record idx 15 opaqueRoomUpdatePrefixB3B7): capture caps. A
      host that sees more live entries than the cap MUST NOT set
      b3b7_sparse_ready (module falls back to the monolithic residual). */

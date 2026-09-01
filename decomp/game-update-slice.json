@@ -2,7 +2,7 @@
  "schemaVersion": 1,
  "rootSymbol": "Game::Update",
  "rootVa": "0x006fadc0",
- "abiVersion": 99,
+ "abiVersion": 100,
  "block": "post-guard timers through room-update prefix/clear/ambient/tail peel of VA 0x00802980: pure B0 entry clear + ordered prefix host residuals B1 / B2-host / B3B7 + pure-gated B8 path-cost + B9B11 + pure B2 Room+0x7764 collectible-timer countdown + pure B6 water-lerp countdown + B14 camera/FX lerp + tail countdowns + StatHUD lanes; record 9 state==2 arm pure (v89) ; record 9 iterate-arm JOIN pure-decision proof (v93)",
  "fields": [
   {
@@ -925,8 +925,9 @@
   },
   {
    "name": "frameOpaque98dba0Float2d0",
-   "address": "Game+0x261bc",
-   "binaryOffset": "0x261bc",
+   "address": "Game+0x2619c",
+   "binaryOffset": "0x2619c",
+   "correction20260831": "ABI v100: was pinned 0x261bc in model+cpp+JSON together (dual-side-consistent, so the differential could not see it - green-lie class 4). Machine truth: this=Game+0x25ecc at both Update sites (0x006fb521/0x006fb918 lea ecx,[edi+0x25ecc]) and the join block 0x0098df8b/0x0098df9b reads/writes [edi+0x2d0] with edi=this (0x0098dbc8 mov edi,ecx; convergent with the correct +0x170->0x2603c pin and [edi]+0x624->0x264f0 in the same block) = 0x2619c. 0x261bc (= this+0x2f0) has NO access in this body. Found by the Grok-4.6 idx-5 scout, machine-verified by the coordinator.",
    "bytes": 4,
    "type": "f32",
    "direction": "inout",
@@ -32472,6 +32473,7 @@
    "idx": 5,
    "targetVa": "0x0098dba0",
    "name": "opaqueCall0098dba0",
+   "assessment20260831": "Grok-4.6 scout + coordinator verification. STAYS-HOST. Body 0x0098dba0..0x0098e170, 385 insns, 2 Update callers (0x006fb527 iff Game+0x1ba78==0 && Game+0x1b83c!=0; 0x006fb91e after 0x9b7650 AL==0). Blocker 0x00956110 (nested Lua 0x864c30 + [[entry]+0x30] + 0xa20940; this-site arg2 is a player ptr not -1, so the v95 walk-fold is unreachable). No new Game sparse fields beyond v66+idx32. DEAD SITE proven: call_reg [0xc7e814] @0x0098de02 - 0 writers / 101 readers, zero-at-load -> constant 0. LAYOUT DEFECT FOUND AND FIXED at ABI v100: frameOpaque98dba0Float2d0 was pinned Game+0x261bc in model+cpp+JSON together (dual-side-consistent green-lie); machine is [this+0x2d0] with this=Game+0x25ecc (0x0098df8b/0x0098df9b in the join block, edi=this) = Game+0x2619c. Corrected everywhere + discriminating capture test + killed mutant + differential re-run 5387 @ ABI 100. Full scout report: output/decomp/_scratch/grok-scouts-20260831/idx5-98dba0.md.",
    "operation": "HOST",
    "evidence": "NOT removed; timer block narrowed (v66/v76), player-walk residual HOST. v90 ASSESSED: walk iterates the [0xc71678]+0x1baa8 manager entries (id [entry+0x1618]), matches players in the [0xc7169c]+0x4b3d8 list by [player+0xc]==id, per match dispatches the VIRTUAL [[player+0x370]+0x14] (accept feeds the walk state machine) - host-only, not blob-gateable without the entity surface; 0x956110 typed-pair residual + 0xa112c0 bursts covered by frame-opaque/log contracts.",
    "abiV95": "entity-surface capture contract landed ([[player+0x370]+0x14], walk sites 0x98dca2/0x98dd1d): the [matched MP entry]+0x370 subobject vptr is one of exactly two .rdata vtables (0xb82d98 DataUpdate_t / 0xb82e20 Network::KAGE::MultiplayerManager::LobbyDataUpdate_t); vtable[0x14] accept predicates (0xa5f260 / 0xa23970) are PURE and captured (class-bits + frame/animation fields: impl byte0 flag, id words +8/+0xc 0xfefefefe gate, layer node +0x20->+0x10 vs [0xc5ac00], netman lookup [0xc7999c]+0x2b4 gated by [0xc73680]/[0xc73694]==0x60001); the pure decision shell folds the walk state machine (probe1_ran/bl_after1, rtti_enter); the virtual dispatch STAYS TYPED-HOST (host captures the real AL to verify). NARROWED further, not removed STAYS",
@@ -32604,6 +32606,7 @@
    "idx": 35,
    "targetVa": "0x00802a80",
    "name": "opaqueRoomUpdateTailRain",
+   "assessment20260831": "Grok-4.6 scout (UNVERIFIED beyond coordinator spot checks - do NOT move to resolved without confirming the open questions). Pin 0x00802a80 is mid-body inside Room::Update 0x00802980; record span 248 insns. Scout claim: REMOVABLE by reusing the already-landed v139 b1Rain voucher lane (b1RainRowsReady @18392 + 64x b1RainRow* + echoes; laws roomB1RngXorshift{1,9,29}/corner-table/roomB1CornerWorldXy/cmovb-min) exactly like the removed idx38 - the v139 wire may already quiet opaque_room_update_tail_rain when b1RainVoucherLive, but the tree still shows HOST/OPEN so it was NOT resolved. Blocking callees stay typed-host behind the rows: 0x813520 position search, 0x428b20->0x6fe410 entity create, 0x7ef420 bind (Room+0x7764=-1, 0x6eef60 x3). MUST VERIFY before a resolved-move: (1) the idx13 SFX fragment still fires when the rain voucher retires idx35 (Play 0x92dc30 id 0xbe is INSIDE the named span); (2) 0x4d3230 [0xc7e850] callback Game-store census; (3) whether resolve is blocked by the exactly-once invariant or a missing CreateEntityPtr/BindStore7764 apply. Full scout report: output/decomp/_scratch/grok-scouts-20260831/idx35-802a80.md.",
    "operation": "HOST",
    "evidence": "B15 rain spawn loop (0x00802a80..0x00802e0d, tail fn 0x00802980): once-flag gate 0x80000 on Game+0x1839c, quality 4/6/8 from 0x7cb6e0, count = signed idiv (end-begin)/0x78 + unsigned cmovb min, xorshift seed carry, corner table + world xy (40/120), spawn relay 0x428b20 (pure v54) -> create 0x6fe410, bind 0x7ef420, entity mark 0x32c; census + update-v95-802a80-rain/NOTES.md",
    "abiV95": "B15 rain spawn loop-frame laws landed (update-slice v95): count/bounds (0x802bb1 magic 0x88888889 idiv /0x78 + cmovb min), corner table (0x802aa9..0x802b48) + world xy (0x802d40..0x802d9c, 40.0/120.0), spawn-arg assembly (0x802daf..0x802dc4 via v54 relay) consumed by reference from the room family (v54/v55/B1). Loop-frame wire types the residual host: search 0x813520 / create 0x6fe410 / bind 0x7ef420 / 0x78 swap; RNG draws typed-host via roomGenrandNext (in-module MT when genrand_mt_ready). ready=0 keeps the pre-v95 monolithic record. Record still HOST (search/create/bind + type-5 SFX 0x92dc30 remain host). NARROWED not removed.",
