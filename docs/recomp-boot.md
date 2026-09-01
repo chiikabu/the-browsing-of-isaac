@@ -1168,6 +1168,23 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
 
 ## 10. Open items, honestly
 
+- **RAM-FS asset seeding — hook LANDED (2026-08-31), boot relink PENDING.**
+  The empty shim FS made `Manager::LoadImage("gfx/ui/coop menu.png")` return
+  NULL and the lifted HUD path fault at `0x009a26c2`. `isaac_fs_seed(path,
+  data, len)` in `host_shims_fs.c` now places the packed archives as real
+  files the game's own `fopen`/`fread` read back (KAGE parses them itself —
+  it is NOT a fake LoadImage), with parent dirs materialised; proven by the
+  selftest (§8: seed → GetFileAttributesA dir → fopen → fread byte-for-byte,
+  5 checks). `boot_integration.mjs` seeds `graphics.a`/`config.a`/`fonts.a`/
+  `animations.a`/`rooms.a` from the local instance before `main` **when the
+  module exports `_isaac_fs_seed`**. The Aug-10 `boot.wasm` predates that
+  export, so the next step is a **boot relink** that (a) compiles the current
+  host `src/` tree, (b) adds `_isaac_fs_seed` to the boot link's
+  `EXPORTED_FUNCTIONS`, (c) re-links against the lifted objects under
+  `output/recomp/lift/full/`. That link recipe is not yet scripted (only the
+  lifter build in `build_wasm.py` is); reconstructing it as
+  `scripts/recomp/lift/build_boot.*` is the gating task before the boot can
+  advance past the coop-menu trap to the next named one.
 - **139 REAL shims are declared, not written.** They currently trap loudly,
   which is the correct failure mode but not a running game.
 - **`arg_bytes` unknown for 15 symbols** — all with 0 measured call sites, so

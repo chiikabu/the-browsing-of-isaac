@@ -725,6 +725,70 @@ int main(int argc, char **argv) {
 #  undef LARG64
 #endif
 
+    /* 13. BOOT ASSET SEEDING: isaac_fs_seed() must place a file the game's
+     * own fopen/fread shims read back byte-for-byte, at the key those shims
+     * compute from the same relative path — this is what lets the packed
+     * archives be present so Manager::LoadImage stops returning NULL on the
+     * HUD path (the guest fault at 0x009a26c2). Parent dirs must appear so a
+     * directory scan sees the file. */
+    {
+        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
+        static const uint8_t payload[] = {
+            'I','S','A','A','C','P','A','K', 0x01, 0x00, 0x00, 0x00,
+            0xDE, 0xAD, 0xBE, 0xEF, 0x55, 0xAA, 0x00, 0xFF,
+        };
+        int seeded = isaac_fs_seed("resources/packed/graphics.a",
+                                   payload, (uint32_t)sizeof payload);
+        check(seeded == 1, "isaac_fs_seed placed the archive file");
+
+        /* the parent directory the game FindFirstFile-scans must exist */
+        uint32_t dbuf = ISAAC_HEAP_VA + 0x50000;
+        const char *dpath = "resources/packed";
+        for (unsigned i = 0; ; ++i) {
+            *(uint8_t *)isaac_g(dbuf + i) = (uint8_t)dpath[i];
+            if (!dpath[i]) break;
+        }
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, dbuf);
+        imp_kernel32__GetFileAttributesA(&cpu);
+        check(cpu.EAX == 0x10u, "the seeded parent dir reads as a directory");
+
+        /* open it through the SAME fopen shim the lifted game uses */
+        uint32_t pbuf = dbuf + 256, mbuf = dbuf + 512, rbuf = dbuf + 640;
+        const char *ppath = "resources/packed/graphics.a";
+        for (unsigned i = 0; ; ++i) {
+            *(uint8_t *)isaac_g(pbuf + i) = (uint8_t)ppath[i];
+            if (!ppath[i]) break;
+        }
+        *(uint8_t *)isaac_g(mbuf) = 'r';
+        *(uint8_t *)isaac_g(mbuf + 1) = 'b';
+        *(uint8_t *)isaac_g(mbuf + 2) = 0;
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, pbuf);
+        isaac_w32(cpu.ESP + 8, mbuf);
+        imp_api_ms_win_crt_stdio__fopen(&cpu);
+        uint32_t fh = cpu.EAX;
+        check(fh != 0, "fopen finds the seeded archive by its normalized key");
+
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, rbuf);                 /* dst    */
+        isaac_w32(cpu.ESP + 8, 1);                    /* size   */
+        isaac_w32(cpu.ESP + 12, (uint32_t)sizeof payload); /* nmemb */
+        isaac_w32(cpu.ESP + 16, fh);                  /* stream */
+        imp_api_ms_win_crt_stdio__fread(&cpu);
+        check(cpu.EAX == sizeof payload, "fread returns the full seeded length");
+        int match = 1;
+        for (unsigned i = 0; i < sizeof payload; ++i)
+            if (*(uint8_t *)isaac_g(rbuf + i) != payload[i]) { match = 0; break; }
+        check(match, "the bytes read back are byte-for-byte what was seeded");
+    }
+
     isaac_module_report();
 
     isaac_heap_report();

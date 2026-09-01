@@ -57,6 +57,7 @@ static uint32_t g_find_cur[FS_FIND_RG];
 static uint32_t g_find_n[FS_FIND_RG];
 static uint32_t g_find_ids[FS_FIND_RG][128];
 
+__attribute__((unused))
 static uint32_t fs_err_last(void) { return isaac_r32(ISAAC_TEB_VA + 0x34u); }
 static void fs_err_set(uint32_t e) { isaac_w32(ISAAC_TEB_VA + 0x34u, e); }
 
@@ -143,6 +144,60 @@ static void fs_parent_key(const char *key, char *out, size_t cap) {
     if (m >= cap) m = cap - 1;
     memcpy(out, key, m);
     out[m] = 0;
+}
+
+/* ---- boot-time asset seeding ------------------------------------------- */
+/* The RAM-FS starts empty, so the game's first LoadImage on the HUD path
+ * (Manager::LoadImage "gfx/ui/coop menu.png" -> KAGE archive get) returns
+ * NULL and the lifted code dereferences it (guest fault at 0x009a26c2).
+ * The fix is to make the packed archives real files the game opens and
+ * parses itself (KAGE reads resources/packed/ .a archives via fopen/fread) — NOT to
+ * fake LoadImage. The boot harness calls isaac_fs_seed() for each archive
+ * before main(); paths normalize exactly as fopen's argument does, so a
+ * relative "resources/packed/graphics.a" lands on the same key the game
+ * later opens (c:/isaac/resources/packed/graphics.a).
+ *
+ * Bytes are copied into the entry's own host-heap buffer (like a written
+ * file), so the caller's source buffer can be freed after the call.
+ * Parent directories are materialised so FindFirstFileA/dir scans see the
+ * file. Returns 1 on success, 0 on bad path / table full / OOM. */
+static int fs_ensure_dirs(const char *key) {
+    /* create every ancestor directory entry of `key` (idempotent). */
+    char dir[256];
+    fs_parent_key(key, dir, sizeof dir);
+    if (!dir[0]) return 1;
+    /* build ancestors front-to-back so each parent exists first. */
+    for (size_t i = 1; dir[i]; ++i) {
+        if (dir[i] == '/') {
+            char save = dir[i];
+            dir[i] = 0;
+            if (!fs_find(dir) && !fs_new(dir, 1)) return 0;
+            dir[i] = save;
+        }
+    }
+    if (!fs_find(dir) && !fs_new(dir, 1)) return 0;
+    return 1;
+}
+
+int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
+    char key[256];
+    if (!path || !fs_key(path, key, sizeof key) || !key[0]) return 0;
+    if (!fs_ensure_dirs(key)) return 0;
+    fs_entry *e = fs_new(key, 0);
+    if (!e) return 0;
+    if (e->is_dir) return 0;              /* a dir already owns this key */
+    uint8_t *buf = NULL;
+    if (len) {
+        buf = (uint8_t *)malloc(len);
+        if (!buf) return 0;
+        if (data) memcpy(buf, data, len);
+        else memset(buf, 0, len);
+    }
+    if (e->data) free(e->data);
+    e->data = buf;
+    e->size = len;
+    e->cap = len;
+    return 1;
 }
 
 /* ---- guest helpers ----------------------------------------------------- */
@@ -238,7 +293,7 @@ static void fs_find_fill(CpuState *cpu, uint32_t findbuf, fs_entry *e) {
 void imp_kernel32__FindFirstFileA(CpuState *restrict cpu) {
     char p[512]; uint32_t findbuf = isaac_arg(cpu, 1);
     (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "FindFirstFileA");
-    /* strip trailing "\*" / "/*" pattern */
+    /* strip a trailing wildcard segment (backslash-star or slash-star) */
     size_t n = strlen(p);
     if (n >= 2 && p[n - 1] == '*' && (p[n - 2] == '/' || p[n - 2] == '\\'))
         p[n - 2] = 0;

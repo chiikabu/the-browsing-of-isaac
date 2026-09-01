@@ -119,21 +119,24 @@ void imp_kernel32__MultiByteToWideChar(CpuState *restrict cpu) {
     uint32_t wc = isaac_arg(cpu, 4), wcCap = isaac_arg(cpu, 5);
     uint8_t buf[512];
     size_t read_n = 0;
-    size_t limit = (mbLen < 0 || mbLen > 512) ? 512 : (size_t)mbLen;
-    if (mbLen == -1) {                          /* read to terminator */
+    size_t limit = ((int32_t)mbLen < 0 || mbLen > 512) ? 512 : (size_t)mbLen;
+    if (mbLen == 0xFFFFFFFFu) {                  /* -1: read to terminator */
         while (read_n + 1 < sizeof buf && isaac_is_guest_va(mb + (uint32_t)read_n)) {
             uint8_t c = isaac_r8(mb + (uint32_t)read_n);
-            buf[read_n++] = c;
+            buf[read_n] = c;
+            ++read_n;
             if (!c) break;
         }
     } else {
-        while (read_n < limit && isaac_is_guest_va(mb + (uint32_t)read_n))
-            buf[read_n++] = isaac_r8(mb + (uint32_t)read_n);
+        while (read_n < limit && isaac_is_guest_va(mb + (uint32_t)read_n)) {
+            buf[read_n] = isaac_r8(mb + (uint32_t)read_n);
+            ++read_n;
+        }
     }
-    size_t units = guest_utf8_to_utf16(wc, (size_t)(wcCap < 0 ? 0 : wcCap),
+    size_t units = guest_utf8_to_utf16(wc, (size_t)((int32_t)wcCap < 0 ? 0 : wcCap),
                                        buf, read_n, 1);
     if (units == (size_t)-1) { cpu->EAX = 0; return; }
-    cpu->EAX = (uint32_t)(units + (mbLen == -1 ? 1 : 0));
+    cpu->EAX = (uint32_t)(units + (mbLen == 0xFFFFFFFFu ? 1 : 0));
 }
 
 /* int WideCharToMultiByte(UINT cp, DWORD flags, LPCWCH wc, int wcLen,
@@ -143,21 +146,23 @@ void imp_kernel32__WideCharToMultiByte(CpuState *restrict cpu) {
     uint32_t mb = isaac_arg(cpu, 4), mbCap = isaac_arg(cpu, 5);
     uint16_t wbuf[256];
     size_t n = 0;
-    size_t limit = (wcLen < 0 || wcLen > 256) ? 256 : (size_t)wcLen;
-    if (wcLen == -1) {
+    size_t limit = ((int32_t)wcLen < 0 || wcLen > 256) ? 256 : (size_t)wcLen;
+    if (wcLen == 0xFFFFFFFFu) {
         while (n + 1 < 256 && isaac_is_guest_va(wc + n * 2)) {
             wbuf[n] = (uint16_t)isaac_r16(wc + n * 2);
             ++n;
             if (!wbuf[n - 1]) break;
         }
     } else {
-        while (n < limit && isaac_is_guest_va(wc + n * 2))
-            wbuf[n++] = (uint16_t)isaac_r16(wc + n * 2);
+        while (n < limit && isaac_is_guest_va(wc + n * 2)) {
+            wbuf[n] = (uint16_t)isaac_r16(wc + n * 2);
+            ++n;
+        }
     }
     size_t bytes = guest_utf16_to_utf8(wbuf, n, mb,
-                                       (size_t)(mbCap < 0 ? 0 : mbCap));
+                                       (size_t)((int32_t)mbCap < 0 ? 0 : mbCap));
     if (bytes == (size_t)-1) { cpu->EAX = 0; return; }
-    cpu->EAX = (uint32_t)(bytes + (wcLen == -1 ? 1 : 0));
+    cpu->EAX = (uint32_t)(bytes + (wcLen == 0xFFFFFFFFu ? 1 : 0));
 }
 
 /* DWORD GetFullPathNameW(LPCWSTR name, DWORD nBufferLength, LPWSTR buffer,

@@ -37,6 +37,40 @@ m._isaac_guard_arm();
 console.log('  guard armed');
 if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : 'OK'}`); process.exit(layoutBad ? 1 : 0); }
 
+// --- seed the RAM-FS with the packed archives --------------------------
+// The lifted HUD load (Manager::LoadImage "gfx/ui/coop menu.png") reads
+// resources/packed/graphics.a through the game's own fopen/fread; an empty
+// FS returns NULL and the guest faults at 0x009a26c2. Seed the archives the
+// game opens from the locally-owned instance BEFORE main so the KAGE loader
+// finds them. Requires the boot module to export _isaac_fs_seed (add it to
+// the boot link's EXPORTED_FUNCTIONS). music.a/videos.a are not on the boot
+// path and are skipped to keep the seed small.
+const PACKED_DIR = 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance/resources/packed';
+const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a'];
+if (typeof m._isaac_fs_seed === 'function') {
+  stageOk('seed packed archives', () => {
+    let seeded = 0;
+    for (const name of BOOT_ARCHIVES) {
+      let bytes;
+      try { bytes = readFileSync(`${PACKED_DIR}/${name}`); }
+      catch { console.log(`  (skip ${name}: not present locally)`); continue; }
+      const relPath = `resources/packed/${name}`;
+      const pathBytes = Buffer.from(relPath + '\0', 'utf8');
+      const pp = m._malloc(pathBytes.length);
+      const dp = m._malloc(bytes.length || 1);
+      m.HEAPU8.set(pathBytes, pp);
+      if (bytes.length) m.HEAPU8.set(bytes, dp);
+      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
+      m._free(pp); m._free(dp);
+      console.log(`  seed ${relPath} ${bytes.length} bytes -> ${ok ? 'ok' : 'FAIL'}`);
+      if (ok) seeded += 1;
+    }
+    return seeded;
+  });
+} else {
+  console.log('  (seed skipped: boot module has no _isaac_fs_seed export — rebuild the boot link)');
+}
+
 // --- host boot: IAT, TEB, TLS, _initterm -------------------------------
 const bootRc = stageOk('host boot (IAT + TEB + TLS + _initterm)',
                        () => m._isaac_run_boot(1));

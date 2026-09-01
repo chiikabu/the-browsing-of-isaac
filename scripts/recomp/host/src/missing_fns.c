@@ -12,6 +12,8 @@
 #include "shim_decls.h"
 
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 /* ---------------------------------------------------------------------- *
  * 0x00aa9350 -- const char *platform_name(void).  Six bytes:
@@ -185,4 +187,29 @@ void sub_00aefe20(CpuState *restrict s) {
     }
     memcpy(&s->ZMM0[0], &d, 8);
     memset(&s->ZMM0[8], 0, 8);
+}
+
+/* ---------------------------------------------------------------------- *
+ * Lifter-runtime symbols the STANDALONE host selftest link lacks.
+ *
+ * In the real boot module these live in scripts/recomp/lift/recomp_rt.c,
+ * which the lifted-object link pulls in. The host-layer selftest
+ * (scripts/recomp/host/build_selftest.py) links only the host src/ tree,
+ * so without these two the link fails on undefined symbols — which had
+ * gone dark since the crtstartup/trap files began referencing them. The
+ * selftest never triggers a guest longjmp or a live fault dump, so inert
+ * definitions are correct for it and are overridden by recomp_rt.c's
+ * strong versions in the real boot build. */
+
+/* Set by the shim dispatcher (host_trap.c) for the fault register dump. */
+struct CpuState *recomp_last_cpu;
+
+/* Guest longjmp unwind to isaac_guest_call. The standalone selftest has no
+ * guest call frame to unwind to; reaching here in that build is a defect,
+ * so fail loudly rather than silently returning. */
+void isaac_guest_longjmp(CpuState *restrict cpu) {
+    (void)cpu;
+    fprintf(stderr,
+            "[selftest] isaac_guest_longjmp reached in the host-only build\n");
+    abort();
 }

@@ -314,6 +314,10 @@ void imp_api_ms_win_crt_stdio____stdio_common_vsscanf(CpuState *restrict cpu) {
     }
 
 #define ARG(i) (*(uint32_t *)isaac_g(argptr + 4 * (i)))
+    /* hfmt is the guest's own format string by contract — this shim IS the
+     * sscanf reimplementation, so a non-literal format is intentional. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-security"
     switch (n) {
         case 0:  cpu->EAX = sscanf(hbuf, hfmt); break;
         case 1:  cpu->EAX = sscanf(hbuf, hfmt, (void *)ARG(0)); break;
@@ -344,6 +348,7 @@ void imp_api_ms_win_crt_stdio____stdio_common_vsscanf(CpuState *restrict cpu) {
             cpu->EAX = 0;
             break;
     }
+#pragma GCC diagnostic pop
 #undef ARG
 }
 
