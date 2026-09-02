@@ -40,6 +40,8 @@ emulation and runtime behavior is verified against the original.
 
 ## The machine track (static recompilation) — check it before hand-translating
 
+- **Speed units start from a wall-time profile of the whole process** (`node --cpu-prof`, self time per wasm function), never from a guest-instruction histogram (`ISAAC_PROFILE=1`). Round 12d removed 54% of the lifted instructions exactly and saved 0 s; round 12e's V8 profile showed 95% of the boot inside the host allocator (a first-fit walk), invisible to instruction ticks. Guest-instruction counts measure the guest; seconds are spent wherever the host does work per guest instruction.
+
 `scripts/recomp/` is a parallel, machine-heavy pipeline (docs:
 `docs/recomp-architecture.md`, `docs/recomp-boot.md`,
 `docs/recomp-host-boundary.md`). State measured 2026-08-31: Ghidra headless

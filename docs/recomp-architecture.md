@@ -2518,6 +2518,66 @@ profiles the process with V8's sampling profiler (`node --cpu-prof`) to
 find it; the fastpath stays (it is exact, verified, and cheap) but the
 lesson is recorded here: **profile wall time, not guest instructions.**
 
+### 21.14 Round 12e: the wall-time profile -- 95% of the boot was the guest allocator
+
+`node --cpu-prof --cpu-prof-interval 2000` on the 3-frame boot (the
+`.cpuprofile` is nodes + samples + timeDeltas; self time per frame summed
+over samples, wasm functions keep their names in the debug link):
+
+```
+  447.69 s  95.4%  guest_malloc            (host_shims_heap.c)
+    4.86 s   1.0%  sub_00adb9c0            (zlib inflate_fast)
+    1.89 s   0.4%  open                    (node fs, instance seeding)
+    1.00 s   0.2%  sub_00652210
+    0.99 s   0.2%  isaac_fs_seed
+  ---- by bucket:  lifted sub_* 3.1%, isaac_* host 0.4%, imp_* shims 0.1%, JS 0.1%
+```
+
+The guest allocator was the round-2 "auditable in one screen" first-fit
+walk: every `malloc` walked every block from the arena start until the
+first free one that fit. 527 k mallocs over a heap that holds ~100 k live
+blocks = tens of billions of header reads through the bounds-checked
+accessors. The instruction-tick profiler could not see it because the
+walk is host code; `--fast` could not help because it is not lifted code.
+
+**Replacement** (`host_shims_heap.c`): boundary tags (header `{size,
+flags}` as before plus a footer `size|used`), free blocks on doubly-linked
+lists segregated by size class (exact 8-byte classes below 512 bytes,
+then one per power of two), `malloc` = first fit inside the request's own
+class or the head of the first non-empty larger class, `free` = immediate
+two-way coalescing through the footer. Used blocks are never touched.
+The meter, the double-free / foreign-pointer / header-footer guards and
+the API are unchanged; the report now also prints the free-block census.
+Selftest: three-neighbour coalescing, a 4000-block churn with pattern
+verification, realloc, the guards, and "everything freed = one block
+again" -- backward/forward coalescing, the unlink and the split are each
+mutation-checked.
+
+**Result.** 5-frame bounded boot: frame 3 at **10.6 s** (was 416 s);
+frames 4-6 at **3 / 2 / 1 ms** (were 143 / 137 / 132 ms); clean shutdown,
+`main returned 0`. Peak live 91.4 MiB (footers cost 0.3 MiB). So the
+lifted code runs at roughly 500 MIPS, not 12: the "12 MIPS" of round 12c
+was the allocator's time divided by the guest's instruction count. Every
+speed conclusion drawn from `ISAAC_PROFILE=1` in rounds 12c-12d was an
+artefact of that; the fastpath (§21.13) stays because it is exact and
+verified, but it was never needed.
+
+**Rule, added to AGENTS.md:** a speed unit starts from a wall-time
+profile of the whole process (`node --cpu-prof`), never from a
+guest-instruction histogram; the two disagree by whatever the host does
+per guest instruction, and here that was 30x.
+
+**zlib note for later** (decomp-scout evidence, 2026-09-02): the embedded
+zlib is 1.1.x (infblock/infcodes layering, 1.1-only tree messages), LTCG
+turned every entry into ECX/EDX register conventions (`inflate(ecx=z)`
+with the flush argument folded away, `inflate_fast(ecx=bl, edx=bd, 4 on
+the stack)`), `inflateInit2_` hard-codes wbits 15 and skips the version
+check, libpng 1.2.50 supplies `png_zalloc/png_zfree` callbacks, and
+`0x00ab2140` (png_decompress_chunk) carries two inlined `inflateReset`
+copies that read `z->state` directly. An API-level host zlib is therefore
+a shadow-state design with those two sites patched -- and at 1% of wall
+time it is not a speed unit.
+
 ## Appendix: reproduction
 
 ```bash

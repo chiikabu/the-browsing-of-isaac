@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12d)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12e)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -193,14 +193,23 @@ see. Shutdown now passes `~Thread` (adoption sets the done flag) and then
 reached the unlifted 6-byte element destructor `0x00a67fd0` through the
 CRT's `__ehvec_dtor` (hand-written in `missing_fns.c`).
 
-**Exact next unit (B):** profile wall time, not guest instructions:
-`cd .scratch/game-instance && ISAAC_MAX_FRAMES=3 ISAAC_LOG_TIME=1 node --cpu-prof --cpu-prof-dir=<dir> --cpu-prof-interval 2000 ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`
-then summarise self time per wasm function from the `.cpuprofile`
-(nodes/samples/timeDeltas; bucket `sub_*` vs `recomp_*` vs `imp_*` vs
-`isaac_*` vs JS) and cut what it names. Only after that: per-frame STUBs
-(input, audio, GL draw) as real host arms, and the zlib `inflate()` API
-cut (the emscripten zlib port is in the sysroot cache, 1.3.2) if inflate
-is what the wall clock says.
+**Round 12e (the profile answered):** `node --cpu-prof` on the boot put
+**95.4% of wall time in `guest_malloc`** -- the round-2 first-fit walk
+over every block. Replaced by segregated explicit free lists with
+two-way coalescing (same header, footer added, same guards and meter;
+mutation-checked pins in the selftest). **Boot to frame 3: 416 s -> 10.6 s;
+frame loop 135 ms -> 1-3 ms per frame; clean shutdown, main returned 0.**
+Rule added to AGENTS.md: speed units start from a wall-time profile of the
+whole process, never from the guest-instruction histogram (it was off by
+30x here).
+
+**Exact next unit (B):** run the profiled 600-frame boot
+(`ISAAC_MAX_FRAMES=600 node --cpu-prof ... `, summarise self time per
+function) and read what is left: the instance seeding (`isaac_fs_seed` +
+node `open`/`read`, ~3.5 s of the 10.6 s -- lazy seeding is the obvious
+cut), the lifted PNG chain (inflate_fast ~5 s under the profiler), and the
+per-frame shim traffic. Then the per-frame STUBs (input, audio, GL draw)
+become real host arms so the menu actually renders.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

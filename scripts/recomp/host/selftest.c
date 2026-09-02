@@ -277,6 +277,69 @@ int main(int argc, char **argv) {
     check(isaac_heap_peak() == peak_before,
           "peak is a high-water mark, not the live figure");
 
+    /* Round 12d allocator (segregated free lists, two-way coalescing): the
+     * first-fit walk it replaced was 95% of a 470 s boot. */
+    {
+        extern uint32_t isaac_guest_alloc(uint32_t n);
+        extern void     isaac_guest_free(uint32_t p);
+        extern uint32_t isaac_guest_realloc(uint32_t p, uint32_t n);
+        extern uint32_t isaac_heap_free_blocks(void);
+        extern uint32_t isaac_heap_largest_free(void);
+        /* coalescing: three neighbours freed middle-last must fold back into
+         * one block (backward AND forward merge), leaving the largest free
+         * block and the free-block count as they were */
+        uint32_t before_largest = isaac_heap_largest_free();
+        uint32_t before_blocks = isaac_heap_free_blocks();
+        uint32_t a = isaac_guest_alloc(100), b = isaac_guest_alloc(200), c = isaac_guest_alloc(300);
+        check(a && b && c && a < b && b < c, "three consecutive blocks come out ascending");
+        isaac_guest_free(a);
+        isaac_guest_free(c);
+        isaac_guest_free(b);
+        check(isaac_heap_largest_free() == before_largest && isaac_heap_free_blocks() == before_blocks,
+              "freeing neighbours (ends first, middle last) coalesces both ways back to one block");
+        /* churn: 4000 random-sized blocks written with their own pattern, freed
+         * in a different order, must never overlap or lose their bytes */
+        enum { NCH = 4000 };
+        static uint32_t ptr[NCH]; static uint32_t len[NCH];
+        uint32_t seed = 0x9e3779b9u;
+        int churn_ok = 1;
+        for (int i = 0; i < NCH; i++) {
+            seed = seed * 1664525u + 1013904223u;
+            len[i] = 1u + (seed >> 8) % 700u;
+            ptr[i] = isaac_guest_alloc(len[i]);
+            if (!ptr[i] || (ptr[i] & 7u)) { churn_ok = 0; break; }
+            memset(isaac_g(ptr[i]), (int)(i & 0xff), len[i]);
+            if (i % 3 == 2) {                 /* free an earlier one to fragment */
+                int j = (int)((seed >> 4) % (uint32_t)i);
+                if (ptr[j]) { isaac_guest_free(ptr[j]); ptr[j] = 0; }
+            }
+        }
+        for (int i = 0; i < NCH && churn_ok; i++) {
+            if (!ptr[i]) continue;
+            const uint8_t *q = (const uint8_t *)isaac_g(ptr[i]);
+            for (uint32_t k = 0; k < len[i]; k++)
+                if (q[k] != (uint8_t)(i & 0xff)) { churn_ok = 0; break; }
+        }
+        check(churn_ok, "4000-block churn: every surviving block still holds its own pattern (no overlap)");
+        /* realloc keeps the bytes */
+        uint32_t r = isaac_guest_alloc(40);
+        memset(isaac_g(r), 0x5a, 40);
+        r = isaac_guest_realloc(r, 4000);
+        check(r && ((const uint8_t *)isaac_g(r))[39] == 0x5a, "realloc to a larger block keeps the old bytes");
+        isaac_guest_free(r);
+        for (int i = 0; i < NCH; i++) if (ptr[i]) isaac_guest_free(ptr[i]);
+        check(isaac_heap_largest_free() == before_largest && isaac_heap_free_blocks() == before_blocks,
+              "after freeing everything the arena is one block again (no leaked fragments)");
+        /* the guards: a double free and a foreign pointer are refused, not acted on */
+        uint32_t d = isaac_guest_alloc(64);
+        isaac_guest_free(d);
+        isaac_guest_free(d);
+        isaac_guest_free(ISAAC_STACK_TOP_VA - 0x100);
+        uint32_t e = isaac_guest_alloc(64);
+        check(e == d, "a double free is ignored and the block is reused exactly once");
+        isaac_guest_free(e);
+    }
+
     /* VirtualAlloc must also stay inside the guest range and zero its memory */
     memset(&cpu, 0, sizeof cpu);
     cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;

@@ -25,10 +25,12 @@
  * first integration run that reaches gameplay produces the number for free and
  * the guard can be moved once, on evidence.
  *
- * Allocator shape: first-fit with boundary tags and immediate coalescing.
- * Chosen because it is auditable in one screen, not because it is fast. If it
- * ever shows up in a profile, replace it -- but replace it knowing the real
- * peak, which is the entire point of the meter.
+ * Allocator shape: boundary tags with segregated explicit free lists and
+ * immediate two-way coalescing (see the block layout below). Round 12d
+ * replaced the original first-fit walk after V8's profiler put 95% of a
+ * 470 s boot inside it: 527 k mallocs, each walking every block from the
+ * arena start. The meter stayed; its answer (peak 91 MiB of 192) is what
+ * sized this one.
  */
 
 #include "isaac_host.h"
@@ -38,48 +40,93 @@
 #include <string.h>
 
 #define HDR_BYTES   8u          /* {size, flags} */
+#define FTR_BYTES   4u          /* size | used, the block's last dword */
 #define ALIGN       8u
 #define FLAG_USED   1u
+#define MIN_BLOCK   24u         /* header + two free-list links + footer */
+#define NBINS       84u
 
-/* Header layout at block VA b:
- *   [b+0] total block size including header, 8-byte aligned
- *   [b+4] flags (bit 0 = in use)
- * Payload starts at b + HDR_BYTES. */
+/* Block layout at block VA b (size is a multiple of 8, >= MIN_BLOCK):
+ *   [b+0]       total block size including header and footer
+ *   [b+4]       flags (bit 0 = in use)
+ *   [b+8]       payload (used block) | free-list prev link (free block)
+ *   [b+12]                          | free-list next link (free block)
+ *   [b+size-4]  footer: size | (bit 0 = in use), so the block BEFORE a
+ *               freed one is found in O(1) for backward coalescing.
+ * Payload starts at b + HDR_BYTES, 8-byte aligned.
+ *
+ * Free blocks live on doubly-linked lists segregated by size class
+ * (g_bin): exact 8-byte classes below 512 bytes, then one class per power
+ * of two. malloc looks in the class of the request (first fit within it,
+ * since a power-of-two class holds smaller blocks too) and otherwise takes
+ * the head of the first non-empty larger class, where every block fits.
+ * free coalesces both ways immediately, so no two free blocks are ever
+ * adjacent. Nothing touches a used block, which is what round 12d needed:
+ * the first-fit walk from the arena start cost 95% of a 470 s boot
+ * (527 k mallocs, each walking every block before the first fit). */
 
 static uint32_t g_arena_lo, g_arena_hi;
 static int g_inited;
+static uint32_t g_bin[NBINS];
 
 static struct {
     uint64_t live, peak, total_alloced;
     uint32_t largest_single, allocs, frees, reallocs, failures;
     uint32_t peak_at_alloc;      /* which allocation number hit the peak */
+    uint32_t corrupt;            /* frees refused because the header was bad */
 } g_stat;
-
-static void heap_init(void) {
-    if (g_inited) return;
-    g_arena_lo = ISAAC_HEAP_VA;
-    g_arena_hi = ISAAC_HEAP_VA + ISAAC_HEAP_SIZE;
-    /* One free block spanning the arena. */
-    isaac_w32(g_arena_lo, ISAAC_HEAP_SIZE);
-    isaac_w32(g_arena_lo + 4, 0);
-    g_inited = 1;
-    isaac_log("[isaac][heap] guest arena 0x%08x..0x%08x (%u MiB), separate from "
-              "the host allocator by design",
-              g_arena_lo, g_arena_hi, ISAAC_HEAP_SIZE >> 20);
-}
 
 static uint32_t blk_size(uint32_t b) { return isaac_r32(b) & ~(ALIGN - 1u); }
 static int      blk_used(uint32_t b) { return isaac_r32(b + 4) & FLAG_USED; }
 static void     blk_set(uint32_t b, uint32_t size, int used) {
     isaac_w32(b, size);
     isaac_w32(b + 4, used ? FLAG_USED : 0u);
+    isaac_w32(b + size - FTR_BYTES, size | (used ? FLAG_USED : 0u));
+}
+
+static unsigned bin_index(uint32_t size) {
+    if (size < 512u) return (size - MIN_BLOCK) / ALIGN;         /* 24..504 -> 0..60 */
+    unsigned k = 31u - (unsigned)__builtin_clz(size);          /* 512 -> 9 */
+    unsigned i = 61u + (k - 9u);
+    return i < NBINS ? i : NBINS - 1u;
+}
+
+static void bin_insert(uint32_t b, uint32_t size) {
+    unsigned i = bin_index(size);
+    uint32_t head = g_bin[i];
+    isaac_w32(b + 8, 0);
+    isaac_w32(b + 12, head);
+    if (head) isaac_w32(head + 8, b);
+    g_bin[i] = b;
+}
+
+static void bin_unlink(uint32_t b, uint32_t size) {
+    uint32_t prev = isaac_r32(b + 8), next = isaac_r32(b + 12);
+    if (prev) isaac_w32(prev + 12, next);
+    else      g_bin[bin_index(size)] = next;
+    if (next) isaac_w32(next + 8, prev);
+}
+
+static void heap_init(void) {
+    if (g_inited) return;
+    g_arena_lo = ISAAC_HEAP_VA;
+    g_arena_hi = ISAAC_HEAP_VA + ISAAC_HEAP_SIZE;
+    memset(g_bin, 0, sizeof g_bin);
+    /* One free block spanning the arena. */
+    blk_set(g_arena_lo, ISAAC_HEAP_SIZE, 0);
+    bin_insert(g_arena_lo, ISAAC_HEAP_SIZE);
+    g_inited = 1;
+    isaac_log("[isaac][heap] guest arena 0x%08x..0x%08x (%u MiB), separate from "
+              "the host allocator by design",
+              g_arena_lo, g_arena_hi, ISAAC_HEAP_SIZE >> 20);
 }
 
 static uint32_t guest_malloc(uint32_t n) {
     heap_init();
     if (!n) n = 1;
-    uint64_t need64 = (uint64_t)n + HDR_BYTES;
+    uint64_t need64 = (uint64_t)n + HDR_BYTES + FTR_BYTES;
     need64 = (need64 + (ALIGN - 1)) & ~(uint64_t)(ALIGN - 1);
+    if (need64 < MIN_BLOCK) need64 = MIN_BLOCK;
     if (need64 > ISAAC_HEAP_SIZE) {
         ++g_stat.failures;
         isaac_log("[isaac][heap] malloc(%u) exceeds the whole arena (%u MiB)",
@@ -88,36 +135,41 @@ static uint32_t guest_malloc(uint32_t n) {
     }
     uint32_t need = (uint32_t)need64;
 
-    for (uint32_t b = g_arena_lo; b < g_arena_hi; ) {
-        uint32_t sz = blk_size(b);
-        if (!sz || sz > (g_arena_hi - b)) break;      /* corrupt: stop */
-        if (!blk_used(b) && sz >= need) {
-            if (sz - need >= HDR_BYTES + ALIGN) {     /* split */
-                blk_set(b + need, sz - need, 0);
-                blk_set(b, need, 1);
-            } else {
-                blk_set(b, sz, 1);
-                need = sz;
-            }
-            g_stat.live += need;
-            g_stat.total_alloced += need;
-            ++g_stat.allocs;
-            if (n > g_stat.largest_single) g_stat.largest_single = n;
-            if (g_stat.live > g_stat.peak) {
-                g_stat.peak = g_stat.live;
-                g_stat.peak_at_alloc = g_stat.allocs;
-            }
-            return b + HDR_BYTES;
-        }
-        b += sz;
+    /* the request's own class may hold smaller blocks: first fit inside it */
+    unsigned i0 = bin_index(need);
+    uint32_t b = 0;
+    for (uint32_t c = g_bin[i0]; c; c = isaac_r32(c + 12))
+        if (blk_size(c) >= need) { b = c; break; }
+    /* every block of a larger class fits: take the first non-empty one */
+    for (unsigned i = i0 + 1; !b && i < NBINS; ++i) b = g_bin[i];
+    if (!b) {
+        ++g_stat.failures;
+        isaac_log("[isaac][heap] OUT OF MEMORY: malloc(%u) failed with %llu bytes "
+                  "live and a %u MiB arena. Peak was %llu. Raise ISAAC_HEAP_SIZE "
+                  "or move the guard.",
+                  n, (unsigned long long)g_stat.live, ISAAC_HEAP_SIZE >> 20,
+                  (unsigned long long)g_stat.peak);
+        return 0;
     }
-    ++g_stat.failures;
-    isaac_log("[isaac][heap] OUT OF MEMORY: malloc(%u) failed with %llu bytes "
-              "live and a %u MiB arena. Peak was %llu. Raise ISAAC_HEAP_SIZE "
-              "or move the guard.",
-              n, (unsigned long long)g_stat.live, ISAAC_HEAP_SIZE >> 20,
-              (unsigned long long)g_stat.peak);
-    return 0;
+    uint32_t sz = blk_size(b);
+    bin_unlink(b, sz);
+    if (sz - need >= MIN_BLOCK) {                 /* split: the tail stays free */
+        blk_set(b + need, sz - need, 0);
+        bin_insert(b + need, sz - need);
+        blk_set(b, need, 1);
+    } else {
+        blk_set(b, sz, 1);
+        need = sz;
+    }
+    g_stat.live += need;
+    g_stat.total_alloced += need;
+    ++g_stat.allocs;
+    if (n > g_stat.largest_single) g_stat.largest_single = n;
+    if (g_stat.live > g_stat.peak) {
+        g_stat.peak = g_stat.live;
+        g_stat.peak_at_alloc = g_stat.allocs;
+    }
+    return b + HDR_BYTES;
 }
 
 static void guest_free(uint32_t p) {
@@ -134,26 +186,60 @@ static void guest_free(uint32_t p) {
         return;
     }
     uint32_t sz = blk_size(b);
+    if (sz < MIN_BLOCK || b + sz > g_arena_hi ||
+        (isaac_r32(b + sz - FTR_BYTES) & ~(ALIGN - 1u)) != sz) {
+        ++g_stat.corrupt;
+        isaac_log("[isaac][heap] free(0x%08x): header/footer disagree (size %u) "
+                  "-- a guest overrun; ignoring the free.", p, sz);
+        return;
+    }
     g_stat.live -= sz;
     ++g_stat.frees;
-    blk_set(b, sz, 0);
 
-    /* Coalesce forward. Backward coalescing needs a footer; a first-fit walk
-     * plus forward merging keeps fragmentation bounded enough for a meter. */
+    /* Coalesce forward, then backward (the footer names the block before). */
     uint32_t nxt = b + sz;
-    while (nxt < g_arena_hi && !blk_used(nxt)) {
+    if (nxt < g_arena_hi && !blk_used(nxt)) {
         uint32_t ns = blk_size(nxt);
-        if (!ns) break;
+        bin_unlink(nxt, ns);
         sz += ns;
-        blk_set(b, sz, 0);
-        nxt += ns;
     }
+    if (b > g_arena_lo && !(isaac_r32(b - FTR_BYTES) & FLAG_USED)) {
+        uint32_t ps = isaac_r32(b - FTR_BYTES) & ~(ALIGN - 1u);
+        if (ps >= MIN_BLOCK && b - ps >= g_arena_lo) {
+            bin_unlink(b - ps, ps);
+            b -= ps;
+            sz += ps;
+        }
+    }
+    blk_set(b, sz, 0);
+    bin_insert(b, sz);
 }
 
 static uint32_t guest_size(uint32_t p) {
     if (!p || p < g_arena_lo + HDR_BYTES || p >= g_arena_hi) return 0;
     uint32_t s = blk_size(p - HDR_BYTES);
-    return s > HDR_BYTES ? s - HDR_BYTES : 0;
+    return s > HDR_BYTES + FTR_BYTES ? s - HDR_BYTES - FTR_BYTES : 0;
+}
+
+/* Free-list census for the report: blocks and the largest one. */
+static void heap_free_census(uint32_t *blocks, uint32_t *largest, uint64_t *bytes) {
+    *blocks = 0; *largest = 0; *bytes = 0;
+    for (unsigned i = 0; i < NBINS; ++i)
+        for (uint32_t c = g_bin[i]; c; c = isaac_r32(c + 12)) {
+            uint32_t sz = blk_size(c);
+            ++*blocks; *bytes += sz;
+            if (sz > *largest) *largest = sz;
+        }
+}
+uint32_t isaac_heap_free_blocks(void) {
+    uint32_t fb, fl; uint64_t fbytes;
+    heap_free_census(&fb, &fl, &fbytes);
+    return fb;
+}
+uint32_t isaac_heap_largest_free(void) {
+    uint32_t fb, fl; uint64_t fbytes;
+    heap_free_census(&fb, &fl, &fbytes);
+    return fl;
 }
 
 /* Exposed so other shims that must allocate (e.g. _strdup) get GUEST memory.
@@ -272,6 +358,12 @@ void isaac_heap_report(void) {
               g_stat.allocs, g_stat.frees, g_stat.reallocs, g_stat.failures);
     isaac_log("[isaac][heap]   total churn    : %llu bytes",
               (unsigned long long)g_stat.total_alloced);
+    {
+        uint32_t fb, fl; uint64_t fbytes;
+        heap_free_census(&fb, &fl, &fbytes);
+        isaac_log("[isaac][heap]   free now       : %u blocks, %llu bytes, largest %u (corrupt frees refused: %u)",
+                  fb, (unsigned long long)fbytes, fl, g_stat.corrupt);
+    }
     isaac_log("[isaac][heap] Move ISAAC_GUEST_LIMIT_VA / ISAAC_HEAP_SIZE to "
               "PEAK plus deliberate headroom, then GLOBAL_BASE and "
               "INITIAL_MEMORY follow from it.");
