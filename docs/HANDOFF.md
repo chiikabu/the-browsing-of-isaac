@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12f)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 13)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -209,16 +209,29 @@ instance files with their sizes; bytes are read on first open through
 `Module.isaacLazyRead`). A 5-frame boot reads 643 files (31 MB) and takes
 **12.4 s start to exit**; the host heap no longer carries the 208 MB copy.
 
-**Exact next unit (B):** the boot is now dominated by the lifted PNG
-chain (inflate_fast + inflate_codes + libpng, ~7 s of the 10.7 s to
-frame 3; a host zlib cut is a shadow-state design, see §21.14) -- but the
-functional walls matter more now that the loop outruns real time: the
-frame presents nothing (GL draw arms are tables and counters), takes no
-input, plays no audio, and the engine's three service threads never run
-(`ISAAC_RUN_THREADS=1` is an untested inline runner; the jobs are endless
-loops and need a per-job design). Read the per-frame shim census in the
-stub report of a 600-frame run first (`ISAAC_MAX_FRAMES=600`), then make
-the first real arm the one the menu needs to show anything.
+**Round 13 (2026-09-02): THE GAME RENDERS.** `build_boot.py --web` links
+the same lifted objects for the browser (host TUs rebuilt with
+`-DISAAC_WEB=1`, MEMFS, WebGL2); `host_gl_webgl.c` forwards the whole
+opengl32 surface to WebGL2 (the census of §21.17 showed nothing needed
+translation beyond a GLSL ES precision header); `scripts/recomp/web/run_web.mjs`
+runs it under Playwright's headless Chromium (SwiftShader), serving the
+instance from a local HTTP server, and writes the presented frames as
+PNGs. 5-frame run: main returned 0, 0 GL errors, 36 draws, frame 4 = the
+main menu's paper backdrop; frame 120 of a 120-frame run = the Repentance+
+Beta welcome popup, text and fonts intact. Run it:
+`python scripts/recomp/lift/build_boot.py --web && node scripts/recomp/web/run_web.mjs output/recomp/web-run 120`
+then open `output/recomp/web-run/frame_*.png`. `ISAAC_GL_CHECK=1` as a
+trailing `K=V` argument names any GL error's caller.
+
+**Exact next unit (B):** input. The frame pump is `PeekMessageW` /
+`DispatchMessageW` (§21.12); the page can post key and mouse events to
+the host (a queue the `PeekMessageW` shim drains into WM_KEYDOWN/UP and
+WM_MOUSEMOVE/BUTTON messages, plus `GetKeyboardState`/`GetCursorPos`
+answers) so the harness can navigate the menu and start a run -- the
+first step towards Game::Update executing under lifted code with real
+frames to compare against the hand-decomp track. After input: audio
+(OpenAL arms onto Web Audio, same forwarding shape as GL), the per-job
+thread design of §21.16, and a live view (worker + OffscreenCanvas).
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

@@ -535,6 +535,9 @@ static int frame_cap(void) {
 uint32_t isaac_frames_presented(void) { return g_frames_presented; }
 /* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
 void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
+#ifdef ISAAC_WEB
+    { extern void isaac_web_present(void); isaac_web_present(); }
+#endif
     (void)isaac_arg(cpu, 0);
     static double last_ms;
     double now = emscripten_get_now();

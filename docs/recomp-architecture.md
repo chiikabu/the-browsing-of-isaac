@@ -2613,6 +2613,121 @@ reader runs exactly once across two opens, and it receives the verbatim
 seed path -- the index insert, the materialise call and the lazy-flag
 clear are mutation-checked.
 
+### 21.16 The three engine threads -- what they service, and why the menu needs none of them
+
+Evidence (decomp-scout, 2026-09-02; Ghidra decompiles of `0x00a7da80`,
+`0x00a220c0`, `0x00a9e950`, `0x00a7f130`). The engine's `Thread` class:
+`Start` at `0x00a5a570` allocates a 0x28-byte internal block
+`{HANDLE, CRITICAL_SECTION, +0x1c busy, +0x20 done, +0x24 tid}` and a job
+block `{Thread, fn, arg}`, then `_beginthreadex(0x00a7f130, {0x00a5a760,
+block, internal})` -- the only `_beginthreadex` site in the image. The
+trampoline `0x00a7f130` stores `done = 1` at `0x00a7f19d` after the job
+returns (which is why round 12d's adoption sets it: `~Thread` at
+`0x00a5a700` joins with `WaitForSingleObject` and terminates when the
+flag is 0). Whole-image sync census: four `WaitForSingleObject` sites
+(`~Thread`, `Thread::Stop`, two unrelated), no semaphores or condition
+variables; the engine `Mutex` (vtable `0xb81c0c`) is a critical section
+with a busy-byte `Sleep(1000)` fallback.
+
+| job | what it is | loop | exit flag | who waits on it |
+|---|---|---|---|---|
+| `0x00a7da80`, arg `SoundManager 0xc5aaa0` | OpenAL "processing thread": finished-source GC and device hotplug re-open (`0x00a9e720`) | `Sleep(5)` per iteration | `[0xc5aaa4] & 4`, set only by `SoundManager::Shutdown 0x00a9e5a0` | only `Shutdown` (join) |
+| `0x00a220c0`, arg `InputManager 0xc57b18` (unread) | controller hotplug poll: `0x00a6dab0` pumps the DirectInput hidden window, re-enumerates DirectInput devices on request, polls XInput slots 0..3 and registers new devices through the main-thread callback `[0xc75da8]` | `Sleep(100)` | `[0xc57b1c] & 2` (`ControllerHotplug` option toggles it without a join) | only `Shutdown 0x00a21b70` (join) |
+| `0x00a9e950`, arg `CommandThread 0xc79a7c` | EOS "Command thread": pops 24-byte commands from a ring `Queue` (`+0xc` ring, `+0x10` cap, `+0x14` head, `+0x18` count, `+0x1c` Mutex) and runs the executor `0x00a733c0` (lobby create/join, EOS calls) | **no sleep** -- a hot Lock/Unlock spin when idle | `[0xc79a7c] & 2` | `Shutdown 0x00a71770` (join) and `0x00907690`: a main-thread loop that drains `CommandSystem::ProcessQueue`, ticks EOS and `Sleep(10)`s until a pending vector empties -- 10 callers, all online-lobby flows |
+
+Nothing on the boot or title-menu path enqueues work for any of them or
+blocks on a result, which is why the 600-frame run sits at the game's
+own 30 fps pacing with the threads adopted but never run. The per-job
+design when it is needed: the audio and hotplug loops are "run one
+iteration at a yield point" jobs (their bodies are ordinary lifted
+functions, `0x00a9e720` and `0x00a6dab0`, callable through
+`isaac_guest_call` from the frame's `PeekMessageW` or `Sleep`); the
+command thread's iteration is "pop one ring element and call
+`0x00a733c0(&elem, 0xc79a60)`", which the host can do from the `Sleep(10)`
+inside `0x00907690`'s poll loop -- the exact point where the main thread
+would otherwise wait forever. `ISAAC_RUN_THREADS=1`'s inline runner
+(round 12) is the wrong shape for all three: it runs the whole endless
+loop and never returns.
+
+### 21.17 Round 13: the web build -- the recompiled game renders its first frame
+
+**13a, the GL census.** Before writing a real backend, the headless fake in
+`host_shims_gl.c` recorded every distinct enum tuple the game passes
+(`gl_census`, printed with the stub report; 60 frames). The result: the
+whole surface is WebGL2-native. Textures are `RGBA|RGB / UNSIGNED_BYTE`
+with NEAREST|LINEAR and CLAMP_TO_EDGE|REPEAT; render targets are a
+DEPTH_COMPONENT24 renderbuffer plus a COLOR_ATTACHMENT0 texture, and the
+game reads `GL_FRAMEBUFFER_BINDING` back; state is BLEND / DEPTH_TEST /
+CULL_FACE, `GL_GREATER`, `FUNC_ADD` with `(ONE, ONE_MINUS_SRC_ALPHA)`
+(premultiplied, which is what the premultiply table in §21.13 is for);
+geometry is client-side float arrays (strides 0x14/0x1c/0x24) drawn as
+TRIANGLES with UNSIGNED_SHORT indices; 23 GLSL programs. The window is
+960x540 (`glViewport`). Not one enum needed translation; the only
+desktop-isms are `glClearDepth(double)` and `glDrawArraysInstancedEXT`.
+
+**13b, the build and the harness.** `build_boot.py --web` reuses the
+lifted objects and rebuilds the host TUs as `.web.o` with
+`-DISAAC_WEB=1`, linking `-sENVIRONMENT=web` with MEMFS instead of
+NODERAWFS, `FS`/`ENV` exported and `-lGL` (WebGL2 only). Output
+`boot-web/` (a 380 MB wasm; the link takes seconds because the objects
+are already optimised). `scripts/recomp/web/run_web.mjs` launches
+Playwright's bundled Chromium headless with SwiftShader, serves the
+module, the memory image and the instance tree from a throwaway HTTP
+server on 127.0.0.1, and drives `boot_web.html` + `boot_web.mjs` -- the
+same stages as the node driver, with the lazy RAM-FS reads answered by a
+synchronous XHR (base64: a synchronous XHR may only read text and
+Chromium strips a leading UTF-8 BOM from text whatever the charset
+label, which silently emptied every BOM-prefixed `.anm2`/`.fs`/`.xml` on
+the first attempt), the Lua scripts written into MEMFS, and `ENV` set
+from the query string (`?frames=N&ISAAC_X=Y`). The first attempt served
+`boot.wasm` through `page.route`; a 380 MB body crossing the CDP channel
+as base64 killed the renderer, hence the HTTP server.
+
+**13c, the backend.** `host_gl_webgl.c` (web build only) forwards every
+opengl32 entry point to the GLES3 function emscripten binds to the
+page's WebGL2 context, which `wglCreateContext` creates on `#canvas`.
+Arguments come off the guest stack (`isaac_arg`), floats as raw bits,
+doubles as two slots, pointers through `isaac_g()` straight into GL
+(guest memory is the wasm heap). Geometry goes through the client-array
+emulation of round 2 (`host_gl_clientarrays.c`), which was written for
+exactly this and needed only an instanced-draw entry. `glShaderSource`
+concatenates the pieces, prepends `precision highp float; precision
+highp int;` to fragment shaders that declare none (desktop GLSL does not
+need it, GLSL ES rejects it: "No precision specified for (float)"),
+strips a desktop `#version` line, compiles at once and logs a failing
+source's head. The capability gates (`glGetString` "4.6.0",
+`GL_NUM_EXTENSIONS` 0, `GL_CONTEXT_PROFILE_MASK` 0) keep their headless
+answers so the refresh takes the same branches as under node; state and
+limit queries (`GL_FRAMEBUFFER_BINDING`, `GL_MAX_TEXTURE_SIZE`, ...) are
+real. `SwapBuffers` reads the default framebuffer back (`glReadPixels`)
+and hands it to the page (`Module.isaacPresent`); the runner writes the
+last frames as PNGs. `ISAAC_GL_CHECK=1` polls `glGetError` after every
+forwarded call and names the caller.
+
+**Result (2026-09-02).** 5-frame run: 16 s wall including the module
+load, `main returned 0`, **0 GL errors, 0 shader failures, 36 draws**,
+6 frames presented at 53-59 ms each under SwiftShader; 643 lazy reads
+(31 MB). Frame 4 is the main menu's paper backdrop with the pencils --
+the first frame the recompiled game has ever rendered; frame 120 of a
+120-frame run is the Repentance+ Beta welcome popup, its text set in the
+game's fonts (the fade and the popup timing are the game's own). Frames 1-2 are
+black (the loading screen draws before its assets arrive), which matches
+the game's own behaviour on a cold start. The frames live under
+`output/recomp/web-run*/` (binary-derived: not committed).
+`tests/recomp-web.test.js` pins the two-backend contract: every
+opengl32 import has a headless body and a WebGL body, the fakes are
+compiled out of the web build, the frame capture and the context
+creation are wired.
+
+**What the web build does not do yet:** no input (the pump runs but no
+key or mouse events reach the game), no audio (OpenAL is the same
+no-op arms), the three engine threads stay adopted (§21.16), and the
+page blocks inside `main` for the whole run -- the canvas is read back
+from the host, not presented by the browser, so a live view needs
+either a worker/OffscreenCanvas split or Asyncify at the SwapBuffers
+shim. Speed: SwiftShader spends ~50 ms per frame; a GPU-backed Chromium
+(`--use-gl=angle` without SwiftShader) is the same harness with a flag.
+
 ## Appendix: reproduction
 
 ```bash

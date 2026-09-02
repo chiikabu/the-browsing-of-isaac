@@ -159,14 +159,31 @@ def main():
                     help="link at -O2 (wasm-opt over the whole module, ~8 min) for a shipping build")
     ap.add_argument("--no-lift-patches", action="store_true",
                     help="do not apply scripts/recomp/lift/lift_patches.py to the lifted TUs")
+    ap.add_argument("--web", action="store_true",
+                    help="browser profile: host objects rebuilt as .web.o with -DISAAC_WEB=1 "
+                         "(real WebGL2 GL backend, EM_JS bridges), link with -sENVIRONMENT=web, "
+                         "MEMFS (no NODERAWFS), FS/ENV exported; output in boot-web/. Driven by "
+                         "scripts/recomp/web/run_web.mjs under Playwright.")
     ap.add_argument("--fast", action="store_true",
                     help="speed profile: lifted TUs with -DRECOMP_MEM_CHECK=0 (no bounds checks, VA "
                          "ring, memory watch or stall tick), objects as lifted_NNN.fast.o, output in "
                          "boot-fast/, wasm-opt link. Faults become raw wasm traps; measure with it, "
                          "debug with the default profile.")
     args = ap.parse_args()
-    global BOOT_OUT, LIFT_CFLAGS
+    global BOOT_OUT, LIFT_CFLAGS, LDFLAGS, HOST_CFLAGS
     lift_obj_suffix = ".o"
+    host_obj_suffix = ".o"
+    if args.web:
+        BOOT_OUT = OUT_LIFT / "boot-web"
+        HOST_CFLAGS = HOST_CFLAGS + ["-DISAAC_WEB=1"]
+        host_obj_suffix = ".web.o"
+        LDFLAGS = [f for f in LDFLAGS
+                   if f not in ("-sENVIRONMENT=node", "-sNODERAWFS=1",
+                                "-sEXPORTED_RUNTIME_METHODS=HEAPU8")]
+        LDFLAGS += ["-sENVIRONMENT=web", "-sFORCE_FILESYSTEM=1",
+                    "-sEXPORTED_RUNTIME_METHODS=HEAPU8,FS,ENV",
+                    "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",
+                    "-sGL_ENABLE_GET_PROC_ADDRESS=0", "-lGL"]
     if args.fast:
         BOOT_OUT = OUT_LIFT / "boot-fast"
         LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=0"]
@@ -257,7 +274,7 @@ def main():
     host_objs = []
     host_fail = []
     for src in host_srcs + extra_srcs:
-        obj = obj_dir / (src.stem + ".o")
+        obj = obj_dir / (src.stem + host_obj_suffix)
         flags = HOST_CFLAGS + inc_host
         if src in extra_srcs:
             # boot_integration.c / recomp_rt.c / dispatch / stubs need the

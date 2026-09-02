@@ -1,0 +1,186 @@
+// run_web.mjs -- run the WEB build of the lifted module (build_boot.py --web ->
+// output/recomp/lift/boot-web/) under headless Chromium through Playwright.
+//
+// Files are served from disk by a throwaway HTTP server on 127.0.0.1 (the
+// boot module, the memory image, the instance tree, and a generated index of
+// the instance files the page uses to register the RAM-FS lazily). Chromium renders WebGL2 through SwiftShader
+// (software), so the run is deterministic and needs no GPU.
+//
+// The page script (boot_web.html + boot_web.mjs) runs the same stages as
+// boot_integration.mjs. The host's SwapBuffers shim reads the framebuffer
+// back on every presented frame (web build only) and hands it to
+// Module.isaacPresent; the page keeps the last frames and this runner writes
+// them out as PNGs next to the log.
+//
+//   node scripts/recomp/web/run_web.mjs [out-dir] [frames] [ISAAC_X=Y ...]
+//
+// Exit code: 0 when main returned 0, 1 otherwise. Reads nothing outside the
+// repo and the instance dir; downloads nothing (Playwright's bundled Chromium
+// must already be installed).
+import { chromium } from 'playwright';
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'node:fs';
+import { deflateSync } from 'node:zlib';
+import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..', '..', '..');
+const BOOT = join(ROOT, 'output', 'recomp', 'lift', 'boot-web');
+const SEGS = join(ROOT, 'output', 'recomp', 'host', 'isaac.segs.bin');
+const INSTANCE = join(ROOT, '.scratch', 'game-instance');
+const OUT = process.argv[2] || join(ROOT, 'output', 'recomp', 'web-run');
+const FRAMES = process.argv[3] || '5';
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=')).map((a) => a.split('='));
+
+for (const f of ['boot.mjs', 'boot.wasm']) {
+  if (!existsSync(join(BOOT, f))) {
+    console.log(`missing ${join(BOOT, f)} -- build it with: python scripts/recomp/lift/build_boot.py --web`);
+    process.exit(2);
+  }
+}
+mkdirSync(OUT, { recursive: true });
+
+// ---- instance index: what the page registers lazily -----------------------
+// Same policy as boot_integration.mjs: skip exe/dll/so/ogv, mods/, the
+// duplicate top-level packed/ (the archives are seeded eagerly by name from
+// resources/packed/), and dot files.
+const SKIP_DIRS = new Set(['packed', 'mods']);
+const SKIP_EXT = /\.(exe|dll|so|ogv)$/i;
+const index = [];
+(function walk(dir, rel) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
+    if (e.isDirectory()) { if (SKIP_DIRS.has(r)) continue; walk(p, r); }
+    else if (e.isFile()) {
+      if (SKIP_EXT.test(e.name) || e.name.startsWith('.')) continue;
+      index.push({ p: r, s: statSync(p).size });
+    }
+  }
+})(INSTANCE, '');
+
+// ---- PNG writer (RGBA, bottom-up rows as glReadPixels returns them) --------
+const CRC = new Int32Array(256);
+for (let n = 0; n < 256; n++) {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  CRC[n] = c;
+}
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function chunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+  return Buffer.concat([len, td, crc]);
+}
+function pngFromRgba(rgba, w, h, flipY) {
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const srcRow = flipY ? h - 1 - y : y;
+    raw[y * (w * 4 + 1)] = 0;
+    rgba.copy(raw, y * (w * 4 + 1) + 1, srcRow * w * 4, srcRow * w * 4 + w * 4);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// ---- the browser -----------------------------------------------------------
+const mime = (p) => p.endsWith('.mjs') || p.endsWith('.js') ? 'text/javascript'
+  : p.endsWith('.wasm') ? 'application/wasm'
+  : p.endsWith('.html') ? 'text/html'
+  : p.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+         '--enable-webgl', '--disable-web-security'],
+});
+const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+const consoleLines = [];
+page.on('console', (msg) => consoleLines.push(msg.text()));
+page.on('pageerror', (e) => consoleLines.push(`PAGEERROR ${e.message}`));
+page.on('crash', () => consoleLines.push('PAGE CRASHED (renderer died)'));
+let served = 0, missing = 0;
+// A real local HTTP server rather than page.route: the 380 MB boot.wasm
+// through route.fulfill crashed the renderer (the body crosses the CDP
+// channel as base64), and streaming compilation wants a normal response.
+function resolveFile(rel) {
+  if (rel === '/' || rel === '/boot_web.html') return { file: join(HERE, 'boot_web.html') };
+  if (rel === '/boot_web.mjs') return { file: join(HERE, 'boot_web.mjs') };
+  if (rel === '/boot.mjs' || rel === '/boot.wasm') return { file: join(BOOT, rel.slice(1)) };
+  if (rel === '/isaac.segs.bin') return { file: SEGS };
+  if (rel === '/instance_index.json') return { body: Buffer.from(JSON.stringify(index)) };
+  if (rel.startsWith('/instance/')) return { file: join(INSTANCE, rel.slice('/instance/'.length)) };
+  return {};
+}
+const server = createServer((req, res) => {
+  const u = new URL(req.url, 'http://x');
+  const rel = decodeURIComponent(u.pathname);
+  // ?b64=1: the page's synchronous XHR can only read text, and Chromium
+  // strips a leading UTF-8 BOM from any text response whatever the charset
+  // label (three bytes gone from every BOM-prefixed .anm2/.fs/.xml). Base64
+  // survives the decoder untouched.
+  const b64 = u.searchParams.get('b64') === '1';
+  const r = resolveFile(rel);
+  if (!r.body && (!r.file || !existsSync(r.file))) {
+    missing += 1;
+    if (missing <= 10) consoleLines.push(`[http] 404 ${rel}`);
+    res.writeHead(404); res.end('not found'); return;
+  }
+  served += 1;
+  let body = r.body || readFileSync(r.file);
+  if (b64) body = Buffer.from(body.toString('base64'), 'ascii');
+  res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(rel), 'Content-Length': body.length,
+                       'Cache-Control': 'no-store' });
+  res.end(body);
+});
+await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+
+const qs = new URLSearchParams({ frames: FRAMES });
+for (const [k, v] of EXTRA_ENV) qs.set(k, v);
+const t0 = Date.now();
+await page.goto(`${ORIGIN}/boot_web.html?${qs}`);
+let done;
+try {
+  await page.waitForFunction(() => window.isaacDone !== null && window.isaacDone !== undefined,
+                             null, { timeout: 20 * 60 * 1000 });
+  done = await page.evaluate(() => window.isaacDone);
+} catch (e) {
+  done = { error: `timeout or navigation failure: ${e.message}` };
+}
+const wall = Date.now() - t0;
+const result = await page.evaluate(() => ({
+  log: window.isaacLog || [],
+  frames: (window.isaacFrames || []).map((f) => {
+    let s = '';
+    for (let i = 0; i < f.rgba.length; i += 8192)
+      s += String.fromCharCode.apply(null, f.rgba.subarray(i, i + 8192));
+    return { n: f.n, w: f.w, h: f.h, b64: btoa(s) };
+  }),
+})).catch((e) => ({ log: [`evaluate failed: ${e.message}`], frames: [] }));
+await browser.close();
+server.close();
+
+writeFileSync(join(OUT, 'web-run.log'), [...consoleLines, '---- page log ----', ...result.log].join('\n') + '\n');
+for (const f of result.frames) {
+  const rgba = Buffer.from(f.b64, 'base64');
+  writeFileSync(join(OUT, `frame_${String(f.n).padStart(4, '0')}.png`), pngFromRgba(rgba, f.w, f.h, true));
+}
+console.log(`web run: ${wall} ms wall, ${served} files served (${missing} missing), ` +
+            `${result.frames.length} frame(s) written to ${OUT}`);
+console.log(`done: ${JSON.stringify(done)}`);
+const tail = result.log.slice(-6);
+for (const l of tail) console.log(`  ${l}`);
+process.exit(done && done.mainRc === 0 ? 0 : 1);

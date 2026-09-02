@@ -106,9 +106,35 @@ void imp_gdi32__DescribePixelFormat(CpuState *restrict cpu) {
  * object are only ever re-passed to us. */
 
 /* HGLRC wglCreateContext(HDC) */
+#ifdef ISAAC_WEB
+#include <emscripten/html5.h>
+static EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_web_ctx;
+static int web_context_ready(void) {
+    if (g_web_ctx) return 1;
+    EmscriptenWebGLContextAttributes at;
+    emscripten_webgl_init_context_attributes(&at);
+    at.majorVersion = 2; at.minorVersion = 0;
+    at.alpha = 0; at.depth = 1; at.stencil = 1; at.antialias = 0;
+    at.premultipliedAlpha = 0; at.preserveDrawingBuffer = 1;
+    at.enableExtensionsByDefault = 1;
+    g_web_ctx = emscripten_webgl_create_context("#canvas", &at);
+    if (g_web_ctx <= 0) {
+        isaac_log("[isaac][gl] emscripten_webgl_create_context failed (%d)", (int)g_web_ctx);
+        g_web_ctx = 0;
+        return 0;
+    }
+    emscripten_webgl_make_context_current(g_web_ctx);
+    isaac_log("[isaac][gl] WebGL2 context created on #canvas");
+    return 1;
+}
+int isaac_web_gl_ready(void) { return web_context_ready(); }
+#endif
 void imp_opengl32__wglCreateContext(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
     static uint32_t n = 0;
+#ifdef ISAAC_WEB
+    if (!web_context_ready()) { cpu->EAX = 0; return; }
+#endif
     cpu->EAX = 0x77880000u + (++n & 0x7ffffu);
 }
 
@@ -153,7 +179,12 @@ void imp_opengl32__wglGetCurrentContext(CpuState *restrict cpu) {
 /* BOOL wglMakeCurrent(HDC, HGLRC) -- the bootstrap's success gate. */
 void imp_opengl32__wglMakeCurrent(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
-    (void)isaac_arg(cpu, 1);
+    uint32_t rc = isaac_arg(cpu, 1);
+#ifdef ISAAC_WEB
+    if (rc && g_web_ctx) emscripten_webgl_make_context_current(g_web_ctx);
+#else
+    (void)rc;
+#endif
     cpu->EAX = 1;
 }
 
@@ -162,6 +193,46 @@ void imp_opengl32__wglShareLists(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
     (void)isaac_arg(cpu, 1);
     cpu->EAX = 1;
+}
+
+/* ---- GL census (round 13a) ---------------------------------------------
+ * Distinct argument tuples per enum-bearing entry point, printed with the
+ * stub report. Sizes and pointers are bucketed (0 / small / large) so the
+ * table stays a census of KINDS, not of every call. */
+#define GLC_MAX_ENTRIES 40
+#define GLC_MAX_TUPLES  64
+typedef struct { uint32_t a[4]; uint32_t hits; } glc_tuple;
+typedef struct { const char *name; glc_tuple t[GLC_MAX_TUPLES]; unsigned n; uint32_t calls, overflow; } glc_entry;
+static glc_entry g_glc[GLC_MAX_ENTRIES];
+static unsigned g_glc_n;
+static void gl_census(const char *name, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
+    glc_entry *e = NULL;
+    for (unsigned i = 0; i < g_glc_n; ++i) if (g_glc[i].name == name) { e = &g_glc[i]; break; }
+    if (!e) {
+        if (g_glc_n >= GLC_MAX_ENTRIES) return;
+        e = &g_glc[g_glc_n++]; e->name = name;
+    }
+    ++e->calls;
+    for (unsigned i = 0; i < e->n; ++i) {
+        glc_tuple *t = &e->t[i];
+        if (t->a[0] == a0 && t->a[1] == a1 && t->a[2] == a2 && t->a[3] == a3) { ++t->hits; return; }
+    }
+    if (e->n >= GLC_MAX_TUPLES) { ++e->overflow; return; }
+    glc_tuple *t = &e->t[e->n++];
+    t->a[0] = a0; t->a[1] = a1; t->a[2] = a2; t->a[3] = a3; t->hits = 1;
+}
+static uint32_t glc_bucket(uint32_t v) { return v == 0 ? 0u : v < 64u ? 1u : v < 4096u ? 2u : 3u; }
+void isaac_gl_census_report(void) {
+    if (!g_glc_n) return;
+    isaac_log("[isaac][gl] ---- GL census: %u entry points with enum arguments ----", g_glc_n);
+    for (unsigned i = 0; i < g_glc_n; ++i) {
+        glc_entry *e = &g_glc[i];
+        isaac_log("[isaac][gl] %-28s %8u calls, %u distinct tuple(s)%s", e->name, e->calls, e->n,
+                  e->overflow ? " (+more, table full)" : "");
+        for (unsigned k = 0; k < e->n; ++k)
+            isaac_log("[isaac][gl]     %8u x  (0x%x, 0x%x, 0x%x, 0x%x)", e->t[k].hits,
+                      e->t[k].a[0], e->t[k].a[1], e->t[k].a[2], e->t[k].a[3]);
+    }
 }
 
 /* ============ plain-core GL entry points resolved by wglGetProcAddress ==== */
@@ -181,7 +252,22 @@ void imp_opengl32__wglShareLists(CpuState *restrict cpu) {
  * no feature flags set, no extension enumeration (count 0 -> the WGL
  * extension-string fallback), no robustness/flush-control register. */
 void imp_opengl32__glGetIntegerv(CpuState *restrict cpu) {
+    gl_census("glGetIntegerv", isaac_arg(cpu, 0), 0, 0, 0);
     uint32_t pname = isaac_arg(cpu, 0), out = isaac_arg(cpu, 1);
+#ifdef ISAAC_WEB
+    /* Real answers for state and limits; the version/extension gates below
+     * keep their headless answers so the capability refresh takes the same
+     * branches as the node build. */
+    if (pname == 0x8CA6u /* GL_FRAMEBUFFER_BINDING */ || pname == 0x0D33u ||
+        pname == 0x0D3Au || pname == 0x84E8u || pname == 0x8073u || pname == 0x851Cu ||
+        pname == 0x8CA7u /* GL_RENDERBUFFER_BINDING */ || pname == 0x8069u /* GL_TEXTURE_BINDING_2D */ ||
+        pname == 0x0BA2u /* GL_VIEWPORT */ || pname == 0x8B8Du /* GL_CURRENT_PROGRAM */) {
+        extern void isaac_web_get_integerv(uint32_t, uint32_t);
+        isaac_web_get_integerv(pname, out);
+        cpu->EAX = 0;
+        return;
+    }
+#endif
     /* Size caps must be non-zero or the asset loader's image-dimension gate
      * (0x00a12d50: `cmp w,max / ja fail`, max = a renderer vtable method that
      * surfaces this query) rejects EVERY texture with "Attempted to create
@@ -232,9 +318,11 @@ void imp_opengl32__glGetStringi(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 
+#ifndef ISAAC_WEB   /* the fake, headless GL; host_gl_webgl.c is the web build's */
 /* void glClear(GLbitfield mask) -- cdecl. Called once at 0x00a6b9e1 with
  * 0x4000 (GL_COLOR_BUFFER_BIT); the return value is discarded. */
 void imp_opengl32__glClear(CpuState *restrict cpu) {
+    gl_census("glClear", isaac_arg(cpu, 0), 0, 0, 0);
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0;
 }
@@ -277,6 +365,7 @@ static void gl_gen_impl(uint32_t count, uint32_t ids) {
 }
 
 void imp_opengl32__glActiveTexture(CpuState *restrict cpu) {
+    gl_census("glActiveTexture", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -285,6 +374,7 @@ void imp_opengl32__glAttachShader(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glBindFramebuffer(CpuState *restrict cpu) {
+    gl_census("glBindFramebuffer", isaac_arg(cpu, 0), glc_bucket(isaac_arg(cpu, 1)), 0, 0);
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -317,18 +407,22 @@ void imp_opengl32__glBindRenderbuffer(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glBindTexture(CpuState *restrict cpu) {
+    gl_census("glBindTexture", isaac_arg(cpu, 0), glc_bucket(isaac_arg(cpu, 1)), 0, 0);
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glBlendEquation(CpuState *restrict cpu) {
+    gl_census("glBlendEquation", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glBlendFuncSeparate(CpuState *restrict cpu) {
+    gl_census("glBlendFuncSeparate", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), isaac_arg(cpu, 3));
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glCheckFramebufferStatus(CpuState *restrict cpu) {
+    gl_census("glCheckFramebufferStatus", isaac_arg(cpu, 0), 0, 0, 0);
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0x8CD5u;          /* GL_FRAMEBUFFER_COMPLETE */
 }
@@ -337,6 +431,7 @@ void imp_opengl32__glClampColorARB(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glClearColor(CpuState *restrict cpu) {
+    gl_census("glClearColor", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), isaac_arg(cpu, 3));
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -353,11 +448,13 @@ void imp_opengl32__glCreateProgram(CpuState *restrict cpu) {
     cpu->EAX = gl_next_token();
 }
 void imp_opengl32__glCreateShader(CpuState *restrict cpu) {
+    gl_census("glCreateShader", isaac_arg(cpu, 0), 0, 0, 0);
     gl_log_once("glCreateShader", "type");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = gl_next_token();
 }
 void imp_opengl32__glCullFace(CpuState *restrict cpu) {
+    gl_census("glCullFace", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -386,14 +483,17 @@ void imp_opengl32__glDeleteShader(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glDeleteTextures(CpuState *restrict cpu) {
+    gl_census("glDeleteTextures", glc_bucket(isaac_arg(cpu, 0)), 0, 0, 0);
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glDepthFunc(CpuState *restrict cpu) {
+    gl_census("glDepthFunc", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glDisable(CpuState *restrict cpu) {
+    gl_census("glDisable", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -402,14 +502,17 @@ void imp_opengl32__glDisableVertexAttribArray(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glDrawArraysInstancedEXT(CpuState *restrict cpu) {
+    gl_census("glDrawArraysInstancedEXT", isaac_arg(cpu, 0), glc_bucket(isaac_arg(cpu, 2)), glc_bucket(isaac_arg(cpu, 3)), 0);
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glDrawElements(CpuState *restrict cpu) {
+    gl_census("glDrawElements", isaac_arg(cpu, 0), isaac_arg(cpu, 2), glc_bucket(isaac_arg(cpu, 1)), 0);
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glEnable(CpuState *restrict cpu) {
+    gl_census("glEnable", isaac_arg(cpu, 0), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -418,10 +521,12 @@ void imp_opengl32__glEnableVertexAttribArray(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glFramebufferRenderbuffer(CpuState *restrict cpu) {
+    gl_census("glFramebufferRenderbuffer", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), 0);
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glFramebufferTexture2D(CpuState *restrict cpu) {
+    gl_census("glFramebufferTexture2D", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), isaac_arg(cpu, 4));
     for (unsigned i = 0; i < 5; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -434,6 +539,7 @@ void imp_opengl32__glGenRenderbuffers(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glGenTextures(CpuState *restrict cpu) {
+    gl_census("glGenTextures", glc_bucket(isaac_arg(cpu, 0)), 0, 0, 0);
     gl_gen_impl(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     cpu->EAX = 0;
 }
@@ -510,6 +616,7 @@ void imp_opengl32__glProgramUniform1ivEXT(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glReadPixels(CpuState *restrict cpu) {
+    gl_census("glReadPixels", isaac_arg(cpu, 4), isaac_arg(cpu, 5), glc_bucket(isaac_arg(cpu, 2)), glc_bucket(isaac_arg(cpu, 3)));
     uint32_t w = isaac_arg(cpu, 2), h = isaac_arg(cpu, 3),
              fmt = isaac_arg(cpu, 5), ty = isaac_arg(cpu, 6),
              px = isaac_arg(cpu, 7);
@@ -521,6 +628,7 @@ void imp_opengl32__glReadPixels(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glRenderbufferStorage(CpuState *restrict cpu) {
+    gl_census("glRenderbufferStorage", isaac_arg(cpu, 0), isaac_arg(cpu, 1), glc_bucket(isaac_arg(cpu, 2)), glc_bucket(isaac_arg(cpu, 3)));
     (void)isaac_arg(cpu, 0);                 /* target */
     int k = gl_rb_slot(g_gl_rb_bound);
     if (k >= 0) {
@@ -531,27 +639,33 @@ void imp_opengl32__glRenderbufferStorage(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glShaderSource(CpuState *restrict cpu) {
+    gl_census("glShaderSource", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), glc_bucket(isaac_arg(cpu, 2)), glc_bucket(isaac_arg(cpu, 3)));
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3);
     cpu->EAX = 0;
 }
 void imp_opengl32__glTexImage2D(CpuState *restrict cpu) {
+    gl_census("glTexImage2D", isaac_arg(cpu, 2), isaac_arg(cpu, 6), isaac_arg(cpu, 7), glc_bucket(isaac_arg(cpu, 3)) * 16u + glc_bucket(isaac_arg(cpu, 4)));
     for (unsigned i = 0; i < 9; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glTexParameteri(CpuState *restrict cpu) {
+    gl_census("glTexParameteri", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), 0);
     for (unsigned i = 0; i < 3; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glTexSubImage2D(CpuState *restrict cpu) {
+    gl_census("glTexSubImage2D", isaac_arg(cpu, 0), isaac_arg(cpu, 6), isaac_arg(cpu, 7), glc_bucket(isaac_arg(cpu, 4)));
     for (unsigned i = 0; i < 9; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniform1fv(CpuState *restrict cpu) {
+    gl_census("glUniform1fv", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), 0, 0);
     for (unsigned i = 0; i < 3; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniform1i(CpuState *restrict cpu) {
+    gl_census("glUniform1i", glc_bucket(isaac_arg(cpu, 0)), glc_bucket(isaac_arg(cpu, 1)), 0, 0);
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -564,6 +678,7 @@ void imp_opengl32__glUniform1uiv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniform2fv(CpuState *restrict cpu) {
+    gl_census("glUniform2fv", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), 0, 0);
     for (unsigned i = 0; i < 3; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -576,6 +691,7 @@ void imp_opengl32__glUniform2uiv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniform3fv(CpuState *restrict cpu) {
+    gl_census("glUniform3fv", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), 0, 0);
     for (unsigned i = 0; i < 3; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -588,6 +704,7 @@ void imp_opengl32__glUniform3uiv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniform4fv(CpuState *restrict cpu) {
+    gl_census("glUniform4fv", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), 0, 0);
     for (unsigned i = 0; i < 3; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -624,6 +741,7 @@ void imp_opengl32__glUniformMatrix3x4fv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glUniformMatrix4fv(CpuState *restrict cpu) {
+    gl_census("glUniformMatrix4fv", glc_bucket(isaac_arg(cpu, 0)), isaac_arg(cpu, 1), isaac_arg(cpu, 2), 0);
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -636,10 +754,12 @@ void imp_opengl32__glUniformMatrix4x3fv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glUseProgram(CpuState *restrict cpu) {
+    gl_census("glUseProgram", glc_bucket(isaac_arg(cpu, 0)), 0, 0, 0);
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
 void imp_opengl32__glVertexAttribPointer(CpuState *restrict cpu) {
+    gl_census("glVertexAttribPointer", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), isaac_arg(cpu, 4));
     for (unsigned i = 0; i < 6; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -648,9 +768,12 @@ void imp_opengl32__glVertexStream2fATI(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glViewport(CpuState *restrict cpu) {
+    gl_census("glViewport", isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2), isaac_arg(cpu, 3));
     for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
+
+#endif /* !ISAAC_WEB */
 
 /* ================= TEMP instrumentation (remove after 0xa6b570 root cause) = */
 void imp_kernel32__OutputDebugStringA(CpuState *restrict cpu) {

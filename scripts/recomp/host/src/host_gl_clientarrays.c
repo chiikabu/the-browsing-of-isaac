@@ -327,6 +327,19 @@ void isaac_gl_draw_arrays(GLenum mode, GLint first, GLsizei count) {
     ++g_draws;
 }
 
+void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count,
+                                    GLsizei prims) {
+    if (count <= 0 || prims <= 0) return;
+    ensure_buffers();
+    stage_attributes((uint32_t)first + (uint32_t)count);
+#ifdef __EMSCRIPTEN__
+    glDrawArraysInstanced(mode, first, count, prims);
+#else
+    (void)mode;
+#endif
+    ++g_draws;
+}
+
 void isaac_gl_report(void) {
     isaac_log("[isaac][gl] client-array emulation: %llu draws, %llu indices "
               "scanned, %llu vertex bytes staged, %llu index bytes staged",

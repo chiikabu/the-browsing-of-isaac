@@ -273,6 +273,11 @@ void isaac_stub_report(void) {
         g_records[j] = k;
     }
     { extern void recomp_profile_report(void); recomp_profile_report(); }
+    { extern void isaac_gl_census_report(void); isaac_gl_census_report(); }
+#ifdef ISAAC_WEB
+    { extern void isaac_web_gl_report(void); isaac_web_gl_report();
+      extern void isaac_gl_report(void); isaac_gl_report(); }
+#endif
     isaac_log("[isaac] ---- stub report: %u distinct symbols, %u total calls ----",
               g_record_count, g_total_stub_calls);
     for (unsigned i = 0; i < g_record_count; ++i) {
