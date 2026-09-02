@@ -3076,7 +3076,7 @@ __attribute__((weak)) void imp_user32__GetRawInputDeviceList(CpuState *restrict 
 __attribute__((weak)) void imp_user32__LoadImageA(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[613];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_user32__PeekMessageA(CpuState *restrict cpu) {
     static const isaac_import *self;

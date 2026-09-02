@@ -124,6 +124,18 @@ void imp_user32__LoadIconA(CpuState *restrict cpu) {
     cpu->EAX = 0x10001u;
 }
 
+/* HANDLE LoadImageA(HINSTANCE, LPCSTR name, UINT type, int cx, int cy, UINT fuLoad)
+ * -- 6 stdcall args (purge 24). Reached REGISTER-HELD (`call ebx` at
+ * 0x00949b03: hInstance, MAKEINTRESOURCE(101), IMAGE_ICON, ...) for the
+ * window icon, so the call-site census saw 0 sites and the purge was
+ * UNKNOWN; boot round 11b stopped on that trap. No icon: return NULL, which
+ * the caller tolerates (it only hands the result to SetClassLongA). */
+void imp_user32__LoadImageA(CpuState *restrict cpu) {
+    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4); (void)isaac_arg(cpu, 5);
+    cpu->EAX = 0;
+}
+
 /* LONG SetClassLongA(HWND, int, LONG) -- no class storage; old value 0. */
 void imp_user32__SetClassLongA(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);

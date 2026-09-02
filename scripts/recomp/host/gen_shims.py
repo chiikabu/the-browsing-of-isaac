@@ -205,6 +205,9 @@ SYMBOL_OVERRIDE = {
     # kernel32 pieces that are genuinely inert in a single-threaded wasm build
     "InitializeCriticalSection@kernel32.dll": "STUB",
     "InitializeCriticalSectionAndSpinCount@kernel32.dll": "REAL",
+    # Window icon via a register-held call (0x00949b03): census 0 sites, so
+    # the verdict would stay NEVER_CALLED although host_shims_win.c provides it.
+    "LoadImageA@user32.dll": "PROVIDED",
     "EnterCriticalSection@kernel32.dll": "STUB",
     "LeaveCriticalSection@kernel32.dll": "STUB",
     "DeleteCriticalSection@kernel32.dll": "STUB",
@@ -280,6 +283,10 @@ CURATED_PURGE = {
     # UNKNOWN -- with the shim now implemented, isaac_indirect_call would trap
     # on its return ("stack purge is unknown") at the first directory scan.
     "FindNextFileW@kernel32.dll": 8,
+    # HANDLE LoadImageA(HINSTANCE, LPCSTR, UINT, int, int, UINT) = 6 DWORDs = 24.
+    # Reached ONLY register-held (`call ebx` at 0x00949b03, the window icon) so
+    # the census saw 0 sites; boot round 11b stopped on the unknown-purge trap.
+    "LoadImageA@user32.dll": 24,
     # msvcp140 C++ methods are __thiscall (this in ECX, callee pops the stack
     # args). The push-count sweep counts the CALLER's unrelated pushes at the
     # inlined construction sites, so three of them measured wrong; the purge is
