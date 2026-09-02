@@ -156,9 +156,10 @@ runtime guest-memory watch (prints writer VA + value). A full boot takes
 matters. The guest heap layout moves between runs (time-seeded RNG): never
 compare a register image from one run with a dump from another.
 
-**Exact next unit (B):** run the boot after the ISteamUGC NULL slot (see the
-last paragraph of recomp-architecture.md §21.5 for the measured outcome) and
-take the next wall from the trap dump. `_Fiopen` + codecvt facets (behind the
+**Exact next unit (B):** run the boot on the round-11b build (Steam
+accessor allow-list; it was still in flight at hand-off) and take the next
+wall from the trap dump (both fault paths print the last 512 VAs, live
+registers and a stack walk; `ISAAC_WATCH` names a writer). `_Fiopen` + codecvt facets (behind the
 `fstream` ctor `0x009e8010`) stay loud stubs; the 18 remaining emulator-era
 hand patches (§19.5) are candidates only when shown to block something.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
