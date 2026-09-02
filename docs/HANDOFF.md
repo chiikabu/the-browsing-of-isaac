@@ -156,10 +156,15 @@ runtime guest-memory watch (prints writer VA + value). A full boot takes
 matters. The guest heap layout moves between runs (time-seeded RNG): never
 compare a register image from one run with a dump from another.
 
-**Exact next unit (B):** run the boot on the round-11b build (Steam
-accessor allow-list; it was still in flight at hand-off) and take the next
-wall from the trap dump (both fault paths print the last 512 VAs, live
-registers and a stack walk; `ISAAC_WATCH` names a writer). `_Fiopen` + codecvt facets (behind the
+**Exact next unit (B):** the round-11b boot passes Menu Save Init and stops
+at `user32!LoadImageA`, reached register-held (`call ebx` at `0x00949b03`:
+`push esi(hInstance); push 1 (IMAGE_ICON); push 0x65 (icon 101); …`), whose
+shim-table entry is NEVER-CALLED with an unknown purge, so the dispatcher
+traps rather than desync. Curate `LoadImageA@user32.dll` = 24 (6 stdcall
+args) in `gen_shims.py`, provide a shim returning 0 (no window icon),
+`python scripts/recomp/host/gen_shims.py`, host-only relink, boot, and take
+the next wall from the trap dumps (both fault paths print the last 512 VAs,
+live registers and a stack walk; `ISAAC_WATCH` names a writer). `_Fiopen` + codecvt facets (behind the
 `fstream` ctor `0x009e8010`) stay loud stubs; the 18 remaining emulator-era
 hand patches (§19.5) are candidates only when shown to block something.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
