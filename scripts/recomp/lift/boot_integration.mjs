@@ -120,8 +120,9 @@ for (const item of (process.env.ISAAC_INPUT || '').split(',').map((t) => t.trim(
     inputTimeline.push({ frame: frame + 2, ev: [3, btn, 0, 0] });
   } else if (KEYS[w]) {
     const [vk, sc, ext] = KEYS[w];
+    const hold = Math.max(1, Number(rest[0] || 2));      // frame:key[:hold] -- held for `hold` frames
     inputTimeline.push({ frame, ev: [1, vk, sc | (ext << 8), 1] });
-    inputTimeline.push({ frame: frame + 2, ev: [1, vk, sc | (ext << 8), 0] });
+    inputTimeline.push({ frame: frame + hold, ev: [1, vk, sc | (ext << 8), 0] });
   } else console.log(`  ISAAC_INPUT: unknown key '${what}' in '${item}'`);
 }
 inputTimeline.sort((a, b) => a.frame - b.frame);

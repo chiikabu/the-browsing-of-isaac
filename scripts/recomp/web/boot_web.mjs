@@ -76,8 +76,8 @@ cfg.isaacPresent = (ptr, w, h) => {
 // ---- scripted input ---------------------------------------------------------
 // The page's main thread is inside main() for the whole run, so no browser
 // event can reach the game; input is a timeline keyed by presented frame:
-//   ?input=130:Enter,160:Enter,200:Down,230:Enter,300:mouse:480:270,301:click
-// A key entry presses at its frame and releases two frames later. The host's
+//   ?input=130:Enter,160:Enter,200:Down,230:Enter,300:mouse:480:270,301:click,400:w:30
+// A key entry presses at its frame and releases `hold` frames later (default 2). The host's
 // PeekMessageW asks Module.isaacInputPoll(frame, out) for the events due at
 // or before `frame`, one per call, packed as four int32s at `out`:
 //   [1, vk, scancode | (extended << 8), down]   key
@@ -108,8 +108,9 @@ for (const item of (params.get('input') || '').split(',').map((t) => t.trim()).f
     timeline.push({ frame: frame + 2, ev: [3, btn, 0, 0] });
   } else if (KEYS[w]) {
     const [vk, sc, ext] = KEYS[w];
+    const hold = Math.max(1, Number(rest[0] || 2));      // frame:key[:hold] -- held for `hold` frames
     timeline.push({ frame, ev: [1, vk, sc | (ext << 8), 1] });
-    timeline.push({ frame: frame + 2, ev: [1, vk, sc | (ext << 8), 0] });
+    timeline.push({ frame: frame + hold, ev: [1, vk, sc | (ext << 8), 0] });
   } else log(`  input: unknown key '${what}' in '${item}'`);
 }
 timeline.sort((a, b) => a.frame - b.frame);

@@ -14,10 +14,12 @@ Recognised MSVC x86 forms
   C  jmp dword ptr [IMM]                         IAT / global slot -> tail call
   D  jmp reg                                     dynamic tail call / vtable
 
-The bound comes from the dominating `cmp reg, N` + `ja/jbe/jae` pair; when
-it cannot be found the table is walked until an entry leaves the owning
-function's address range (MSVC emits tables contiguously in .text or
-.rdata, so this terminates).
+The bound comes from the dominating `cmp IDX, N` + unsigned `ja/jbe/jae`
+pair on the table's index register (both parts required: a bare `cmp` on
+the way to the jump is ordinary control flow, not a bound); when it cannot
+be found the table is walked until an entry leaves the owning function's
+address range (MSVC emits tables contiguously in .text or .rdata, so this
+terminates).
 """
 
 import capstone
@@ -90,18 +92,77 @@ class JumpTables:
         # forms A/B: jmp dword ptr [idx*4 + TBL]
         if idx_reg != 0 and m.scale == 4 and base_reg == 0:
             tbl = disp
-            n = self._bound_before(va, body_addrs)
-            targets = self._read_table(tbl, n, lo, hi)
-            if targets:
-                return ("table", targets)
+            # 1. a real range guard on the index register, then on any
+            #    register (two-level tables compare the pre-transformed index)
+            n = self._bound_before(va, body_addrs, idx_reg)
+            if n is None:
+                n = self._bound_before(va, body_addrs, 0)
+            if n is not None:
+                targets = self._read_table(tbl, n, lo, hi)
+                if targets:
+                    return ("table", targets)
+            # 2. no guard: walk the table inside the function, and also take
+            #    the legacy nearest-cmp read; the longer of the two wins. The
+            #    walk alone misses tables whose first entry is outside the
+            #    recorded function range; the legacy read alone truncates
+            #    tables whose nearest cmp is ordinary control flow.
+            walked = self._read_table(tbl, None, lo, hi)
+            legacy_n = self._nearest_cmp_bound(va, body_addrs)
+            legacy = self._read_table(tbl, legacy_n, lo, hi) if legacy_n else []
+            best = walked if len(walked) >= len(legacy) else legacy
+            if best:
+                return ("table", best)
             return ("unknown", [])
 
         # jmp dword ptr [base + idx*4] with a register base: table address
         # is computed (PIC-ish); not seen in this binary but keep it honest.
         return ("unknown", [])
 
-    def _bound_before(self, va, body_addrs):
-        """Find `cmp reg, N` in the few instructions before `va`."""
+    GUARD_JCC = ("ja", "jae", "jb", "jbe", "jnb", "jnbe", "jnc", "jc")
+
+    def _bound_before(self, va, body_addrs, idx_reg=0):
+        """Find the range check that guards the table jump at `va`: a
+        `cmp REG, N` on the table's index register, followed by an
+        UNSIGNED conditional jump (MSVC's `cmp eax, N; ja default`).
+
+        A bare `cmp` is not a bound. Boot round 14 met a switch whose last
+        instructions before the jump were `cmp esi, 2 / je ...` -- ordinary
+        control flow on the same register -- and the old rule took N=2 as
+        the table size, dropping the fourth case; the game ran off the
+        lifted table into an unlifted address during level generation
+        (0x009b0d7b, table 0x009b1210, 4 entries). Without a guard the
+        table is walked until an entry leaves the function (_read_table)."""
+        cands = [a for a in body_addrs if a < va]
+        cands.sort()
+        window = cands[-12:]
+        decoded = []
+        for a in window:
+            try:
+                decoded.append(next(self.md.disasm(self.pe.read(a, 16), a)))
+            except (StopIteration, ValueError):
+                decoded.append(None)
+        for i in range(len(decoded) - 1, -1, -1):
+            ins = decoded[i]
+            if ins is None or ins.mnemonic != "cmp" or len(ins.operands) != 2:
+                continue
+            if ins.operands[1].type != capstone.x86.X86_OP_IMM:
+                continue
+            if ins.operands[0].type != capstone.x86.X86_OP_REG:
+                continue
+            if idx_reg and ins.operands[0].reg != idx_reg:
+                continue
+            # the very next decoded instruction must be the unsigned guard
+            nxt = decoded[i + 1] if i + 1 < len(decoded) else None
+            if nxt is None or nxt.mnemonic not in self.GUARD_JCC:
+                continue
+            n = ins.operands[1].imm
+            if 0 <= n < MAX_TABLE:
+                return n + 1
+        return None
+
+    def _nearest_cmp_bound(self, va, body_addrs):
+        """The pre-round-14 rule, kept only as the fallback's second opinion:
+        the nearest `cmp x, N` in the 12 instructions before the jump."""
         cands = [a for a in body_addrs if a < va]
         cands.sort()
         for a in reversed(cands[-12:]):

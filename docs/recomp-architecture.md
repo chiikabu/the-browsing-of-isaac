@@ -2763,6 +2763,29 @@ window, whose WndProc dutifully ignored them. The queue targets the
 in the game's own order and sizes (the mutant that reverts to "last
 window" dies).
 
+**The chain, from the scout's evidence (2026-09-02), so the next input
+problem can be bisected instead of guessed:** GLFW 3.4's window proc
+`0x00a5b7b0` takes `scancode = (lParam >> 16) & 0x1ff` (0 -> `MapVirtualKeyW`),
+`key = keycodes[scancode]` from the `0xc74cc8` table `createKeyTables`
+(`0x00a80770`) fills, `action = ~(lParam >> 31) & 1`, mods from eight
+`GetKeyState` calls, and calls `_glfwInputKey` `0x00a25c50`, which writes
+`window->keys[key]` (`window+0x7c`) and invokes `callbacks.key`
+(`window+0x2a4`). The engine installs `0x00a6cec0` there (keyboard-device
+init `0x00a6c3e0`, from `InputManager` init `0x00a21980`): press -> byte
+`[0xc78ab0 + key] = 1`, release -> 0, repeats ignored. The frame's update
+(`0x00954cd0`) calls `glfwPollEvents` (`0x00a5e660`), the pad poll, then
+`InputManager::Update` `0x00a1fc00` -> per-device update -> keyboard slot
+30 `0x00a6c650`, which snapshots `0xc78ab0` into cur (`0xc78c10`) and
+prev (`0xc78950`); `Pressed` (`0x00a6c540`) is cur && !prev. Actions map
+through the default bindings table `0xc33b10` (33 pairs): MenuConfirm
+(0xe) = SPACE or ENTER, MenuBack (0xf) = ESC, MenuUp/Down (0x16/0x17) =
+UP/DOWN. Nothing gates keyboard input on focus (WM_SETFOCUS only feeds a
+pause flag read in-game). The beta-notice popup (`0x00420190`) creates
+its ACCEPT/DENY options disabled and a timer (`0x00420760`) re-enables
+them after 5,000 ms of `QueryPerformanceCounter` time, selecting ACCEPT --
+which is why the Enter presses before frame ~400 did nothing and the ones
+after did.
+
 **Result (2026-09-02).** Web run, 560 frames, `Enter` at 420 / 470 / 520:
 the beta notice is accepted, the title screen passes, frame 480 is the
 **FILE SELECT** screen (three files, "DELETE FILE"), frame 560 the main
@@ -2771,6 +2794,53 @@ selftest pins the queue (lParam layout, order, key-up bits, key state,
 cursor, properties, the window choice) with four mutants killed;
 `tests/recomp-web.test.js` pins that the page and the node driver share
 one key table and that the pump drains the queue before the cap.
+
+### 21.19 Round 14b: starting a run -- a lifter jump-table bound bug in the Basement generator
+
+With input working, the timeline `Enter` x7 (beta notice, title, file
+select, NEW RUN, character select) took the web build into a new run:
+`RNG Start Seed: YHMN 99GP`, `Initialized player`, `Level::Init m_Stage 1`,
+`[RoomConfig] load stage 1: #BASEMENT_NAME`, `allocate 1220 rooms`,
+`generate...` -- and then `exit(1)`: an indirect jump inside the level
+generator (`0x009b0b00`, at `0x009b0d7b`: `jmp dword ptr [esi*4 +
+0x9b1210]`) landed on `0x009b0f8a`, an address inside the function that
+the lifter never emitted as a target, so the runtime's "not a lifted
+function" trap fired.
+
+**The bug** (`scripts/recomp/lift/jumptables.py`): the switch-table
+bound came from *the nearest* `cmp reg, N` before the jump. Here the
+instructions before the jump were `cmp esi, 2 / je ...` -- ordinary
+control flow on the index register, not a range check -- and N=2 was
+taken as the table size: three targets emitted, the fourth case
+(`esi == 3`, `0x9b0f8a`) dropped. The table has four in-function entries
+followed by the next function's code.
+
+**The fix, measured before it was trusted.** A census over all 785
+table jumps in the image (Ghidra function bounds, linear decode) compared
+three rules: the legacy nearest-`cmp` (776 tables, 7,701 entries, 9
+unresolved), a strict "guard only" rule -- `cmp` on the index register
+followed by an unsigned jcc -- (760 / 7,438 / 25: it fixes the
+truncations but loses 16 tables whose first entry lies outside the
+recorded function range, so the walk fails), and the shipped rule: a
+real guard (index register first, then any register, since two-level
+tables compare the pre-transformed index) is trusted; without one, both
+the in-function walk and the legacy read are taken and the longer wins
+(**776 / 7,757 / 9**: every legacy table kept, 56 entries recovered,
+among them 0x9b0d7b 3->4, 0x5e3e62 4->12, 0x6f98ee 14->25, 0xa2c061 4->15).
+`tests/recomp-jumptables.test.js` pins the rule and, where `tools/` is
+present, runs the classifier on the binary for the Basement switch (four
+targets). Lesson for the lifter: a rule change is a census first.
+
+**Re-lift.** The tree was re-emitted with the recorded argv
+(`summary.json` carries it) into a scratch directory and
+`patch_reentry.py` applied. A per-TU diff against the live tree was the
+plan; it is not possible: the split is by cumulative emitted bytes, so
+one longer function moves every later boundary and all TUs differ (the
+tree also went from 41 to 45 TUs). A lifter change is therefore always a
+whole-tree replacement plus a full lifted recompile (41 TUs, 655 s with 8 jobs); keep the
+previous tree beside it (`gu-prev/`) for a rollback.
+
+**Result.** With the re-lifted tree the node boot is unchanged (frame 3 at 11.3 s, main returned 0) and the web play run passes the generator: the Basement is generated and the start room loads (Room 1.2). The next wall is a V8 'Maximum call stack size exceeded' while loading that room -- round 14c.
 
 ## Appendix: reproduction
 
