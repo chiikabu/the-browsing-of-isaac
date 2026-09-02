@@ -19,6 +19,7 @@
 #include "isaac_host.h"
 #include "shim_decls.h"   /* the 622 imp_* declarations */
 #include "rtti_cases.h"   /* real RTTI chains from the image */
+uint32_t isaac_frames_presented(void);   /* host_shims_win.c frame counter */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -418,6 +419,30 @@ int main(int argc, char **argv) {
     imp_kernel32__GetModuleHandleW(&cpu);
     check(cpu.EAX == ISAAC_IMAGE_BASE,
           "GetModuleHandleW(NULL) returns the image base");
+
+    /* Frame cap (boot round 12): after ISAAC_MAX_FRAMES presented frames,
+     * PeekMessageW hands GLFW's pump one WM_QUIT. The selftest runs with the
+     * cap unset, so the pump must stay silent however many frames pass. */
+    {
+        uint32_t msgbuf = ISAAC_STACK_TOP_VA - 0x2300;
+        for (int f = 0; f < 3; ++f) {
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, 0x10001);            /* HDC */
+            imp_gdi32__SwapBuffers(&cpu);
+        }
+        check(isaac_frames_presented() == 3, "SwapBuffers counts presented frames");
+        isaac_w32(msgbuf + 4, 0xFFFFFFFF);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, msgbuf); isaac_w32(cpu.ESP + 8, 0);
+        isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); isaac_w32(cpu.ESP + 20, 1);
+        imp_user32__PeekMessageW(&cpu);
+        check(cpu.EAX == 0 && isaac_r32(msgbuf + 4) == 0xFFFFFFFF,
+              "PeekMessageW stays silent while no frame cap is set");
+    }
 
     /* GL renderbuffer book-keeping (boot round 12): the game re-validates a
      * render target every frame by reading back GL_RENDERBUFFER_WIDTH/HEIGHT

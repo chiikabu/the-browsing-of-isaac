@@ -16,6 +16,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define WIN_CLASS_MAX 32
 #define WIN_HWND_MAX  32
@@ -513,9 +514,54 @@ void imp_user32__GetRawInputDeviceInfoA(CpuState *restrict cpu) {
 
 /* ------------------------------------------------------- messages ------ */
 
+/* Frame cap. The game's main loop ends only when GLFW's window reports
+ * shouldClose, so a boot that reaches the loop never returns. With
+ * ISAAC_MAX_FRAMES=N the SwapBuffers shim counts presented frames (and
+ * stamps every 60th with the elapsed wall time: the only per-frame timing
+ * the log has) and, once N are presented, PeekMessageW hands GLFW's own
+ * pump a single WM_QUIT; glfwPollEvents turns that into shouldClose and
+ * main returns normally -- the same path a real Alt+F4 takes. */
+static uint32_t g_frames_presented;
+static int g_max_frames = -1;         /* -1 = env not read yet, 0 = unlimited */
+static int g_quit_sent;
+static int frame_cap(void) {
+    if (g_max_frames < 0) {
+        const char *e = getenv("ISAAC_MAX_FRAMES");
+        g_max_frames = (e && *e) ? atoi(e) : 0;
+    }
+    return g_max_frames;
+}
+uint32_t isaac_frames_presented(void) { return g_frames_presented; }
+/* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
+void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
+    (void)isaac_arg(cpu, 0);
+    ++g_frames_presented;
+    if (g_frames_presented == 1 || g_frames_presented % 60u == 0)
+        isaac_log("[isaac][frame] %u frames presented", g_frames_presented);
+    cpu->EAX = 1;
+}
 void imp_user32__PeekMessageW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
-    (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
+    uint32_t msg = isaac_arg(cpu, 0);
+    (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
+    int cap = frame_cap();
+    if (cap > 0 && (int)g_frames_presented >= cap && !g_quit_sent && msg &&
+        isaac_is_guest_va(msg + 27u)) {
+        /* MSG { HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam;
+         *       DWORD time; POINT pt; } -- WM_QUIT (0x12) */
+        isaac_w32(msg + 0u, 0);
+        isaac_w32(msg + 4u, 0x12u);
+        isaac_w32(msg + 8u, 0);
+        isaac_w32(msg + 12u, 0);
+        isaac_w32(msg + 16u, 0);
+        isaac_w32(msg + 20u, 0);
+        isaac_w32(msg + 24u, 0);
+        g_quit_sent = 1;
+        isaac_log("[isaac][frame] ISAAC_MAX_FRAMES=%d reached after %u presented frames: "
+                  "posting WM_QUIT", cap, g_frames_presented);
+        cpu->EAX = 1;
+        return;
+    }
     cpu->EAX = 0;                       /* no messages */
 }
 void imp_user32__GetMessageA(CpuState *restrict cpu) {

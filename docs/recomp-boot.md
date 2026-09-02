@@ -1198,6 +1198,18 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
   subset (54 imports, 5 stream constructors; reference
   `C:\Windows\SysWOW64\msvcp140.dll`), or game-level overrides of the five
   consumers.
+- **ROUND 11c / 12 (2026-09-02): the boot runs the frame loop.** The import
+  census counts register-held IAT loads (`gen_shims.py` `regHeldLoads`): 27
+  imports reachable only that way (LoadImageA, SendMessageA, GetDeviceCaps,
+  GetRawInputDeviceList, TranslateMessage, PeekMessageA, curl_easy_setopt,
+  lua_getstack, four EOS …) now have verdicts and purges; NEVER_CALLED shrank
+  32 → 11, all genuinely dead. Every menu initialises and the main loop
+  starts; its render-target validation reads back `GL_RENDERBUFFER_WIDTH/
+  HEIGHT`, so the GL shim now stores renderbuffer sizes per name instead of
+  answering 0 (which re-created a 1024² target every frame). `ISAAC_MAX_FRAMES`
+  bounds a run (WM_QUIT through GLFW's own pump after N `SwapBuffers`).
+  Selftest 136/0, `tests/recomp-host.test.js` 36/36. Details:
+  recomp-architecture.md §21.8–§21.10.
 - **ROUND 11 (2026-09-02): the boot reaches the viewport.** Four fixes,
   three of them corrections of round-10/10b conclusions (full analysis:
   recomp-architecture.md §20.3, §21):

@@ -227,6 +227,7 @@ SYMBOL_OVERRIDE = {
     "_EOS_Platform_GetFriendsInterface@4@eossdk-win32-shipping.dll": "STUB",
     # ... and these need a real answer (host_shims_win.c / host_lua.c):
     "GetDeviceCaps@gdi32.dll": "PROVIDED",        # LOGPIXELS/VREFRESH/BITSPIXEL, not 0
+    "SwapBuffers@gdi32.dll": "PROVIDED",          # counts presented frames (ISAAC_MAX_FRAMES cap, per-60 stamps)
     "GetRawInputDeviceList@user32.dll": "PROVIDED",   # must write *count = 0
     "lua_getstack@lua5.3.3r.dll": "PROVIDED",     # real Lua 5.3.3 binding
     "EnterCriticalSection@kernel32.dll": "STUB",

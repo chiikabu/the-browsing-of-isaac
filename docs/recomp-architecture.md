@@ -2407,6 +2407,19 @@ the GL contract: **any GL query the engine uses to decide whether a resource
 is still valid must read back what the engine wrote** (the shim already did
 this for shader/program status; render targets were the second case).
 
+### 21.10 Tool: a frame cap, because the loop has no other exit
+
+Once the boot enters the frame loop nothing ends it: the game's `main` only
+returns when GLFW's window reports `shouldClose`, so an unbounded run is a
+silent CPU burn with no result line. `ISAAC_MAX_FRAMES=N` bounds it the way
+the real program would end: the `SwapBuffers` shim (`host_shims_win.c`, now
+PROVIDED) counts presented frames and stamps every 60th; once N are
+presented, `PeekMessageW` hands GLFW's own message pump a single `WM_QUIT`,
+`glfwPollEvents` turns it into `shouldClose`, the loop exits, `main`
+returns and the harness prints `RESULT: main returned 0` with the reports.
+Unset = unlimited (the selftest pins that the pump stays silent then).
+Per-frame cost is read from the `[isaac][frame]` stamps.
+
 ## Appendix: reproduction
 
 ```bash

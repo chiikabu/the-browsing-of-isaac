@@ -435,7 +435,7 @@ isaac_import isaac_imports[] = {
   { "gdi32.dll", "CreateRectRgn", 0x00b1817cu, 0x0f001a80u, 16, 1, ISAAC_V_STUB, 1, imp_gdi32__CreateRectRgn },
   { "gdi32.dll", "GetDeviceGammaRamp", 0x00b18160u, 0x0f001a90u, 8, 1, ISAAC_V_STUB, 1, imp_gdi32__GetDeviceGammaRamp },
   { "gdi32.dll", "SetDeviceGammaRamp", 0x00b18170u, 0x0f001aa0u, 8, 1, ISAAC_V_STUB, 1, imp_gdi32__SetDeviceGammaRamp },
-  { "gdi32.dll", "SwapBuffers", 0x00b18188u, 0x0f001ab0u, 4, 1, ISAAC_V_STUB, 1, imp_gdi32__SwapBuffers },
+  { "gdi32.dll", "SwapBuffers", 0x00b18188u, 0x0f001ab0u, 4, 1, ISAAC_V_PROVIDED, 1, imp_gdi32__SwapBuffers },
   { "kernel32.dll", "CreateEventW", 0x00b181a4u, 0x0f001ac0u, 16, 1, ISAAC_V_REAL, 1, imp_kernel32__CreateEventW },
   { "kernel32.dll", "CreateThread", 0x00b181ecu, 0x0f001ad0u, 24, 1, ISAAC_V_STUB, 1, imp_kernel32__CreateThread },
   { "kernel32.dll", "DeleteFileA", 0x00b18288u, 0x0f001ae0u, 4, 1, ISAAC_V_PROVIDED, 1, imp_kernel32__DeleteFileA },

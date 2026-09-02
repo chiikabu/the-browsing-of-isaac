@@ -2146,7 +2146,7 @@ __attribute__((weak)) void imp_gdi32__SetDeviceGammaRamp(CpuState *restrict cpu)
 __attribute__((weak)) void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[427];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__CreateEventW(CpuState *restrict cpu) {
     static const isaac_import *self;

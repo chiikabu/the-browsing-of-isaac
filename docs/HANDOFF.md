@@ -156,19 +156,31 @@ runtime guest-memory watch (prints writer VA + value). A full boot takes
 matters. The guest heap layout moves between runs (time-seeded RNG): never
 compare a register image from one run with a dump from another.
 
-**Exact next unit (B):** the round-11b boot passes Menu Save Init and stops
-at `user32!LoadImageA`, reached register-held (`call ebx` at `0x00949b03`:
-`push esi(hInstance); push 1 (IMAGE_ICON); push 0x65 (icon 101); …`), whose
-shim-table entry is NEVER-CALLED with an unknown purge, so the dispatcher
-traps rather than desync. **Landed, not yet booted:** `LoadImageA@user32.dll`
-is curated to 24 (6 stdcall args) and PROVIDED by `host_shims_win.c`
-(returns 0: no window icon); table regenerated, selftest 130/0. Do
-`python scripts/recomp/lift/build_boot.py --dir output/recomp/lift/gu`
-(host-only, ~2.5 min), boot from the instance dir, and take the next wall
-from the trap dumps (both fault paths print the last 512 VAs, live registers
-and a stack walk; `ISAAC_WATCH` names a writer). `_Fiopen` + codecvt facets (behind the
-`fstream` ctor `0x009e8010`) stay loud stubs; the 18 remaining emulator-era
-hand patches (§19.5) are candidates only when shown to block something.
+**Round 11c / 12 (2026-09-02, commits f9dc764, 13c1488, + frame cap):** the
+import census now counts register-held loads of an IAT slot (`mov r32,[slot]`
+… `call r32`), which is how `LoadImageA`, `SendMessageA` and 25 other
+imports are reached; each has a signature-derived purge and a running
+verdict (`tests/recomp-host.test.js` refuses a reachable NEVER_CALLED /
+unknown-purge import; mutation-checked). With them the boot leaves engine
+init: every menu initialises (Title … Online Awards) and the game's frame
+loop runs. Its first frames re-created the render target every frame because
+the GL shim answered 0 to `GL_RENDERBUFFER_WIDTH/HEIGHT`; the shim now
+remembers renderbuffer storage per name (selftest 134). Because the loop only
+ends on window close, `ISAAC_MAX_FRAMES=N` posts one `WM_QUIT` through
+`PeekMessageW` after N presented frames (`SwapBuffers` counts and stamps
+every 60th) so a run returns from `main` normally (§21.10; selftest 136).
+
+**Exact next unit (B):** run
+`cd .scratch/game-instance && ISAAC_MAX_FRAMES=120 ISAAC_LOG_TIME=1 node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`,
+read the `[isaac][frame]` stamps (per-frame cost) and the trap dump if a
+frame traps; the reports at `RESULT` then list which stubs the loop touches
+(`SwapBuffers`, `PeekMessageW`, XInput/DirectInput, `GetCursorPos`, EOS tick
+…) — every STUB on the per-frame path is a candidate for a real host arm
+(input, audio, GL draw). Iteration speed: 11 min per boot, 567 s of it PNG
+decoding in lifted code; the host-decode cut is `Image::LoadPNG` 0x00a64a50
+(vtable-called: file-object read vslot → libpng → texel buffer via
+0x00a230b0 → row pointers → format code) — worth doing before many more
+frame-loop iterations.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at
