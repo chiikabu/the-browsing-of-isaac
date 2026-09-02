@@ -134,9 +134,23 @@ must be invoked through the host→guest call path), or override the five
 consumers at game level (needs exact MSVC `std::string`/`vector` layouts and
 the guest allocator). Everything hit before that trap is proven; every other
 msvcp import keeps trapping loudly until implemented. Scout facts for later
-walls: the only `CreateThread` is the theoraplayer worker (`0x00aab120`);
-nothing on the init chain waits on it, so the stub costs only video decode.
-Full analysis: `docs/recomp-architecture.md §19`, `docs/recomp-boot.md §10`.
+walls (both index-verified, 2026-09-01): the only `CreateThread` is the
+theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
+the stub costs only video decode. **The frame loop** lives inside `main` at
+`0x931231..0x931453` (entered after `0x9aa040` engine init returns): per frame
+`glfwGetTime` (QPC) → `0x9ab6d0` (Steam `RunCallbacks`, EOS tick,
+`push 1; call 0x954cd0` update+input: half-rate on `[Manager+0x4abbc]` parity,
+`pollEvents` = `PeekMessageW`/`DispatchMessageW` loop, `GetCursorPos`, gamepad
+`0xa6de60` via XInput/DirectInput COM) → `0x9555c0` render → inline
+`glfwSwapBuffers` (`0xa7fb00`, `SwapBuffers` @`0xa7fb73`) → two `lua_gc` →
+exit test `[window+0x1c]` (`glfwWindowShouldClose`) → pacing `Sleep(ms)`
+@`0x9313cc` + spin `0x931438` until `glfwGetTime()-start ≥ 1/60`. Two spin
+risks: `QueryPerformanceFrequency` must be non-zero (0 → NaN →
+`Sleep(0x7fffffff)`); and `0x8fb120` mods-init starts a `_beginthreadex`
+worker and renders `loading.anm2` until it joins — only when the mods vector
+is non-empty (empty `mods/` skips it). GL goes through epoxy `.data` slots
+(e.g. `epoxy_glClear [0xc0f960]`), not the IAT. Full analysis:
+`docs/recomp-architecture.md §19`, `docs/recomp-boot.md §10`.
 
 **Debugging tools (use these before adding a printf):**
 - `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.

@@ -187,6 +187,19 @@ SYMBOL_OVERRIDE = {
     # wcstombs_s likewise measured 0 sites only because the scan that uses
     # it (cFileName -> narrow) never ran while FindFirstFileW was a stub.
     "wcstombs_s@api-ms-win-crt-convert-l1-1-0.dll": "PROVIDED",
+    # msvcp140 basic_streambuf BASE virtuals: zero direct call sites because the
+    # game's basic_stringbuf vtable at 0xb1b190 reaches them through the IAT
+    # jump thunks 0xaef06b..0xaef095 (slots 1,2,5,7,8,9,12,13,14 = _Lock,
+    # _Unlock, showmanyc, uflow, xsgetn, xsputn, setbuf, sync, imbue). sgetc /
+    # sbumpc inside the DLL call uflow/underflow through that vtable, so these
+    # are on the stringstream path and are implemented in host_shims_msvcp.c.
+    "?uflow@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MAEHXZ@msvcp140.dll": "PROVIDED",
+    "?showmanyc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MAE_JXZ@msvcp140.dll": "PROVIDED",
+    "?sync@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MAEHXZ@msvcp140.dll": "PROVIDED",
+    "?setbuf@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MAEPAV12@PAD_J@Z@msvcp140.dll": "PROVIDED",
+    "?imbue@?$basic_streambuf@DU?$char_traits@D@std@@@std@@MAEXABVlocale@2@@Z@msvcp140.dll": "PROVIDED",
+    "?_Lock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UAEXXZ@msvcp140.dll": "PROVIDED",
+    "?_Unlock@?$basic_streambuf@DU?$char_traits@D@std@@@std@@UAEXXZ@msvcp140.dll": "PROVIDED",
     "FindClose@kernel32.dll": "PROVIDED",
     "MoveFileExA@kernel32.dll": "PROVIDED",
     # kernel32 pieces that are genuinely inert in a single-threaded wasm build
@@ -267,6 +280,17 @@ CURATED_PURGE = {
     # UNKNOWN -- with the shim now implemented, isaac_indirect_call would trap
     # on its return ("stack purge is unknown") at the first directory scan.
     "FindNextFileW@kernel32.dll": 8,
+    # msvcp140 C++ methods are __thiscall (this in ECX, callee pops the stack
+    # args). The push-count sweep counts the CALLER's unrelated pushes at the
+    # inlined construction sites, so five of them measured wrong; the purge is
+    # the sum of the stack argument sizes in the decorated name (4 per
+    # pointer/int/bool/char, 8 per _J/_K 64-bit, 4 for a class returned by
+    # value = hidden pointer). Boot round 10 reached the first of these.
+    "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ@msvcp140.dll": 0,        # measured 32
+    "??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z@msvcp140.dll": 4,  # measured 8
+    "??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z@msvcp140.dll": 8,  # measured 12
+    "??0_Lockit@std@@QAE@H@Z@msvcp140.dll": 4,                                    # measured 36
+    "?widen@?$basic_ios@DU?$char_traits@D@std@@@std@@QBEDD@Z@msvcp140.dll": 4,   # measured 12
     # kernel32
     "EnterCriticalSection@kernel32.dll": 4,
     "LeaveCriticalSection@kernel32.dll": 4,

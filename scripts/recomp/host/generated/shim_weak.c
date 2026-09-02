@@ -3001,12 +3001,12 @@ __attribute__((weak)) void imp_lua5_3_3r__luaopen_utf8(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_msvcp140____Lock___basic_streambuf_DU__char_traits_D_std___std__UAEXXZ(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[598];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140____Unlock___basic_streambuf_DU__char_traits_D_std___std__UAEXXZ(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[599];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___id___codecvt_DDU_Mbstatet___std__2V0locale_2_A(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -3016,27 +3016,27 @@ __attribute__((weak)) void imp_msvcp140___id___codecvt_DDU_Mbstatet___std__2V0lo
 __attribute__((weak)) void imp_msvcp140___imbue___basic_streambuf_DU__char_traits_D_std___std__MAEXABVlocale_2__Z(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[601];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___setbuf___basic_streambuf_DU__char_traits_D_std___std__MAEPAV12_PAD_J_Z(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[602];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___showmanyc___basic_streambuf_DU__char_traits_D_std___std__MAE_JXZ(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[603];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___sync___basic_streambuf_DU__char_traits_D_std___std__MAEHXZ(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[604];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___uflow___basic_streambuf_DU__char_traits_D_std___std__MAEHXZ(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[605];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_ole32__CoInitialize(CpuState *restrict cpu) {
     static const isaac_import *self;
