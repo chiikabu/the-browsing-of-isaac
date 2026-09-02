@@ -78,37 +78,50 @@ static void steam_build_context(void) {
 /* void *SteamInternal_ContextInit(void *pContextInitData) -- cdecl.
  * Returns the slot address with the fake context installed:
  * [slot] = O, [O] = V. */
-/* Accessor slots whose interface must read as ABSENT (a NULL context):
- * every caller of these checks `cmp [slot],0; je` first and takes its own
- * no-Steam arm, whereas the fake 16-slot vtable above cannot serve the
- * interface's methods. Identified by the static CSteamAPIContext slot each
- * inline accessor passes (per-binary, like every other VA here). */
-static const struct { uint32_t slot; const char *what; } steam_null_slots[] = {
-    /* Boot round 11: mods-init 0x008fb120 (6 sites) is the only user; with
-     * a context it walks ISteamUGC's vtable at +0x128/+0x12c/+0x130
-     * (GetNumSubscribedItems / GetSubscribedItems / GetItemState) to
-     * enumerate Workshop subscriptions -- slot 74 of a 16-slot fake table
-     * was a NULL indirect call. NULL = "Steam not running": no Workshop
-     * mods, the game's own branch at 0x008fc529. */
-    { 0x00c5c48cu, "ISteamUGC (Workshop subscriptions, mods-init 0x008fb120)" },
+/* Which accessor slots get the fake context. SteamInternal_ContextInit is
+ * the inline body of EVERY SteamXxx() accessor; each has its own static
+ * CSteamAPIContext slot, and each caller tests `cmp [slot],0; je` before
+ * touching the interface. The fake 16-slot vtable only answers the
+ * CSteamAPIContext INIT dance (round 9: the four verified sites push
+ * 0x00bf93c8 / 0x00c5c510). Any other interface reached through it calls
+ * methods whose real purges differ from the fake slots' -- boot round 11
+ * measured it twice: ISteamUGC at slot +0x128 (a NULL call) and
+ * ISteamApps::BIsDlcInstalled at +0x1c (thiscall, 4 bytes) served by
+ * CSteamAPIContext_ReleaseInterface (8 bytes): three calls drifted ESP by
+ * 12 and 0x009ef5c0 returned with edi = esi, so Menu Save Init addressed
+ * MenuManager + 0x1dc. Hence an ALLOW-list: these slots get the fake
+ * context, every other slot reads NULL = "Steam not running", the game's
+ * own arm. First sight of a slot is logged either way. */
+static const struct { uint32_t slot; const char *what; } steam_fake_slots[] = {
+    { 0x00bf93c8u, "CSteamAPIContext init dance (0x00a7db31, engine init 0x009aa040)" },
+    { 0x00c5c510u, "CSteamAPIContext init dance (0x00a8c5ac; per-frame RunCallbacks path)" },
 };
+
+static int steam_slot_is_fake(uint32_t slot) {
+    for (unsigned k = 0; k < sizeof steam_fake_slots / sizeof steam_fake_slots[0]; ++k)
+        if (steam_fake_slots[k].slot == slot) return 1;
+    return 0;
+}
+
+static void steam_log_slot_once(uint32_t slot, const char *how) {
+    static uint32_t seen[32];
+    static unsigned nseen;
+    for (unsigned k = 0; k < nseen; ++k) if (seen[k] == slot) return;
+    if (nseen < 32) seen[nseen++] = slot;
+    isaac_log("[isaac][steam] SteamInternal_ContextInit(slot=0x%08x) -> %s", (unsigned)slot, how);
+}
 
 void imp_steam_api__SteamInternal_ContextInit(CpuState *restrict cpu) {
     uint32_t slot = isaac_arg(cpu, 0);
     steam_build_context();
-    for (unsigned k = 0; k < sizeof steam_null_slots / sizeof steam_null_slots[0]; ++k) {
-        if (steam_null_slots[k].slot != slot) continue;
+    if (steam_slot_is_fake(slot)) {
+        if (isaac_is_guest_va(slot)) isaac_w32(slot, STEAM_OBJ_VA);
+        steam_log_slot_once(slot, "fake context (init dance; no steam)");
+    } else {
         if (isaac_is_guest_va(slot)) isaac_w32(slot, 0);
-        cpu->EAX = slot;
-        isaac_log("[isaac][steam] SteamInternal_ContextInit(slot=0x%08x) -> NULL: %s",
-                  (unsigned)slot, steam_null_slots[k].what);
-        return;
+        steam_log_slot_once(slot, "NULL interface (not the init dance; no steam)");
     }
-    if (isaac_is_guest_va(slot)) isaac_w32(slot, STEAM_OBJ_VA);
     cpu->EAX = slot;
-    isaac_log("[isaac][steam] SteamInternal_ContextInit(slot=0x%08x) -> fake "
-              "context obj=0x%08x vtbl=0x%08x (no steam)",
-              (unsigned)slot, (unsigned)STEAM_OBJ_VA, (unsigned)STEAM_VTBL_VA);
 }
 
 /* The fake CSteamAPIContext methods (thiscall; args on the stack, cleaned

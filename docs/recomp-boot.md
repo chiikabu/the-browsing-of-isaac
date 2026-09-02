@@ -1220,15 +1220,21 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
      conversions, `platform_name`) returned without emulating `ret`; each
      call left its return address on the guest stack. `rc_ret(s)` added,
      test-pinned.
-  4. Mods-init `0x008fb120` enumerates Workshop subscriptions through
-     `ISteamUGC` (vtable +0x128..+0x130); the fake Steam context now reads
-     NULL for that accessor slot (`steam_null_slots`), the game's own
-     no-Steam arm.
+  4. The fake Steam context is now an allow-list: only the two init-dance
+     accessor slots (`0x00bf93c8`, `0x00c5c510`) get it, every other
+     `SteamXxx()` reads NULL (the game's own no-Steam arm). Mods-init walked
+     `ISteamUGC` +0x128 into a NULL vtable slot; the DLC check `0x009ef5c0`
+     called `ISteamApps::BIsDlcInstalled` (+0x1c, pops 4) on a fake slot that
+     pops 8 and came back with `edi = esi` — the "dead Sprite string" in Menu
+     Save Init was `MenuManager + 0x1dc + 0x2f4`.
   New tool: the CRT noreturn shim dumps the last 512 VAs, live registers and
   the guest stack from ESP (`isaac_dump_trap_context`). Boot log now shows
   `players.xml` parsed from the loose copy (1,331 tokenizer stringstreams),
   every UI anm2, `Viewport: 960x540`, framebuffer/window metrics. Host
-  selftest 127/0, `tests/recomp-host.test.js` 35/35.
+  selftest 130/0, `tests/recomp-host.test.js` 35/35. Tools added: runtime
+  guest-memory watch (`ISAAC_WATCH`), `ISAAC_LOG_TIME` stamps, stack walks
+  in both fault dumps (recomp-architecture.md §21.6); the 11-minute boot is
+  567 s of PNG decoding in lifted code (§21.7).
 - **(superseded, round 10) BOOT REACHES THE ARCHIVE MOUNT (2026-08-31, round 9).** The round-8
   lifter gap is closed (`sub_00ab2d80` and 46 other wide-varnode bodies now
   lift; recomp-architecture.md §17), the module relinks clean, and a seeded

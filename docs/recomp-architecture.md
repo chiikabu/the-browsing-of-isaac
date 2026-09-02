@@ -2294,11 +2294,68 @@ Steam init arms depend on.
 Measured with it: the boot (637 s wall, no FS trace) passes mods-init, prints
 `Menu Manager Init` / `Menu Title Init` / `Menu Save Init`, logs
 `[warn] AnmCache: cannot remove reference to ` with an EMPTY name, and
-faults in `std::string::assign` (`0x0040ccd0`, from the release wrapper
-`0x0040bd50`) writing 36 bytes through a NULL heap pointer of the string at
-`0x059921ac` whose capacity says "heap". Next: the stack walk now printed by
-`recomp_mem_fault` names the releasing site; the string object dump says
-whether it is a dead object.
+faults in `std::string::assign` (`0x0040ccd0`, from `Sprite::Load`
+`0x0040bd50`) writing 36 bytes through a NULL heap pointer of a string whose
+capacity says "heap".
+
+**Same class, third instance.** The runtime watch (§21.6) showed the bytes
+under that "string" being written by the texture premultiply loop
+(`0x00a663c0`) and by nothing that constructs objects, and the stack walk
+put `SaveSelectMenu::Init`'s `this` at `[0xc72a20] + 0x1dc + 0x2f4` — the
+manager pointer plus `0x1dc`, which is exactly the `lea esi, [edi + 0x1dc]`
+Menu Save Init performs just before calling `0x009ef5c0`. That function is
+the DLC ownership check: `SteamApps()->BIsDlcInstalled(appid)` three times
+(`push 0x62200 / 0x8b524 / 0x15c37c; call [vtable + 0x1c]`), a `__thiscall`
+that pops 4 bytes. The fake `CSteamAPIContext` vtable serves slot `+0x1c`
+as `CSteamAPIContext_ReleaseInterface`, which the dispatcher purges by 8, so
+each call drifted ESP by 4 and `0x009ef5c0`'s epilogue restored `edi` from
+`esi`'s slot. The fault is therefore not a dead string at all: the menu
+code was reading a "Sprite" 0x1dc bytes past the real one, inside memory a
+freed 64 MB texture buffer had last used.
+
+Policy change in `host_shims_steam.c`: the fake context is now an
+**allow-list** — only the two slots the round-9 init dance pushes
+(`0x00bf93c8`, `0x00c5c510`) receive the fake object; every other
+`SteamXxx()` accessor reads NULL, the game's own "Steam not running" arm
+(every caller tests `cmp [slot],0; je` first). Any interface reached through
+the fake vtable would call methods whose real purges differ from the fake
+slots' — the drift is structural, not a one-off — so NULL is the only safe
+answer outside the init dance.
+
+### 21.6 Tool: a runtime guest-memory watch
+
+Finding who wrote a corrupted field used to mean editing the compile-time
+range in `recomp_rt.h`'s `RECOMP_WATCH` and recompiling all 41 lifted TUs.
+The window is now runtime state: `ISAAC_WATCH=0xLO:0xHI[:w]` (parsed once
+by a constructor in `recomp_rt.c`; `w` = writes only) and every access in
+the window prints `[recomp][PW] W @addr n=size v=value va=<guest VA>` (reads
+without the value). The old hard-wired epoxy/allocator window
+(`0xc73680..0xc73740`, ~1,000 lines per boot) is gone; opt in with the same
+syntax. One full lifted recompile paid for it (`build_boot.py
+--recompile-lifted`); a new address costs nothing. Caveat measured while
+building it: the guest heap layout is NOT identical run to run (the
+MenuManager moved by 0x48 between two boots — the RNG is time-seeded), so
+watch a window around the object and read the manager pointer back with
+`ISAAC_DUMP32=0xc72a20:1`, and never compare a register image from one run
+with a dump from another (§21.5's first reading of the Sprite fault did
+exactly that).
+
+### 21.7 Where the 11 minutes go
+
+`ISAAC_LOG_TIME=1` on a full boot (712 s wall, no FS trace): 567 s lie
+inside nine gaps that each begin right after the second `_setjmp3` of an
+image load (libpng's `setjmp(png_jmpbuf)` pair, `cont=0x00a64bbb`) — i.e.
+PNG decoding in lifted x86 (inflate + unfilter, bounds-checked and
+VA-traced), not the RAM-FS, not the XML parsers, not the shims. The instance's
+largest inputs are the 4096×4096 RGBA font atlases (`teammeatex16_0.png`
+9.7 MB, `teammeatex10_0.png` 5.0 MB) and the big UI sheets; the six largest
+gaps are 156 / 139 / 101 / 64 / 48 / 34 s. Everything else — 11,197-file
+seed, 1,331 tokenizer stringstreams, every anm2 parse, mods-init, menu init
+— fits in the remaining ~2.5 min. Two ways out when it matters: a host
+`png_read_*`-level decode (the game only ever needs RGBA8 rows) or a lifted
+build without `RECOMP_MEM_CHECK`/`--trace-va` for the hot TUs; measure
+before choosing. Note the setjmp pair count differs between runs that take
+different paths, so attribute gaps within one stamped log, not across runs.
 
 ## Appendix: reproduction
 

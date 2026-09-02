@@ -32,7 +32,7 @@ REQUIRE emsdk on PATH:
 - Tree consistency (`verify-unit.mjs --preflight`) clean: no literal ABI pins
   in any suite, JSON canonical and in sync with the model layout, no
   stranded mutants.
-- recomp host selftest **127/0**, `tests/recomp-host.test.js` **35/35**
+- recomp host selftest **130/0**, `tests/recomp-host.test.js` **35/35**
   (two new pins: vbase-ctor purges + `PURGE_PATCHES` vs the shim table;
   every `missing_fns.c` body pops its return address); boot module relinks
   clean at `-O0` (~2.5 min host-only; `--opt-link` for shipping).
@@ -140,14 +140,21 @@ KAGE tries the archive index before a root's loose map, so round 10's restored
 gone (canonical stub), the boot seeds the whole extracted tree, RAM-FS
 16,384 slots. (3) The six hand-written callees in `missing_fns.c` never
 emulated `ret`; each call left its return address on the guest stack
-(`rc_ret(s)`, test-pinned). (4) Mods-init `0x008fb120` enumerates Workshop
-subscriptions through `ISteamUGC` (vtable +0x128..+0x130); the fake Steam
-context now reads NULL for that accessor slot (`steam_null_slots` in
-`host_shims_steam.c`) so the game takes its own no-Steam arm. New tool: the
+(`rc_ret(s)`, test-pinned). (4) Every `SteamXxx()` accessor other than the two init-dance slots
+(`0x00bf93c8`, `0x00c5c510`) now reads NULL (`steam_fake_slots` allow-list in
+`host_shims_steam.c`): the fake 16-slot vtable cannot serve real interfaces
+— `ISteamUGC` +0x128 was a NULL call, and `ISteamApps::BIsDlcInstalled`
+(+0x1c, pops 4) served by `CSteamAPIContext_ReleaseInterface` (pops 8)
+drifted the stack and returned `edi = esi`, which is what the "dead Sprite
+string" in Menu Save Init really was. Selftest-pinned and mutation-checked. New tool: the
 CRT noreturn shim prints the last 512 VAs, live registers and the guest stack
-from ESP (`isaac_dump_trap_context`). A full boot now takes ~15 min of wall
-time (thousands of png/anm2 loads through lifted code); measure before
-optimising.
+from ESP (`isaac_dump_trap_context`); `recomp_mem_fault` walks the stack
+too; `ISAAC_LOG_TIME=1` stamps log lines; `ISAAC_WATCH=0xLO:0xHI[:w]` is a
+runtime guest-memory watch (prints writer VA + value). A full boot takes
+~11-12 min of wall time, 567 s of it PNG decoding in lifted code (the
+4096² font atlases dominate; §21.7) — a host PNG decode is the fix when it
+matters. The guest heap layout moves between runs (time-seeded RNG): never
+compare a register image from one run with a dump from another.
 
 **Exact next unit (B):** run the boot after the ISteamUGC NULL slot (see the
 last paragraph of recomp-architecture.md §21.5 for the measured outcome) and

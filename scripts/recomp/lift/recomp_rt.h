@@ -70,14 +70,27 @@ void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
     if ((a) < 0x1000u || (uint64_t)(a) + (n) > RECOMP_GUEST_LIMIT)       \
       recomp_mem_fault((a), (n), (w));                                   \
   } while (0)
-#define RECOMP_WATCH(a, n, w)                                            \
+/* Guest-memory watch. The window is RUNTIME state (recomp_rt.c reads
+ * ISAAC_WATCH=0xLO:0xHI[:w] once; w = writes only) so a new address never
+ * costs a lifted recompile. Writes print the value. Empty window = off. */
+extern uint32_t recomp_watch_lo, recomp_watch_hi;
+extern int recomp_watch_wonly;
+#define RECOMP_WATCH_R(a, n)                                             \
   do {                                                                   \
-    if ((uint64_t)(a) >= 0xc73680u && (uint64_t)(a) + (n) <= 0xc73740u)  \
-      fprintf(stderr, "[recomp][PW] %s @%#x n=%u va=%#x\n", (w) ? "W" : "R", (a), (n), recomp_cur_va); \
+    if (!recomp_watch_wonly && (uint64_t)(a) >= recomp_watch_lo &&       \
+        (uint64_t)(a) + (n) <= recomp_watch_hi)                          \
+      fprintf(stderr, "[recomp][PW] R @%#x n=%u va=%#x\n", (a), (n), recomp_cur_va); \
+  } while (0)
+#define RECOMP_WATCH_W(a, n, v)                                          \
+  do {                                                                   \
+    if ((uint64_t)(a) >= recomp_watch_lo && (uint64_t)(a) + (n) <= recomp_watch_hi) \
+      fprintf(stderr, "[recomp][PW] W @%#x n=%u v=%#llx va=%#x\n", (a), (n), \
+              (unsigned long long)(v), recomp_cur_va);                   \
   } while (0)
 #else
 #define RECOMP_CHECK(a, n, w) ((void)0)
-#define RECOMP_WATCH(a, n, w) ((void)0)
+#define RECOMP_WATCH_R(a, n) ((void)0)
+#define RECOMP_WATCH_W(a, n, v) ((void)0)
 #define RECOMP_VA(v) ((void)0)
 #endif
 
@@ -86,12 +99,12 @@ void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
 #define RECOMP_DEF_MEM(BITS, TY)                                         \
   static inline TY MEMR##BITS(uint32_t a) {                              \
     TY v;                                                                \
-    RECOMP_CHECK(a, sizeof(TY), 0); RECOMP_WATCH(a, sizeof(TY), 0);                                      \
+    RECOMP_CHECK(a, sizeof(TY), 0); RECOMP_WATCH_R(a, sizeof(TY));       \
     memcpy(&v, RECOMP_PTR(a), sizeof(v));                                \
     return v;                                                            \
   }                                                                      \
   static inline void MEMW##BITS(uint32_t a, TY v) {                      \
-    RECOMP_CHECK(a, sizeof(TY), 1); RECOMP_WATCH(a, sizeof(TY), 1);                                      \
+    RECOMP_CHECK(a, sizeof(TY), 1); RECOMP_WATCH_W(a, sizeof(TY), v);    \
     memcpy(RECOMP_PTR(a), &v, sizeof(v));                                \
   }
 

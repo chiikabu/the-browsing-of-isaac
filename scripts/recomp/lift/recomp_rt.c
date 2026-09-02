@@ -13,6 +13,29 @@
 uint32_t recomp_cur_va;
 volatile uint32_t recomp_va_trace[512];
 volatile uint32_t recomp_va_trace_idx;
+
+/* Guest-memory watch window (recomp_rt.h RECOMP_WATCH_R/W). Off unless
+ * ISAAC_WATCH=0xLO:0xHI[:w] is set; parsed once before main runs. The
+ * pre-round-11 build hard-wired 0xc73680..0xc73740 (epoxy/allocator slots)
+ * and printed ~1,000 lines per boot; that window is now opt-in like any
+ * other. */
+uint32_t recomp_watch_lo = 0, recomp_watch_hi = 0;
+int recomp_watch_wonly = 0;
+__attribute__((constructor)) static void recomp_watch_init(void) {
+  const char *e = getenv("ISAAC_WATCH");
+  if (!e || !*e) return;
+  unsigned long lo = 0, hi = 0;
+  char mode = 0;
+  if (sscanf(e, "%lx:%lx:%c", &lo, &hi, &mode) < 2) {
+    fprintf(stderr, "[recomp][PW] ISAAC_WATCH='%s' is not 0xLO:0xHI[:w]; watch off\n", e);
+    return;
+  }
+  recomp_watch_lo = (uint32_t)lo;
+  recomp_watch_hi = (uint32_t)hi;
+  recomp_watch_wonly = (mode == 'w' || mode == 'W');
+  fprintf(stderr, "[recomp][PW] watching guest %#x..%#x (%s)\n", recomp_watch_lo,
+          recomp_watch_hi, recomp_watch_wonly ? "writes" : "reads+writes");
+}
 struct CpuState *recomp_last_cpu; /* captured by shim dispatch (host_trap.c) */
 
 void recomp_trace_glob(uint32_t va, uint32_t val) {

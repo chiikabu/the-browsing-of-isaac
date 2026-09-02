@@ -419,6 +419,35 @@ int main(int argc, char **argv) {
     check(cpu.EAX == ISAAC_IMAGE_BASE,
           "GetModuleHandleW(NULL) returns the image base");
 
+    /* Steam accessor policy (boot round 11): SteamInternal_ContextInit is
+     * every SteamXxx() accessor's inline body. Only the two init-dance slots
+     * receive the fake CSteamAPIContext; any other slot must read NULL, the
+     * game's own "Steam not running" arm -- a fake vtable answering a real
+     * interface pops the wrong byte count (ISteamApps::BIsDlcInstalled at
+     * +0x1c vs CSteamAPIContext_ReleaseInterface) and drifts the guest stack. */
+    {
+        uint32_t slot_unknown = ISAAC_STACK_TOP_VA - 0x2000;   /* a guest cell */
+        isaac_w32(slot_unknown, 0xCAFEBABE);                   /* stale garbage */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, slot_unknown);
+        imp_steam_api__SteamInternal_ContextInit(&cpu);
+        check(cpu.EAX == slot_unknown,
+              "SteamInternal_ContextInit returns the slot address");
+        check(isaac_r32(slot_unknown) == 0,
+              "a non-init-dance accessor slot reads NULL (no Steam)");
+
+        uint32_t slot_init = 0x00c5c510u;                      /* verified init-dance slot */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, slot_init);
+        imp_steam_api__SteamInternal_ContextInit(&cpu);
+        check(isaac_r32(slot_init) != 0 && isaac_r32(isaac_r32(slot_init)) != 0,
+              "the init-dance slot receives the fake context with a vtable");
+    }
+
     /* memset must refuse a destination on the HOST side of the guard. */
     memset(&cpu, 0, sizeof cpu);
     cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
