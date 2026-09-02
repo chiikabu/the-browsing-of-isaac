@@ -2120,22 +2120,29 @@ has a stale baked value.** When you correct a purge in `gen_shims.py`, add the
 `(wrong, right)` pair to `PURGE_PATCHES` (or re-lift). `lift_patches.py
 --check` reports which sites still carry the old value.
 
-### 20.3 Next: the tail-jump-thunk stack drift (a lifter issue)
+### 20.3 Next: a callee-saved register leaks before the tokenizer (lifter issue)
 
 The boot now faults just after that first `operator>>` returns, in the
-tokenizer `0x0067f420` at `0x0040cf50` (`std::string` construct), because
-`operator>>` restored a callee-saved register (`esi`) from the wrong slot: its
-stack drifted by 4. The cause is one hop deeper than a purge — the game calls
-`rdbuf->_Lock()` / `_Unlock()` through the stringbuf vtable, whose slots hold
-the **tail-jump thunks** `0x00aef06b` / `0x00aef071` (`jmp [msvcp slot]`). The
-lifter models the indirect `call` into the thunk and the thunk's `jmp`-to-shim
-as two return-consuming steps, and the two ESP adjustments do not net to the
-single `call`/`ret` the hardware performs. This is in the lifter's handling of
-`call → jmp-thunk → host-import`, not the shim table, and is the exact next
-unit: either lift the `jmp [import]` thunks as transparent tail calls (no
-extra ESP pop) or route them through `isaac_indirect_call` with the import's
-real purge once. `_Fiopen` and the codecvt facet family (behind the `fstream`
-ctor `0x009e8010`) remain loud weak stubs until a later path needs them.
+tokenizer `0x0067f420` at `0x0040cf50` (a `std::string` construct), because the
+caller's `esi` is a misaligned `0x0dfc4b2f` — a callee-saved register was
+clobbered. An ESP/register trace (env `ISAAC_MSVCP_TRACE=1`, logged at
+`_Ipfx` and `_Unlock` — the first and last shims inside `operator>>`) rules
+`operator>>` OUT: its frame ESP is identical (`0x…492c`) at entry and exit and
+every shim purge is paired with its pushed args, so it is stack-balanced and
+restores its caller's registers correctly. The clobber therefore happens
+upstream — in the stringstream ctor `0x00684ce0` (which, past the now-correct
+stream construction, copies the string into a heap buffer and sets up the get
+area through more calls) or in `0x0067f420` itself: one of those calls does not
+preserve `esi`/`edi`/`ebx` for its caller. The exact next step is a
+callee-saved-register trace across `0x00684ce0`'s call sites (the lifter must
+save/restore ebx/esi/edi/ebp across every `recomp_call_indirect` and host-shim
+call; a shim that writes `cpu->ESI` etc. without restoring it, or a mis-lifted
+epilogue, would leak). `_Fiopen` + the codecvt facet family (behind the
+`fstream` ctor `0x009e8010`) remain loud weak stubs until a later path needs
+them. (An earlier note here blamed the `_Lock`/`_Unlock` tail-jump thunks
+`0x00aef06b`/`0x00aef071`; that was disproven — the indirect
+call-into-thunk-into-shim path IS balanced, since the lifted `call [vtable+N]`
+pushes a real return address that the thunk's single `ESP += 4` pops.)
 
 ## Appendix: reproduction
 

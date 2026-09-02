@@ -133,18 +133,7 @@ baked constant per call site (12 sites) and drops the touched TU's object;
 --check` lists stale sites). With that, construction and the first `operator>>`
 parse run correctly.
 
-**Exact next unit (B) — the tail-jump-thunk stack drift (lifter side).** The
-boot now faults just after the first `operator>>` returns, in the tokenizer
-`0x0067f420` at `0x0040cf50`, because `operator>>` restored `esi` from a slot 4
-bytes off. Cause: the game calls `rdbuf->_Lock()`/`_Unlock()` through the
-stringbuf vtable slots, which hold tail-jump thunks (`0x00aef06b`/`0x00aef071`
-= `jmp [msvcp import]`). The lifter treats the indirect `call` into the thunk
-and the thunk's `jmp`-to-shim as two return-consuming steps; their two ESP
-adjustments do not net to one `call`/`ret`. Fix on the lifter side: lift a
-`jmp [import]` thunk as a transparent tail call, or route it through
-`isaac_indirect_call` once. `_Fiopen` + the codecvt facets (behind the fstream
-ctor `0x009e8010`) stay loud stubs until needed. Full analysis:
-docs/recomp-architecture.md §20. Scout facts for later
+**Exact next unit (B) — a callee-saved register leaks before the tokenizer (lifter side).** The boot now faults just after the first `operator>>` returns, in the tokenizer `0x0067f420` at `0x0040cf50`, because the caller's `esi` is a misaligned `0x0dfc4b2f` — a callee-saved register was clobbered. An ESP/register trace (`ISAAC_MSVCP_TRACE=1`, logged at `_Ipfx` and `_Unlock`) proves `operator>>` is stack-balanced (frame ESP identical at entry and exit), so the clobber is UPSTREAM: in the stringstream ctor `0x00684ce0` (which, past the now-correct construction, copies the string and sets up the get area through more calls) or in `0x0067f420` itself — one of their calls does not preserve esi/edi/ebx. Next step: a callee-saved-register trace across `0x00684ce0`'s call sites. (An earlier note blamed the `_Lock`/`_Unlock` tail-jump thunks; disproven — that path is balanced.) `_Fiopen` + codecvt facets (behind fstream ctor `0x009e8010`) stay loud stubs. Full analysis: docs/recomp-architecture.md §20.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

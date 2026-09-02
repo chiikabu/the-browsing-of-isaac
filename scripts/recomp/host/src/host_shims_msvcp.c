@@ -456,6 +456,9 @@ void imp_msvcp140____1__basic_ostream_DU__char_traits_D_std___std__UAE_XZ(CpuSta
 
 /* basic_istream::_Ipfx(bool noskip) (thiscall, ret 4; bool in al) */
 void imp_msvcp140____Ipfx___basic_istream_DU__char_traits_D_std___std__QAE_N_N_Z(CpuState *restrict cpu) {
+    if (msvcp_trace())
+        isaac_log("[isaac][msvcp] _Ipfx  ESP=0x%08x ESI=0x%08x EDI=0x%08x EBX=0x%08x ret=0x%08x",
+                  cpu->ESP, cpu->ESI, cpu->EDI, cpu->EBX, isaac_retaddr(cpu));
     cpu->EAX = (uint32_t)istream_ipfx(cpu, cpu->ECX, isaac_arg(cpu, 0) & 0xffu);
 }
 /* basic_ios::setstate(int, bool) (thiscall, ret 8; this = basic_ios) */
@@ -532,7 +535,11 @@ void imp_msvcp140___imbue___basic_streambuf_DU__char_traits_D_std___std__MAEXABV
     (void)cpu;                                 /* base: no-op */
 }
 void imp_msvcp140____Lock___basic_streambuf_DU__char_traits_D_std___std__UAEXXZ(CpuState *restrict cpu) { (void)cpu; }
-void imp_msvcp140____Unlock___basic_streambuf_DU__char_traits_D_std___std__UAEXXZ(CpuState *restrict cpu) { (void)cpu; }
+void imp_msvcp140____Unlock___basic_streambuf_DU__char_traits_D_std___std__UAEXXZ(CpuState *restrict cpu) {
+    if (msvcp_trace())
+        isaac_log("[isaac][msvcp] _Unlock ESP=0x%08x ESI=0x%08x EDI=0x%08x EBX=0x%08x ret=0x%08x",
+                  cpu->ESP, cpu->ESI, cpu->EDI, cpu->EBX, isaac_retaddr(cpu));
+}
 
 /* ---- ostream operations -------------------------------------------------- */
 static void ostream_osfx(CpuState *cpu, uint32_t B) {
