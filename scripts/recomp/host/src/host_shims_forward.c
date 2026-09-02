@@ -404,8 +404,10 @@ void imp_kernel32__QueryPerformanceFrequency(CpuState *restrict cpu) {
 
 /* Sleep in a browser cannot block. The one honest thing is to advance the
  * deterministic clock by the requested amount and return. */
+void isaac_threads_run_pending(CpuState *restrict cpu);   /* host_shims_module.c */
 void imp_kernel32__Sleep(CpuState *restrict cpu) {
     uint32_t ms = isaac_arg(cpu, 0);
+    isaac_threads_run_pending(cpu);          /* a yield point (ISAAC_RUN_THREADS) */
     if (g_time_mode == ISAAC_TIME_DETERMINISTIC)
         g_qpc_ticks += (uint64_t)ms * (ISAAC_QPF_HZ / 1000ull);
     cpu->EAX = 0;

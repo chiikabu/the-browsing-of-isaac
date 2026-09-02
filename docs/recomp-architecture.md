@@ -2420,6 +2420,34 @@ returns and the harness prints `RESULT: main returned 0` with the reports.
 Unset = unlimited (the selftest pins that the pump stays silent then).
 Per-frame cost is read from the `[isaac][frame]` stamps.
 
+### 21.11 Tool: a stall watchdog inside the lifted code
+
+The first bounded run (§21.10) never presented a second frame: after
+`Menu Online Awards Init` the log went silent for good, and nothing in the
+host layer runs when the guest spins without calling a shim — no timer can
+fire under a synchronous wasm call, and the fault dumps only fire on a
+fault. `ISAAC_STALL_DUMP=<seconds>` hooks the one place every lifted
+instruction passes: `RECOMP_VA` now calls `recomp_stall_tick()` every 2²⁰
+instructions, which compares the wall clock with the last `isaac_log`
+stamp (`recomp_last_log_ms`, set in `isaac_log`) and, after that much
+silence, prints a histogram of the hottest VAs in the 512-entry ring (the
+loop body), the last 64 VAs in order, the register image from the last
+spill (stale inside a call-free loop — the ring is the truth), and a stack
+walk from that ESP; then re-arms. Cost: one masked compare per lifted
+instruction. It needed the one full lifted recompile the runtime watch
+(§21.6) had already paid for once; it will also fire, harmlessly, inside a
+150-second PNG decode.
+
+Related, for the thing it is about to name: the engine's three
+`_beginthreadex` spawns all go through the trampoline `0x00a7f130`
+(`fn(arg)` once, then a done flag on the thread struct), so a "thread" is
+a run-to-completion job unless `fn` loops. `host_shims_module.c` now logs
+each spawn's real job (`fn`/`arg` read from the 12-byte block) and, with
+`ISAAC_RUN_THREADS=1`, runs pending jobs inline at the main thread's next
+yield point (`Sleep`, `WaitForSingleObject`) on a guest stack below the
+caller's frame — off by default because an endless mixer loop would hang
+the boot.
+
 ## Appendix: reproduction
 
 ```bash

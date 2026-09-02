@@ -361,6 +361,7 @@ void imp_kernel32__ResetEvent(CpuState *restrict cpu) {
     cpu->EAX = o ? 1 : 0;
 }
 
+void isaac_threads_run_pending(CpuState *restrict cpu);   /* below: cooperative threads */
 #define WAIT_OBJECT_0  0x00000000u
 #define WAIT_TIMEOUT   0x00000102u
 #define WAIT_FAILED    0xFFFFFFFFu
@@ -374,6 +375,7 @@ void imp_kernel32__ResetEvent(CpuState *restrict cpu) {
  * reported as one rather than hanging the tab. */
 void imp_kernel32__WaitForSingleObject(CpuState *restrict cpu) {
     uint32_t h = isaac_arg(cpu, 0), ms = isaac_arg(cpu, 1);
+    isaac_threads_run_pending(cpu);          /* a yield point (ISAAC_RUN_THREADS) */
     kobject *o = obj_of(h);
     if (!o) { cpu->EAX = WAIT_FAILED; return; }
     if (o->signaled) {
@@ -453,6 +455,43 @@ void imp_kernel32__SetThreadPriority(CpuState *restrict cpu) {
     cpu->EAX = 1;
 }
 
+/* Cooperative threads (boot round 12). Every spawn goes through the engine's
+ * trampoline 0x00a7f130 with a 12-byte block {fn, arg, thread-struct}: it
+ * calls fn(arg) ONCE, then marks the struct done (+0x1c/+0x20) and frees the
+ * block. So a "thread" here is a run-to-completion job unless fn itself
+ * loops. With ISAAC_RUN_THREADS=1 the pending jobs are run inline, in spawn
+ * order, at the main thread's next yield point (Sleep, WaitForSingleObject,
+ * MsgWaitForMultipleObjects) on a guest stack below the caller's frame --
+ * the same sub-call shape host_shims_crt.c uses for _initterm entries.
+ * Off by default: a job that spins forever (an audio mixer loop) would hang
+ * the boot; the spawn log names the job so the choice is per boot. */
+#define THR_MAX 16
+static struct { uint32_t start, arglist, fn, arg, handle; int ran; } g_thr[THR_MAX];
+static unsigned g_thr_n;
+static int g_thr_running;
+static int thr_mode(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("ISAAC_RUN_THREADS"); v = (e && *e && *e != '0'); }
+    return v;
+}
+void isaac_threads_run_pending(CpuState *restrict cpu) {
+    if (!thr_mode() || g_thr_running) return;
+    g_thr_running = 1;
+    for (unsigned i = 0; i < g_thr_n; ++i) {
+        if (g_thr[i].ran) continue;
+        g_thr[i].ran = 1;
+        CpuState sub = *cpu;
+        sub.ESP = (cpu->ESP - 0x2000u) & ~0xFu;
+        sub.ESP -= 4; isaac_w32(sub.ESP, g_thr[i].arglist);   /* the trampoline's arg */
+        sub.ESP -= 4; isaac_w32(sub.ESP, 0);                  /* return address */
+        isaac_log("[isaac][thr] running adopted thread #%u inline: trampoline 0x%08x "
+                  "-> job 0x%08x(0x%08x)", i, g_thr[i].start, g_thr[i].fn, g_thr[i].arg);
+        isaac_guest_call(g_thr[i].start, &sub);
+        isaac_log("[isaac][thr] adopted thread #%u finished (eax=0x%08x)", i, sub.EAX);
+    }
+    g_thr_running = 0;
+}
+
 void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     uint32_t start = isaac_arg(cpu, 2), arglist = isaac_arg(cpu, 3),
              thrdaddr = isaac_arg(cpu, 5);
@@ -460,9 +499,16 @@ void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     if (!h) { cpu->EAX = 0; return; }
     obj_of(h)->signaled = 1;
     if (thrdaddr && isaac_is_guest_va(thrdaddr)) isaac_w32(thrdaddr, 0x1788u);
-    isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x) -> handle "
-              "0x%08x (adopted; thread does not run in this single-threaded "
-              "port)", start, arglist, h);
+    uint32_t fn = 0, arg = 0;
+    if (isaac_is_guest_va(arglist + 11u)) { fn = isaac_r32(arglist); arg = isaac_r32(arglist + 4u); }
+    isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x -> job 0x%08x(0x%08x)) -> handle "
+              "0x%08x (adopted; %s)", start, arglist, fn, arg, h,
+              thr_mode() ? "runs inline at the next yield point" : "does not run: ISAAC_RUN_THREADS unset");
+    if (g_thr_n < THR_MAX) {
+        g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = arglist;
+        g_thr[g_thr_n].fn = fn; g_thr[g_thr_n].arg = arg; g_thr[g_thr_n].handle = h;
+        g_thr[g_thr_n].ran = 0; ++g_thr_n;
+    }
     cpu->EAX = h;
 }
 

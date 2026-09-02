@@ -97,6 +97,7 @@ void isaac_log(const char *fmt, ...) {
         t0 = emscripten_get_now();
     }
     if (stamp) fprintf(stderr, "[%9.1f] ", emscripten_get_now() - t0);
+    { extern double recomp_last_log_ms; recomp_last_log_ms = emscripten_get_now(); }
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);

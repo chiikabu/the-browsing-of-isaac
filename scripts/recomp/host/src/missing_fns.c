@@ -231,6 +231,7 @@ __attribute__((weak)) struct CpuState *recomp_last_cpu;
  * recomp_rt.c's strong definitions win in the boot link. */
 __attribute__((weak)) volatile uint32_t recomp_va_trace[512];
 __attribute__((weak)) volatile uint32_t recomp_va_trace_idx;
+__attribute__((weak)) double recomp_last_log_ms;
 
 /* Guest longjmp unwind to isaac_guest_call. The standalone selftest has no
  * guest call frame to unwind to; reaching here in that build is a defect,

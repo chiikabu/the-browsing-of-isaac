@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <emscripten.h>
 #include "recomp_state.h"
 #include "recomp_rt.h"
 
@@ -368,6 +369,71 @@ uint32_t recomp_other_swi(CpuState *s, uint32_t n) {
   fprintf(stderr, "recomp: software interrupt %u\n", (unsigned)n);
   abort();
   return 0;
+}
+
+/* ---- stall watchdog ----------------------------------------------------
+ * The boot has silent phases (a 4096x4096 PNG decode is ~150 s of lifted
+ * code) and, once it reaches the game's main loop, silent spins that never
+ * end (round 12: a loop after "Menu Online Awards Init" that presents no
+ * frame). ISAAC_STALL_DUMP=<seconds>: when no isaac_log line has appeared
+ * for that long, print the last 512 executed VAs (with a histogram of the
+ * hottest addresses, which is the loop), the register image from the last
+ * spill, and the guest stack from that ESP; then re-arm for the next
+ * interval. recomp_last_log_ms is stamped by isaac_log (host_trap.c). */
+double recomp_last_log_ms;
+static double stall_ms = -1.0;
+double recomp_now_ms(void) {
+  return emscripten_get_now();
+}
+void recomp_stall_tick(void) {
+  if (stall_ms < 0.0) {
+    const char *e = getenv("ISAAC_STALL_DUMP");
+    stall_ms = (e && *e) ? atof(e) * 1000.0 : 0.0;
+    if (stall_ms > 0.0)
+      fprintf(stderr, "[recomp][STALL] watchdog armed: dump after %.0f ms of log silence\n", stall_ms);
+  }
+  if (stall_ms <= 0.0) return;
+  double now = recomp_now_ms();
+  if (recomp_last_log_ms <= 0.0) { recomp_last_log_ms = now; return; }
+  if (now - recomp_last_log_ms < stall_ms) return;
+  recomp_last_log_ms = now;
+  fprintf(stderr, "[recomp][STALL] no log line for %.0f ms; current VA 0x%08x\n",
+          stall_ms, recomp_cur_va);
+  /* histogram of the ring: the loop body is whatever dominates */
+  uint32_t vas[512]; unsigned cnt[512]; unsigned n = 0;
+  for (unsigned i = 0; i < 512; i++) {
+    uint32_t v = recomp_va_trace[i];
+    unsigned k;
+    for (k = 0; k < n; k++) if (vas[k] == v) { cnt[k]++; break; }
+    if (k == n) { vas[n] = v; cnt[n] = 1; n++; }
+  }
+  fprintf(stderr, "[recomp][STALL] ---- hottest VAs in the last 512 (count va):\n");
+  for (unsigned round = 0; round < 24 && round < n; round++) {
+    unsigned best = 0;
+    for (unsigned k = 1; k < n; k++) if (cnt[k] > cnt[best]) best = k;
+    if (!cnt[best]) break;
+    fprintf(stderr, "[recomp][STALL]   %3u 0x%08x\n", cnt[best], vas[best]);
+    cnt[best] = 0;
+  }
+  uint32_t start = recomp_va_trace_idx & 511u;
+  fprintf(stderr, "[recomp][STALL] ---- last 64 executed VAs (oldest -> newest):\n");
+  for (unsigned i = 448; i < 512; i++)
+    fprintf(stderr, "[recomp][STALL]   %08x\n", recomp_va_trace[(start + i) & 511u]);
+  {
+    extern void isaac_dump_regs(const struct CpuState *s, const char *tag);
+    if (recomp_last_cpu) {
+      isaac_dump_regs(recomp_last_cpu, "register image (from the last spill; stale inside a call-free loop)");
+      uint32_t esp = ((const uint32_t *)recomp_last_cpu)[4];
+      fprintf(stderr, "[recomp][STALL] ---- guest stack from the spilled ESP 0x%08x:\n", esp);
+      for (uint32_t i = 0; i < 64; i += 4) {
+        uint32_t a = esp + i * 4u;
+        if (a + 16u > 0x0dff0000u || a < 0x0dee0000u) break;
+        fprintf(stderr, "[recomp][STALL]   %08x: %08x %08x %08x %08x\n", a,
+                ((uint32_t *)RECOMP_PTR(a))[0], ((uint32_t *)RECOMP_PTR(a))[1],
+                ((uint32_t *)RECOMP_PTR(a))[2], ((uint32_t *)RECOMP_PTR(a))[3]);
+      }
+    }
+  }
 }
 
 /* Only referenced by TUs built with -DRECOMP_MEM_CHECK=1. */

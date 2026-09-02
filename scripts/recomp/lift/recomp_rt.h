@@ -55,10 +55,15 @@ extern volatile uint32_t recomp_va_trace_idx;
  * matching L_ label.  Defined in dispatch_tbl.c. */
 extern uint32_t g_reentry_eip;
 
+/* Stall watchdog (recomp_rt.c): every 2^20 lifted instructions, see whether
+ * the log has been silent longer than ISAAC_STALL_DUMP seconds and dump the
+ * VA ring + registers + stack walk if so. Off unless the env var is set. */
+void recomp_stall_tick(void);
 #define RECOMP_VA(v)                                                       \
   do {                                                                     \
     recomp_cur_va = (uint32_t)(v);                                         \
     recomp_va_trace[(recomp_va_trace_idx++) & 511u] = recomp_cur_va;       \
+    if ((recomp_va_trace_idx & 0xFFFFFu) == 0u) recomp_stall_tick();       \
   } while (0)
 void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
 /* Everything the guest may legitimately touch lives below the host base. */
