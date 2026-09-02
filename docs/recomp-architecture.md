@@ -2016,6 +2016,10 @@ lift): the generated `sub_009ab970` emulates the two lost instructions and
 enters the lifted orphan body `sub_009ab973`; one TU recompiles, the canonical
 hash is untouched.
 
+> **Superseded in round 11 (§21):** the patch is load-bearing for this
+> instance, which is a ResourceExtractor dump rather than a Steam layout, and
+> the override was removed again. The scan/seed fixes above stand.
+
 **Round-10 result** (`boot_integration.mjs` from the instance dir, seeded
 archives + loose tree): two mount roots, **0 `Could not open`** (every
 `.anm2` loads; previously 33+ failures and the null-ANM2 trap at
@@ -2120,29 +2124,181 @@ has a stale baked value.** When you correct a purge in `gen_shims.py`, add the
 `(wrong, right)` pair to `PURGE_PATCHES` (or re-lift). `lift_patches.py
 --check` reports which sites still carry the old value.
 
-### 20.3 Next: a callee-saved register leaks before the tokenizer (lifter issue)
+### 20.3 The "callee-saved register leak" was one of round 10b's own purge corrections (round 11)
 
-The boot now faults just after that first `operator>>` returns, in the
-tokenizer `0x0067f420` at `0x0040cf50` (a `std::string` construct), because the
-caller's `esi` is a misaligned `0x0dfc4b2f` — a callee-saved register was
-clobbered. An ESP/register trace (env `ISAAC_MSVCP_TRACE=1`, logged at
-`_Ipfx` and `_Unlock` — the first and last shims inside `operator>>`) rules
-`operator>>` OUT: its frame ESP is identical (`0x…492c`) at entry and exit and
-every shim purge is paired with its pushed args, so it is stack-balanced and
-restores its caller's registers correctly. The clobber therefore happens
-upstream — in the stringstream ctor `0x00684ce0` (which, past the now-correct
-stream construction, copies the string into a heap buffer and sets up the get
-area through more calls) or in `0x0067f420` itself: one of those calls does not
-preserve `esi`/`edi`/`ebx` for its caller. The exact next step is a
-callee-saved-register trace across `0x00684ce0`'s call sites (the lifter must
-save/restore ebx/esi/edi/ebp across every `recomp_call_indirect` and host-shim
-call; a shim that writes `cpu->ESI` etc. without restoring it, or a mis-lifted
-epilogue, would leak). `_Fiopen` + the codecvt facet family (behind the
-`fstream` ctor `0x009e8010`) remain loud weak stubs until a later path needs
-them. (An earlier note here blamed the `_Lock`/`_Unlock` tail-jump thunks
-`0x00aef06b`/`0x00aef071`; that was disproven — the indirect
-call-into-thunk-into-shim path IS balanced, since the lifted `call [vtable+N]`
-pushes a real return address that the thunk's single `ESP += 4` pops.)
+After 20.2 the boot faulted just after the first `operator>>` returned, in
+the tokenizer `0x0067f420` at `0x0040cf50`, with the caller's `esi` a
+misaligned `0x0dfc4b2f`. The round-10b note here blamed a lifter defect
+(first the `_Lock`/`_Unlock` tail-jump thunks, then "some call does not
+preserve esi/edi/ebx") and proposed a register-preservation trace. Neither
+was needed; the fault image already held the answer:
+
+- `ISAAC_DUMP32=0xbf93b4:1` read the live security cookie: `0xbb40e64e`.
+- The register image at the trap had `EDI = 0xb6bcaf2e` — and
+  `0xbb40e64e ^ 0x0dfc4960 == 0xb6bcaf2e`, i.e. **EDI held a frame's
+  `cookie ^ ebp`**, the value MSVC pushes right after the callee-saved
+  registers. The frame at `ebp = 0x0dfc4960` is the `std::stringstream`
+  ctor `0x00684ce0` (the tokenizer calls it with `esp = 0x0dfc4968` after
+  `sub esp,8; push ecx`). So that ctor's epilogue (`pop ecx; pop edi; pop
+  esi; pop ebx; mov esp,ebp; pop ebp; ret 0xc`) ran with ESP **one slot
+  low**: `edi` ← cookie, `esi` ← saved edi, `ebx` ← saved esi; `mov esp,
+  ebp` then hid the drift from ESP itself, which is why the ESP-only trace
+  in 20.2 looked balanced.
+- Inside `0x00684ce0` the only ESP movements are three baked import purges
+  (20.2) and a `call 0x40cf00`/`memcpy`/`add esp,0xc` group. The baked
+  purge for `??0basic_iostream(streambuf*)` at `0x00684d40` was `4` — the
+  round-10b *curated* value — while the caller pushes two dwords (`push 0;
+  push edi`) and msvcp140's callee is `ret 8`. The round-10b abi notes
+  themselves record it (`output/decomp/_scratch/msvcp140/abi-notes.md`
+  §1.5: "`ret 8` (sb, most_derived)"), and the shim reads the second arg
+  (`isaac_arg(cpu, 1)`): **constructors of classes with a virtual base take
+  a hidden trailing `int most_derived` that the callee pops.** The
+  decorated-name sum used to curate the purge does not include it. The same
+  mistake was made for `??0basic_ostream(streambuf*, bool)`: curated 8,
+  real `ret 0xc`. The push-count sweep had measured both correctly (8 and
+  12); the curation overrode a correct measurement.
+
+Fix: `gen_shims.py` `CURATED_PURGE` carries 8 / 12 with the reason, and
+`lift_patches.py` `PURGE_PATCHES` maps `(4 → 8)` / `(8 → 12)` so a tree
+lifted before the correction is repaired in place (5 call sites; on a fresh
+lift the corrected table bakes 8 / 12 and these entries match nothing).
+`lift_patches.py --check` listed exactly those 5 sites. General lesson for
+the curated table: **a curated purge that disagrees with the push-count
+measurement must be justified by the callee's `ret N`, never by the
+decorated name alone** — MSVC's hidden parameters (vbase `most_derived`,
+by-value class returns) are invisible in the mangling.
+
+The `_Lock`/`_Unlock` thunk path and `operator>>` are balanced, as 20.2 said;
+`_Fiopen` + the codecvt facet family (behind the `fstream` ctor `0x009e8010`)
+remain loud weak stubs until a path needs them.
+
+## 21. Round 11: the stale-archive shadow — the instance is an extracted tree, and the 0x009ab970 patch was load-bearing
+
+With the purge fix of §20.3 the tokenizer wall is gone (the msvcp trace goes
+from 4 lines to 10,097: 1,331 `std::stringstream` constructions and their
+`operator>>` parses run cleanly). The boot then faults in the `players.xml`
+loader `0x006998d0` at `0x00699b81`: `first_attribute("nameimageroot")` on
+the root node returns null and the loader dereferences it (the original
+does not check; rapidxml in this binary is compiled non-throwing, a parse
+error only sets `[0x00c7de4c]`).
+
+### 21.1 What was parsed
+
+`ISAAC_DUMP32` on the trapped image read the rapidxml document out of the
+loader's 64 KB stack pool (`sub esp, 0x10230` = rapidxml's static pool):
+the root node carries three attributes, but their sizes are `root` value
+34 (the loose file's is 24), `portraitroot` value 22 (13), and a third
+attribute with a **15-byte name** — `bigportraitroot`, not the 13-byte
+`nameimageroot`. Dumping the text buffer confirmed an older schema
+(`name="Cain"`, `portrait="PlayerPortrait_02_…"`, `bigportrait=`): the
+Afterbirth+-era `players.xml`. The loose `resources/players.xml` (14,519 B,
+CRLF, `#ISAAC_NAME`, `nameimageroot=`) was never opened — `ISAAC_FS_TRACE`
+shows the loader's `fopen` going to `resources/packed/config.a` instead.
+
+### 21.2 Why the archive won
+
+Parsed `config.a`'s TOC (`ARCH000`, 24 members; the per-member key pair is
+the same lowercase/`\`→`/` djb2 (`0x00a159d0`, seed 0x1505) and FNV
+(`0x00a15ab0`, seed 0x5bb2220e) the loader uses): member 17 is
+`resources/players.xml` at 3,154 packed bytes, and there is no
+`resources-dlc3/…` member (the binary's `"-dlc3/"` string belongs to the
+mods loader, `0x008f5ad0`/`0x008f99c0`). The resolver `0x00a16c60` walks the
+mount roots **last-mounted first** and, for each root, tries the **archive
+index before the root's loose map** (`0x00a17f40` on the prefixed key, then
+`_Find_lower_bound` on the map). So with roots `["", "resources/"]` the key
+`resources/players.xml` hits the stale archive member before any loose file
+is considered. That is not a defect: the real Steam install
+(`…\The Binding of Isaac Rebirth
+esources\`) holds **only** `packed/` and
+`scripts/` — no loose xml at all — plus `afterbirth.a`, `afterbirthp.a` and
+`repentance.a` (1.1 GB) which this instance does not carry, and the newer
+archives override the old members in the index.
+
+### 21.3 The instance is an extracted tree, and the patch was its contract
+
+The instance root (`.scratch/game-instance`) is a **ResourceExtractor dump**
+(the Steam dir's `ResourceExtractor_log.txt` lists the 22 archives it
+unpacked): `gfx/` (1,675 costumes, 722 collectibles, …), `font/`, `data/`,
+34 top-level `.xml` — 10,725 files / 208 MB of png/anm2/xml/fnt/stb/wav —
+on top of the 485-file `resources/` subtree round 10 seeded. The
+emulator-era boot ran the canonical exe against exactly this tree, and the
+canonical exe's hand patch at `0x009ab970` (`xor eax, eax; ret`: no
+`resources/` mount root) is what made it work: with only the `""` root,
+every relative key (`players.xml`, `gfx/ui/x.anm2`) misses the archive index
+(keyed `resources/…`) and resolves through the root scan of the extracted
+tree; explicit `resources/…` keys still reach the small archives for what
+they hold. Round 10 read the patch as sabotage because the top-level tree
+had never been seeded (only `resources/`), restored the prologue, and thereby
+put the stale archives in front of the Repentance+ content.
+
+Round 11 therefore **removes the `0x009ab970` override** (`lift_patches.py`
+`PATCHES` is empty; the lifted body is the canonical stub again; the
+mechanism stays for the other 18 patches), **seeds the whole extracted
+tree** (`boot_integration.mjs`: everything under the instance root except
+`resources/packed` (seeded by name), the duplicate top-level `packed/`,
+`mods/`, and exe/dll/so/ogv), and raises the RAM-FS to **16,384 slots**
+(`host_shims_fs.c`; widest directory `gfx/characters/costumes` = 1,675 <
+the 2,048 per-scan cap). Faithful alternative for later: a file-backed
+(lazy) RAM-FS entry so the real 1.1 GB archive set can be mounted as on
+Steam — the same primitive a browser build needs (OPFS sync access handle
+in a worker).
+
+### 21.4 Next wall, and its cause: six hand-written callees never returned
+
+With the extracted tree in place the boot parses `players.xml` from the
+loose copy, loads every menu/minimap `.anm2`, opens `ambush.xml`, and stops
+in `std::vector<T12>::_Tidy` (`0x0069dac0`) with the MSVC big-allocation
+header check calling `_invalid_parameter_noinfo_noreturn` — the vector
+object's `this` was `0x009b3d95`, a code address. The new trap-context dump
+(`isaac_dump_trap_context` in `host_trap.c`: last 512 VAs, live registers,
+guest stack from ESP — wired into the CRT noreturn shim) showed the frame
+chain ambush loader `0x006f4740` → generic XML loader `0x00834680`
+(`vector<vector<T12>>::clear()` loop) with the loader's saved `esi`/`edi`
+equal to `0x0098d7bc`/`0x0098d7cd`: the **return addresses** of two `call
+0x00aefca0` sites inside `0x0098d560`, the function called just before.
+
+`0x00aefca0` is the CRT float→uint32 helper (AVX-512 `vcvttss2usi` fast
+path gated on `[0xc7162c] >= 6`, SSE fallback). It is one of the 26 lift
+failures, so it — and five siblings (`0x00aefcf0`, `0x00aefd70`,
+`0x00aefe20`, `0x00aefe80`, `0x00aa9350`) — is a **hand-written body in
+`scripts/recomp/host/src/missing_fns.c`**. Every one of them computed its
+result and returned to C **without emulating the original's `ret`**. The
+lifted caller pushes the return address, calls the body, and reloads ESP
+from `CpuState`, so each call left 4 bytes on the guest stack; the caller's
+`mov esp, ebp` epilogue re-synchronised ESP but its `pop edi; pop esi` had
+already read the leftover return addresses. Fix: `rc_ret(s)` (`EIP =
+[ESP]; ESP += 4`) at the end of every body, the contract comment now says
+so, and `tests/recomp-host.test.js` refuses a `missing_fns.c` body without
+it.
+
+### 21.5 With the callees returning: viewport up, then the Workshop enumeration
+
+The next run goes a long way further: `ambush.xml` and the remaining xml
+tables parse, every menu/minimap/`mod_defaults` anm2 loads, the loading
+spinner is built, and the engine prints `Viewport: 960x540` and the
+framebuffer/window metrics. It then stops in mods-init `0x008fb120`: an
+indirect call to `0x00000000` with `ecx = 0x0e00d500` — the Steam shim's
+fake `CSteamAPIContext` object. The accessor slot is `0x00c5c48c`
+(`ISteamUGC`, 6 sites all in `0x008fb120`), and the function walks the
+interface's vtable at `+0x128` / `+0x12c` / `+0x130`
+(`GetNumSubscribedItems` / `GetSubscribedItems` / `GetItemState`) to
+enumerate Workshop subscriptions; the shim's fake vtable has 16 provided
+slots, so slot 74 was zero. Every caller of `SteamInternal_ContextInit`
+first tests `cmp [slot],0; je` — the game's own "Steam not running" arm.
+`host_shims_steam.c` now carries a per-slot NULL table (`steam_null_slots`,
+keyed by the static context slot the inline accessor passes) and answers
+`0x00c5c48c` with a NULL context, so mods-init takes its no-Workshop branch
+at `0x008fc529`; every other accessor keeps the fake context the round-9
+Steam init arms depend on.
+
+Measured with it: the boot (637 s wall, no FS trace) passes mods-init, prints
+`Menu Manager Init` / `Menu Title Init` / `Menu Save Init`, logs
+`[warn] AnmCache: cannot remove reference to ` with an EMPTY name, and
+faults in `std::string::assign` (`0x0040ccd0`, from the release wrapper
+`0x0040bd50`) writing 36 bytes through a NULL heap pointer of the string at
+`0x059921ac` whose capacity says "heap". Next: the stack walk now printed by
+`recomp_mem_fault` names the releasing site; the string object dump says
+whether it is a dead object.
 
 ## Appendix: reproduction
 

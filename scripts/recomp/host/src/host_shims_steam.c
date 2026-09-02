@@ -78,9 +78,32 @@ static void steam_build_context(void) {
 /* void *SteamInternal_ContextInit(void *pContextInitData) -- cdecl.
  * Returns the slot address with the fake context installed:
  * [slot] = O, [O] = V. */
+/* Accessor slots whose interface must read as ABSENT (a NULL context):
+ * every caller of these checks `cmp [slot],0; je` first and takes its own
+ * no-Steam arm, whereas the fake 16-slot vtable above cannot serve the
+ * interface's methods. Identified by the static CSteamAPIContext slot each
+ * inline accessor passes (per-binary, like every other VA here). */
+static const struct { uint32_t slot; const char *what; } steam_null_slots[] = {
+    /* Boot round 11: mods-init 0x008fb120 (6 sites) is the only user; with
+     * a context it walks ISteamUGC's vtable at +0x128/+0x12c/+0x130
+     * (GetNumSubscribedItems / GetSubscribedItems / GetItemState) to
+     * enumerate Workshop subscriptions -- slot 74 of a 16-slot fake table
+     * was a NULL indirect call. NULL = "Steam not running": no Workshop
+     * mods, the game's own branch at 0x008fc529. */
+    { 0x00c5c48cu, "ISteamUGC (Workshop subscriptions, mods-init 0x008fb120)" },
+};
+
 void imp_steam_api__SteamInternal_ContextInit(CpuState *restrict cpu) {
     uint32_t slot = isaac_arg(cpu, 0);
     steam_build_context();
+    for (unsigned k = 0; k < sizeof steam_null_slots / sizeof steam_null_slots[0]; ++k) {
+        if (steam_null_slots[k].slot != slot) continue;
+        if (isaac_is_guest_va(slot)) isaac_w32(slot, 0);
+        cpu->EAX = slot;
+        isaac_log("[isaac][steam] SteamInternal_ContextInit(slot=0x%08x) -> NULL: %s",
+                  (unsigned)slot, steam_null_slots[k].what);
+        return;
+    }
     if (isaac_is_guest_va(slot)) isaac_w32(slot, STEAM_OBJ_VA);
     cpu->EAX = slot;
     isaac_log("[isaac][steam] SteamInternal_ContextInit(slot=0x%08x) -> fake "

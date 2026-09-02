@@ -1198,6 +1198,37 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
   subset (54 imports, 5 stream constructors; reference
   `C:\Windows\SysWOW64\msvcp140.dll`), or game-level overrides of the five
   consumers.
+- **ROUND 11 (2026-09-02): the boot reaches the viewport.** Four fixes,
+  three of them corrections of round-10/10b conclusions (full analysis:
+  recomp-architecture.md §20.3, §21):
+  1. The "callee-saved register leak" was round 10b's own purge curation:
+     msvcp140's `??0basic_iostream` / `??0basic_ostream` constructors pop a
+     hidden `most_derived` int (vbase ctors), so the purges are 8 / 12 as
+     the push-count sweep measured, not the decorated-name 4 / 8. The lifted
+     `std::stringstream` ctor `0x00684ce0` under-popped and restored
+     ebx/esi/edi one slot low (`edi` = `cookie ^ ebp` was the tell).
+     `gen_shims.py` corrected, `PURGE_PATCHES` repairs the lifted tree,
+     `tests/recomp-host.test.js` cross-checks both against the shim table.
+  2. The instance is a ResourceExtractor dump (10,725 loose files at the
+     install root), not a Steam layout; KAGE tries the archive index before
+     a root's loose files, so round 10's restored `resources/` root made the
+     stale small archives (config.a = Afterbirth+ `players.xml`) shadow the
+     Repentance+ content. The `0x009ab970` lift patch is removed (canonical
+     stub), the whole extracted tree is seeded (11,197 files, 243 MB),
+     RAM-FS 16,384 slots.
+  3. The six hand-written callees in `missing_fns.c` (CRT float/int
+     conversions, `platform_name`) returned without emulating `ret`; each
+     call left its return address on the guest stack. `rc_ret(s)` added,
+     test-pinned.
+  4. Mods-init `0x008fb120` enumerates Workshop subscriptions through
+     `ISteamUGC` (vtable +0x128..+0x130); the fake Steam context now reads
+     NULL for that accessor slot (`steam_null_slots`), the game's own
+     no-Steam arm.
+  New tool: the CRT noreturn shim dumps the last 512 VAs, live registers and
+  the guest stack from ESP (`isaac_dump_trap_context`). Boot log now shows
+  `players.xml` parsed from the loose copy (1,331 tokenizer stringstreams),
+  every UI anm2, `Viewport: 960x540`, framebuffer/window metrics. Host
+  selftest 127/0, `tests/recomp-host.test.js` 35/35.
 - **(superseded, round 10) BOOT REACHES THE ARCHIVE MOUNT (2026-08-31, round 9).** The round-8
   lifter gap is closed (`sub_00ab2d80` and 46 other wide-varnode bodies now
   lift; recomp-architecture.md §17), the module relinks clean, and a seeded

@@ -368,13 +368,21 @@ void recomp_mem_fault(uint32_t addr, unsigned bytes, int write) {
     else
       fprintf(stderr, "[recomp][MEM]   (no shim dispatch has run - recomp_last_cpu is null)\n");
   }
-  /* guest stack top region (stack lives at ISAAC_STACK_TOP_VA - 1MiB .. top) */
-  fprintf(stderr, "[recomp][MEM] ---- guest stack top dwords 0x0dff0000-0x40 .. 0x0dff0000 (ESP==top means empty):\n");
-  for (int i = 0; i < 16; i++) {
-    uint32_t a = 0x0dff0000u - (uint32_t)(i * 16);
-    fprintf(stderr, "[recomp][MEM]   %08x: %08x %08x %08x %08x\n", a,
-            ((uint32_t *)RECOMP_PTR(a))[0], ((uint32_t *)RECOMP_PTR(a))[1],
-            ((uint32_t *)RECOMP_PTR(a))[2], ((uint32_t *)RECOMP_PTR(a))[3]);
+  /* guest stack from the last spilled ESP: the return addresses in this
+   * window are the call chain, which the 512-VA ring cannot show once the
+   * fault is inside a hot helper (boot round 11: a string assign reached
+   * from a logger loop that filled the whole ring). ESP is as of the last
+   * register spill (a call boundary), i.e. at most one frame stale. */
+  if (recomp_last_cpu) {
+    uint32_t esp = ((const uint32_t *)recomp_last_cpu)[4]; /* CpuState: EAX ECX EDX EBX ESP ... */
+    fprintf(stderr, "[recomp][MEM] ---- guest stack from the spilled ESP 0x%08x (return addresses mark the callers):\n", esp);
+    for (uint32_t i = 0; i < 128; i += 4) {
+      uint32_t a = esp + i * 4u;
+      if (a + 16u > 0x0dff0000u || a < 0x0dee0000u) break;
+      fprintf(stderr, "[recomp][MEM]   %08x: %08x %08x %08x %08x\n", a,
+              ((uint32_t *)RECOMP_PTR(a))[0], ((uint32_t *)RECOMP_PTR(a))[1],
+              ((uint32_t *)RECOMP_PTR(a))[2], ((uint32_t *)RECOMP_PTR(a))[3]);
+    }
   }
   abort();
 }

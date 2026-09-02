@@ -36,6 +36,35 @@ void isaac_dump_regs(const CpuState *s, const char *tag) {
             s->EIP);
 }
 
+/* Full trap context for a shim that stops the run (noreturn CRT entry points,
+ * abort paths): the last 512 executed guest VAs, the LIVE registers at the
+ * shim call, and the guest stack from ESP upward -- the return-address chain
+ * in that window is the call stack, which the VA trace alone cannot show
+ * once the fault is inside a shared helper (boot round 11: a
+ * vector::_Tidy big-allocation check reached from 82 callers). */
+void isaac_dump_trap_context(const CpuState *cpu, const char *tag) {
+    extern volatile uint32_t recomp_va_trace_idx;
+    extern volatile uint32_t recomp_va_trace[512];
+    uint32_t n = recomp_va_trace_idx < 512u ? recomp_va_trace_idx : 512u;
+    uint32_t start = (recomp_va_trace_idx - n) & 511u;
+    fprintf(stderr, "[recomp][TRAP] %s\n", tag);
+    fprintf(stderr, "[recomp][TRAP] ---- last %u executed guest VAs (oldest -> newest):\n", n);
+    for (uint32_t i = 0; i < n; i++)
+        fprintf(stderr, "[recomp][TRAP]   %08x\n", recomp_va_trace[(start + i) & 511u]);
+    fprintf(stderr, "[recomp][TRAP] ---- live registers at the shim call:\n");
+    fprintf(stderr, "[recomp][TRAP]   EAX=0x%08x ECX=0x%08x EDX=0x%08x EBX=0x%08x\n",
+            cpu->EAX, cpu->ECX, cpu->EDX, cpu->EBX);
+    fprintf(stderr, "[recomp][TRAP]   ESP=0x%08x EBP=0x%08x ESI=0x%08x EDI=0x%08x\n",
+            cpu->ESP, cpu->EBP, cpu->ESI, cpu->EDI);
+    fprintf(stderr, "[recomp][TRAP] ---- guest stack from ESP (return addresses mark the callers):\n");
+    for (uint32_t i = 0; i < 96; i += 4) {
+        uint32_t a = cpu->ESP + i * 4u;
+        if (!isaac_is_guest_va(a + 15u)) break;
+        fprintf(stderr, "[recomp][TRAP]   %08x: %08x %08x %08x %08x\n", a,
+                isaac_r32(a), isaac_r32(a + 4u), isaac_r32(a + 8u), isaac_r32(a + 12u));
+    }
+}
+
 /* Weak so the host layer links standalone; the real ones live in
  * host_shims_module.c and host_shims_heap.c. */
 __attribute__((weak)) void isaac_module_report(void) {}
@@ -58,6 +87,16 @@ static unsigned g_record_count;
 static unsigned g_total_stub_calls;
 
 void isaac_log(const char *fmt, ...) {
+    /* ISAAC_LOG_TIME=1: prefix the elapsed wall time in ms since the first
+     * log line, so a long boot can be profiled from its log alone. */
+    static int stamp = -1;
+    static double t0;
+    if (stamp < 0) {
+        const char *e = getenv("ISAAC_LOG_TIME");
+        stamp = (e && *e && *e != '0');
+        t0 = emscripten_get_now();
+    }
+    if (stamp) fprintf(stderr, "[%9.1f] ", emscripten_get_now() - t0);
     char buf[1024];
     va_list ap;
     va_start(ap, fmt);

@@ -444,6 +444,63 @@ test('the 16 imports on the critical path to main are all implemented', (t) => {
   assert.equal(ipfp.argBytesSource, 'curated-signature');
 });
 
+test('vbase constructors purge the hidden most_derived flag; lift purge patches agree with the table', (t) => {
+  if (!has('shim-table.json')) return t.skip('run gen_shims.py');
+  const st = readJson(join(host, 'shim-table.json'));
+  const bySym = new Map(st.imports.map((r) => [r.symbol, r]));
+  // MSVC x86 passes a hidden trailing `int most_derived` to constructors of
+  // classes with a virtual base, and a __thiscall callee pops it: msvcp140
+  // ??0basic_iostream is `ret 8`, ??0basic_ostream `ret 0xc`. Round 10b
+  // curated these from the decorated name alone (4 / 8); the lifted
+  // stringstream ctor 0x00684ce0 then restored ebx/esi/edi one slot low.
+  const vbase = [
+    ['??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z', 8],
+    ['??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z', 12],
+  ];
+  for (const [sym, purge] of vbase) {
+    const r = bySym.get(sym);
+    assert.ok(r, `${sym} in the table`);
+    assert.equal(r.convention, 'thiscall');
+    assert.equal(r.argBytes, purge, `${sym} pops declared args + most_derived`);
+    assert.equal(r.argBytesSource, 'curated-signature');
+    // The push-count sweep measured this correctly; the curation must agree.
+    assert.equal(r.measuredPushes * 4, purge, `${sym}: curated purge contradicts the measured pushes`);
+    assert.equal(r.purgeClash, false);
+  }
+  // basic_ios has no virtual base: no hidden flag, purge 0.
+  const bios = bySym.get('??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ');
+  assert.ok(bios);
+  assert.equal(bios.argBytes, 0);
+  // Every PURGE_PATCHES right-hand value (the constant baked into the lifted
+  // callers) must equal the current table's purge for that import, or the
+  // lifted tree and the runtime dispatcher disagree on ESP after the call.
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  const block = lp.slice(lp.indexOf('PURGE_PATCHES: dict'), lp.indexOf('def apply_purge_patches'));
+  const byIdent = new Map(st.imports.map((r) => [r.cident, r]));
+  const entries = [...block.matchAll(/"(imp_[A-Za-z0-9_]+)":\s*\((\d+),\s*(\d+)\)/g)];
+  assert.ok(entries.length >= 5, 'PURGE_PATCHES entries parsed');
+  for (const [, ident, wrong, right] of entries) {
+    const r = byIdent.get(ident);
+    assert.ok(r, `${ident} is a table import`);
+    assert.equal(Number(right), r.argBytes, `${ident}: PURGE_PATCHES right-hand value != table purge`);
+    assert.notEqual(Number(wrong), Number(right));
+  }
+});
+
+test('every hand-written missing-callee body emulates its ret', () => {
+  // scripts/recomp/host/src/missing_fns.c holds STRONG bodies for callees
+  // the lifter could not decode. The lifted caller pushes the return
+  // address and reloads ESP from CpuState afterwards, so a body that does
+  // not pop it desynchronises the guest stack by 4 per call (boot round 11:
+  // 0x0098d560 handed its own return addresses back as esi/edi).
+  const src = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'missing_fns.c'), 'utf8');
+  const bodies = [...src.matchAll(/^void (sub_[0-9a-f]{8})\(CpuState \*restrict s\) \{([\s\S]*?)^\}/gm)];
+  assert.ok(bodies.length >= 6, `found ${bodies.length} hand-written bodies`);
+  for (const [, name, body] of bodies) {
+    assert.match(body, /rc_ret\(s\);/, `${name} must pop its return address (rc_ret)`);
+  }
+});
+
 test('trap messages name the call site, not the return address', (t) => {
   if (!has('build-selftest.json')) return t.skip('run build_selftest.py');
   const b = readJson(join(host, 'build-selftest.json'));

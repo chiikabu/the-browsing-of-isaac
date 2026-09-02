@@ -61,6 +61,10 @@ void imp_api_ms_win_crt_runtime___invalid_parameter_noinfo_noreturn(
               "the guest passed an invalid parameter to a secure-CRT function. "
               "This is noreturn on Windows, so execution stops here.",
               isaac_retaddr(cpu));
+    {
+        extern void isaac_dump_trap_context(const CpuState *cpu, const char *tag);
+        isaac_dump_trap_context(cpu, "_invalid_parameter_noinfo_noreturn");
+    }
     isaac_stub_report();
     abort();
 }

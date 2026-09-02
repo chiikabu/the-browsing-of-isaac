@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-01, harness round 3 + recomp boot round 10)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 11)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -32,13 +32,14 @@ REQUIRE emsdk on PATH:
 - Tree consistency (`verify-unit.mjs --preflight`) clean: no literal ABI pins
   in any suite, JSON canonical and in sync with the model layout, no
   stranded mutants.
-- recomp host selftest **103/0** (was 82; wide directory-scan chain,
-  `GetFullPathNameW` size protocol, 700-file capacity), `tests/recomp-host.test.js`
-  + `recomp-wideops` **34/34**; boot module relinks clean at `-O0` in 133 s
-  (284,065,116 B; `--opt-link` = the 272 MB wasm-opt build, ~9 min).
-- Boot (from the instance dir) loads 6 archives + 476 loose files, **0 asset
-  misses**, runs `main.lua`, stops at the first msvcp140 iostream call
-  (`0x00684d24`). See front B below.
+- recomp host selftest **127/0**, `tests/recomp-host.test.js` **35/35**
+  (two new pins: vbase-ctor purges + `PURGE_PATCHES` vs the shim table;
+  every `missing_fns.c` body pops its return address); boot module relinks
+  clean at `-O0` (~2.5 min host-only; `--opt-link` for shipping).
+- Boot (from the instance dir) seeds the whole extracted instance tree
+  (11,197 files, 243 MB) + 6 small archives, parses `players.xml` and the
+  other xml tables, loads every UI anm2, prints `Viewport: 960x540` and the
+  framebuffer/window metrics, and enters mods-init. See front B below.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (the flow, not the port)
@@ -116,24 +117,43 @@ run. Run it **from the instance dir** (the host Lua's libc is NODERAWFS):
 Host-only relink is now **~2 min** (`build_boot.py` links at `-O0` by default:
 474 s → 8 s; `--opt-link` for shipping).
 
-**Round 10b (2026-09-01): the msvcp140 iostream layer is in; next is a lifter
-tail-jump-thunk bug.** `host_shims_msvcp.c` re-implements the streambuf /
-basic_ios / istream / ostream / iostream members on the real MSVC x86 object
-layout (54 imports; abi-notes at
-`output/decomp/_scratch/msvcp140/abi-notes.md`); host selftest 103 -> 127,
-mutation-checked. Landing it exposed and fixed a GENERAL baked-purge bug: the
-lifter bakes each host-import call's stack purge into the caller at lift time,
-and `gen_shims.py`'s push-count sweep had miscounted five __thiscall ctors
-(e.g. `basic_ios()` as 32, should be 0), so the lifted `std::stringstream` ctor
-over-popped and mis-passed its args. Fixed WITHOUT a full re-lift:
-`scripts/recomp/lift/lift_patches.py` gained `PURGE_PATCHES`, which rewrites the
-baked constant per call site (12 sites) and drops the touched TU's object;
-`build_boot.py` recompiles only those. WHENEVER YOU CORRECT A PURGE in
-`gen_shims.py`, add its (wrong,right) to `PURGE_PATCHES` (`lift_patches.py
---check` lists stale sites). With that, construction and the first `operator>>`
-parse run correctly.
+**Round 10b (2026-09-01): the msvcp140 iostream layer.** `host_shims_msvcp.c`
+re-implements the streambuf / basic_ios / istream / ostream / iostream members
+on the real MSVC x86 object layout (54 imports; abi-notes at
+`output/decomp/_scratch/msvcp140/abi-notes.md`). It also found the GENERAL
+baked-purge class: the lifter bakes each host-import call's stack purge into
+the caller at lift time, so a purge corrected in `gen_shims.py` after a lift
+needs a `PURGE_PATCHES` entry in `scripts/recomp/lift/lift_patches.py`
+(`--check` lists stale sites; `build_boot.py` recompiles only the touched TUs).
 
-**Exact next unit (B) — a callee-saved register leaks before the tokenizer (lifter side).** The boot now faults just after the first `operator>>` returns, in the tokenizer `0x0067f420` at `0x0040cf50`, because the caller's `esi` is a misaligned `0x0dfc4b2f` — a callee-saved register was clobbered. An ESP/register trace (`ISAAC_MSVCP_TRACE=1`, logged at `_Ipfx` and `_Unlock`) proves `operator>>` is stack-balanced (frame ESP identical at entry and exit), so the clobber is UPSTREAM: in the stringstream ctor `0x00684ce0` (which, past the now-correct construction, copies the string and sets up the get area through more calls) or in `0x0067f420` itself — one of their calls does not preserve esi/edi/ebx. Next step: a callee-saved-register trace across `0x00684ce0`'s call sites. (An earlier note blamed the `_Lock`/`_Unlock` tail-jump thunks; disproven — that path is balanced.) `_Fiopen` + codecvt facets (behind fstream ctor `0x009e8010`) stay loud stubs. Full analysis: docs/recomp-architecture.md §20.
+**Round 11 (2026-09-02): four walls, three of them round-10 misdiagnoses
+(recomp-architecture.md §20.3, §21; the rules are now in AGENTS.md).**
+(1) The "callee-saved register leak" was round 10b's own curation:
+`??0basic_iostream` / `??0basic_ostream` are vbase constructors and pop a
+hidden `most_derived` int, so their purges are the measured 8 / 12, not the
+decorated-name 4 / 8; the lifted stringstream ctor under-popped and its
+epilogue restored ebx/esi/edi one slot low (`edi == cookie ^ ebp` was the
+tell). (2) The instance is a ResourceExtractor dump, not a Steam layout, and
+KAGE tries the archive index before a root's loose map, so round 10's restored
+`resources/` root made the stale small archives (config.a's Afterbirth+
+`players.xml`) shadow the Repentance+ files: the `0x009ab970` lift patch is
+gone (canonical stub), the boot seeds the whole extracted tree, RAM-FS
+16,384 slots. (3) The six hand-written callees in `missing_fns.c` never
+emulated `ret`; each call left its return address on the guest stack
+(`rc_ret(s)`, test-pinned). (4) Mods-init `0x008fb120` enumerates Workshop
+subscriptions through `ISteamUGC` (vtable +0x128..+0x130); the fake Steam
+context now reads NULL for that accessor slot (`steam_null_slots` in
+`host_shims_steam.c`) so the game takes its own no-Steam arm. New tool: the
+CRT noreturn shim prints the last 512 VAs, live registers and the guest stack
+from ESP (`isaac_dump_trap_context`). A full boot now takes ~15 min of wall
+time (thousands of png/anm2 loads through lifted code); measure before
+optimising.
+
+**Exact next unit (B):** run the boot after the ISteamUGC NULL slot (see the
+last paragraph of recomp-architecture.md §21.5 for the measured outcome) and
+take the next wall from the trap dump. `_Fiopen` + codecvt facets (behind the
+`fstream` ctor `0x009e8010`) stay loud stubs; the 18 remaining emulator-era
+hand patches (§19.5) are candidates only when shown to block something.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at
@@ -184,6 +204,14 @@ re-lift**: `build_boot.py` reuses the lifted objects (~16 s + ~355 s link).
 - Commit a landed unit before the session ends; an uncommitted unit is
   invisible to the next session's orientation.
 - Original-binary defects are reproduced and pinned, never "fixed".
+- A curated import purge must equal the callee's `ret N` (hidden MSVC
+  params: vbase `most_derived`, by-value class returns), and every
+  hand-written guest callee must emulate its `ret`. A callee-saved register
+  holding `cookie ^ ebp` names the frame whose epilogue popped one slot low.
+- The instance is an extracted tree; the canonical exe's `0x009ab970` patch
+  (no `resources/` root) is load-bearing. Do not restore it.
 - Tooling note for Claude Code sessions on this machine: heredocs through the
-  Bash tool lose backslashes (`\s` → `s`); write files with the Write tool
-  or spell backslashes as `String.fromCharCode(92)`.
+  Bash tool lose backslashes (`\s` → `s`) — a C `"
+"` written that way
+  became a raw newline and broke a build; write such files with the Write
+  tool or spell backslashes as `String.fromCharCode(92)`.

@@ -59,6 +59,28 @@ the recomp track is the coverage track. They meet at the hybrid plan in
 oracle vectors, pequery censuses) over token-driven re-derivation wherever
 the question is mechanical.
 
+Recomp-track rules that were each learned from a lost round (details in
+`docs/recomp-architecture.md` §20–21):
+
+- A curated import purge (`gen_shims.py` `CURATED_PURGE`) must equal the
+  callee's `ret N`, never the decorated-name sum: MSVC passes hidden
+  parameters the mangling does not show (the `most_derived` int of a
+  constructor with a virtual base, by-value class returns). A curation that
+  contradicts the push-count measurement needs the callee's disassembly
+  as evidence. Correcting a purge after a lift requires a `PURGE_PATCHES`
+  entry (`lift_patches.py --check`).
+- Every hand-written guest callee in `missing_fns.c` must emulate its
+  `ret` (`rc_ret(s)`); the lifted caller reloads ESP from `CpuState`.
+- Read a fault image before theorising: a callee-saved register holding
+  `cookie ^ ebp` means that frame's epilogue popped one slot low, and the
+  `ebp` it encodes names the frame.
+- The instance is a ResourceExtractor dump, not a Steam layout: KAGE tries
+  the archive index before a root's loose files, so the canonical exe's
+  `0x009ab970` patch (no `resources/` root) is load-bearing and the whole
+  extracted tree must be seeded. Do not restore that prologue again.
+- Never write C/regex through a Bash-tool heredoc (it strips backslashes);
+  use the Write tool.
+
 ## Worktree and artifact safety
 
 - Work on `codex/decomp` unless the user explicitly selects another branch.

@@ -80,25 +80,45 @@ if (typeof m._isaac_fs_seed === 'function') {
     }
     return seeded;
   });
-  stageOk('seed loose resources/ tree', () => {
-    let files = 0, bytes = 0, failed = 0;
+  // Boot round 11: the instance is a ResourceExtractor DUMP, not a Steam
+  // layout. The real install keeps everything in resources/packed/*.a
+  // (afterbirth.a, afterbirthp.a, repentance.a: 1.1 GB the instance does not
+  // carry) and resources/ holds only packed/ + scripts/. The emulator-era
+  // instance instead has the archives' contents extracted to the install
+  // ROOT (gfx/, font/, data/, *.xml: 10,725 files, 208 MB) and relies on the
+  // canonical exe's hand patch at 0x009ab970 (no "resources/" mount root), so
+  // every relative key ("players.xml", "gfx/ui/x.anm2") misses the archive
+  // index (keyed "resources/...") and resolves through the "" root's scan of
+  // that extracted tree. The small archives left in resources/packed/ are
+  // STALE (config.a's players.xml is the Afterbirth+ one); with a
+  // "resources/" root they shadow the extracted Repentance+ files, because
+  // KAGE tries the archive index before a root's loose map. Seed the whole
+  // tree the game would see on disk. Skipped: exe/dll/so (not assets), .ogv
+  // (63 MB of cutscenes; videos.a is skipped for the same reason), mods/,
+  // and the duplicate top-level packed/ (the game opens archives by the
+  // resources/packed/ name above).
+  stageOk('seed extracted instance tree', () => {
+    let files = 0, bytes = 0, failed = 0, skipped = 0;
+    const SKIP_DIRS = new Set(['resources/packed', 'packed', 'mods']);
+    const SKIP_EXT = /\.(exe|dll|so|ogv)$/i;
     const walk = (dir, rel) => {
       let entries;
       try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
       for (const e of entries) {
         const p = `${dir}/${e.name}`, r = rel ? `${rel}/${e.name}` : e.name;
         if (e.isDirectory()) {
-          if (r === 'resources/packed') continue;          // archives: by name above
+          if (SKIP_DIRS.has(r)) continue;
           walk(p, r);
         } else if (e.isFile()) {
+          if (SKIP_EXT.test(e.name) || e.name.startsWith('.')) { skipped += 1; continue; }
           const data = readFileSync(p);
           if (seedFile(r, data)) { files += 1; bytes += data.length; }
           else { failed += 1; if (failed <= 5) console.log(`  FAIL seeding ${r}`); }
         }
       }
     };
-    walk(`${INSTANCE_DIR}/resources`, 'resources');
-    console.log(`  seeded ${files} loose files (${bytes} bytes) under resources/${failed ? `, ${failed} FAILED` : ''}`);
+    walk(INSTANCE_DIR, '');
+    console.log(`  seeded ${files} loose files (${(bytes / 1048576).toFixed(1)} MB) from the instance root, ${skipped} skipped by type${failed ? `, ${failed} FAILED` : ''}`);
     // The host Lua module (upstream 5.3.3 in wasm) opens scripts through its
     // OWN libc, which this link maps to the real Node filesystem
     // (-sNODERAWFS=1) relative to process.cwd() -- not through the RAM-FS.

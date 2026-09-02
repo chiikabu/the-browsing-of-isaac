@@ -5,8 +5,17 @@
  *
  * Contract: guest-callee ABI.  On entry [ESP] is the return address and
  * arguments are wherever the original function expected them (registers or
- * stack).  Registers that are not part of the contract must be preserved.
+ * stack).  Registers that are not part of the contract must be preserved,
+ * and the body MUST emulate the original's `ret`: pop the return address
+ * into EIP and add 4 (+N for a `ret N`) to ESP -- exactly what a lifted
+ * callee's epilogue does (`EIP = MEMR32(ESP); ESP += 4`).  Boot round 11:
+ * every body below returned WITHOUT popping, so each call left its return
+ * address on the guest stack; the caller's `mov esp, ebp` hid the drift
+ * until its callee-saved pops read the leftover return addresses
+ * (0x0098d560 handed esi/edi = 0x0098d7bc/0x0098d7cd back to the ambush
+ * loader, whose vector<vector<T>> member then had `this` = 0x009b3d95).
  */
+
 
 #include "isaac_host.h"
 #include "shim_decls.h"
@@ -14,6 +23,12 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+/* The original's `ret`: consume the return address. */
+static inline void rc_ret(CpuState *restrict s) {
+    s->EIP = isaac_r32(s->ESP);
+    s->ESP += 4u;
+}
 
 /* ---------------------------------------------------------------------- *
  * 0x00aa9350 -- const char *platform_name(void).  Six bytes:
@@ -26,9 +41,10 @@
  * by the win32-init copy loop at 0x00a812de.  Function recovery never
  * produced it (no direct caller, only a data/pointer reference), so the
  * dispatch table had no entry and the indirect call trapped.  Returns the
- * platform string; writes no flags, touches no stack (naked leaf). */
+ * platform string; writes no flags; its `ret` pops the return address. */
 void sub_00aa9350(CpuState *restrict s) {
     s->EAX = 0x00b6d10cu;
+    rc_ret(s);
 }
 
 /* ---------------------------------------------------------------------- *
@@ -71,6 +87,7 @@ void sub_00aefe80(CpuState *restrict s) {
     }
     memcpy(&s->ZMM0[0], &d, 8);
     memset(&s->ZMM0[8], 0, 8);
+    rc_ret(s);
 }
 
 /* ---------------------------------------------------------------------- *
@@ -115,6 +132,7 @@ void sub_00aefca0(CpuState *restrict s) {
     }
     (void)rc_feature_gate();   /* both paths agree; fallback is exact */
     s->EAX = eax;
+    rc_ret(s);
 }
 
 /* 0x00aefcf0 -- double (xmm0 low 8) -> uint32 EAX.
@@ -142,6 +160,7 @@ void sub_00aefcf0(CpuState *restrict s) {
         eax = 0xFFFFFFFFu;
     }
     s->EAX = eax;
+    rc_ret(s);
 }
 
 /* 0x00aefd70 -- double (xmm0 low 8) -> uint64 {edx:eax}.
@@ -173,6 +192,7 @@ void sub_00aefd70(CpuState *restrict s) {
     }
     s->EAX = (uint32_t)r;
     s->EDX = (uint32_t)(r >> 32);
+    rc_ret(s);
 }
 
 /* 0x00aefe20 -- uint64 {ecx:edx} -> double xmm0 (unsigned twin of 0x00aefe80).
@@ -187,6 +207,7 @@ void sub_00aefe20(CpuState *restrict s) {
     }
     memcpy(&s->ZMM0[0], &d, 8);
     memset(&s->ZMM0[8], 0, 8);
+    rc_ret(s);
 }
 
 /* ---------------------------------------------------------------------- *
@@ -204,6 +225,12 @@ void sub_00aefe20(CpuState *restrict s) {
 /* Set by the shim dispatcher (host_trap.c) for the fault register dump.
  * Weak so recomp_rt.c's strong definition wins in the boot link. */
 __attribute__((weak)) struct CpuState *recomp_last_cpu;
+
+/* The lifted code's executed-VA ring (RECOMP_VA markers), read by
+ * isaac_dump_trap_context (host_trap.c). Inert in the standalone selftest;
+ * recomp_rt.c's strong definitions win in the boot link. */
+__attribute__((weak)) volatile uint32_t recomp_va_trace[512];
+__attribute__((weak)) volatile uint32_t recomp_va_trace_idx;
 
 /* Guest longjmp unwind to isaac_guest_call. The standalone selftest has no
  * guest call frame to unwind to; reaching here in that build is a defect,

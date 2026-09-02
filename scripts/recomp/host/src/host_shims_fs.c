@@ -31,12 +31,13 @@
 
 #define ERRNO_CELL_VA     (ISAAC_TEB_VA + 0x800u)
 
-/* Capacity. The extracted install carries 476 loose files + 21 dirs under
- * resources/ (anm2/shaders/scripts/xml/png the game reads by PATH, not from
- * an archive) on top of the packed archives, and the game creates its own
- * save-dir entries; 512 slots overflowed at boot round 10. gfx/ui alone has
- * 143 children, past the old 128-per-scan cap. */
-#define FS_SLOTS      8192u
+/* Capacity. The instance is a ResourceExtractor dump: 10,725 loose files
+ * (208 MB of png/anm2/xml/fnt/stb/wav) + ~600 dirs at the install root, the
+ * 485-file resources/ subtree, the packed archives, and the game's own
+ * save-dir entries. 512 slots overflowed at boot round 10 (resources/ only);
+ * 8192 would overflow the whole tree (round 11). Widest directory is
+ * gfx/characters/costumes with 1,675 children (per-scan cap below). */
+#define FS_SLOTS      16384u
 #define FS_FILE_RG    64u
 #define FS_FIND_RG    8u
 #define FS_FIND_MAX   2048u

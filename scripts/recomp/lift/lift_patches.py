@@ -2,13 +2,15 @@
 
 Why this exists: the canonical target `tools/isaac-ng.unpacked.exe` carries
 19 runs / 172 bytes of this project's own emulator-era hand patches (diff it
-against `tools/isaac-ng.unpacked.exe.pre-coinit`). One of them is fatal for
-the recompiled boot: `0x009ab970` -- the KAGE function that mounts the
-"resources/" VFS root -- had its prologue `push ebp; mov ebp, esp`
-(55 8b ec) overwritten with `xor eax, eax; ret` (33 c0 c3). The lifter
-faithfully lifted the stub, and Ghidra kept the orphaned body as
-FUN_009ab973, so every relative asset path ("gfx/ui/ui_streak.anm2") missed
-(boot round 10, recomp-architecture.md §19).
+against `tools/isaac-ng.unpacked.exe.pre-coinit`). Round 10 believed one of
+them fatal for the recompiled boot -- `0x009ab970`, the KAGE function that
+mounts the "resources/" VFS root, has its prologue `push ebp; mov ebp, esp`
+(55 8b ec) overwritten with `xor eax, eax; ret` (33 c0 c3); the lifter
+faithfully lifts the stub and Ghidra keeps the orphaned body as
+FUN_009ab973 -- and restored the prologue from here. Round 11 showed the
+patch is load-bearing for THIS instance (a ResourceExtractor dump; see the
+PATCHES comment) and removed the override again; the mechanism stays for
+the other patches (recomp-architecture.md §19.5, §21).
 
 Re-lifting from a re-patched binary would change the canonical hash that
 every decomp tool pins, so the fix is applied HERE: build_boot.py rewrites
@@ -32,31 +34,22 @@ MARKER = "/* LIFT-PATCH"
 # RECOMP_VA(<va>u) marker: mkdispatch.py / patch_reentry.py scan the lifted C
 # for those markers to build the dispatch table.
 PATCHES: dict[int, tuple[str, str]] = {
-    0x009ab970: (
-        "restore `push ebp; mov ebp, esp` (pristine 55 8b ec; project patch 33 c0 c3 = "
-        "xor eax,eax; ret) so the resources/ mount root is created and scanned",
-        """void sub_009ab970(CpuState *restrict s) {
-  /* LIFT-PATCH 0x009ab970: the canonical exe carries an emulator-era hand patch
-     that turned this function's prologue into `xor eax, eax; ret`; the pristine
-     bytes (tools/isaac-ng.unpacked.exe.pre-coinit) are `push ebp; mov ebp, esp`
-     and the rest of the body is lifted as sub_009ab973 (Ghidra's orphaned
-     FUN_009ab973). Emulate the two lost instructions and fall into the body,
-     which ends with the function's own `mov esp, ebp; pop ebp; ret`. */
-  RECOMP_VA(0x9ab970u);
-  {
-    uint32_t ESP = s->ESP;
-    ESP = (uint32_t)(ESP - ((uint32_t)0x4u));
-    MEMW32(ESP, s->EBP);
-    s->ESP = ESP;
-    s->EBP = ESP;
-  }
-  sub_009ab973(s);
+    # (empty since boot round 11)
+    #
+    # Round 10 restored 0x009ab970's pristine prologue here so a "resources/"
+    # mount root was created. Round 11 REVERTED that (the entry is gone and
+    # the lifted body is the canonical `xor eax, eax; ret` again): the
+    # instance is a ResourceExtractor dump with the archives' contents at the
+    # install ROOT, and KAGE's resolver (0x00a16c60) tries the archive index
+    # before a root's loose map, so a "resources/" root made the stale small
+    # archives (config.a = Afterbirth+ players.xml) shadow the extracted
+    # Repentance+ files. With only the "" root, relative keys miss the
+    # archive index (keyed "resources/...") and resolve through the root
+    # scan -- the behaviour the emulator-era instance was built for. The
+    # boot harness now seeds that whole tree (boot_integration.mjs). Keep the
+    # mechanism: the other 18 hand patches (recomp-architecture.md §19.5)
+    # remain candidates.
 }
-""",
-    ),
-}
-
-
 # --- baked host-import stack purges to correct ---------------------------
 # The lifter bakes each direct host-import call's stack purge INTO THE CALLER
 # at lift time, read from the shim table: `imp_X(s); s->EIP = MEMR32(s->ESP);
@@ -76,8 +69,13 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
     # __thiscall msvcp140 ctors: the sweep counted the caller's inlined arg
     # setup as pushes (boot round 10, recomp-architecture.md).
     "imp_msvcp140____0__basic_ios_DU__char_traits_D_std___std__IAE_XZ": (32, 0),
-    "imp_msvcp140____0__basic_iostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__Z": (8, 4),
-    "imp_msvcp140____0__basic_ostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__N_Z": (12, 8),
+    # Round 10b mis-curated these two as the decorated-name sum and patched the
+    # (correct) measured 8 / 12 down to 4 / 8; constructors of classes with a
+    # virtual base pop a hidden trailing `most_derived` int as well. These
+    # entries undo that on a tree lifted before the correction (a fresh lift
+    # bakes 8 / 12 from gen_shims.py and matches nothing here).
+    "imp_msvcp140____0__basic_iostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__Z": (4, 8),
+    "imp_msvcp140____0__basic_ostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__N_Z": (8, 12),
     "imp_msvcp140____0_Lockit_std__QAE_H_Z": (36, 4),
     "imp_msvcp140___widen___basic_ios_DU__char_traits_D_std___std__QBEDD_Z": (12, 4),
 }

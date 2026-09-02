@@ -282,13 +282,20 @@ CURATED_PURGE = {
     "FindNextFileW@kernel32.dll": 8,
     # msvcp140 C++ methods are __thiscall (this in ECX, callee pops the stack
     # args). The push-count sweep counts the CALLER's unrelated pushes at the
-    # inlined construction sites, so five of them measured wrong; the purge is
+    # inlined construction sites, so three of them measured wrong; the purge is
     # the sum of the stack argument sizes in the decorated name (4 per
     # pointer/int/bool/char, 8 per _J/_K 64-bit, 4 for a class returned by
-    # value = hidden pointer). Boot round 10 reached the first of these.
-    "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ@msvcp140.dll": 0,        # measured 32
-    "??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z@msvcp140.dll": 4,  # measured 8
-    "??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z@msvcp140.dll": 8,  # measured 12
+    # value = hidden pointer) PLUS, for a constructor of a class with a virtual
+    # base, the hidden trailing `int most_derived` that MSVC x86 passes and the
+    # callee pops (msvcp140 `??0basic_iostream` is `ret 8`, `??0basic_ostream`
+    # is `ret 0xc`: output/decomp/_scratch/msvcp140/abi-notes.md §1.5). Boot
+    # round 10b curated those two as the decorated-name sum (4 / 8) and the
+    # lifted stringstream ctor 0x00684ce0 then under-popped by 4, so its
+    # epilogue restored ebx/esi/edi one slot low and the tokenizer 0x0067f420
+    # faulted on the leaked esi (round 11). The measurement was right.
+    "??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ@msvcp140.dll": 0,        # measured 32 (no vbase: no hidden flag)
+    "??0?$basic_iostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@@Z@msvcp140.dll": 8,  # sb + most_derived; measured 8
+    "??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z@msvcp140.dll": 12,  # sb, isstd + most_derived; measured 12
     "??0_Lockit@std@@QAE@H@Z@msvcp140.dll": 4,                                    # measured 36
     "?widen@?$basic_ios@DU?$char_traits@D@std@@@std@@QBEDD@Z@msvcp140.dll": 4,   # measured 12
     # kernel32
