@@ -2061,6 +2061,82 @@ Each of these was made for the BoxedWine emulator phase; under the recompiled
 boot the host shims own Win32, so every one is a candidate for the same
 `lift_patches.py` treatment when it is shown to block something.
 
+## 20. Round 10b: the C++ iostream layer, and a general baked-purge bug
+
+The round-10 boot stopped at `msvcp140!basic_ios<char>::basic_ios()`. Two
+pieces landed; a third is named exactly.
+
+### 20.1 The msvcp140 shim layer
+
+`scripts/recomp/host/src/host_shims_msvcp.c` re-implements the streambuf /
+basic_ios / istream / ostream / iostream members the game reaches, on the
+**exact MSVC x86 object layout** (transcribed from
+`C:\Windows\SysWOW64\msvcp140.dll` 14.44; the disassembly-tagged notes are
+`output/decomp/_scratch/msvcp140/abi-notes.md`). It is not a call into the
+DLL: the game's own `basic_stringbuf` overrides are lifted (its vtable is at
+`0xb1b190`), and the game manipulates the stream objects' fields directly, so
+every shim (a) locates the `basic_ios` virtual base as `this + [[this]+4]`,
+never by a constant, so a game-side `stringstream` (basic_ios at +0x68) works
+unchanged; (b) touches the streambuf only through its six indirection
+pointers, which a stringbuf redirects with setg/setp; (c) dispatches the
+streambuf virtuals (overflow +0xc, underflow +0x18, uflow +0x1c, sync +0x34)
+through the object's real vtable into lifted game code, recognising the
+base-class defaults by their IAT jump thunks at `0x00aef065..0x00aef0a1`. C++
+exceptions (`_Xlength_error`, …) abort loudly: there is no unwinder. Proven
+by 24 host-selftest checks (**103 → 127**) over a synthetic stringstream on
+the game's layout — construct, `_Ipfx` whitespace skip, `operator>>` integer
+parse, `sgetc/sbumpc/snextc`, an empty get area dispatching uflow through the
+vtable, `operator<<` hex/showbase/width/fill formatting, `write`/`put`, a full
+put area dispatching overflow, `flush`, and the three-vtable destruction — and
+mutation-checked (`sgetc` ignoring the count, `>>` dropping eofbit, `<<`
+keeping width, the iostream vtordisp) through `scripts/decomp/mutate.mjs`.
+
+### 20.2 The lifter bakes host-import stack purges — and a stale one corrupts
+
+The shim layer was correct but the boot faulted anyway, in
+`operator>>(istream&, string&)`, reading a `rdbuf` of `1`. The stringstream's
+`_Mystrbuf` had been set to `1` by our own ctor, which had received `sb == 1`.
+
+Root cause: **the lifter bakes each direct host-import call's stack purge into
+the caller at lift time**, read from the shim table —
+`imp_X(s); s->EIP = MEMR32(s->ESP); s->ESP += 4u + <purge>u;`. The push-count
+sweep (`gen_shims.py`) miscounts `__thiscall` constructors whose arguments are
+set up inline at the caller: it read `basic_ios()` (`@@XZ`, zero args, should
+pop 0) as purge **32**, and four others wrong. The lifted stringstream ctor
+therefore over-popped 32 bytes after `basic_ios()`, so the following
+`basic_iostream(sb, most)` args were read from a shifted stack (`sb == 1`).
+
+`gen_shims.py` now curates the correct purge for the five ctors, but re-lifting
+the whole 272 MB image to change a 4-byte constant per call site is wasteful.
+`scripts/recomp/lift/lift_patches.py` gained `PURGE_PATCHES`: it rewrites the
+baked constant in place at each call site (12 sites: 5+4+1+1+1) and drops the
+touched TU's object, exactly like the `0x009ab970` prologue patch —
+`build_boot.py` then recompiles only those 4 TUs. With it, construction is
+correct (`sb`, `_Mystrbuf` = the real streambuf) and the boot advances through
+the stringstream construction and the first `operator>>` parse.
+
+This is a general hazard: **any host import whose purge was wrong at lift time
+has a stale baked value.** When you correct a purge in `gen_shims.py`, add the
+`(wrong, right)` pair to `PURGE_PATCHES` (or re-lift). `lift_patches.py
+--check` reports which sites still carry the old value.
+
+### 20.3 Next: the tail-jump-thunk stack drift (a lifter issue)
+
+The boot now faults just after that first `operator>>` returns, in the
+tokenizer `0x0067f420` at `0x0040cf50` (`std::string` construct), because
+`operator>>` restored a callee-saved register (`esi`) from the wrong slot: its
+stack drifted by 4. The cause is one hop deeper than a purge — the game calls
+`rdbuf->_Lock()` / `_Unlock()` through the stringbuf vtable, whose slots hold
+the **tail-jump thunks** `0x00aef06b` / `0x00aef071` (`jmp [msvcp slot]`). The
+lifter models the indirect `call` into the thunk and the thunk's `jmp`-to-shim
+as two return-consuming steps, and the two ESP adjustments do not net to the
+single `call`/`ret` the hardware performs. This is in the lifter's handling of
+`call → jmp-thunk → host-import`, not the shim table, and is the exact next
+unit: either lift the `jmp [import]` thunks as transparent tail calls (no
+extra ESP pop) or route them through `isaac_indirect_call` with the import's
+real purge once. `_Fiopen` and the codecvt facet family (behind the `fstream`
+ctor `0x009e8010`) remain loud weak stubs until a later path needs them.
+
 ## Appendix: reproduction
 
 ```bash

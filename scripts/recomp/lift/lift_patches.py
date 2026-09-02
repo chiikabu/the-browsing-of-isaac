@@ -57,6 +57,61 @@ PATCHES: dict[int, tuple[str, str]] = {
 }
 
 
+# --- baked host-import stack purges to correct ---------------------------
+# The lifter bakes each direct host-import call's stack purge INTO THE CALLER
+# at lift time, read from the shim table: `imp_X(s); s->EIP = MEMR32(s->ESP);
+# s->ESP += 4u + <purge>u;`. When a purge is corrected in gen_shims.py after
+# the lift (the push-count sweep miscounts __thiscall ctors whose args are set
+# inline at the caller), the baked value is stale and the caller over- or
+# under-pops -- corrupting the guest stack for the NEXT call. Re-lifting the
+# whole image to change a 4-byte constant per call site is wasteful, so
+# build_boot.py rewrites the baked constant in place, per call site, and drops
+# the touched TU's object.
+#
+# Each entry: imp_ C identifier -> (wrong baked purge, correct purge). Verify a
+# value with `pequery.py`/the decorated name (bytes popped by the callee's ret;
+# 0 for a @@XZ no-arg thiscall; 4 per pointer/int/bool arg). Measured wrong
+# values come from output/recomp/host/shim-table.json BEFORE the gen_shims fix.
+PURGE_PATCHES: dict[str, tuple[int, int]] = {
+    # __thiscall msvcp140 ctors: the sweep counted the caller's inlined arg
+    # setup as pushes (boot round 10, recomp-architecture.md).
+    "imp_msvcp140____0__basic_ios_DU__char_traits_D_std___std__IAE_XZ": (32, 0),
+    "imp_msvcp140____0__basic_iostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__Z": (8, 4),
+    "imp_msvcp140____0__basic_ostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__N_Z": (12, 8),
+    "imp_msvcp140____0_Lockit_std__QAE_H_Z": (36, 4),
+    "imp_msvcp140___widen___basic_ios_DU__char_traits_D_std___std__QBEDD_Z": (12, 4),
+}
+
+
+def apply_purge_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Correct stale baked import purges in the generated C. Returns the TUs
+    modified (their objects must be recompiled)."""
+    touched: set[Path] = set()
+    tus = sorted(lift_dir.glob("lifted_*.c"))
+    for name, (wrong, right) in PURGE_PATCHES.items():
+        old = "%s(s);\n  s->EIP = MEMR32(s->ESP);\n  s->ESP += 4u + %du;" % (name, wrong)
+        new = "%s(s);\n  s->EIP = MEMR32(s->ESP);\n  s->ESP += 4u + %du;" % (name, right)
+        total = 0
+        for tu in tus:
+            text = tu.read_text(encoding="utf-8")
+            n = text.count(old)
+            if not n:
+                continue
+            total += n
+            if check_only:
+                touched.add(tu)
+                continue
+            tu.write_text(text.replace(old, new), encoding="utf-8")
+            obj = tu.with_suffix(".o")
+            if obj.exists():
+                obj.unlink()
+            touched.add(tu)
+        if total:
+            print("purge-patch %s: %d call site(s) %d->%d%s" % (name, total, wrong, right,
+                  " (would fix)" if check_only else " corrected"))
+    return sorted(touched)
+
+
 def find_function(text: str, name: str) -> tuple[int, int] | None:
     """Return (start, end) of `void <name>(CpuState *restrict s) { ... }` at
     column 0, matching the closing brace at column 0 (the lifter's layout)."""
@@ -114,6 +169,7 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="report only; exit 1 if any patch is missing")
     args = ap.parse_args()
     touched = apply_lift_patches(args.dir, check_only=args.check)
+    touched += apply_purge_patches(args.dir, check_only=args.check)
     if args.check:
         return 1 if touched else 0
     return 0

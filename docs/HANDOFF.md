@@ -116,24 +116,35 @@ run. Run it **from the instance dir** (the host Lua's libc is NODERAWFS):
 Host-only relink is now **~2 min** (`build_boot.py` links at `-O0` by default:
 474 s → 8 s; `--opt-link` for shipping).
 
-**Exact next unit (B) — the MSVC C++ iostream runtime.** The boot stops at
-`msvcp140.dll!basic_ios<char>::basic_ios()` called from `0x00684d24` inside
-`0x00684ce0` = `std::stringstream(const std::string&)`, whose caller
-`0x0067f420` (41 callers) is the game's whitespace tokenizer
-(`vector<string> split(const string&)`: `>> string` loop until fail|bad) used
-by the anm2/xml attribute parsers. 54 msvcp140 imports (~180 sites), five
-stream constructors: `0x00414330` (`stringstream()`), `0x00684ce0`,
-`0x008fb120` and `0x009036b0` (parse with `operator>>(size_t&)`),
-`0x009e8010` (`fstream` via `_Fiopen`). Two viable routes: implement the
-export subset on the real MSVC x86 object layout (reference:
-`C:\Windows\SysWOW64\msvcp140.dll` 14.44 — basic_ios/iostream/streambuf
-ctors+dtors, `_Init`, `sgetc/sbumpc/snextc/_Pninc`, `_Ipfx/_Osfx/setstate`,
-the integer `>>`/`<<`, `write/put/flush`, `_Fiopen`; the virtuals
-`underflow/uflow/overflow` live in the GAME's stringbuf/filebuf vtables and
-must be invoked through the host→guest call path), or override the five
-consumers at game level (needs exact MSVC `std::string`/`vector` layouts and
-the guest allocator). Everything hit before that trap is proven; every other
-msvcp import keeps trapping loudly until implemented. Scout facts for later
+**Round 10b (2026-09-01): the msvcp140 iostream layer is in; next is a lifter
+tail-jump-thunk bug.** `host_shims_msvcp.c` re-implements the streambuf /
+basic_ios / istream / ostream / iostream members on the real MSVC x86 object
+layout (54 imports; abi-notes at
+`output/decomp/_scratch/msvcp140/abi-notes.md`); host selftest 103 -> 127,
+mutation-checked. Landing it exposed and fixed a GENERAL baked-purge bug: the
+lifter bakes each host-import call's stack purge into the caller at lift time,
+and `gen_shims.py`'s push-count sweep had miscounted five __thiscall ctors
+(e.g. `basic_ios()` as 32, should be 0), so the lifted `std::stringstream` ctor
+over-popped and mis-passed its args. Fixed WITHOUT a full re-lift:
+`scripts/recomp/lift/lift_patches.py` gained `PURGE_PATCHES`, which rewrites the
+baked constant per call site (12 sites) and drops the touched TU's object;
+`build_boot.py` recompiles only those. WHENEVER YOU CORRECT A PURGE in
+`gen_shims.py`, add its (wrong,right) to `PURGE_PATCHES` (`lift_patches.py
+--check` lists stale sites). With that, construction and the first `operator>>`
+parse run correctly.
+
+**Exact next unit (B) — the tail-jump-thunk stack drift (lifter side).** The
+boot now faults just after the first `operator>>` returns, in the tokenizer
+`0x0067f420` at `0x0040cf50`, because `operator>>` restored `esi` from a slot 4
+bytes off. Cause: the game calls `rdbuf->_Lock()`/`_Unlock()` through the
+stringbuf vtable slots, which hold tail-jump thunks (`0x00aef06b`/`0x00aef071`
+= `jmp [msvcp import]`). The lifter treats the indirect `call` into the thunk
+and the thunk's `jmp`-to-shim as two return-consuming steps; their two ESP
+adjustments do not net to one `call`/`ret`. Fix on the lifter side: lift a
+`jmp [import]` thunk as a transparent tail call, or route it through
+`isaac_indirect_call` once. `_Fiopen` + the codecvt facets (behind the fstream
+ctor `0x009e8010`) stay loud stubs until needed. Full analysis:
+docs/recomp-architecture.md §20. Scout facts for later
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

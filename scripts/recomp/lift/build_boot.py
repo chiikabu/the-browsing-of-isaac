@@ -180,8 +180,8 @@ def main():
     # markers), and the touched TU's object is dropped so it recompiles.
     if not args.no_lift_patches:
         sys.path.insert(0, str(HERE))
-        from lift_patches import apply_lift_patches  # noqa: E402
-        patched = apply_lift_patches(lift_dir)
+        from lift_patches import apply_lift_patches, apply_purge_patches  # noqa: E402
+        patched = set(apply_lift_patches(lift_dir)) | set(apply_purge_patches(lift_dir))
         print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)

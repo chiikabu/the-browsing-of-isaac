@@ -46,9 +46,17 @@ uint32_t isaac_call_site_from_return(uint32_t ret);
 
 /* Externs the host layer expects from the lifted module. Standalone build
  * supplies inert versions: nothing here transfers control to guest code. */
+/* Section 17 (msvcp140) points fake streambuf vtable slots at these marker
+ * VAs; a "virtual call" into the guest then answers like the base class:
+ * EOF from underflow/uflow/overflow, 0 from sync. */
+#define SELFTEST_VCALL_EOF  0xDEAD0001u
+#define SELFTEST_VCALL_ZERO 0xDEAD0002u
+static unsigned g_vcalls;
 void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
-    (void)va;
-    if (cpu) cpu->EAX = 0;
+    ++g_vcalls;
+    if (!cpu) return;
+    if (va == SELFTEST_VCALL_EOF) { cpu->EAX = 0xFFFFFFFFu; return; }
+    cpu->EAX = 0;
 }
 static int g_image_loaded;
 int isaac_image_is_loaded(void) { return g_image_loaded; }
@@ -1089,6 +1097,153 @@ int main(int argc, char **argv) {
             imp_api_ms_win_crt_stdio__fopen(&cpu);
             check(cpu.EAX != 0, "the 700th seeded file opens by path");
         }
+    }
+
+    /* 17. THE MSVC IOSTREAM LAYER (msvcp140) on the game's own object shape.
+     * The game's std::stringstream (ctor 0x00684ce0) is 0x68 bytes: istream
+     * vbptr @0 -> {0,0x68}, ostream vbptr @0x10 -> {0,0x58}, basic_stringbuf
+     * @0x18 (basic_streambuf 0x38 + _Seekhigh/_Mystate), basic_ios @0x68. It
+     * calls basic_ios(), basic_iostream(sb, most_derived=0), basic_streambuf()
+     * in that order, then reads through _Ipfx/sgetc/sbumpc/snextc/setstate.
+     * Every shim below must locate basic_ios as this + [[this]+4] and touch
+     * the streambuf only through its indirection pointers (abi-notes.md). */
+    {
+#define MS(name) imp_msvcp140_##name
+#define CALL_THIS(fn, self, ...) do {                                     \
+            uint32_t _a[] = { 0, ##__VA_ARGS__ };                            \
+            memset(&cpu, 0, sizeof cpu);                                     \
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;                           \
+            isaac_w32(cpu.ESP, 0xDEADBEEF);                                  \
+            for (unsigned _i = 1; _i < sizeof _a / sizeof _a[0]; ++_i)       \
+                isaac_w32(cpu.ESP + 4u * _i, _a[_i]);                        \
+            cpu.ECX = (self);                                                \
+            fn(&cpu);                                                        \
+        } while (0)
+        const uint32_t ss = ISAAC_HEAP_VA + 0x60000, sb = ss + 0x18, B = ss + 0x68;
+        const uint32_t vbt_is = ss + 0x100, vbt_os = ss + 0x108, vtbl = ss + 0x120;
+        const uint32_t inbuf = ss + 0x200, outbuf = ss + 0x240, val = ss + 0x280;
+        unsigned i;
+        for (uint32_t k = 0; k < 0x300; k += 4) isaac_w32(ss + k, 0);
+        isaac_w32(vbt_is, 0); isaac_w32(vbt_is + 4, 0x68);      /* game vbtables */
+        isaac_w32(vbt_os, 0); isaac_w32(vbt_os + 4, 0x58);
+        isaac_w32(ss, vbt_is); isaac_w32(ss + 0x10, vbt_os);
+        /* Mirror the game's basic_stringbuf vtable at 0xb1b190: the class's own
+         * overrides (dtor, overflow, pbackfail, underflow, seekoff, seekpos) are
+         * real code -> marker VAs the stub answers with EOF; the base-class
+         * virtuals (_Lock, _Unlock, showmanyc, uflow, xsgetn, xsputn, setbuf,
+         * sync, imbue) are IAT jump thunks in 0x00aef065..0x00aef0a1, which the
+         * shims recognise and answer in-line. */
+        for (unsigned s = 0; s < 15; ++s) isaac_w32(vtbl + 4 * s, SELFTEST_VCALL_EOF);
+        for (unsigned s = 0; s < 15; ++s)
+            if (s == 1 || s == 2 || s == 5 || s == 7 || s == 8 || s == 9 || s == 12 || s == 13 || s == 14)
+                isaac_w32(vtbl + 4 * s, 0x00aef06bu);
+
+        CALL_THIS(MS(___0__basic_ios_DU__char_traits_D_std___std__IAE_XZ), B);
+        check(cpu.EAX == B && isaac_r32(B) == 0x10002f84u && isaac_r32(B + 0x0c) == 0 &&
+              isaac_r32(B + 0x38) == 0 && isaac_r32(B + 0x3c) == 0,
+              "basic_ios() zeroes ios_base and its three fields, returns this");
+        CALL_THIS(MS(___0__basic_iostream_DU__char_traits_D_std___std__QAE_PAV__basic_streambuf_DU__char_traits_D_std___1__Z), ss, sb, 0);
+        check(cpu.EAX == ss && isaac_r32(ss + 8) == 0 && isaac_r32(ss + 0xc) == 0,
+              "basic_iostream(sb,0) returns this and zeroes _Chcount");
+        check(isaac_r32(B + 0x38) == sb && isaac_r32(B + 0x0c) == 0 && isaac_r32(B + 0x14) == 0x201 &&
+              isaac_r32(B + 0x18) == 6 && isaac_r32(B + 0x30) != 0 && isaac_r8(B + 0x40) == ' ',
+              "basic_ios::init via the vbptr: rdbuf, good, skipws|dec, prec 6, locale, fill ' '");
+        check(isaac_r32(B) == 0x100053f4u && isaac_r32(B - 4) == 0x68 - 0x20,
+              "iostream ctor leaves the iostream basic_ios vptr and vtordisp (d-0x20)");
+        check(isaac_r32(ss) == vbt_is && isaac_r32(ss + 0x10) == vbt_os,
+              "most_derived=0 leaves the game's vbtables alone");
+        CALL_THIS(MS(___0__basic_streambuf_DU__char_traits_D_std___std__IAE_XZ), sb);
+        check(cpu.EAX == sb && isaac_r32(sb) == 0x10002f9cu && isaac_r32(sb + 0x1c) == sb + 0x14 &&
+              isaac_r32(sb + 0x2c) == sb + 0x24 && isaac_r32(sb + 0x20) == sb + 0x18 &&
+              isaac_r32(sb + 0x30) == sb + 0x28 && isaac_r32(sb + 0x34) != 0,
+              "basic_streambuf(): indirection pointers at the in-object slots, locale allocated");
+
+        /* the game-side stringbuf: its own vtable + a get area "  12 abc" */
+        isaac_w32(sb, vtbl);
+        static const char text[] = "  12 abc";
+        for (i = 0; text[i]; ++i) *(uint8_t *)isaac_g(inbuf + i) = (uint8_t)text[i];
+        isaac_w32(isaac_r32(sb + 0x0c), inbuf);            /* *_IGfirst */
+        isaac_w32(isaac_r32(sb + 0x1c), inbuf);            /* *_IGnext  */
+        isaac_w32(isaac_r32(sb + 0x2c), (uint32_t)(sizeof text - 1));   /* *_IGcount */
+
+        CALL_THIS(MS(___Ipfx___basic_istream_DU__char_traits_D_std___std__QAE_N_N_Z), ss, 0);
+        check((cpu.EAX & 0xff) == 1 && isaac_r32(isaac_r32(sb + 0x1c)) == inbuf + 2,
+              "_Ipfx skips leading whitespace through the indirection pointers");
+        CALL_THIS(MS(__sgetc___basic_streambuf_DU__char_traits_D_std___std__QAEHXZ), sb);
+        check(cpu.EAX == '1', "sgetc peeks without consuming");
+        isaac_w32(val, 0xdeadbeefu); isaac_w32(val + 4, 0xdeadbeefu);
+        CALL_THIS(MS(___5__basic_istream_DU__char_traits_D_std___std__QAEAAV01_AA_K_Z), ss, val);
+        check(cpu.EAX == ss && isaac_r32(val) == 12 && isaac_r32(val + 4) == 0 && isaac_r32(B + 0x0c) == 0,
+              "operator>>(unsigned __int64&) parses 12, stream stays good");
+        CALL_THIS(MS(___Ipfx___basic_istream_DU__char_traits_D_std___std__QAE_N_N_Z), ss, 0);
+        CALL_THIS(MS(__sbumpc___basic_streambuf_DU__char_traits_D_std___std__QAEHXZ), sb);
+        check(cpu.EAX == 'a' && isaac_r32(isaac_r32(sb + 0x2c)) == 2, "sbumpc consumes 'a' and decrements the count");
+        CALL_THIS(MS(__snextc___basic_streambuf_DU__char_traits_D_std___std__QAEHXZ), sb);
+        check(cpu.EAX == 'c' && isaac_r32(isaac_r32(sb + 0x2c)) == 1, "snextc advances past 'b' and peeks 'c'");
+        CALL_THIS(MS(__sbumpc___basic_streambuf_DU__char_traits_D_std___std__QAEHXZ), sb);
+        check(cpu.EAX == 'c' && isaac_r32(isaac_r32(sb + 0x2c)) == 0, "sbumpc takes the last char");
+        unsigned before = g_vcalls;
+        CALL_THIS(MS(__sbumpc___basic_streambuf_DU__char_traits_D_std___std__QAEHXZ), sb);
+        check(cpu.EAX == 0xFFFFFFFFu && g_vcalls == before + 1,
+              "an empty get area dispatches uflow through the object's vtable (EOF)");
+        CALL_THIS(MS(___5__basic_istream_DU__char_traits_D_std___std__QAEAAV01_AA_K_Z), ss, val);
+        check((isaac_r32(B + 0x0c) & 3) == 3 && isaac_r32(val) == 12,
+              "operator>> at end of input sets eof|fail and leaves the value untouched");
+        isaac_w32(B + 0x0c, 0);
+        CALL_THIS(MS(__setstate___basic_ios_DU__char_traits_D_std___std__QAEXH_N_Z), B, 2, 0);
+        check(isaac_r32(B + 0x0c) == 2, "setstate(failbit) with a live rdbuf adds no badbit");
+        isaac_w32(B + 0x0c, 0);
+
+        /* digits running straight into EOF: the number parses, eofbit is set by
+         * the digit loop itself (not by _Ipfx), and failbit is NOT set */
+        *(uint8_t *)isaac_g(inbuf + 0x20) = '7'; *(uint8_t *)isaac_g(inbuf + 0x21) = '7';
+        isaac_w32(isaac_r32(sb + 0x1c), inbuf + 0x20);
+        isaac_w32(isaac_r32(sb + 0x2c), 2);
+        isaac_w32(val, 0);
+        CALL_THIS(MS(___5__basic_istream_DU__char_traits_D_std___std__QAEAAV01_AA_K_Z), ss, val);
+        check(isaac_r32(val) == 77 && isaac_r32(B + 0x0c) == 1,
+              "operator>> parsing up to EOF yields the value with eofbit only");
+        isaac_w32(B + 0x0c, 0);
+
+        /* output side: a 16-byte put area */
+        isaac_w32(isaac_r32(sb + 0x10), outbuf);           /* *_IPfirst */
+        isaac_w32(isaac_r32(sb + 0x20), outbuf);           /* *_IPnext  */
+        isaac_w32(isaac_r32(sb + 0x30), 16);               /* *_IPcount */
+        isaac_w32(B + 0x14, 0x201 | 0x800 | 0x008 | 0x004); /* hex|showbase|uppercase */
+        isaac_w32(B + 0x14, (isaac_r32(B + 0x14) & ~0x200u));
+        CALL_THIS(MS(___6__basic_ostream_DU__char_traits_D_std___std__QAEAAV01__K_Z), ss, 0xff, 0);
+        check(cpu.EAX == ss && memcmp(isaac_g(outbuf), "0XFF", 4) == 0 &&
+              isaac_r32(isaac_r32(sb + 0x20)) == outbuf + 4 && isaac_r32(isaac_r32(sb + 0x30)) == 12,
+              "operator<<(unsigned __int64) formats hex|showbase|uppercase into the put area");
+        isaac_w32(B + 0x14, 0x201);
+        isaac_w32(B + 0x20, 6); *(uint8_t *)isaac_g(B + 0x40) = '.';
+        CALL_THIS(MS(___6__basic_ostream_DU__char_traits_D_std___std__QAEAAV01__K_Z), ss, 42, 0);
+        check(memcmp(isaac_g(outbuf + 4), "....42", 6) == 0 && isaac_r32(B + 0x20) == 0,
+              "width 6 right-adjusts with the fill char and resets width to 0");
+        for (i = 0; i < 2; ++i) *(uint8_t *)isaac_g(val + i) = "hi"[i];
+        CALL_THIS(MS(__write___basic_ostream_DU__char_traits_D_std___std__QAEAAV12_PBD_J_Z), ss, val, 2, 0);
+        CALL_THIS(MS(__put___basic_ostream_DU__char_traits_D_std___std__QAEAAV12_D_Z), ss, '!');
+        check(memcmp(isaac_g(outbuf), "0XFF....42hi!", 13) == 0 && isaac_r32(B + 0x0c) == 0,
+              "write/put append through sputn/sputc, stream good");
+        isaac_w32(isaac_r32(sb + 0x30), 0);                /* put area full -> overflow virtual */
+        before = g_vcalls;
+        CALL_THIS(MS(__put___basic_ostream_DU__char_traits_D_std___std__QAEAAV12_D_Z), ss, 'x');
+        check(g_vcalls == before + 1 && (isaac_r32(B + 0x0c) & 4) == 4,
+              "a full put area dispatches overflow; EOF from it sets badbit");
+        isaac_w32(B + 0x0c, 0);
+        CALL_THIS(MS(__flush___basic_ostream_DU__char_traits_D_std___std__QAEAAV12_XZ), ss);
+        check(cpu.EAX == ss && isaac_r32(B + 0x0c) == 0, "flush syncs through the vtable and stays good");
+
+        /* destruction in the game's order: ~iostream (ecx=obj+0x20), ~ios, ~streambuf */
+        CALL_THIS(MS(___1__basic_iostream_DU__char_traits_D_std___std__UAE_XZ), ss + 0x20);
+        check(isaac_r32(B) == 0x10003060u && isaac_r32(B - 4) == 0x68 - 0x18,
+              "~basic_iostream takes the vbase-adjusted this and rewinds vptr/vtordisp");
+        CALL_THIS(MS(___1__basic_ios_DU__char_traits_D_std___std__UAE_XZ), B);
+        check(isaac_r32(B + 0x30) == 0, "~basic_ios frees the ios_base locale");
+        CALL_THIS(MS(___1__basic_streambuf_DU__char_traits_D_std___std__UAE_XZ), sb);
+        check(isaac_r32(sb + 0x34) == 0, "~basic_streambuf frees the streambuf locale");
+#undef CALL_THIS
+#undef MS
     }
 
     isaac_module_report();
