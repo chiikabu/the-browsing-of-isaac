@@ -419,6 +419,59 @@ int main(int argc, char **argv) {
     check(cpu.EAX == ISAAC_IMAGE_BASE,
           "GetModuleHandleW(NULL) returns the image base");
 
+    /* GL renderbuffer book-keeping (boot round 12): the game re-validates a
+     * render target every frame by reading back GL_RENDERBUFFER_WIDTH/HEIGHT
+     * of the bound renderbuffer; a 0 answer re-creates the target each frame. */
+    {
+        uint32_t ids = ISAAC_STACK_TOP_VA - 0x2100, out = ISAAC_STACK_TOP_VA - 0x2200;
+        isaac_w32(ids, 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 1); isaac_w32(cpu.ESP + 8, ids);
+        imp_opengl32__glGenRenderbuffers(&cpu);
+        uint32_t rb = isaac_r32(ids);
+        check(rb != 0, "glGenRenderbuffers hands out a name");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0x8D41); isaac_w32(cpu.ESP + 8, rb);
+        imp_opengl32__glBindRenderbuffer(&cpu);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0x8D41); isaac_w32(cpu.ESP + 8, 0x8058 /* GL_RGBA8 */);
+        isaac_w32(cpu.ESP + 12, 1024); isaac_w32(cpu.ESP + 16, 768);
+        imp_opengl32__glRenderbufferStorage(&cpu);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0x8D41); isaac_w32(cpu.ESP + 8, 0x8D42 /* WIDTH */);
+        isaac_w32(cpu.ESP + 12, out); isaac_w32(out, 0xFFFFFFFF);
+        imp_opengl32__glGetRenderbufferParameteriv(&cpu);
+        check(isaac_r32(out) == 1024, "GL_RENDERBUFFER_WIDTH reads back the stored width");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0x8D41); isaac_w32(cpu.ESP + 8, 0x8D43 /* HEIGHT */);
+        isaac_w32(cpu.ESP + 12, out); isaac_w32(out, 0xFFFFFFFF);
+        imp_opengl32__glGetRenderbufferParameteriv(&cpu);
+        check(isaac_r32(out) == 768, "GL_RENDERBUFFER_HEIGHT reads back the stored height");
+        /* delete forgets: the query on a dead name answers 0 */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 1); isaac_w32(cpu.ESP + 8, ids);
+        imp_opengl32__glDeleteRenderbuffers(&cpu);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0x8D41); isaac_w32(cpu.ESP + 8, 0x8D42);
+        isaac_w32(cpu.ESP + 12, out); isaac_w32(out, 0xFFFFFFFF);
+        imp_opengl32__glGetRenderbufferParameteriv(&cpu);
+        check(isaac_r32(out) == 0, "a deleted renderbuffer no longer reports a size");
+    }
+
     /* Steam accessor policy (boot round 11): SteamInternal_ContextInit is
      * every SteamXxx() accessor's inline body. Only the two init-dance slots
      * receive the fake CSteamAPIContext; any other slot must read NULL, the

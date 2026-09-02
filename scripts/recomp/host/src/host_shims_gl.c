@@ -288,8 +288,32 @@ void imp_opengl32__glBindFramebuffer(CpuState *restrict cpu) {
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
+/* Renderbuffer storage book-keeping. The game's RenderTarget code
+ * (0x00a18750) re-validates a target every frame: bind the renderbuffer,
+ * read back GL_RENDERBUFFER_WIDTH/HEIGHT, and if they differ from the wanted
+ * size, glGenRenderbuffers a new one (logging "Renderbuffer ID: ..."). A
+ * shim that answers 0 for the query therefore allocates a fresh 1024x1024
+ * target on every frame (boot round 12: 652 of them in ten minutes, the
+ * first thing the frame loop did). Remember (w, h, format) per name. */
+#define GL_RB_SLOTS 256u
+static struct { uint32_t name, w, h, fmt; } g_gl_rb[GL_RB_SLOTS];
+static uint32_t g_gl_rb_bound;
+static int gl_rb_find(uint32_t name) {
+    if (!name) return -1;
+    for (unsigned i = 0; i < GL_RB_SLOTS; ++i) if (g_gl_rb[i].name == name) return (int)i;
+    return -1;
+}
+static int gl_rb_slot(uint32_t name) {
+    int i = gl_rb_find(name);
+    if (i >= 0) return i;
+    for (unsigned k = 0; k < GL_RB_SLOTS; ++k)
+        if (!g_gl_rb[k].name) { g_gl_rb[k].name = name; g_gl_rb[k].w = g_gl_rb[k].h = g_gl_rb[k].fmt = 0; return (int)k; }
+    gl_log_once("glRenderbufferStorage", "renderbuffer table full (256 live names)");
+    return -1;
+}
 void imp_opengl32__glBindRenderbuffer(CpuState *restrict cpu) {
-    for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
+    (void)isaac_arg(cpu, 0);                 /* target: GL_RENDERBUFFER only */
+    g_gl_rb_bound = isaac_arg(cpu, 1);
     cpu->EAX = 0;
 }
 void imp_opengl32__glBindTexture(CpuState *restrict cpu) {
@@ -345,7 +369,15 @@ void imp_opengl32__glDeleteProgram(CpuState *restrict cpu) {
     for (unsigned i = 0; i < 1; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
+static void gl_rb_forget(uint32_t count, uint32_t ids) {
+    for (uint32_t i = 0; i < count; ++i) {
+        if (!isaac_is_guest_va(ids + 4 * i)) break;
+        int k = gl_rb_find(isaac_r32(ids + 4 * i));
+        if (k >= 0) g_gl_rb[k].name = 0;
+    }
+}
 void imp_opengl32__glDeleteRenderbuffers(CpuState *restrict cpu) {
+    gl_rb_forget(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     for (unsigned i = 0; i < 2; ++i) (void)isaac_arg(cpu, i);
     cpu->EAX = 0;
 }
@@ -432,8 +464,15 @@ void imp_opengl32__glGetProgramiv(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glGetRenderbufferParameteriv(CpuState *restrict cpu) {
-    uint32_t out = isaac_arg(cpu, 2);
-    if (isaac_is_guest_va(out)) isaac_w32(out, 0);
+    uint32_t pname = isaac_arg(cpu, 1), out = isaac_arg(cpu, 2);
+    int k = gl_rb_find(g_gl_rb_bound);
+    uint32_t v = 0;
+    if (k >= 0) {
+        if (pname == 0x8D42u) v = g_gl_rb[k].w;          /* GL_RENDERBUFFER_WIDTH */
+        else if (pname == 0x8D43u) v = g_gl_rb[k].h;     /* GL_RENDERBUFFER_HEIGHT */
+        else if (pname == 0x8D44u) v = g_gl_rb[k].fmt;   /* GL_RENDERBUFFER_INTERNAL_FORMAT */
+    }
+    if (isaac_is_guest_va(out)) isaac_w32(out, v);
     cpu->EAX = 0;
 }
 void imp_opengl32__glGetShaderInfoLog(CpuState *restrict cpu) {
@@ -482,7 +521,13 @@ void imp_opengl32__glReadPixels(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 void imp_opengl32__glRenderbufferStorage(CpuState *restrict cpu) {
-    for (unsigned i = 0; i < 4; ++i) (void)isaac_arg(cpu, i);
+    (void)isaac_arg(cpu, 0);                 /* target */
+    int k = gl_rb_slot(g_gl_rb_bound);
+    if (k >= 0) {
+        g_gl_rb[k].fmt = isaac_arg(cpu, 1);
+        g_gl_rb[k].w = isaac_arg(cpu, 2);
+        g_gl_rb[k].h = isaac_arg(cpu, 3);
+    }
     cpu->EAX = 0;
 }
 void imp_opengl32__glShaderSource(CpuState *restrict cpu) {

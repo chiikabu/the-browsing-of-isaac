@@ -2385,6 +2385,28 @@ stub-purge-confidence test counts register-held loads as reachability
 (mutation-checked: dropping a curated purge, or blinding the census, fails
 the suite). Host selftest 130/0.
 
+### 21.9 Round 12: the frame loop, and the render target that was re-created every frame
+
+With the 27 imports provided (§21.8) the boot leaves engine init for the
+first time: `SendMessageA` (WM_SETICON) passes, and the log becomes an
+endless `Renderbuffer ID: <n> size 1024x1024` — 652 lines in ten minutes,
+one per iteration, names 16 apart. That is the game's main loop running:
+`RenderTarget` validation (`0x00a18750`) binds the target's renderbuffer,
+reads back `GL_RENDERBUFFER_WIDTH` / `HEIGHT`
+(`glGetRenderbufferParameteriv`), and when they differ from the wanted size
+generates a new renderbuffer and logs it. The GL shim answered 0 to every
+query, so every frame allocated a fresh 1024×1024 target (a leak in the
+guest, and the GL name space) instead of rendering into the old one.
+`host_shims_gl.c` now keeps a 256-entry `{name, w, h, format}` table:
+`glBindRenderbuffer` tracks the bound name, `glRenderbufferStorage` records
+the size/format, `glGetRenderbufferParameteriv` answers `WIDTH` / `HEIGHT` /
+`INTERNAL_FORMAT` (0x8D42..0x8D44) from it, `glDeleteRenderbuffers` forgets.
+Selftest 130 → 134 (gen/bind/storage/query round trip, delete forgets),
+mutation-checked (a 0 width answer fails it). The general rule this adds to
+the GL contract: **any GL query the engine uses to decide whether a resource
+is still valid must read back what the engine wrote** (the shim already did
+this for shader/program status; render targets were the second case).
+
 ## Appendix: reproduction
 
 ```bash
