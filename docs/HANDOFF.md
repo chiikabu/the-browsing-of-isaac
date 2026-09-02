@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 11)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12d)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -180,15 +180,27 @@ table was silently dropping destructors past 64 (now 1024). Per-frame shim
 traffic: ~40k `Enter/LeaveCriticalSection` stub calls per frame (the
 biggest single cost candidate), one `_EOS_Platform_Tick`.
 
-**Exact next unit (B):** run
-`cd .scratch/game-instance && ISAAC_MAX_FRAMES=5 ISAAC_LOG_TIME=1 ISAAC_PROFILE=1 node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`
-and read `[recomp][PROF]` (hottest lifted functions, MIPS) plus the
-`[frame]` stamps; then the same on the speed profile
-(`build_boot.py --fast`, run `boot-fast/boot_integration.mjs`) to split
-frame time into instrumentation vs. lifted work. After that: the per-frame
-STUBs (input, audio, GL draw) become real host arms, and the host PNG decode
-(`Image::LoadPNG` 0x00a64a50: file-object read vslot → libpng → texel buffer
-via 0x00a230b0 → row pointers → format code) cuts the 11-minute boot.
+**Round 12d (commit bb53dfd) — the measurement that changed the plan.**
+The guest-instruction profiler (`ISAAC_PROFILE=1`) blamed PNG unfilter
+37% / inflate_fast 27% / adler32 8.7% / premultiply 8%. Exact host versions
+of three of them (`host_fastpath.c`, installed by `lift_patches.py`
+`WRAP_PATCHES` as wrappers: `ISAAC_FASTPATH=0` lifted, `ISAAC_FASTPATH_VERIFY=1`
+both + byte compare, default host) verified **0 mismatches over 533 PNG
+decodes** — and frame 3 still came at 416 s (418–470 s before). 54% of the
+lifted instructions gone, 0 s saved: the boot's minutes are **host-side
+wall time** (shims, FS, allocator, JS glue) that a tick profiler cannot
+see. Shutdown now passes `~Thread` (adoption sets the done flag) and then
+reached the unlifted 6-byte element destructor `0x00a67fd0` through the
+CRT's `__ehvec_dtor` (hand-written in `missing_fns.c`).
+
+**Exact next unit (B):** profile wall time, not guest instructions:
+`cd .scratch/game-instance && ISAAC_MAX_FRAMES=3 ISAAC_LOG_TIME=1 node --cpu-prof --cpu-prof-dir=<dir> --cpu-prof-interval 2000 ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`
+then summarise self time per wasm function from the `.cpuprofile`
+(nodes/samples/timeDeltas; bucket `sub_*` vs `recomp_*` vs `imp_*` vs
+`isaac_*` vs JS) and cut what it names. Only after that: per-frame STUBs
+(input, audio, GL draw) as real host arms, and the zlib `inflate()` API
+cut (the emscripten zlib port is in the sysroot cache, 1.3.2) if inflate
+is what the wall clock says.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

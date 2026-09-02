@@ -244,6 +244,23 @@ void sub_0069d1f0(CpuState *restrict s) {
  * Weak so recomp_rt.c's strong definition wins in the boot link. */
 __attribute__((weak)) struct CpuState *recomp_last_cpu;
 
+/* ---------------------------------------------------------------------- *
+ * 0x00a67fd0 -- a six-byte element destructor (boot round 12d):
+ *     c7 01 ac 04 ba 00   mov dword ptr [ecx], 0x00ba04ac
+ *     c3                  ret
+ * Not a Ghidra function: it is only reached through the CRT's array
+ * destructor iterator __ehvec_dtor (0x00aef638), which gets it as the
+ * `dtor` argument at 0x00a68193 (`push 0xa67fd0; push [esi-4]; push 0x14;
+ * push esi; call 0xaef638`) for the 0x14-byte objects built by __ehvec_ctor
+ * at 0x00a68048 (ctor 0x00a67fa0, dtor 0x00a67fd0). It restores the base
+ * vptr and returns; the first shutdown that got past ~Thread reached it as
+ * an unlifted indirect target from 0x00aef679. __thiscall, no arguments:
+ * plain ret. */
+void sub_00a67fd0(CpuState *restrict s) {
+    isaac_w32(s->ECX, 0x00ba04acu);
+    rc_ret(s);
+}
+
 /* The lifted code's executed-VA ring (RECOMP_VA markers), read by
  * isaac_dump_trap_context (host_trap.c). Inert in the standalone selftest;
  * recomp_rt.c's strong definitions win in the boot link. */
