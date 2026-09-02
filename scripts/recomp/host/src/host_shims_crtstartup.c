@@ -78,7 +78,10 @@ void imp_api_ms_win_crt_stdio____p__commode(CpuState *restrict cpu) {
  * The list lives in HOST memory: the guest passes function pointers in and
  * never inspects the list, so there is no reason to expose it to a wild write.
  * These run at exit; isaac_run_atexit() drives them. */
-#define ATEXIT_MAX 64
+/* Boot round 12: the engine registers well over 64 static destructors
+ * (the log showed the table full at 64 with 0x00b16750 etc. dropped), and
+ * a dropped entry silently changes shutdown. */
+#define ATEXIT_MAX 1024
 static uint32_t g_atexit[ATEXIT_MAX];
 static unsigned g_atexit_n;
 

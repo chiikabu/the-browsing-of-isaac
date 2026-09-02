@@ -516,7 +516,7 @@ test('every hand-written missing-callee body emulates its ret', () => {
   const bodies = [...src.matchAll(/^void (sub_[0-9a-f]{8})\(CpuState \*restrict s\) \{([\s\S]*?)^\}/gm)];
   assert.ok(bodies.length >= 6, `found ${bodies.length} hand-written bodies`);
   for (const [, name, body] of bodies) {
-    assert.match(body, /rc_ret\(s\);/, `${name} must pop its return address (rc_ret)`);
+    assert.match(body, /rc_ret\(s\);|recomp_jump_indirect\(s,/, `${name} must pop its return address (rc_ret) or tail-jump into lifted code`);
   }
 });
 

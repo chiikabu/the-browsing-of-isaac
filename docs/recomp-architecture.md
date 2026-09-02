@@ -2448,6 +2448,40 @@ yield point (`Sleep`, `WaitForSingleObject`) on a guest stack below the
 caller's frame — off by default because an endless mixer loop would hang
 the boot.
 
+### 21.12 Measured: the frame loop runs at ~7 fps; the first clean shutdown
+
+A 5-frame bounded run (`ISAAC_MAX_FRAMES=5 ISAAC_LOG_TIME=1`, stamps on
+every frame) settles what the silence was: frames 1 and 2 are presented
+during engine init (6 s apart, the loading screen), frame 3 arrives 418 s
+later (all of menu init and the first frame's asset loads), and frames
+4 / 5 / 6 take **143 / 137 / 132 ms** — the game's main loop, in the fully
+instrumented debug build, at about 7 fps. The stall dump's hot loop
+(§21.11) was simply the character-select render in that loop. The cap then
+works end to end: `WM_QUIT` posted after frame 5, one more frame presented,
+`Isaac is shutting down...`, the enemy-query CPU report — and a trap in
+the static-destructor pass: `_execute_onexit_table` calls `0x0069d1f0`, an
+8-byte adjustor thunk (`add ecx, 4; jmp 0x0040d040`) that no function-start
+scan ever recorded, so it was neither lifted nor in the dispatch table.
+`missing_fns.c` carries it as a hand-written tail-jump
+(`recomp_jump_indirect`), `mkdispatch.py` already includes hand-written
+VAs, and the "every hand-written body emulates ret" test accepts a
+tail-jump. Two more things the shutdown exposed: the host `_crt_atexit`
+table was 64 entries and had been dropping the engine's static
+destructors since round 9 (`table full (64); 0x00b16750 will not run`),
+now 1024; and the three `_beginthreadex` spawns all resolve, one wrapper
+deeper, to the same job `0x00a5a760` (running-bit around `fn(arg)`), whose
+innermost `fn` the spawn log now prints.
+
+Tools added for the loop: `ISAAC_PROFILE=1` samples `recomp_cur_va` on the
+same 2²⁰-instruction tick, attributes it to the containing lifted function
+(binary search over the dispatch table's `g_dva`, count exported as
+`g_ndispatch`) and prints the hottest functions with the stub report,
+including effective MIPS; `build_boot.py --fast` builds a speed profile
+(lifted TUs with `RECOMP_MEM_CHECK=0` — no bounds checks, VA ring, watch or
+stall tick — objects `lifted_NNN.fast.o`, output `boot-fast/`, wasm-opt
+link) to measure how much of the 135 ms is instrumentation. Faults there
+are raw wasm traps; debug with the default profile.
+
 ## Appendix: reproduction
 
 ```bash

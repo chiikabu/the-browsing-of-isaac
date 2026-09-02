@@ -170,17 +170,25 @@ ends on window close, `ISAAC_MAX_FRAMES=N` posts one `WM_QUIT` through
 `PeekMessageW` after N presented frames (`SwapBuffers` counts and stamps
 every 60th) so a run returns from `main` normally (§21.10; selftest 136).
 
+**Measured (round 12, 5-frame bounded run):** the main loop runs at
+**~135 ms per frame** in the debug build (frames 4–6: 143/137/132 ms);
+frames 1–2 are the loading screen during init, frame 3 comes 418 s later
+(menu init + first-frame asset loads). The cap ends the run cleanly
+(`WM_QUIT` → `Isaac is shutting down...`); the first shutdown trapped on an
+unlifted adjustor thunk `0x0069d1f0` (hand-written now) and the host atexit
+table was silently dropping destructors past 64 (now 1024). Per-frame shim
+traffic: ~40k `Enter/LeaveCriticalSection` stub calls per frame (the
+biggest single cost candidate), one `_EOS_Platform_Tick`.
+
 **Exact next unit (B):** run
-`cd .scratch/game-instance && ISAAC_MAX_FRAMES=120 ISAAC_LOG_TIME=1 node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`,
-read the `[isaac][frame]` stamps (per-frame cost) and the trap dump if a
-frame traps; the reports at `RESULT` then list which stubs the loop touches
-(`SwapBuffers`, `PeekMessageW`, XInput/DirectInput, `GetCursorPos`, EOS tick
-…) — every STUB on the per-frame path is a candidate for a real host arm
-(input, audio, GL draw). Iteration speed: 11 min per boot, 567 s of it PNG
-decoding in lifted code; the host-decode cut is `Image::LoadPNG` 0x00a64a50
-(vtable-called: file-object read vslot → libpng → texel buffer via
-0x00a230b0 → row pointers → format code) — worth doing before many more
-frame-loop iterations.
+`cd .scratch/game-instance && ISAAC_MAX_FRAMES=5 ISAAC_LOG_TIME=1 ISAAC_PROFILE=1 node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`
+and read `[recomp][PROF]` (hottest lifted functions, MIPS) plus the
+`[frame]` stamps; then the same on the speed profile
+(`build_boot.py --fast`, run `boot-fast/boot_integration.mjs`) to split
+frame time into instrumentation vs. lifted work. After that: the per-frame
+STUBs (input, audio, GL draw) become real host arms, and the host PNG decode
+(`Image::LoadPNG` 0x00a64a50: file-object read vslot → libpng → texel buffer
+via 0x00a230b0 → row pointers → format code) cuts the 11-minute boot.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

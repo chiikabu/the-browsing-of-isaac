@@ -43,17 +43,19 @@ extern uint8_t *recomp_mem_base;
 #define RECOMP_MEM_CHECK 0
 #endif
 
-#if RECOMP_MEM_CHECK
-extern uint32_t recomp_cur_va;   /* set by --trace-va emission */
-struct CpuState;
-extern volatile uint32_t recomp_va_trace[512];
-extern struct CpuState *recomp_last_cpu; /* set by shim dispatch; for fault reg dump */
-extern volatile uint32_t recomp_va_trace_idx;
 /* Mid-function re-entry contract (see mkdispatch.py / patch_reentry.py):
  * isaac_lifted_dispatch sets this before calling a function at a block
  * target; each lifted function's prologue consumes it and jumps to the
- * matching L_ label.  Defined in dispatch_tbl.c. */
+ * matching L_ label.  Defined in dispatch_tbl.c. Needed by every profile
+ * (the --fast build has no MEM_CHECK but still re-enters). */
+struct CpuState;
 extern uint32_t g_reentry_eip;
+
+#if RECOMP_MEM_CHECK
+extern uint32_t recomp_cur_va;   /* set by --trace-va emission */
+extern volatile uint32_t recomp_va_trace[512];
+extern struct CpuState *recomp_last_cpu; /* set by shim dispatch; for fault reg dump */
+extern volatile uint32_t recomp_va_trace_idx;
 
 /* Stall watchdog (recomp_rt.c): every 2^20 lifted instructions, see whether
  * the log has been silent longer than ISAAC_STALL_DUMP seconds and dump the

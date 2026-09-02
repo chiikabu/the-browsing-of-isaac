@@ -385,7 +385,62 @@ static double stall_ms = -1.0;
 double recomp_now_ms(void) {
   return emscripten_get_now();
 }
+/* ---- sampling profiler ---------------------------------------------------
+ * ISAAC_PROFILE=1: on every 2^20-instruction tick, attribute recomp_cur_va to
+ * its containing lifted function (binary search over the dispatch table's
+ * sorted entry VAs g_dva[]) and count it. recomp_profile_report() (run with
+ * the stub report at exit) prints the hottest functions. One sample per
+ * 1,048,576 lifted instructions, so the sample count is also the
+ * instruction count in Mi and, against the wall clock, the effective MIPS. */
+extern const uint32_t g_dva[];
+extern const uint32_t g_ndispatch;
+static uint32_t *prof_counts;
+static uint32_t prof_samples, prof_unknown;
+static double prof_t0;
+static int prof_on = -1;
+static uint32_t prof_lookup(uint32_t va) {
+  uint32_t lo = 0, hi = g_ndispatch;
+  while (lo + 1 < hi) {
+    uint32_t mid = (lo + hi) / 2;
+    if (g_dva[mid] <= va) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+static void prof_sample(void) {
+  if (prof_on < 0) {
+    const char *e = getenv("ISAAC_PROFILE");
+    prof_on = (e && *e && *e != '0') ? 1 : 0;
+    if (prof_on) {
+      prof_counts = (uint32_t *)calloc(g_ndispatch, sizeof(uint32_t));
+      prof_t0 = emscripten_get_now();
+      fprintf(stderr, "[recomp][PROF] sampling every 2^20 lifted instructions over %u functions\n", g_ndispatch);
+    }
+  }
+  if (!prof_on || !prof_counts) return;
+  uint32_t va = recomp_cur_va;
+  prof_samples++;
+  if (g_ndispatch && va >= g_dva[0]) prof_counts[prof_lookup(va)]++;
+  else prof_unknown++;
+}
+void recomp_profile_report(void) {
+  if (!prof_on || !prof_counts || !prof_samples) return;
+  double secs = (emscripten_get_now() - prof_t0) / 1000.0;
+  fprintf(stderr, "[recomp][PROF] %u samples = %.0f Mi lifted instructions in %.1f s (%.1f MIPS); %u outside the table\n",
+          prof_samples, (double)prof_samples, secs,
+          secs > 0 ? prof_samples * 1.048576 / secs : 0.0, prof_unknown);
+  fprintf(stderr, "[recomp][PROF] ---- hottest lifted functions (samples, share, entry VA):\n");
+  for (unsigned rank = 0; rank < 40; rank++) {
+    uint32_t best = 0;
+    for (uint32_t i = 1; i < g_ndispatch; i++) if (prof_counts[i] > prof_counts[best]) best = i;
+    if (!prof_counts[best]) break;
+    fprintf(stderr, "[recomp][PROF]   %7u  %5.1f%%  0x%08x\n", prof_counts[best],
+            100.0 * prof_counts[best] / prof_samples, g_dva[best]);
+    prof_counts[best] = 0;
+  }
+}
+
 void recomp_stall_tick(void) {
+  prof_sample();
   if (stall_ms < 0.0) {
     const char *e = getenv("ISAAC_STALL_DUMP");
     stall_ms = (e && *e) ? atof(e) * 1000.0 : 0.0;

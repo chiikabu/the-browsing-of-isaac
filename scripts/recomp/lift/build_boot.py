@@ -158,7 +158,19 @@ def main():
                     help="link at -O2 (wasm-opt over the whole module, ~8 min) for a shipping build")
     ap.add_argument("--no-lift-patches", action="store_true",
                     help="do not apply scripts/recomp/lift/lift_patches.py to the lifted TUs")
+    ap.add_argument("--fast", action="store_true",
+                    help="speed profile: lifted TUs with -DRECOMP_MEM_CHECK=0 (no bounds checks, VA "
+                         "ring, memory watch or stall tick), objects as lifted_NNN.fast.o, output in "
+                         "boot-fast/, wasm-opt link. Faults become raw wasm traps; measure with it, "
+                         "debug with the default profile.")
     args = ap.parse_args()
+    global BOOT_OUT, LIFT_CFLAGS
+    lift_obj_suffix = ".o"
+    if args.fast:
+        BOOT_OUT = OUT_LIFT / "boot-fast"
+        LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=0"]
+        lift_obj_suffix = ".fast.o"
+        args.fast_link = False
 
     emcc = find_emcc()
     if not emcc:
@@ -274,7 +286,7 @@ def main():
     lifted_objs = []
     need_compile = []
     for src in lifted_cs:
-        obj = lift_dir / (src.stem + ".o")
+        obj = lift_dir / (src.stem + lift_obj_suffix)
         if args.recompile_lifted or not obj.exists():
             need_compile.append((src, obj))
         else:

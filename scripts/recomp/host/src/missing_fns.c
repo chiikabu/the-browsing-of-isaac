@@ -25,6 +25,7 @@
 #include <stdlib.h>
 
 /* The original's `ret`: consume the return address. */
+void recomp_jump_indirect(CpuState *restrict s, uint32_t target);   /* host_trap.c */
 static inline void rc_ret(CpuState *restrict s) {
     s->EIP = isaac_r32(s->ESP);
     s->ESP += 4u;
@@ -211,6 +212,23 @@ void sub_00aefe20(CpuState *restrict s) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * 0x0069d1f0 -- an adjustor thunk (8 bytes):
+ *
+ *     add ecx, 4
+ *     jmp 0x40d040            ; the destructor proper
+ *
+ * Registered with atexit (`push 0x69d1f0` at 0x006f11c9 / 0x008296be /
+ * 0x00afb4c4) and reached from unwind funclets; never in the lifter's
+ * function set (the function-start scan absorbed it), so the first clean
+ * shutdown (boot round 12, WM_QUIT after ISAAC_MAX_FRAMES) trapped on it as
+ * "neither a host shim nor a lifted function". It TAIL-JUMPS: no ret of its
+ * own -- the destructor's ret pops the caller's return address. */
+void sub_0069d1f0(CpuState *restrict s) {
+    s->ECX += 4u;
+    recomp_jump_indirect(s, 0x0040d040u);
+}
+
+/* ---------------------------------------------------------------------- *
  * Lifter-runtime symbols the STANDALONE host selftest link lacks.
  *
  * In the real boot module these live in scripts/recomp/lift/recomp_rt.c,
@@ -232,6 +250,9 @@ __attribute__((weak)) struct CpuState *recomp_last_cpu;
 __attribute__((weak)) volatile uint32_t recomp_va_trace[512];
 __attribute__((weak)) volatile uint32_t recomp_va_trace_idx;
 __attribute__((weak)) double recomp_last_log_ms;
+__attribute__((weak)) void recomp_profile_report(void) {}
+__attribute__((weak)) const uint32_t g_dva[1] = {0};
+__attribute__((weak)) const uint32_t g_ndispatch = 0;
 
 /* Guest longjmp unwind to isaac_guest_call. The standalone selftest has no
  * guest call frame to unwind to; reaching here in that build is a defect,

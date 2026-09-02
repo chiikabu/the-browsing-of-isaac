@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <emscripten.h>
 
 #define WIN_CLASS_MAX 32
 #define WIN_HWND_MAX  32
@@ -535,9 +536,17 @@ uint32_t isaac_frames_presented(void) { return g_frames_presented; }
 /* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
 void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
+    static double last_ms;
+    double now = emscripten_get_now();
     ++g_frames_presented;
-    if (g_frames_presented == 1 || g_frames_presented % 60u == 0)
-        isaac_log("[isaac][frame] %u frames presented", g_frames_presented);
+    /* every frame for the first 10 (with the frame's wall time), then every
+     * 60th: the per-frame cost of the lifted code is a number the log must
+     * carry (boot round 12: the loop ran at well under 0.1 fps, invisible
+     * behind a 60-frame cadence). */
+    if (g_frames_presented <= 10u || g_frames_presented % 60u == 0)
+        isaac_log("[isaac][frame] %u frames presented (%.0f ms since the previous)",
+                  g_frames_presented, last_ms > 0.0 ? now - last_ms : 0.0);
+    last_ms = now;
     cpu->EAX = 1;
 }
 void imp_user32__PeekMessageW(CpuState *restrict cpu) {

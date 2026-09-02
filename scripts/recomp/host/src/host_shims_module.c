@@ -499,10 +499,13 @@ void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     if (!h) { cpu->EAX = 0; return; }
     obj_of(h)->signaled = 1;
     if (thrdaddr && isaac_is_guest_va(thrdaddr)) isaac_w32(thrdaddr, 0x1788u);
-    uint32_t fn = 0, arg = 0;
+    uint32_t fn = 0, arg = 0, fn2 = 0, arg2 = 0;
     if (isaac_is_guest_va(arglist + 11u)) { fn = isaac_r32(arglist); arg = isaac_r32(arglist + 4u); }
-    isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x -> job 0x%08x(0x%08x)) -> handle "
-              "0x%08x (adopted; %s)", start, arglist, fn, arg, h,
+    /* the engine wraps once more: job 0x00a5a760(block) -> block = {obj, fn, arg}
+     * sets obj's running bit around fn(arg) */
+    if (fn == 0x00a5a760u && isaac_is_guest_va(arg + 11u)) { fn2 = isaac_r32(arg + 4u); arg2 = isaac_r32(arg + 8u); }
+    isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x -> job 0x%08x(0x%08x) -> 0x%08x(0x%08x)) -> handle "
+              "0x%08x (adopted; %s)", start, arglist, fn, arg, fn2, arg2, h,
               thr_mode() ? "runs inline at the next yield point" : "does not run: ISAAC_RUN_THREADS unset");
     if (g_thr_n < THR_MAX) {
         g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = arglist;
