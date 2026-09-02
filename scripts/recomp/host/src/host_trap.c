@@ -373,11 +373,52 @@ __attribute__((weak)) int isaac_lifted_dispatch(uint32_t va, CpuState *restrict 
     return 0;
 }
 
+/* Thunks the function-start scan never records (boot round 12: the static
+ * destructor pass reached two of them through the atexit table): an
+ * adjustor thunk `add ecx, imm8/imm32; jmp rel32` (83 C1 ib / 81 C1 id, then
+ * E9 rel32) or a bare `jmp rel32`. Decoded from the guest image bytes at
+ * the target; returns 1 with the ECX delta and the jump destination. */
+int isaac_decode_thunk(uint32_t va, int32_t *ecx_delta, uint32_t *dest) {
+    if (!isaac_in_image(va) || !isaac_is_guest_va(va + 10u)) return 0;
+    const uint8_t *p = (const uint8_t *)isaac_g(va);
+    int32_t delta = 0;
+    uint32_t at = va;
+    if (p[0] == 0x83 && p[1] == 0xC1) { delta = (int8_t)p[2]; at += 3; }
+    else if (p[0] == 0x81 && p[1] == 0xC1) {
+        delta = (int32_t)(p[2] | (p[3] << 8) | (p[4] << 16) | ((uint32_t)p[5] << 24)); at += 6;
+    }
+    const uint8_t *j = (const uint8_t *)isaac_g(at);
+    if (j[0] != 0xE9) return 0;
+    int32_t rel = (int32_t)(j[1] | (j[2] << 8) | (j[3] << 16) | ((uint32_t)j[4] << 24));
+    *ecx_delta = delta;
+    *dest = at + 5u + (uint32_t)rel;
+    return isaac_in_image(*dest);
+}
+
 void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
     if (isaac_indirect_call(target, s))
         return;
     if (isaac_lifted_dispatch(target, s))
         return;
+    {
+        /* an unlifted thunk: apply its ECX adjustment and follow the jump
+         * (at most a few hops; the destination's own ret pops the return
+         * address the caller pushed, exactly as the thunk would have) */
+        int32_t delta; uint32_t dest, cur = target;
+        for (int hop = 0; hop < 4 && isaac_decode_thunk(cur, &delta, &dest); ++hop) {
+            s->ECX += (uint32_t)delta;
+            static uint32_t seen[64]; static unsigned nseen;
+            unsigned k; for (k = 0; k < nseen; ++k) if (seen[k] == target) break;
+            if (k == nseen && nseen < 64) {
+                seen[nseen++] = target;
+                isaac_log("[isaac][thunk] 0x%08x is an unlifted thunk (ecx %+d, jmp 0x%08x); emulated",
+                          target, (int)delta, dest);
+            }
+            if (isaac_indirect_call(dest, s)) return;
+            if (isaac_lifted_dispatch(dest, s)) return;
+            cur = dest;
+        }
+    }
     {
         extern volatile uint32_t recomp_va_trace_idx;
         extern volatile uint32_t recomp_va_trace[512];

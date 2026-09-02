@@ -81,6 +81,131 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 }
 
 
+# --- host fastpath wrappers ---------------------------------------------
+# The boot profile (recomp-architecture.md §21.12) is dominated by three
+# deterministic leaf functions: libpng's row unfilter (37%), zlib's adler32
+# (8.7%) and the engine's texture premultiply (8%). host_fastpath.c
+# re-implements them exactly on guest memory. Rather than replace the lifted
+# bodies, each is RENAMED to sub_X__lifted and a wrapper sub_X takes its
+# place: it runs the host version (default), the lifted one (ISAAC_FASTPATH=0)
+# or both with a byte compare of the touched range (ISAAC_FASTPATH_VERIFY=1),
+# so the equivalence is measured on the game's own data, not assumed.
+# Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
+WRAP_PATCHES: dict[int, str] = {
+    # png_read_filter_row (SSE2 build): edx = png_row_info*, stack = (row,
+    # prev_row, filter); caller cleans (plain ret). Touches rowbytes bytes at
+    # row.
+    0x00ab2d80: """void sub_00ab2d80(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00ab2d80: host PNG unfilter (host_fastpath.c) */
+  RECOMP_VA(0xab2d80u);
+  uint32_t info = s->EDX, row = MEMR32(s->ESP + 4u), prev = MEMR32(s->ESP + 8u),
+           filter = MEMR32(s->ESP + 12u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || filter > 4u) { sub_00ab2d80__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t rb = MEMR32(info + 4u);
+    uint8_t *snap = (uint8_t *)malloc(rb ? rb : 1u);
+    if (snap && rb) memcpy(snap, RECOMP_PTR(row), rb);
+    isaac_fast_unfilter(info, row, prev, filter);
+    uint8_t *host = (uint8_t *)malloc(rb ? rb : 1u);
+    if (host && rb) memcpy(host, RECOMP_PTR(row), rb);
+    if (snap && rb) memcpy(RECOMP_PTR(row), snap, rb);
+    sub_00ab2d80__lifted(s);
+    if (host && rb && !isaac_fast_verify_equal(host, row, rb))
+      isaac_fastpath_mismatch("unfilter", filter, rb);
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_unfilter(info, row, prev, filter);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # zlib adler32(adler, buf, len): cdecl, result in eax.
+    0x00aaddd0: """void sub_00aaddd0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00aaddd0: host adler32 (host_fastpath.c) */
+  RECOMP_VA(0xaaddd0u);
+  uint32_t adler = MEMR32(s->ESP + 4u), buf = MEMR32(s->ESP + 8u), len = MEMR32(s->ESP + 12u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0) { sub_00aaddd0__lifted(s); return; }
+  uint32_t r = isaac_fast_adler32(adler, buf, len);
+  if (mode == 2) {
+    sub_00aaddd0__lifted(s);
+    if (s->EAX != r) isaac_fastpath_mismatch("adler32", s->EAX, r);
+    return;
+  }
+  s->EAX = r;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # texture premultiply: ecx = pixels, edx = rows, stack = (width); count =
+    # rows * width; caller cleans; table chosen by [0x00c798e4] & 8.
+    0x00a663c0: """void sub_00a663c0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a663c0: host premultiply (host_fastpath.c) */
+  RECOMP_VA(0xa663c0u);
+  uint32_t pixels = s->ECX, count = s->EDX * MEMR32(s->ESP + 4u);
+  uint32_t table = (MEMR8(0x00c798e4u) & 8u) ? 0x00c13640u : 0x00c23640u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0) { sub_00a663c0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t n = count * 4u;
+    uint8_t *snap = (uint8_t *)malloc(n ? n : 1u);
+    if (snap && n) memcpy(snap, RECOMP_PTR(pixels), n);
+    isaac_fast_premultiply(pixels, count, table);
+    uint8_t *host = (uint8_t *)malloc(n ? n : 1u);
+    if (host && n) memcpy(host, RECOMP_PTR(pixels), n);
+    if (snap && n) memcpy(RECOMP_PTR(pixels), snap, n);
+    sub_00a663c0__lifted(s);
+    if (host && n && !isaac_fast_verify_equal(host, pixels, n))
+      isaac_fastpath_mismatch("premultiply", count, table);
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_premultiply(pixels, count, table);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+}
+
+
+def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Install the fastpath wrappers: rename `void sub_X(` to `void sub_X__lifted(`
+    (definition only; call sites keep calling sub_X = the wrapper) and append
+    the wrapper after the lifted body. Idempotent via the __lifted name."""
+    touched: list[Path] = []
+    tus = sorted(lift_dir.glob("lifted_*.c"))
+    for va, body in WRAP_PATCHES.items():
+        name = "sub_%08x" % va
+        for tu in tus:
+            text = tu.read_text(encoding="utf-8")
+            if ("void %s__lifted(CpuState *restrict s) {" % name) in text:
+                break                                   # already wrapped
+            span = find_function(text, name)
+            if span is None:
+                continue
+            if check_only:
+                touched.append(tu)
+                break
+            start, end = span
+            lifted = text[start:end].replace("void %s(CpuState *restrict s) {" % name,
+                                             "void %s__lifted(CpuState *restrict s) {" % name, 1)
+            decl = "void %s__lifted(CpuState *restrict s);\n" % name
+            text = text[:start] + decl + lifted + "\n" + body + text[end:]
+            tu.write_text(text, encoding="utf-8")
+            obj = tu.with_suffix(".o")
+            if obj.exists():
+                obj.unlink()
+            for fast in tu.parent.glob(tu.stem + ".fast.o"):
+                fast.unlink()
+            touched.append(tu)
+            print("wrap-patch %s: lifted body kept as %s__lifted, host wrapper installed in %s"
+                  % (name, name, tu.name))
+            break
+    return touched
+
+
 def apply_purge_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
     """Correct stale baked import purges in the generated C. Returns the TUs
     modified (their objects must be recompiled)."""

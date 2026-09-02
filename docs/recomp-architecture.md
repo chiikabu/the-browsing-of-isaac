@@ -2482,6 +2482,42 @@ stall tick — objects `lifted_NNN.fast.o`, output `boot-fast/`, wasm-opt
 link) to measure how much of the 135 ms is instrumentation. Faults there
 are raw wasm traps; debug with the default profile.
 
+### 21.13 Round 12d: the host fastpath -- exact, verified, and no faster
+
+`ISAAC_PROFILE=1` on the 5-frame run: **6.76 G lifted instructions in
+584 s = 12 MIPS**, 37% in `0x00ab2d80` (libpng's SSE2 row unfilter), 27% in
+`0x00adb9c0` (zlib `inflate_fast`), 8.7% in `0x00aaddd0` (zlib `adler32`),
+8% in `0x00a663c0` (the engine's texture premultiply). `--fast`
+(no bounds checks / VA ring, wasm-opt link, 46 MB module) and
+`node --no-liftoff` change nothing (146-172 ms per frame, 469-498 s to
+frame 3).
+
+So the three deterministic leaf functions got exact host implementations
+(`scripts/recomp/host/src/host_fastpath.c`): the PNG filters per the spec
+(Sub/Up/Avg/Paeth over `png_row_info` at `edx`, bpp from `pixel_depth`),
+RFC 1950 Adler-32, and the premultiply table lookup on the image's own
+64 KB table. They are installed as **wrap patches** (`lift_patches.py`
+`WRAP_PATCHES`): the lifted body is renamed `sub_X__lifted` and a wrapper
+`sub_X` takes its place, so `ISAAC_FASTPATH=0` runs the lifted code,
+`ISAAC_FASTPATH_VERIFY=1` runs both and byte-compares the touched range on
+the game's own data (any mismatch is logged and counted), and the default
+runs the host version. Spec vectors pin the host code in the selftest
+(Paeth tie-break, Adler-32 modulus and NMAX chunking all
+mutation-checked); `tests/recomp-fastpath.test.js` pins the wrapper
+contract (lifted body reachable, mode consulted, host path ends with the
+`ret` emulation -- the one-slot stack drift class).
+
+**Measured.** Verify mode over the whole boot (533 PNG decodes, 3 frames):
+**0 mismatches**. Host mode: frame 3 at **416 s** against 418-470 s with
+the lifted bodies. Removing 54% of the lifted instructions removed no wall
+time. The instruction profile counts lifted instructions, not seconds; at
+12 MIPS overall the lifted code cannot be where the seconds go (bounds
+checks off changed nothing either). The wall time is on the host side of
+the boundary -- which the instruction-tick profiler is blind to. Round 12e
+profiles the process with V8's sampling profiler (`node --cpu-prof`) to
+find it; the fastpath stays (it is exact, verified, and cheap) but the
+lesson is recorded here: **profile wall time, not guest instructions.**
+
 ## Appendix: reproduction
 
 ```bash

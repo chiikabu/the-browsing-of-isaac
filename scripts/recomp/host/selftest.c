@@ -420,6 +420,110 @@ int main(int argc, char **argv) {
     check(cpu.EAX == ISAAC_IMAGE_BASE,
           "GetModuleHandleW(NULL) returns the image base");
 
+    /* Unlifted thunk decoding (boot round 12): the static-destructor pass
+     * calls adjustor thunks (`add ecx, imm8; jmp rel32`) and bare `jmp rel32`
+     * thunks that no function-start scan recorded. The indirect-call fallback
+     * decodes them from the image bytes instead of trapping. */
+    {
+        extern int isaac_decode_thunk(uint32_t va, int32_t *ecx_delta, uint32_t *dest);
+        /* 0x0069d1f0: 83 C1 04 E9 48 FE D6 FF  -> add ecx,4; jmp 0x0040d040 */
+        int32_t d = 0; uint32_t dest = 0;
+        int ok = isaac_decode_thunk(0x0069d1f0u, &d, &dest);
+        check(ok && d == 4 && dest == 0x0040d040u, "adjustor thunk 0x0069d1f0 decodes to add ecx,4; jmp 0x0040d040");
+        /* 0x007df3e0: E9 5B B7 24 00 -> jmp 0x00a2ab40 */
+        ok = isaac_decode_thunk(0x007df3e0u, &d, &dest);
+        check(ok && d == 0 && dest == 0x00a2ab40u, "jump thunk 0x007df3e0 decodes to jmp 0x00a2ab40");
+        /* a real function prologue is not a thunk */
+        ok = isaac_decode_thunk(0x0040ccd0u, &d, &dest);
+        check(!ok, "a push ebp prologue is not decoded as a thunk");
+    }
+
+    /* Host fastpath (boot round 12): exact re-implementations of the three
+     * leaf functions that dominate the boot. Spec vectors here; the boot's
+     * ISAAC_FASTPATH_VERIFY=1 mode compares against the lifted bodies on
+     * real data. */
+    {
+        extern uint32_t isaac_fast_adler32(uint32_t, uint32_t, uint32_t);
+        extern void isaac_fast_unfilter(uint32_t, uint32_t, uint32_t, uint32_t);
+        extern void isaac_fast_premultiply(uint32_t, uint32_t, uint32_t);
+        uint32_t buf = ISAAC_STACK_TOP_VA - 0x3000;
+        const char *w = "Wikipedia";
+        for (int i = 0; i < 9; i++) *(uint8_t *)isaac_g(buf + i) = (uint8_t)w[i];
+        check(isaac_fast_adler32(1u, buf, 9u) == 0x11E60398u, "adler32(\"Wikipedia\") == 0x11E60398 (RFC 1950)");
+        check(isaac_fast_adler32(1u, 0u, 9u) == 1u, "adler32 of a NULL buffer is 1, as zlib defines it");
+        /* 6000 bytes: crosses the NMAX (5552) chunk boundary and drives both
+         * sums past 65521, so the modulus and the chunking are both pinned
+         * (expected value from Python's zlib.adler32 on the same bytes). */
+        uint32_t big = ISAAC_STACK_TOP_VA - 0x20000;
+        for (uint32_t i = 0; i < 6000u; i++) *(uint8_t *)isaac_g(big + i) = (uint8_t)(i * 7u + 3u);
+        check(isaac_fast_adler32(1u, big, 6000u) == 0x26A8AC6Eu, "adler32 over 6000 bytes (past NMAX and the modulus) == 0x26A8AC6E");
+        /* all 0xff: without the NMAX chunking s2 overflows 32 bits before the
+         * modulus is applied, so this also pins the chunk size. */
+        for (uint32_t i = 0; i < 6000u; i++) *(uint8_t *)isaac_g(big + i) = 0xffu;
+        check(isaac_fast_adler32(1u, big, 6000u) == 0xA49759EAu, "adler32 over 6000 x 0xff (s2 would overflow unchunked) == 0xA49759EA");
+        /* png_row_info: rowbytes 6, pixel_depth 24 (bpp 3) */
+        uint32_t info = ISAAC_STACK_TOP_VA - 0x3100, row = ISAAC_STACK_TOP_VA - 0x3200,
+                 prev = ISAAC_STACK_TOP_VA - 0x3300;
+        isaac_w32(info + 0, 2); isaac_w32(info + 4, 6);
+        *(uint8_t *)isaac_g(info + 0xb) = 24;
+        const uint8_t prow[6] = {10, 20, 30, 40, 50, 60};
+        for (int i = 0; i < 6; i++) *(uint8_t *)isaac_g(prev + i) = prow[i];
+        const uint8_t sub[6] = {1, 2, 3, 4, 5, 6};
+        for (int i = 0; i < 6; i++) *(uint8_t *)isaac_g(row + i) = sub[i];
+        isaac_fast_unfilter(info, row, prev, 1);        /* Sub: row[i] += row[i-3] */
+        check(*(uint8_t *)isaac_g(row + 3) == 5 && *(uint8_t *)isaac_g(row + 5) == 9, "PNG Sub filter");
+        for (int i = 0; i < 6; i++) *(uint8_t *)isaac_g(row + i) = sub[i];
+        isaac_fast_unfilter(info, row, prev, 2);        /* Up */
+        check(*(uint8_t *)isaac_g(row + 0) == 11 && *(uint8_t *)isaac_g(row + 5) == 66, "PNG Up filter");
+        for (int i = 0; i < 6; i++) *(uint8_t *)isaac_g(row + i) = sub[i];
+        isaac_fast_unfilter(info, row, prev, 3);        /* Avg: [0]=1+10/2=6, [3]=4+(6+40)/2=27 */
+        check(*(uint8_t *)isaac_g(row + 0) == 6 && *(uint8_t *)isaac_g(row + 3) == 27, "PNG Average filter");
+        for (int i = 0; i < 6; i++) *(uint8_t *)isaac_g(row + i) = sub[i];
+        isaac_fast_unfilter(info, row, prev, 4);        /* Paeth: [0]=1+10=11; [3]: a=11 b=40 c=10 p=41 pa=30 pb=1 pc=31 -> b -> 44 */
+        check(*(uint8_t *)isaac_g(row + 0) == 11 && *(uint8_t *)isaac_g(row + 3) == 44, "PNG Paeth filter");
+        /* Paeth tie-break: pb == pc must pick b (the spec's order a, b, c).
+         * bpp 1, prev [4, 0], raw [2, 10]: [0] = 2+4 = 6; [1]: a=6 b=0 c=4
+         * p=2 pa=4 pb=2 pc=2 -> b -> 10 (a "pb < pc" mutant picks c -> 14). */
+        isaac_w32(info + 4, 2); *(uint8_t *)isaac_g(info + 0xb) = 8;
+        *(uint8_t *)isaac_g(prev + 0) = 4; *(uint8_t *)isaac_g(prev + 1) = 0;
+        *(uint8_t *)isaac_g(row + 0) = 2; *(uint8_t *)isaac_g(row + 1) = 10;
+        isaac_fast_unfilter(info, row, prev, 4);
+        check(*(uint8_t *)isaac_g(row + 0) == 6 && *(uint8_t *)isaac_g(row + 1) == 10, "PNG Paeth tie-break prefers b over c");
+        isaac_w32(info + 4, 6); *(uint8_t *)isaac_g(info + 0xb) = 24;
+        /* premultiply with an identity-free table: table[(a<<8)|v] = v/2 */
+        uint32_t tbl = ISAAC_STACK_TOP_VA - 0x14000;   /* 64 KB in the guest stack scratch */
+        for (uint32_t a = 0; a < 256; a++) for (uint32_t v = 0; v < 256; v++)
+            *(uint8_t *)isaac_g(tbl + (a << 8) + v) = (uint8_t)(v / 2);
+        uint32_t px = ISAAC_STACK_TOP_VA - 0x3400;
+        const uint8_t pix[12] = {200, 100, 50, 0xff,  200, 100, 50, 0,  200, 100, 50, 0x80};
+        for (int i = 0; i < 12; i++) *(uint8_t *)isaac_g(px + i) = pix[i];
+        isaac_fast_premultiply(px, 3, tbl);
+        check(*(uint8_t *)isaac_g(px + 0) == 200 && *(uint8_t *)isaac_g(px + 3) == 0xff,
+              "premultiply leaves alpha 0xff pixels alone");
+        check(isaac_r32(px + 4) == 0, "premultiply zeroes alpha 0 pixels");
+        check(*(uint8_t *)isaac_g(px + 8) == 100 && *(uint8_t *)isaac_g(px + 10) == 25 && *(uint8_t *)isaac_g(px + 11) == 0x80,
+              "premultiply maps R,G,B through the alpha table and keeps alpha");
+    }
+
+    /* Adopted threads (boot round 12): _beginthreadex through the engine's
+     * trampoline 0x00a7f130 must leave the thread struct's done flag set, or
+     * ~Thread() calls std::terminate() at shutdown. */
+    {
+        uint32_t block = ISAAC_STACK_TOP_VA - 0x3600, tobj = ISAAC_STACK_TOP_VA - 0x3700;
+        isaac_w32(block + 0, 0x00a5a760u); isaac_w32(block + 4, 0); isaac_w32(block + 8, tobj);
+        *(uint8_t *)isaac_g(tobj + 0x20) = 0;
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0);
+        isaac_w32(cpu.ESP + 12, 0x00a7f130u); isaac_w32(cpu.ESP + 16, block);
+        isaac_w32(cpu.ESP + 20, 0); isaac_w32(cpu.ESP + 24, 0);
+        imp_api_ms_win_crt_runtime___beginthreadex(&cpu);
+        check(cpu.EAX != 0, "_beginthreadex hands out a handle");
+        check(*(uint8_t *)isaac_g(tobj + 0x20) == 1,
+              "an adopted (never-run) thread is marked done so ~Thread does not terminate()");
+    }
+
     /* Frame cap (boot round 12): after ISAAC_MAX_FRAMES presented frames,
      * PeekMessageW hands GLFW's pump one WM_QUIT. The selftest runs with the
      * cap unset, so the pump must stay silent however many frames pass. */

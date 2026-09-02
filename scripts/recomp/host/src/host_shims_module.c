@@ -507,6 +507,17 @@ void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x -> job 0x%08x(0x%08x) -> 0x%08x(0x%08x)) -> handle "
               "0x%08x (adopted; %s)", start, arglist, fn, arg, fn2, arg2, h,
               thr_mode() ? "runs inline at the next yield point" : "does not run: ISAAC_RUN_THREADS unset");
+    /* The engine's Thread wrapper tests the thread struct's done flag
+     * (+0x20, set by the trampoline 0x00a7f130 when fn returns) in its
+     * destructor: still-running -> std::terminate() (boot round 12: the first
+     * clean shutdown died there, after "Isaac has shut down successfully").
+     * A thread that never runs is, for the program, a thread that ran and
+     * exited at once: mark it done at adoption. With ISAAC_RUN_THREADS the
+     * trampoline sets it itself when the job finishes. */
+    if (!thr_mode() && start == 0x00a7f130u && isaac_is_guest_va(arglist + 11u)) {
+        uint32_t tobj = isaac_r32(arglist + 8u);
+        if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
+    }
     if (g_thr_n < THR_MAX) {
         g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = arglist;
         g_thr[g_thr_n].fn = fn; g_thr[g_thr_n].arg = arg; g_thr[g_thr_n].handle = h;
