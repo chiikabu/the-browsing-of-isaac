@@ -863,6 +863,234 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* 14. THE WIDE DIRECTORY SCAN THAT BUILDS KAGE'S MOUNT INDEX.
+     * The engine's readdir (0x00a172e0 / opendir 0x00a16f50) lists a directory
+     * with mbstowcs_s -> GetFullPathNameW -> "\*" -> FindFirstFileW, walks it
+     * with FindNextFileW through a register-held import, and brings each
+     * cFileName back with wcstombs_s. KAGE init scans the root that way to
+     * fill the std::map every relative path resolves through (0x00a16c60).
+     * With FindFirstFileW a stub the map stayed empty and all 18 packed
+     * archives "Failed to open" before any fopen (boot round 9). Each check
+     * here is one link of that chain against the SAME RAM-FS the game sees. */
+    {
+        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
+        static const uint8_t payload2[] = { 'A','R','C','H', 2, 0, 0, 0, 0x11, 0x22 };
+        check(isaac_fs_seed("resources/packed/animations.a", payload2,
+                            (uint32_t)sizeof payload2) == 1,
+              "a second archive seeds beside the first");
+
+        uint32_t wpat = ISAAC_HEAP_VA + 0x54000, wfd = wpat + 0x400;
+        uint32_t mb = wfd + 0x300, pret = mb + 0x120;
+        /* the exact shape 0x00a16f50 produces: full path + backslash + star */
+        static const char pat[] = "c:\\isaac\\resources\\packed\\*";
+        unsigned i;
+        for (i = 0; pat[i]; ++i) isaac_w16(wpat + 2 * i, (uint16_t)(uint8_t)pat[i]);
+        isaac_w16(wpat + 2 * i, 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, wpat);
+        isaac_w32(cpu.ESP + 8, wfd);
+        imp_kernel32__FindFirstFileW(&cpu);
+        uint32_t fh = cpu.EAX;
+        check(fh != 0xFFFFFFFFu, "FindFirstFileW opens the seeded dir from a wide backslash-star pattern");
+        check(isaac_r32(wfd) == 0x80u, "the first entry is a regular file (attr 0x80)");
+        /* 20 = the section-13 graphics.a payload; the other is payload2 */
+        check(isaac_r32(wfd + 0x20u) == 20u || isaac_r32(wfd + 0x20u) == sizeof payload2,
+              "nFileSizeLow carries the seeded length");
+        check(isaac_r16(wfd + 0x234u) == 0, "cAlternateFileName is empty");
+
+        /* wcstombs_s(&ret, mb, 0x104, cFileName, 0x104) -- the readdir form */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, pret);
+        isaac_w32(cpu.ESP + 8, mb);
+        isaac_w32(cpu.ESP + 12, 0x104);
+        isaac_w32(cpu.ESP + 16, wfd + 0x2cu);
+        isaac_w32(cpu.ESP + 20, 0x104);
+        imp_api_ms_win_crt_convert__wcstombs_s(&cpu);
+        check(cpu.EAX == 0, "wcstombs_s converts cFileName without error");
+        const char *name1 = (const char *)isaac_g(mb);
+        int name1_ok = strcmp(name1, "graphics.a") == 0 || strcmp(name1, "animations.a") == 0;
+        check(name1_ok, "cFileName round-trips as one of the seeded basenames");
+        check(isaac_r32(pret) == (uint32_t)strlen(name1) + 1u,
+              "wcstombs_s reports the length INCLUDING the terminator (readdir stores ret-1)");
+        char first[64];
+        strncpy(first, name1, sizeof first - 1); first[sizeof first - 1] = 0;
+
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, fh);
+        isaac_w32(cpu.ESP + 8, wfd);
+        imp_kernel32__FindNextFileW(&cpu);
+        check(cpu.EAX == 1, "FindNextFileW yields the second seeded file");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, pret);
+        isaac_w32(cpu.ESP + 8, mb);
+        isaac_w32(cpu.ESP + 12, 0x104);
+        isaac_w32(cpu.ESP + 16, wfd + 0x2cu);
+        isaac_w32(cpu.ESP + 20, 0x104);
+        imp_api_ms_win_crt_convert__wcstombs_s(&cpu);
+        check(cpu.EAX == 0 && strcmp((const char *)isaac_g(mb), first) != 0 &&
+              (strcmp((const char *)isaac_g(mb), "graphics.a") == 0 ||
+               strcmp((const char *)isaac_g(mb), "animations.a") == 0),
+              "the second entry is the OTHER seeded basename");
+
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, fh);
+        isaac_w32(cpu.ESP + 8, wfd);
+        imp_kernel32__FindNextFileW(&cpu);
+        check(cpu.EAX == 0, "a third FindNextFileW is exhausted (ERROR_NO_MORE_FILES)");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, fh);
+        imp_kernel32__FindClose(&cpu);
+        check(cpu.EAX == 1, "FindClose releases the wide handle");
+
+        /* the KAGE root scan: mbstowcs("./") -> GetFullPathNameW -> "c:/isaac/./"
+         * (already slash-terminated, so the game appends only "*"). It must land
+         * on the FS root and enumerate "resources" as a directory. */
+        static const char rootpat[] = "c:/isaac/./*";
+        for (i = 0; rootpat[i]; ++i) isaac_w16(wpat + 2 * i, (uint16_t)(uint8_t)rootpat[i]);
+        isaac_w16(wpat + 2 * i, 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, wpat);
+        isaac_w32(cpu.ESP + 8, wfd);
+        imp_kernel32__FindFirstFileW(&cpu);
+        fh = cpu.EAX;
+        check(fh != 0xFFFFFFFFu, "the root pattern 'c:/isaac/./*' opens the FS root");
+        int saw_resources_dir = 0;
+        for (unsigned guard = 0; fh != 0xFFFFFFFFu && guard < 200; ++guard) {
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, pret);
+            isaac_w32(cpu.ESP + 8, mb);
+            isaac_w32(cpu.ESP + 12, 0x104);
+            isaac_w32(cpu.ESP + 16, wfd + 0x2cu);
+            isaac_w32(cpu.ESP + 20, 0x104);
+            imp_api_ms_win_crt_convert__wcstombs_s(&cpu);
+            if (cpu.EAX == 0 && strcmp((const char *)isaac_g(mb), "resources") == 0 &&
+                isaac_r32(wfd) == 0x10u)
+                saw_resources_dir = 1;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, fh);
+            isaac_w32(cpu.ESP + 8, wfd);
+            imp_kernel32__FindNextFileW(&cpu);
+            if (cpu.EAX != 1) break;
+        }
+        check(saw_resources_dir, "the root scan lists 'resources' as a directory (attr 0x10)");
+
+        /* 15. GetFullPathNameW's two-call size protocol, exactly as opendir
+         * 0x00a16f50 drives it: a NULL/0 query must return the required
+         * WCHAR count INCLUDING the terminator (the game mallocs n*2+0x10 and
+         * calls again with n); the sized call returns the length WITHOUT the
+         * terminator and writes it. Returning 0 on the query is what stopped
+         * the whole mount-root scan before FindFirstFileW (boot round 10). */
+        static const char rel[] = "./";
+        for (i = 0; rel[i]; ++i) isaac_w16(wpat + 2 * i, (uint16_t)(uint8_t)rel[i]);
+        isaac_w16(wpat + 2 * i, 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, wpat);       /* name   */
+        isaac_w32(cpu.ESP + 8, 0);          /* nBufferLength = 0 */
+        isaac_w32(cpu.ESP + 12, 0);         /* buffer = NULL */
+        isaac_w32(cpu.ESP + 16, 0);         /* lpFilePart = NULL */
+        imp_kernel32__GetFullPathNameW(&cpu);
+        uint32_t need = cpu.EAX;
+        /* "c:/isaac/./" = 11 WCHARs + terminator */
+        check(need == 12u, "GetFullPathNameW(name, 0, NULL) returns the required size INCLUDING the terminator");
+
+        uint32_t wout = wfd;                /* reuse the find buffer as scratch */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, wpat);
+        isaac_w32(cpu.ESP + 8, 4);          /* too small */
+        isaac_w32(cpu.ESP + 12, wout);
+        isaac_w32(cpu.ESP + 16, 0);
+        imp_kernel32__GetFullPathNameW(&cpu);
+        check(cpu.EAX == 12u, "a too-small buffer also returns the required size");
+
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, wpat);
+        isaac_w32(cpu.ESP + 8, need);       /* exactly what the query asked for */
+        isaac_w32(cpu.ESP + 12, wout);
+        isaac_w32(cpu.ESP + 16, 0);
+        imp_kernel32__GetFullPathNameW(&cpu);
+        check(cpu.EAX == 11u, "the sized call returns the length WITHOUT the terminator");
+        static const char expect_full[] = "c:/isaac/./";
+        int full_ok = 1;
+        for (i = 0; i <= 11; ++i)
+            if (isaac_r16(wout + 2 * i) != (uint16_t)(uint8_t)expect_full[i]) { full_ok = 0; break; }
+        check(full_ok, "the sized call writes L\"c:/isaac/./\" NUL-terminated (the cwd-resolved form)");
+
+        /* 16. CAPACITY. The install's loose resources/ tree is 476 files in 21
+         * dirs (gfx/ui alone has 143 children) plus the archives and the save
+         * dir the game creates; the old 512-slot table and 128-per-scan cap
+         * overflowed silently (a seed returning 0, a scan listing 128 of 143).
+         * Seed 700 small files into one directory and require every one of
+         * them to be enumerable and openable. */
+        {
+            static const uint8_t tiny[] = { 'x' };
+            int seeded_all = 1;
+            char name[64];
+            for (unsigned k = 0; k < 700; ++k) {
+                snprintf(name, sizeof name, "resources/many/f%03u.txt", k);
+                if (isaac_fs_seed(name, tiny, 1) != 1) { seeded_all = 0; break; }
+            }
+            check(seeded_all, "700 files seed into one directory (table capacity)");
+            static const char manypat[] = "c:\\isaac\\resources\\many\\*";
+            for (i = 0; manypat[i]; ++i) isaac_w16(wpat + 2 * i, (uint16_t)(uint8_t)manypat[i]);
+            isaac_w16(wpat + 2 * i, 0);
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, wpat);
+            isaac_w32(cpu.ESP + 8, wfd);
+            imp_kernel32__FindFirstFileW(&cpu);
+            uint32_t hh = cpu.EAX;
+            unsigned listed = (hh != 0xFFFFFFFFu) ? 1u : 0u;
+            while (hh != 0xFFFFFFFFu && listed < 5000) {
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, hh);
+                isaac_w32(cpu.ESP + 8, wfd);
+                imp_kernel32__FindNextFileW(&cpu);
+                if (cpu.EAX != 1) break;
+                ++listed;
+            }
+            check(listed == 700u, "a directory scan lists all 700 (per-scan cap)");
+            /* and the last one opens by its narrow path through the same fopen */
+            const char *lastp = "resources/many/f699.txt";
+            for (i = 0; ; ++i) { *(uint8_t *)isaac_g(mb + i) = (uint8_t)lastp[i]; if (!lastp[i]) break; }
+            const char *mode = "rb";
+            for (i = 0; ; ++i) { *(uint8_t *)isaac_g(pret + i) = (uint8_t)mode[i]; if (!mode[i]) break; }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, mb);
+            isaac_w32(cpu.ESP + 8, pret);
+            imp_api_ms_win_crt_stdio__fopen(&cpu);
+            check(cpu.EAX != 0, "the 700th seeded file opens by path");
+        }
+    }
+
     isaac_module_report();
 
     isaac_heap_report();

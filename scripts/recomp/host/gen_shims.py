@@ -178,6 +178,15 @@ SYMBOL_OVERRIDE = {
     "FindFirstFileA@kernel32.dll": "PROVIDED",
     "FindFirstFileW@kernel32.dll": "PROVIDED",
     "FindNextFileA@kernel32.dll": "PROVIDED",
+    # FindNextFileW has ZERO direct call sites: KAGE's readdir (0x00a172e0)
+    # loads the import into a register (`mov edx,[0xb1825c]` @0x00a17369)
+    # and calls through it, so the census cannot see the site. It IS on the
+    # boot path -- the mount-root scan that fills the VFS index -- and it is
+    # implemented in host_shims_fs.c beside FindFirstFileW (boot round 10).
+    "FindNextFileW@kernel32.dll": "PROVIDED",
+    # wcstombs_s likewise measured 0 sites only because the scan that uses
+    # it (cFileName -> narrow) never ran while FindFirstFileW was a stub.
+    "wcstombs_s@api-ms-win-crt-convert-l1-1-0.dll": "PROVIDED",
     "FindClose@kernel32.dll": "PROVIDED",
     "MoveFileExA@kernel32.dll": "PROVIDED",
     # kernel32 pieces that are genuinely inert in a single-threaded wasm build
@@ -252,6 +261,12 @@ CURATED_PURGE = {
     "CoInitializeEx@ole32.dll": 8,   # HRESULT CoInitializeEx(LPVOID, DWORD) -- reached
                                      # reg-indirect at 0x00a6d160, so the call-site census
                                      # saw 0 sites and the auto-purge was UNKNOWN.
+    # BOOL FindNextFileW(HANDLE, LPWIN32_FIND_DATAW) = 2 DWORDs = 8. Reached
+    # ONLY through a register-held import (`mov edx,[0xb1825c]` @0x00a17369 in
+    # KAGE's readdir 0x00a172e0), so the census saw 0 sites and the purge was
+    # UNKNOWN -- with the shim now implemented, isaac_indirect_call would trap
+    # on its return ("stack purge is unknown") at the first directory scan.
+    "FindNextFileW@kernel32.dll": 8,
     # kernel32
     "EnterCriticalSection@kernel32.dll": 4,
     "LeaveCriticalSection@kernel32.dll": 4,

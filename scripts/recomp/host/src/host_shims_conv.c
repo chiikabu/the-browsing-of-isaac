@@ -109,6 +109,40 @@ void imp_api_ms_win_crt_convert__mbstowcs_s(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 
+/* ---------- api-ms-win-crt-convert: wcstombs_s -------------------------- */
+/* errno_t wcstombs_s(size_t *pReturnValue, char *dst, size_t dstCapBytes,
+ *                    const wchar_t *src, size_t count)
+ * The inverse of mbstowcs_s. KAGE's readdir (0x00a172e0) brings every
+ * FindFirstFileW/FindNextFileW cFileName back through it and stores
+ * *pReturnValue - 1 as the entry's name length, so pReturnValue counts the
+ * terminator (MS semantics). The call-site census listed this import as
+ * never called: the scan that uses it never ran while FindFirstFileW was a
+ * stub. count == _TRUNCATE (-1) is the common form. */
+void imp_api_ms_win_crt_convert__wcstombs_s(CpuState *restrict cpu) {
+    uint32_t pret = isaac_arg(cpu, 0), dst = isaac_arg(cpu, 1);
+    uint32_t dstcap = isaac_arg(cpu, 2), src = isaac_arg(cpu, 3);
+    uint32_t count = isaac_arg(cpu, 4);
+    if (!src) { if (pret) isaac_w32(pret, 0); cpu->EAX = 22; return; } /* EINVAL */
+    uint16_t wbuf[512];
+    size_t n = 0;
+    while (n + 1 < sizeof wbuf / sizeof wbuf[0] && n < count &&
+           isaac_is_guest_va(src + (uint32_t)n * 2 + 1)) {
+        wbuf[n] = (uint16_t)isaac_r16(src + (uint32_t)n * 2);
+        if (!wbuf[n]) break;
+        ++n;
+    }
+    wbuf[n] = 0;
+    size_t bytes = guest_utf16_to_utf8(wbuf, n, dst, dstcap);
+    if (bytes == (size_t)-1) {                              /* ERANGE */
+        if (dst && dstcap) *(uint8_t *)isaac_g(dst) = 0;
+        if (pret) isaac_w32(pret, 0);
+        cpu->EAX = 34;
+        return;
+    }
+    if (pret) isaac_w32(pret, (uint32_t)(bytes + 1));
+    cpu->EAX = 0;
+}
+
 /* ---------- kernel32 wide conversions ---------------------------------- */
 /* int MultiByteToWideChar(UINT cp, DWORD flags, LPCSTR mb, int mbLen,
  *                         LPWSTR wc, int wcCap)                          */
@@ -214,8 +248,6 @@ void imp_kernel32__GetFullPathNameW(CpuState *restrict cpu) {
     }
     if (hn < sizeof out - on) { memcpy(out + on, host, hn); on += hn; }
     out[on] = 0;
-    /* write utf16 result into guest */
-    if (!buf || nbuf < 2) { cpu->EAX = 0; return; }
     size_t want = 0;
     {
         /* count u16 units */
@@ -228,8 +260,16 @@ void imp_kernel32__GetFullPathNameW(CpuState *restrict cpu) {
             else { cp = ((uint32_t)(c & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12) | ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F); p += 4; }
             want += (cp >= 0x10000) ? 2 : 1;
         }
-        if (want + 1 > nbuf) { cpu->EAX = 0; return; }
     }
+    /* Size query / too-small buffer: Win32 returns the REQUIRED size in
+     * WCHARs INCLUDING the terminator and writes nothing. KAGE's opendir
+     * (0x00a16f50) relies on exactly this two-call protocol --
+     * GetFullPathNameW(name, 0, NULL, NULL) -> malloc(n*2+0x10) ->
+     * GetFullPathNameW(name, n, buf, NULL) -> append "\*" -> FindFirstFileW.
+     * Returning 0 here (the old behaviour) made the second call see n == 0,
+     * fail with errno 2, and the mount-root scan never reached FindFirstFileW
+     * at all (boot round 10). */
+    if (!buf || nbuf < want + 1) { cpu->EAX = (uint32_t)(want + 1); return; }
     uint32_t filepart_off = 0;
     for (size_t k = 0; k < on; ++k) if (out[k] == '/') filepart_off = (uint32_t)k + 1;
     guest_utf8_to_utf16(buf, nbuf, (const uint8_t *)out, on + 1, 1);

@@ -1912,6 +1912,155 @@ malformed doubled-USERPROFILE probe disappears — but it is **not** the
 archive blocker, which is unchanged. Recorded as such rather than as
 progress toward the trap.
 
+## 19. Round 10: the archive blocker, fixed — three host-shim defects and a seeding gap
+
+Round 9 located the failure inside the guest (§18: the mount-root's index
+is empty, so no relative path resolves) and left two threads. Both are
+closed, and the "no writer in `.text`" thread turns out to be a non-issue.
+
+### 19.1 Thread 2 dissolves: the archive list is static data
+
+`[0x00bfae60]` is **file-backed** `.data` holding `0x00c04ea4` — the head of
+a static linked list of the 18 archive names (`resources/packed/*.a`,
+`packed/repentance_*.a`, `secret.a`, all present as `.rdata` strings at
+`0x00b80620..0x00b807c4`). Nothing needs to write it. `pequery.py u32
+0xbfae60 / xrefs-to 0xbfae60` settles it in one call.
+
+### 19.2 Thread 1, read from the decompiles: the index is a directory scan
+
+KAGE init (`0x00a710a0`, "KAGE has already been initialized") creates the
+default mount root through `0x00a15f10`: a 0x14-byte object `{vtable
+0xb81cf8, map head, map size, name, aux}` with an MSVC `std::map` header
+(`_Left=_Parent=_Right=self, Color/Isnil = 0x0101`), then calls **vtable+8
+(`0x00a15d20`) → vtable+0x18 (`0x00a687f0`) = Scan(root->name, "")**. Scan
+lists a directory through `0x00a172e0`, a `readdir` wrapper over
+`0x00a16f50` (`opendir`), hashes every FILE entry's relative path with the
+djb2 at `0x00a159d0` (seed 0x1505, `h*33+c`, lowercase, `\`→`/`) and
+inserts `hash → path` into the root's map (`FUN_00651990`), recursing into
+DIR entries. The resolver `0x00a16c60` looks that map up for every relative
+path — so the map is the physical-file index, built once at init.
+
+`0x00a16f50` is the whole story: `mbstowcs_s(dir)` → `GetFullPathNameW(name,
+0, NULL, NULL)` (size query) → `malloc(n*2+0x10)` → `GetFullPathNameW(name,
+n, buf, NULL)` → append `\*` → **`FindFirstFileW`**; the loop in `0x00a172e0`
+then calls **`FindNextFileW` through a register-held import** (`mov edx,
+[0xb1825c]` @`0x00a17369` — which is why the call-site census recorded that
+import as never called) and narrows every `cFileName` with `wcstombs_s`,
+storing `*pReturnValue - 1` as the name length. The find data sits at
+DIR+0x218 (`cFileName` @+0x244 = +0x2c, `cAlternateFileName` @+0x44c =
++0x234); attribute 0x10 → dir, 0x40 → device, else file.
+
+The mods scanner uses `FindFirstFileA` directly, which is why the round-9
+trace showed A-probes for `mods/` and `online_logs/` but nothing for the
+root: three shims on the W path were wrong, in this order of discovery:
+
+| shim | defect | effect |
+|---|---|---|
+| `GetFullPathNameW` | returned 0 for the size query (NULL/0 buffer) and for a too-small buffer, instead of the required WCHAR count incl. terminator | opendir's second call saw `n == 0`, failed with errno 2; `FindFirstFileW` never reached — the trace's silence was one call earlier than the stub |
+| `FindFirstFileW` | untraced stub returning `INVALID_HANDLE_VALUE` | scan empty even once the pattern was built |
+| `FindNextFileW` | weak default (`NEVER_CALLED`, purge `0xFFFF`) | `isaac_indirect_call` would trap on return ("stack purge is unknown") at the first directory with two entries |
+| `wcstombs_s` | weak default (`NEVER_CALLED`) | names never came back |
+
+All four are now real (`host_shims_fs.c`, `host_shims_conv.c`), the shim
+table carries `FindNextFileW` = stdcall 8 / PROVIDED and `wcstombs_s` =
+PROVIDED (`gen_shims.py` curated entries explain the register-held call),
+and `ISAAC_FS_TRACE=1` logs the W probes. Host selftest **82 → 103 checks,
+0 failures**: each link of the chain is exercised against the same RAM-FS
+the game sees (wide backslash-star pattern → attr/size/alt-name → `wcstombs_s`
+length incl. terminator → `FindNextFileW` → exhaustion → `FindClose`; the
+root pattern `c:/isaac/./*` lists `resources` as a directory; the
+`GetFullPathNameW` two-call protocol; 700 files in one directory enumerate
+and open). Mutation-checked through `scripts/decomp/mutate.mjs`: dropping
+the dir attribute, reporting the length without the terminator, never
+advancing `FindNextFileW`, returning 0 on the size query, and a 128 per-scan
+cap each redden the selftest and were restored hash-verified.
+
+### 19.3 The seeding gap: the install is not only archives
+
+With the scan live the six seeded archives open and register (`[0x00c37b14]
+= 6`; graphics.a is `fopen`ed 2,301 times = its TOC count + 1, sfx.a 302,
+config.a 25 — KAGE opens the archive once per member to verify each
+checksum). But `animations.a` in this instance has **TOC count 1**: a single
+4 MB type-1 (compressed) bundle. The `.anm2` files the AnmCache asks for by
+path (`gfx/ui/ui_streak.anm2`), the GLSL sources the shader init logs as
+failed (`resources/shaders/*.vs`), and the Lua scripts (`resources/scripts/
+main.lua`) are **loose files** under the install's `resources/` tree — 476
+files, 38 MB, all present in `.scratch/game-instance/resources/` — and only
+the archives had been seeded. `boot_integration.mjs` now seeds that whole
+tree (everything except `packed/`, which is seeded by name) and the RAM-FS
+grew from 512 to 8,192 slots with a 2,048-entry per-scan cap (`gfx/ui` alone
+has 143 children; the old caps overflowed silently).
+
+One consequence of the link flags: the host Lua module's libc is
+`-sNODERAWFS=1`, so `luaL_loadfilex("resources/scripts/main.lua")` opens
+the **real** filesystem relative to `process.cwd()`, not the RAM-FS. Run the
+boot with cwd = the instance dir and the game's Lua init finds its scripts;
+the driver prints the exact command when the cwd is anything else.
+
+### 19.4 The last third of the blocker was our own patch
+
+With the scan and the seed in place the six archives registered
+(`[0x00c37b14] = 6`) but every `.anm2` still missed. Archive members are keyed
+by their **full** path — `djb2("resources/gfx/ui/pausescreen.png")` is
+graphics.a entry 1835 and its second hash is the FNV-1a (`0x00a15ab0`) of the
+same string; 122 loose files match TOC entries 1:1 — while the AnmCache asks
+for `gfx/ui/ui_streak.anm2` and prefixes each *mount-root name* from
+`[0x00c798b8]` (`0x0040db90`). So a root named `resources/` must exist. The
+function that creates it, `0x009ab970`, reads `xor eax, eax; ret` — and
+`tools/isaac-ng.unpacked.exe.pre-coinit` has `push ebp; mov ebp, esp` there.
+It is one of this project's own 19 emulator-era patch runs (172 bytes; the
+full list is a two-file diff, reproduced in §19.5), and it silently disabled
+the whole relative-path VFS. The fix is a **lift patch**
+(`scripts/recomp/lift/lift_patches.py`, applied by `build_boot.py` after every
+lift): the generated `sub_009ab970` emulates the two lost instructions and
+enters the lifted orphan body `sub_009ab973`; one TU recompiles, the canonical
+hash is untouched.
+
+**Round-10 result** (`boot_integration.mjs` from the instance dir, seeded
+archives + loose tree): two mount roots, **0 `Could not open`** (every
+`.anm2` loads; previously 33+ failures and the null-ANM2 trap at
+`0x009a26c2`), the complete shader set initialises (Water/Mirror/Heat
+Wave/Hallucination/Dizzy/… — previously "Failed to load vertex shader"),
+renderbuffers allocate, OpenAL and theoraplayer initialise, and
+`resources/scripts/enums.lua` + `main.lua` run to completion. The boot now
+stops at the first **msvcp140.dll** call: `std::basic_ios<char>::basic_ios()`
+from `0x00684d24` inside `0x00684ce0`, a `std::stringstream(const string&)`
+constructor called by `0x0067f420` right after `buttonpromptwidget.anm2`
+loads. The C++ standard-library iostream ABI is the next host layer: 54
+msvcp140 imports (~180 call sites), five stream constructors
+(`0x00414330`, `0x00684ce0`, `0x008fb120`, `0x009036b0`, `0x009e8010` — the
+last opens an `fstream` through `_Fiopen`). The 32-bit reference is
+`C:\Windows\SysWOW64\msvcp140.dll`.
+
+### 19.5 Build speed: the 8-minute link was wasm-opt
+
+`build_boot.py` linked at `-O2`, which runs wasm-opt over the 272 MB module
+(474 s of a 520 s host-only relink). The lifted objects are already `-O2`, so
+the link now defaults to `-O0` (`--opt-link` restores the shipping link):
+**link 474 s → 8.0 s, relink 520 s → 133 s** (25 s dispatch generation +
+19 s host compile + 67 s for a single recompiled lifted TU + 8 s link;
+module 272 → 284 MB). A host-only iteration is now ~2 min instead of ~9.
+
+The project's patch runs against the pristine snapshot (all in `.text` unless
+noted; `pequery.py func <va>` names the owner):
+
+| VA | pristine → patched | effect |
+|---|---|---|
+| `0x006f5198`, `0x007ea7ce`, `0x007eabfe`, `0x007eac91`, `0x007eae2a`, `0x007eae55`, `0x007eaedb`, `0x007f7512`, `0x009517fc` | `cmp [esi+0x38],0; jne; cmp [esi+0x3c],0; je` → `test esi,esi; je …; cmp [esi+0x38],0; je …; nop` (12 B each) | null-guarded field tests (menu/input paths) |
+| `0x00931146` | `call [0xb189f4]` → `add esp,4; xor eax,eax; nop` | CoInitialize killed |
+| `0x009ab970` | `55 8b ec` → `33 c0 c3` | **resources/ mount root never created — undone by the lift patch** |
+| `0x00a19340`, `0x00a193c0` | prologue → `mov eax, 0x3c0 / 0x21c; ret` | forced window metrics 960 / 540 |
+| `0x00a2b5c2` | `cmp byte [ebp+0x14],0; je` → `jmp +0x117` | branch forced |
+| `0x00a8062d` | `push 0xba3cfc; mov [0xc75ab4],eax; call ebx` → `mov [0xc75ab4],eax; xor eax,eax; nop×5` | atom registration killed |
+| `0x00a80d30` | prologue → `xor eax,eax; ret` | function stubbed |
+| `0x00a81390` | `0x20` → `0x00` | one byte |
+| `0x00a8c5a7` | `cmp [eax],0; je +0x36` → `jmp +0x39; nop×3` | branch forced |
+| `0x00ba3da6` (.rdata) | `\0\0Win3` → `00\x00` | string edit |
+
+Each of these was made for the BoxedWine emulator phase; under the recompiled
+boot the host shims own Win32, so every one is a candidate for the same
+`lift_patches.py` treatment when it is shown to block something.
+
 ## Appendix: reproduction
 
 ```bash

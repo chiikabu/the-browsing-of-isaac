@@ -22,6 +22,12 @@
 //  - exit 0 = MUTANT KILLED (command failed as it must); exit 1 = MUTANT
 //    SURVIVED (command passed — the assertions do not discriminate); exit 2 =
 //    usage/restore problem.
+//  - the SOURCE is restored, not the command's OUTPUTS: a command that writes
+//    a result artifact (build_selftest.py -> output/recomp/host/build-selftest.json,
+//    build-game-update-slice.mjs -> the slice wasm) leaves the MUTANT's
+//    artifact behind. Re-run the clean command once after a KILLED run before
+//    anything consumes those artifacts (tests/recomp-host.test.js read the
+//    mutant's 4 failures until the selftest was rebuilt clean, 2026-09-01).
 //
 // Why: the 2026-08-31 unit left `/* MUTANT: inverted verdict */` in the
 // shipped cpp — the check was done by hand-editing, the session died between

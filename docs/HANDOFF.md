@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-01, harness round 3)
+# Handoff — read this first (2026-09-01, harness round 3 + recomp boot round 10)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -32,9 +32,13 @@ REQUIRE emsdk on PATH:
 - Tree consistency (`verify-unit.mjs --preflight`) clean: no literal ABI pins
   in any suite, JSON canonical and in sync with the model layout, no
   stranded mutants.
-- recomp host selftest **82/0**, `tests/recomp-host.test.js` **33/33**;
-  wide-op differential vs Unicorn all green; boot module relinks clean
-  (272,269,106 B, 0 undefined / 0 duplicate symbols) — unchanged this round.
+- recomp host selftest **103/0** (was 82; wide directory-scan chain,
+  `GetFullPathNameW` size protocol, 700-file capacity), `tests/recomp-host.test.js`
+  + `recomp-wideops` **34/34**; boot module relinks clean at `-O0` in 133 s
+  (284,065,116 B; `--opt-link` = the 272 MB wasm-opt build, ~9 min).
+- Boot (from the instance dir) loads 6 archives + 476 loose files, **0 asset
+  misses**, runs `main.lua`, stops at the first msvcp140 iostream call
+  (`0x00684d24`). See front B below.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (the flow, not the port)
@@ -94,22 +98,45 @@ after `main`. Reproduce:
 `cd output/recomp/lift/boot && node boot_integration.mjs ../../host/isaac.segs.bin main`
 (logs: `run-fix1.log` traced, `run-gu2.log` untraced).
 
-**Exact next unit (B) — the archive mount, inside the guest.** The boot fails
-to open every packed archive, 33 `AnmCache` loads fail behind it, and the HUD
-dereferences the null ANM2 at `0x009a26c2`. This is **not** an FS-shim
-problem: `ISAAC_FS_TRACE=1` shows the archives are never `fopen`ed at all.
-The decision happens in `0x00a179c0` → `0x00a17180` → `0x00a16c60`, which
-resolves relative paths only through a per-mount-root `std::map`. In the
-trapped run there is exactly one mount root
-(`[0x00c379e8]`=`0x00d09ca4`, `[0x00c379ec]`=`0x00d09ca8`), its map at
-`0x00d09c30` has `_Mysize == 0`, and the loaded-archive count `[0x00c37b14]`
-is 0 — nothing ever populated the index, and mounting scans nothing
-(`0x00a16e00`, 54 insns, no FS API). Two threads to pull: what fills a mount
-root's map, and the archive list `0x009aa040` walks at `[0x00bfae60]` (no
-writer in `.text`). `0x00a17180` has an absolute drive-letter branch that
-bypasses the VFS — a lever if the names can be made absolute. Full analysis:
-`docs/recomp-architecture.md §18`, `docs/recomp-boot.md §10`. `pequery.py
-fieldrefs` is the right tool for "who writes this map / this count field".
+**Round 10 (2026-09-01): the archive/asset wall is down.** Three defects,
+none in the archive code: the KAGE mount-root index is a **directory scan**
+over `GetFullPathNameW → FindFirstFileW/FindNextFileW → wcstombs_s` and four
+of those shims were wrong (size-query returned 0; W pair stubbed; unknown
+stdcall purge on the register-held `FindNextFileW`); the install's 476 loose
+`resources/` files (`.anm2`, shaders, Lua, xml) had never been seeded (only
+archives), and the RAM-FS capacity could not hold them; and `0x009ab970` —
+the function that creates the `resources/` mount root — was one of **this
+project's own emulator-era hand patches** (`push ebp; mov ebp,esp` →
+`xor eax,eax; ret`; pristine bytes in `tools/isaac-ng.unpacked.exe.pre-coinit`),
+now undone by the re-applicable lift patch `scripts/recomp/lift/lift_patches.py`.
+Boot now: 2 mount roots, 6 archives loaded (`[0x00c37b14]=6`), **0 `Could not
+open`**, all shaders init, renderbuffers, OpenAL/theora, `enums.lua`+`main.lua`
+run. Run it **from the instance dir** (the host Lua's libc is NODERAWFS):
+`cd .scratch/game-instance && ISAAC_FS_TRACE=1 node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main`.
+Host-only relink is now **~2 min** (`build_boot.py` links at `-O0` by default:
+474 s → 8 s; `--opt-link` for shipping).
+
+**Exact next unit (B) — the MSVC C++ iostream runtime.** The boot stops at
+`msvcp140.dll!basic_ios<char>::basic_ios()` called from `0x00684d24` inside
+`0x00684ce0` = `std::stringstream(const std::string&)`, whose caller
+`0x0067f420` (41 callers) is the game's whitespace tokenizer
+(`vector<string> split(const string&)`: `>> string` loop until fail|bad) used
+by the anm2/xml attribute parsers. 54 msvcp140 imports (~180 sites), five
+stream constructors: `0x00414330` (`stringstream()`), `0x00684ce0`,
+`0x008fb120` and `0x009036b0` (parse with `operator>>(size_t&)`),
+`0x009e8010` (`fstream` via `_Fiopen`). Two viable routes: implement the
+export subset on the real MSVC x86 object layout (reference:
+`C:\Windows\SysWOW64\msvcp140.dll` 14.44 — basic_ios/iostream/streambuf
+ctors+dtors, `_Init`, `sgetc/sbumpc/snextc/_Pninc`, `_Ipfx/_Osfx/setstate`,
+the integer `>>`/`<<`, `write/put/flush`, `_Fiopen`; the virtuals
+`underflow/uflow/overflow` live in the GAME's stringbuf/filebuf vtables and
+must be invoked through the host→guest call path), or override the five
+consumers at game level (needs exact MSVC `std::string`/`vector` layouts and
+the guest allocator). Everything hit before that trap is proven; every other
+msvcp import keeps trapping loudly until implemented. Scout facts for later
+walls: the only `CreateThread` is the theoraplayer worker (`0x00aab120`);
+nothing on the init chain waits on it, so the stub costs only video decode.
+Full analysis: `docs/recomp-architecture.md §19`, `docs/recomp-boot.md §10`.
 
 **Debugging tools (use these before adding a printf):**
 - `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.

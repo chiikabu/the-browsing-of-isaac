@@ -2891,7 +2891,7 @@ __attribute__((weak)) void imp_winmm__timeGetDevCaps(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_api_ms_win_crt_convert__wcstombs_s(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[576];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_api_ms_win_crt_string__strcspn(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -2931,7 +2931,7 @@ __attribute__((weak)) void imp_gdi32__GetDeviceCaps(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_kernel32__FindNextFileW(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[584];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__GetFileAttributesA(CpuState *restrict cpu) {
     static const isaac_import *self;

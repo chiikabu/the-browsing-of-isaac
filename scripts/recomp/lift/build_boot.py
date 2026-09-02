@@ -149,6 +149,15 @@ def main():
                     help="rebuild lifted_*.o even if objects already exist")
     ap.add_argument("--skip-dispatch-gen", action="store_true",
                     help="reuse existing dispatch_tbl.c / stubs.c")
+    ap.add_argument("--fast-link", dest="fast_link", action="store_true", default=True,
+                    help="(default) link at -O0: no wasm-opt pass over the 272 MB module. The "
+                         "lifted objects are already -O2, so only the JS glue and dead-code "
+                         "elimination differ. Measured 2026-09-01: link 474 s -> 8.0 s, whole "
+                         "host-only relink 520 s -> 133 s; module 272 -> 284 MB.")
+    ap.add_argument("--opt-link", dest="fast_link", action="store_false",
+                    help="link at -O2 (wasm-opt over the whole module, ~8 min) for a shipping build")
+    ap.add_argument("--no-lift-patches", action="store_true",
+                    help="do not apply scripts/recomp/lift/lift_patches.py to the lifted TUs")
     args = ap.parse_args()
 
     emcc = find_emcc()
@@ -163,6 +172,17 @@ def main():
     if not LUA_LIB.exists():
         print("liblua.a missing at %s -- run scripts/recomp/host/lua_build.py" % LUA_LIB)
         return 2
+
+    # ---- source-level overrides of the generated C (idempotent) ----------
+    # The canonical exe carries the project's own emulator-era hand patches;
+    # the ones that break the recompiled boot are undone HERE, after the lift
+    # and BEFORE dispatch generation (the patched bodies keep their RECOMP_VA
+    # markers), and the touched TU's object is dropped so it recompiles.
+    if not args.no_lift_patches:
+        sys.path.insert(0, str(HERE))
+        from lift_patches import apply_lift_patches  # noqa: E402
+        patched = apply_lift_patches(lift_dir)
+        print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)
     obj_dir = BOOT_OUT / "obj"
@@ -294,7 +314,13 @@ def main():
     link_objs = [str(p) for p in lifted_objs + host_objs] + [str(LUA_LIB)]
     rsp = BOOT_OUT / "link.rsp"
     lines = []
-    lines.extend(LDFLAGS)
+    ldflags = list(LDFLAGS)
+    if args.fast_link:
+        # -O2 at link runs wasm-opt over the whole 272 MB module and dominates
+        # the 8-minute link; the objects are already -O2. Measured per build.
+        ldflags = ["-O0" if f == "-O2" else f for f in ldflags]
+    result["fastLink"] = bool(args.fast_link)
+    lines.extend(ldflags)
     lines += ["-sEXPORTED_FUNCTIONS=@" + str(expo).replace("\\", "/")]
     lines += ["-o", str(out_mjs).replace("\\", "/")]
     lines += [p.replace("\\", "/") for p in link_objs]

@@ -94,7 +94,10 @@ Sanity habits that have paid off (all measured):
    It stashes the original bytes, journals the write, tags the mutant
    `/* MUTANT */`, runs the command, and restores sha256-identical in a
    `finally`/signal handler; `MUTANT KILLED` (command failed) is the
-   evidence line for the report. A session that dies mid-cycle leaves a
+   evidence line for the report. It restores the SOURCE, not the command's
+   outputs: after a killed run whose command writes artifacts (the slice
+   wasm, `build-selftest.json`), run the clean command once more before
+   anything reads them. A session that dies mid-cycle leaves a
    trail `mutate.mjs check` / `restore` and the preflight see. The ABI-101
    unit did this by hand, died between "watch it fail" and "put it back",
    and shipped the inverted cpp.

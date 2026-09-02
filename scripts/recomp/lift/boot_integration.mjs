@@ -1,7 +1,7 @@
 // Boot the lifted module: place the memory image, run the host boot path,
 // then call main. Every stage is reported separately so a failure names
 // the stage it happened in.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import Module from './boot.mjs';
 
 const segsPath = process.argv[2] || 'output/recomp/host/isaac.segs.bin';
@@ -45,8 +45,27 @@ if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : '
 // finds them. Requires the boot module to export _isaac_fs_seed (add it to
 // the boot link's EXPORTED_FUNCTIONS). music.a/videos.a are not on the boot
 // path and are skipped to keep the seed small.
-const PACKED_DIR = 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance/resources/packed';
-const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a'];
+//
+// Boot round 10: the archives are NOT the whole install. This instance's
+// animations.a holds a single 4 MB compressed bundle (TOC count 1), and the
+// .anm2 files the AnmCache asks for by path ("gfx/ui/ui_streak.anm2"), the
+// GLSL shaders ("resources/shaders/*.vs") and the Lua scripts
+// ("resources/scripts/main.lua") are LOOSE files under resources/ (476 files,
+// 38 MB) that KAGE's mount-root scan indexes and resolves by path. Seed that
+// tree too, everything except packed/ (handled above by name).
+const INSTANCE_DIR = 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance';
+const PACKED_DIR = `${INSTANCE_DIR}/resources/packed`;
+const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a'];
+function seedFile(relPath, bytes) {
+  const pathBytes = Buffer.from(relPath + '\0', 'utf8');
+  const pp = m._malloc(pathBytes.length);
+  const dp = m._malloc(bytes.length || 1);
+  m.HEAPU8.set(pathBytes, pp);
+  if (bytes.length) m.HEAPU8.set(bytes, dp);
+  const ok = m._isaac_fs_seed(pp, dp, bytes.length);
+  m._free(pp); m._free(dp);
+  return ok;
+}
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
     let seeded = 0;
@@ -55,17 +74,41 @@ if (typeof m._isaac_fs_seed === 'function') {
       try { bytes = readFileSync(`${PACKED_DIR}/${name}`); }
       catch { console.log(`  (skip ${name}: not present locally)`); continue; }
       const relPath = `resources/packed/${name}`;
-      const pathBytes = Buffer.from(relPath + '\0', 'utf8');
-      const pp = m._malloc(pathBytes.length);
-      const dp = m._malloc(bytes.length || 1);
-      m.HEAPU8.set(pathBytes, pp);
-      if (bytes.length) m.HEAPU8.set(bytes, dp);
-      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
-      m._free(pp); m._free(dp);
+      const ok = seedFile(relPath, bytes);
       console.log(`  seed ${relPath} ${bytes.length} bytes -> ${ok ? 'ok' : 'FAIL'}`);
       if (ok) seeded += 1;
     }
     return seeded;
+  });
+  stageOk('seed loose resources/ tree', () => {
+    let files = 0, bytes = 0, failed = 0;
+    const walk = (dir, rel) => {
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const p = `${dir}/${e.name}`, r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          if (r === 'resources/packed') continue;          // archives: by name above
+          walk(p, r);
+        } else if (e.isFile()) {
+          const data = readFileSync(p);
+          if (seedFile(r, data)) { files += 1; bytes += data.length; }
+          else { failed += 1; if (failed <= 5) console.log(`  FAIL seeding ${r}`); }
+        }
+      }
+    };
+    walk(`${INSTANCE_DIR}/resources`, 'resources');
+    console.log(`  seeded ${files} loose files (${bytes} bytes) under resources/${failed ? `, ${failed} FAILED` : ''}`);
+    // The host Lua module (upstream 5.3.3 in wasm) opens scripts through its
+    // OWN libc, which this link maps to the real Node filesystem
+    // (-sNODERAWFS=1) relative to process.cwd() -- not through the RAM-FS.
+    // So luaL_loadfilex("resources/scripts/main.lua") only resolves when the
+    // boot runs with cwd = the instance dir. Say so instead of guessing.
+    if (process.cwd().replace(/\\/g, '/').toLowerCase() !== INSTANCE_DIR.toLowerCase()) {
+      console.log(`  NOTE: cwd is not the instance dir; the host Lua loader (NODERAWFS) will not find resources/scripts/*.lua.`);
+      console.log(`        run:  cd ${INSTANCE_DIR} && node <boot dir>/boot_integration.mjs <segs> main`);
+    }
+    return files;
   });
 } else {
   console.log('  (seed skipped: boot module has no _isaac_fs_seed export — rebuild the boot link)');

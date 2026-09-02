@@ -1168,7 +1168,37 @@ Tests: `tests/recomp-host.test.js`, 32 tests, all passing.
 
 ## 10. Open items, honestly
 
-- **BOOT REACHES THE ARCHIVE MOUNT (2026-08-31, round 9).** The round-8
+- **BOOT LOADS EVERY ASSET; NEXT WALL IS THE C++ IOSTREAM RUNTIME
+  (2026-09-01, round 10).** The round-9 blocker had three parts, none of them
+  in the archive code: (1) KAGE builds the mount-root index by a directory
+  scan (`0x00a687f0` → readdir `0x00a172e0` → opendir `0x00a16f50`) that runs
+  `mbstowcs_s → GetFullPathNameW → "\*" → FindFirstFileW / FindNextFileW →
+  wcstombs_s`, and four of those shims were wrong or stubbed
+  (`GetFullPathNameW` returned 0 for the size query, `FindFirstFileW` was a
+  stub, `FindNextFileW`/`wcstombs_s` were weak defaults with an unknown
+  stdcall purge — the call-site census could not see the register-held
+  import); (2) the install is not only archives — 476 loose files under
+  `resources/` (`.anm2`, shaders, Lua, xml) had never been seeded, and the
+  RAM-FS capacity (512 slots, 128 per scan) could not hold them; (3) the
+  function that creates the `resources/` mount root, `0x009ab970`, is one of
+  this project's own emulator-era hand patches (`push ebp; mov ebp,esp` →
+  `xor eax,eax; ret`), now undone by a re-applicable lift patch
+  (`scripts/recomp/lift/lift_patches.py`). Result: 2 mount roots, 6 archives
+  loaded, **0 `Could not open`**, all shaders initialise, renderbuffers
+  allocate, OpenAL/theora initialise, `enums.lua`/`main.lua` run; the boot
+  stops at `msvcp140.dll!basic_ios<char>::basic_ios()` from `0x00684d24`
+  (a `std::stringstream` constructor, caller `0x0067f420`, right after
+  `buttonpromptwidget.anm2` loads). Host selftest **82 → 103 checks, 0
+  failures**, each new shim mutation-checked through `mutate.mjs`;
+  `tests/recomp-host.test.js` 34/34. Also: `build_boot.py` links at `-O0`
+  by default (474 s → 8 s; relink 520 s → 133 s; `--opt-link` for shipping),
+  the boot must run with cwd = the instance dir (the host Lua module's libc
+  is `-sNODERAWFS`), and `ISAAC_FS_TRACE=1` now logs the W probes. Full
+  analysis: recomp-architecture.md §19. **Next unit:** the msvcp140 iostream
+  subset (54 imports, 5 stream constructors; reference
+  `C:\Windows\SysWOW64\msvcp140.dll`), or game-level overrides of the five
+  consumers.
+- **(superseded, round 10) BOOT REACHES THE ARCHIVE MOUNT (2026-08-31, round 9).** The round-8
   lifter gap is closed (`sub_00ab2d80` and 46 other wide-varnode bodies now
   lift; recomp-architecture.md §17), the module relinks clean, and a seeded
   boot runs through **Steam + EOS init, GL 4.6.0, two `SwapBuffers`,

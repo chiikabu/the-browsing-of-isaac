@@ -31,9 +31,15 @@
 
 #define ERRNO_CELL_VA     (ISAAC_TEB_VA + 0x800u)
 
-#define FS_SLOTS      512u
+/* Capacity. The extracted install carries 476 loose files + 21 dirs under
+ * resources/ (anm2/shaders/scripts/xml/png the game reads by PATH, not from
+ * an archive) on top of the packed archives, and the game creates its own
+ * save-dir entries; 512 slots overflowed at boot round 10. gfx/ui alone has
+ * 143 children, past the old 128-per-scan cap. */
+#define FS_SLOTS      8192u
 #define FS_FILE_RG    64u
 #define FS_FIND_RG    8u
+#define FS_FIND_MAX   2048u
 #define FILE_TOKEN(x) ((x) + 0x100u)
 #define FIND_TOKEN(x) ((x) + 0x200u)
 
@@ -55,7 +61,7 @@ static uint32_t g_find_used[FS_FIND_RG];
 static uint32_t g_find_dir[FS_FIND_RG];        /* entry index */
 static uint32_t g_find_cur[FS_FIND_RG];
 static uint32_t g_find_n[FS_FIND_RG];
-static uint32_t g_find_ids[FS_FIND_RG][128];
+static uint32_t g_find_ids[FS_FIND_RG][FS_FIND_MAX];
 
 /* ISAAC_FS_TRACE=1 logs every path this layer is asked about and what it
  * answered.  The guest builds an in-memory index of its data directories and
@@ -325,43 +331,56 @@ static void fs_find_fill(CpuState *cpu, uint32_t findbuf, fs_entry *e) {
     *(uint8_t *)isaac_g(dst) = 0;
 }
 
-void imp_kernel32__FindFirstFileA(CpuState *restrict cpu) {
-    char p[512]; uint32_t findbuf = isaac_arg(cpu, 1);
-    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "FindFirstFileA");
-    /* strip a trailing wildcard segment (backslash-star or slash-star) */
+/* Strip a trailing wildcard segment (backslash-star or slash-star) in place.
+ * Both Find flavours receive "<dir>" + separator + "*" from the game; the
+ * RAM-FS enumerates the directory itself. */
+static void fs_strip_wildcard(char *p) {
     size_t n = strlen(p);
     if (n >= 2 && p[n - 1] == '*' && (p[n - 2] == '/' || p[n - 2] == '\\'))
         p[n - 2] = 0;
-    char key[256];
-    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+}
+
+/* Open a directory snapshot for `key` (children only, one level).
+ * Returns the snapshot id, or -1 when the key is not a directory (caller
+ * sets ERROR_FILE_NOT_FOUND) / -2 when the directory has no entries or the
+ * snapshot table is full (ERROR_NO_MORE_FILES). Shared by the A and W
+ * FindFirstFile shims so both see exactly the same tree. */
+static int fs_find_open(const char *key) {
     fs_entry *dir = fs_find(key);
-    if (fs_trace())
-        isaac_log("[isaac][fs] FindFirstFileA('%s') key='%s' -> %s", p, key,
-                  (dir && dir->is_dir) ? "DIR" : "MISS");
-    if (!dir || !dir->is_dir) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
-    /* snapshot children (key + "/" + name, no deeper nesting) */
+    if (!dir || !dir->is_dir) return -1;
     uint32_t sid = 0xFFFFFFFFu;
     for (unsigned s = 0; s < FS_FIND_RG; ++s) if (!g_find_used[s]) { sid = s; break; }
-    if (sid == 0xFFFFFFFFu) { fs_err_set(18u); cpu->EAX = 0xFFFFFFFFu; return; }
+    if (sid == 0xFFFFFFFFu) return -2;
     size_t pref = strlen(key);
     uint32_t cnt = 0;
-    for (unsigned i = 0; i < FS_SLOTS && cnt < 128; ++i) {
+    for (unsigned i = 0; i < FS_SLOTS && cnt < FS_FIND_MAX; ++i) {
         if (!g_fs[i].is_dir && !g_fs[i].data) continue;
         const char *k = g_fs[i].key;
         if (strncmp(k, key, pref) == 0 && k[pref] == '/' &&
             !strchr(k + pref + 1, '/'))
             g_find_ids[sid][cnt++] = i;
     }
-    if (!cnt) {
-        fs_err_set(18u);                         /* no files -> exhausted */
-        cpu->EAX = 0xFFFFFFFFu;
-        return;
-    }
+    if (!cnt) return -2;
     g_find_used[sid] = 1;
     g_find_dir[sid] = 0; g_find_cur[sid] = 0; g_find_n[sid] = cnt;
+    return (int)sid;
+}
+
+void imp_kernel32__FindFirstFileA(CpuState *restrict cpu) {
+    char p[512]; uint32_t findbuf = isaac_arg(cpu, 1);
+    (void)isaac_guest_cstr(isaac_arg(cpu, 0), p, sizeof p, "FindFirstFileA");
+    fs_strip_wildcard(p);
+    char key[256];
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    int sid = fs_find_open(key);
+    if (fs_trace())
+        isaac_log("[isaac][fs] FindFirstFileA('%s') key='%s' -> %s", p, key,
+                  sid >= 0 ? "DIR" : (sid == -1 ? "MISS" : "DIR (empty)"));
+    if (sid == -1) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    if (sid == -2) { fs_err_set(18u); cpu->EAX = 0xFFFFFFFFu; return; } /* no files -> exhausted */
     fs_find_fill(cpu, findbuf, &g_fs[g_find_ids[sid][0]]);
     fs_err_set(0);
-    cpu->EAX = FIND_TOKEN(sid);
+    cpu->EAX = FIND_TOKEN((uint32_t)sid);
 }
 
 void imp_kernel32__FindNextFileA(CpuState *restrict cpu) {
@@ -383,10 +402,78 @@ void imp_kernel32__FindClose(CpuState *restrict cpu) {
     cpu->EAX = 1;
 }
 
+/* ---- the WIDE pair: KAGE's directory scan -------------------------------
+ * The engine's readdir (0x00a172e0 over the opendir at 0x00a16f50) does
+ * mbstowcs_s(dir) -> GetFullPathNameW -> append "\*" -> FindFirstFileW, then
+ * FindNextFileW through a register-held import (mov edx,[0xb1825c] -- which
+ * is why the call-site census recorded FindNextFileW as "never called"), and
+ * brings each cFileName back with wcstombs_s. The mount-root index that
+ * resolves EVERY relative path (0x00a16c60) is built from that scan at KAGE
+ * init (0x00a710a0 -> 0x00a15f10 -> vtable+0x18 = 0x00a687f0). With this pair
+ * stubbed, the root's std::map stayed empty and all 18 packed archives
+ * failed to open before any fopen (boot round 9, recomp-architecture.md §18).
+ *
+ * WIN32_FIND_DATAW: attr +0, ctime +4, atime +0xc, wtime +0x14, nSizeHigh
+ * +0x1c, nSizeLow +0x20, res0 +0x24, res1 +0x28, cFileName WCHAR[260] +0x2c,
+ * cAlternateFileName WCHAR[14] +0x234 (struct 0x250). The game reads the
+ * attribute (0x10 dir / 0x40 device / else file), cFileName at DIR+0x244
+ * and cAlternateFileName at DIR+0x44c with the find data at DIR+0x218. */
+static void fs_guest_wcstr(uint32_t va, char *p, size_t cap) {
+    /* NUL-terminated UTF-16 guest string -> UTF-8 host string (RAM-FS keys
+     * are ASCII; anything else is carried through as UTF-8 and lowercased
+     * by fs_key like any other byte). */
+    size_t n = 0;
+    while (n + 4 < cap && isaac_is_guest_va(va + 1)) {
+        uint16_t u = isaac_r16(va);
+        va += 2;
+        if (!u) break;
+        if (u < 0x80) p[n++] = (char)u;
+        else if (u < 0x800) { p[n++] = (char)(0xC0u | (u >> 6)); p[n++] = (char)(0x80u | (u & 0x3Fu)); }
+        else { p[n++] = (char)(0xE0u | (u >> 12)); p[n++] = (char)(0x80u | ((u >> 6) & 0x3Fu)); p[n++] = (char)(0x80u | (u & 0x3Fu)); }
+    }
+    p[n] = 0;
+}
+
+static void fs_find_fill_w(uint32_t findbuf, const fs_entry *e) {
+    isaac_w32(findbuf + 0x00u, e->is_dir ? 0x10u : 0x80u);
+    for (uint32_t k = 4; k < 0x2cu; k += 4) isaac_w32(findbuf + k, 0);
+    if (!e->is_dir) isaac_w32(findbuf + 0x20u, e->size);   /* nFileSizeLow */
+    const char *base = strrchr(e->key, '/');
+    const char *nm = base ? base + 1 : e->key;
+    uint32_t dst = findbuf + 0x2cu;
+    for (unsigned i = 0; nm[i] && i < 259; ++i, dst += 2)
+        isaac_w16(dst, (uint16_t)(uint8_t)nm[i]);        /* keys are ASCII */
+    isaac_w16(dst, 0);
+    isaac_w16(findbuf + 0x234u, 0);                      /* cAlternateFileName = "" */
+}
+
 void imp_kernel32__FindFirstFileW(CpuState *restrict cpu) {
-    (void)cpu; (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
-    fs_err_set(2u);
-    cpu->EAX = 0xFFFFFFFFu;
+    char p[512]; uint32_t findbuf = isaac_arg(cpu, 1);
+    fs_guest_wcstr(isaac_arg(cpu, 0), p, sizeof p);
+    fs_strip_wildcard(p);
+    char key[256];
+    if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    int sid = fs_find_open(key);
+    if (fs_trace())
+        isaac_log("[isaac][fs] FindFirstFileW('%s') key='%s' -> %s", p, key,
+                  sid >= 0 ? "DIR" : (sid == -1 ? "MISS" : "DIR (empty)"));
+    if (sid == -1) { fs_err_set(2u); cpu->EAX = 0xFFFFFFFFu; return; }
+    if (sid == -2) { fs_err_set(18u); cpu->EAX = 0xFFFFFFFFu; return; }
+    fs_find_fill_w(findbuf, &g_fs[g_find_ids[sid][0]]);
+    fs_err_set(0);
+    cpu->EAX = FIND_TOKEN((uint32_t)sid);
+}
+
+void imp_kernel32__FindNextFileW(CpuState *restrict cpu) {
+    uint32_t h = isaac_arg(cpu, 0), findbuf = isaac_arg(cpu, 1);
+    uint32_t sid = h - FIND_TOKEN(0);
+    if (sid >= FS_FIND_RG || !g_find_used[sid]) { fs_err_set(6u); cpu->EAX = 0; return; }
+    uint32_t c = g_find_cur[sid] + 1;
+    if (c >= g_find_n[sid]) { fs_err_set(18u); cpu->EAX = 0; return; }
+    g_find_cur[sid] = c;
+    fs_find_fill_w(findbuf, &g_fs[g_find_ids[sid][c]]);
+    fs_err_set(0);
+    cpu->EAX = 1;
 }
 
 /* ---- stdio FILE family -------------------------------------------------- */
