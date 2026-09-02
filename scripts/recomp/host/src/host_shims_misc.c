@@ -144,9 +144,13 @@ void imp_user32__MessageBoxA(CpuState *restrict cpu) {
               cap[0] ? cap : "(no caption)", text[0] ? text : "(no text)");
     cpu->EAX = 1;                              /* IDOK */
 }
+/* The main window is the active one once it exists (round 14a: the focus
+ * messages go out at the first pump, and GLFW's focused query is
+ * GetActiveWindow() == its handle). */
 void imp_user32__GetActiveWindow(CpuState *restrict cpu) {
+    extern uint32_t isaac_input_focused_hwnd(void);
     (void)cpu;
-    cpu->EAX = 0;                              /* no window exists yet */
+    cpu->EAX = isaac_input_focused_hwnd();
 }
 
 /* ------------------------------------------------------------ system ---- */

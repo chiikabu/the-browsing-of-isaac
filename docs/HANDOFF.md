@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 13)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 14a)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -223,15 +223,24 @@ Beta welcome popup, text and fonts intact. Run it:
 then open `output/recomp/web-run/frame_*.png`. `ISAAC_GL_CHECK=1` as a
 trailing `K=V` argument names any GL error's caller.
 
-**Exact next unit (B):** input. The frame pump is `PeekMessageW` /
-`DispatchMessageW` (§21.12); the page can post key and mouse events to
-the host (a queue the `PeekMessageW` shim drains into WM_KEYDOWN/UP and
-WM_MOUSEMOVE/BUTTON messages, plus `GetKeyboardState`/`GetCursorPos`
-answers) so the harness can navigate the menu and start a run -- the
-first step towards Game::Update executing under lifted code with real
-frames to compare against the hand-decomp track. After input: audio
-(OpenAL arms onto Web Audio, same forwarding shape as GL), the per-job
-thread design of §21.16, and a live view (worker + OffscreenCanvas).
+**Round 14a (2026-09-02): INPUT WORKS, the menus are navigable.** Scripted
+key/mouse timelines (`input=420:Enter,470:Enter,520:Enter` on the web
+runner, `ISAAC_INPUT=...` on the node driver) become Win32 messages in a
+real queue that GLFW's own pump and WndProc consume (§21.18). Enter x3
+takes the game from the beta notice through the title to FILE SELECT and
+the main menu. Gotchas recorded: the DirectInput "Message" window is
+created last (keys must target the GLFW30 window), and the focus messages
+must be sent before any key.
+
+**Exact next unit (B):** start a run. Extend the timeline through file
+select -> main menu (New Run) -> character select -> the Basement, keeping
+every 50th frame (`keep=50`), and read what the first gameplay frame
+needs: the room renders through the same GL surface, but the update tick
+(`0x954cd0`, half-rate) is now executing Game::Update under lifted code --
+the point where the hand-decomp track's slices can be compared against
+lifted state. Then: audio (OpenAL -> Web Audio, same forwarding shape as
+GL), the per-job thread design of §21.16, a live view (worker +
+OffscreenCanvas), and the PNG chain as the remaining boot-speed unit.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

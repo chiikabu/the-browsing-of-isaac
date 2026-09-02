@@ -96,6 +96,46 @@ function seedLazy(relPath, size) {
   return ok;
 }
 export function isaacLazyStats() { return { lazyReads, lazyBytes }; }
+
+// Round 14a: scripted input for the node profile too. ISAAC_INPUT holds the
+// same timeline syntax as the web runner's input= (frame:Key, frame:mouse:x:y,
+// frame:click): the host's PeekMessageW polls m.isaacInputPoll(frame, out)
+// and turns each event into a Win32 message for GLFW's pump, so a headless
+// node run can navigate the menus and start a run without rendering.
+const KEYS = {
+  enter: [0x0D, 0x1C, 0], escape: [0x1B, 0x01, 0], space: [0x20, 0x39, 0], tab: [0x09, 0x0F, 0],
+  up: [0x26, 0x48, 1], down: [0x28, 0x50, 1], left: [0x25, 0x4B, 1], right: [0x27, 0x4D, 1],
+  shift: [0x10, 0x2A, 0], ctrl: [0x11, 0x1D, 0], a: [0x41, 0x1E, 0], d: [0x44, 0x20, 0],
+  e: [0x45, 0x12, 0], q: [0x51, 0x10, 0], r: [0x52, 0x13, 0], s: [0x53, 0x1F, 0], w: [0x57, 0x11, 0],
+  f: [0x46, 0x21, 0], m: [0x4D, 0x32, 0], '1': [0x31, 0x02, 0], '2': [0x32, 0x03, 0],
+};
+const inputTimeline = [];
+for (const item of (process.env.ISAAC_INPUT || '').split(',').map((t) => t.trim()).filter(Boolean)) {
+  const [fr, what, ...rest] = item.split(':');
+  const frame = Number(fr), w = (what || '').toLowerCase();
+  if (w === 'mouse') inputTimeline.push({ frame, ev: [2, Number(rest[0] || 0), Number(rest[1] || 0), 0] });
+  else if (w === 'click' || w === 'rclick') {
+    const btn = w === 'click' ? 0 : 1;
+    inputTimeline.push({ frame, ev: [3, btn, 1, 0] });
+    inputTimeline.push({ frame: frame + 2, ev: [3, btn, 0, 0] });
+  } else if (KEYS[w]) {
+    const [vk, sc, ext] = KEYS[w];
+    inputTimeline.push({ frame, ev: [1, vk, sc | (ext << 8), 1] });
+    inputTimeline.push({ frame: frame + 2, ev: [1, vk, sc | (ext << 8), 0] });
+  } else console.log(`  ISAAC_INPUT: unknown key '${what}' in '${item}'`);
+}
+inputTimeline.sort((a, b) => a.frame - b.frame);
+let inputsDelivered = 0;
+if (inputTimeline.length) {
+  console.log(`  ISAAC_INPUT: ${inputTimeline.length} scripted events`);
+  m.isaacInputPoll = (frame, out) => {
+    if (!inputTimeline.length || inputTimeline[0].frame > frame) return 0;
+    const { ev } = inputTimeline.shift();
+    m.HEAP32.set(ev, out >> 2);
+    inputsDelivered += 1;
+    return 1;
+  };
+}
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
     let seeded = 0;
@@ -177,6 +217,7 @@ if (stage === 'boot') { console.log(`\nRESULT: boot rc=${bootRc}`); process.exit
 const mainRc = stageOk('main @ 0x00931050', () => m._isaac_run_main());
 console.log(`  isaac_boot_call_main -> ${mainRc}`);
 console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFixed(1)} MB fetched on first open`);
+if (inputTimeline.length || inputsDelivered) console.log(`  scripted input: ${inputsDelivered} events delivered, ${inputTimeline.length} pending`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 try { m._isaac_stub_report(); } catch (e) { /* best effort */ }

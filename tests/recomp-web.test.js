@@ -70,3 +70,31 @@ test('the web build wires the frame capture and the context', () => {
   assert.ok(build.includes('-DISAAC_WEB=1') && build.includes('-sENVIRONMENT=web') && build.includes('"-lGL"'),
     'build_boot.py --web defines ISAAC_WEB and links for the browser with GL');
 });
+
+test('scripted input: the page and the node driver agree on the key table, the host has the queue', () => {
+  const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  const node = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'boot_integration.mjs'), 'utf8');
+  const table = (src) => {
+    const out = {};
+    const block = src.slice(src.indexOf('const KEYS = {'), src.indexOf('};', src.indexOf('const KEYS = {')));
+    for (const m of block.matchAll(/'?([a-z0-9]+)'?:\s*\[(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),\s*([01])\]/g))
+      out[m[1]] = [Number(m[2]), Number(m[3]), Number(m[4])];
+    return out;
+  };
+  const pk = table(page), nk = table(node);
+  assert.ok(Object.keys(pk).length >= 40, 'page key table parsed');
+  assert.ok(Object.keys(nk).length >= 10, 'node key table parsed');
+  for (const k of Object.keys(nk))
+    assert.deepEqual(pk[k], nk[k], `key '${k}': page and node driver disagree on vk/scancode/extended`);
+  // GLFW decodes the scancode from lParam bits 16..23 (+24 extended); pin the
+  // canonical ones so a typo cannot silently map Enter to another key
+  assert.deepEqual(pk.enter, [0x0D, 0x1C, 0]); assert.deepEqual(pk.escape, [0x1B, 0x01, 0]);
+  assert.deepEqual(pk.up, [0x26, 0x48, 1]); assert.deepEqual(pk.down, [0x28, 0x50, 1]);
+  assert.deepEqual(pk.left, [0x25, 0x4B, 1]); assert.deepEqual(pk.right, [0x27, 0x4D, 1]);
+  const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
+  for (const s of ['void isaac_input_key(', 'void isaac_input_mouse_move(', 'void isaac_input_mouse_button(',
+                   'Module.isaacInputPoll', 'isaac_guest_call(proc, &sub)', 'input_poll_page();'])
+    assert.ok(win.includes(s), `host_shims_win.c: ${s}`);
+  assert.ok(/msgq_pop_into\(msg\)\) \{ cpu->EAX = 1; return; \}[\s\S]{0,200}frame_cap\(\)/.test(win),
+    'PeekMessageW drains the queue before the frame cap posts WM_QUIT');
+});

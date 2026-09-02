@@ -2728,6 +2728,50 @@ either a worker/OffscreenCanvas split or Asyncify at the SwapBuffers
 shim. Speed: SwiftShader spends ~50 ms per frame; a GPU-backed Chromium
 (`--use-gl=angle` without SwiftShader) is the same harness with a flag.
 
+### 21.18 Round 14a: input -- the menus are navigable
+
+The page's main thread sits inside `main` for the whole run, so no browser
+event can reach the game; input is a **timeline keyed by presented
+frame** (`?input=420:Enter,470:Enter,...`; `frame:mouse:x:y`, `frame:click`).
+A key entry presses at its frame and releases two frames later. The
+host's `PeekMessageW` shim polls `Module.isaacInputPoll(frame, out)` for
+the events due (four int32s per event) and turns them into Win32
+messages in a real queue (`host_shims_win.c`): `WM_KEYDOWN`/`WM_KEYUP`
+with `lParam = repeat 1 | scancode << 16 | extended << 24 | (up: bits 30,
+31)` -- the layout GLFW's `windowProc` decodes (`HIWORD & 0x1ff` into its
+scancode table) -- and `WM_MOUSEMOVE` / `WM_xBUTTONDOWN|UP`. `PeekMessageW`
+hands GLFW's pump one message per call (the frame cap's `WM_QUIT` waits
+until the queue is empty), `DispatchMessageW` delivers it to the window
+class's WndProc as a guest sub-call (stdcall, four arguments, the
+`_initterm` shape), and `GetKeyState` / `GetCursorPos` answer from the same
+state. `SetPropW`/`GetPropW` became a real property table because GLFW's
+WndProc finds its window object through `GetPropW(hWnd, L"GLFW")`; a 0
+answer sent every message to `DefWindowProc`. The node driver takes the
+same timeline from `ISAAC_INPUT`, so a headless run can navigate too.
+
+Two walls on the way, both instructive. First: a real window receives
+`WM_ACTIVATEAPP`, `WM_ACTIVATE` and `WM_SETFOCUS` before any key, and
+`GetActiveWindow` must name it (GLFW's focused query is
+`GetActiveWindow() == handle`); the host now sends the three at the first
+pump and answers the query with the main window. Second, the one that
+actually mattered: the game creates **three** windows -- GLFW's hidden
+"GLFW3 Helper", the real "GLFW30" window (WndProc `0x00a5b7b0`) and,
+last, a "Message" window for DirectInput's hotplug thread (WndProc
+`0x00a6cef0`). "Last created" addressed every key to the DirectInput
+window, whose WndProc dutifully ignored them. The queue targets the
+`GLFW3*` non-helper window; the selftest pins it with the three windows
+in the game's own order and sizes (the mutant that reverts to "last
+window" dies).
+
+**Result (2026-09-02).** Web run, 560 frames, `Enter` at 420 / 470 / 520:
+the beta notice is accepted, the title screen passes, frame 480 is the
+**FILE SELECT** screen (three files, "DELETE FILE"), frame 560 the main
+menu. Nine messages dispatched, 0 GL errors, `main returned 0`. The
+selftest pins the queue (lParam layout, order, key-up bits, key state,
+cursor, properties, the window choice) with four mutants killed;
+`tests/recomp-web.test.js` pins that the page and the node driver share
+one key table and that the pump drains the queue before the cap.
+
 ## Appendix: reproduction
 
 ```bash

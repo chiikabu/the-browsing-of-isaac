@@ -37,6 +37,7 @@ static struct {
     uint32_t hwnd;
     uint32_t style, ex_style;
     uint32_t x, y, w, h;
+    int      cls;                 /* index into g_wc, -1 if unknown */
 } g_win[WIN_HWND_MAX];
 static int g_win_n;
 
@@ -110,6 +111,9 @@ static uint32_t win_create(uint32_t ex_style, uint32_t cls_va, int wide,
     g_win[g_win_n].y = y;
     g_win[g_win_n].w = (w == 0 || w == 0x80000000u) ? DISPLAY_W : w;
     g_win[g_win_n].h = (h == 0 || h == 0x80000000u) ? DISPLAY_H : h;
+    g_win[g_win_n].cls = -1;
+    for (int i = 0; i < g_wc_n; ++i)
+        if (strcmp(g_wc[i].name, c) == 0) { g_win[g_win_n].cls = i; break; }
     ++g_win_n;
     isaac_log("[isaac][ui] CreateWindowEx%c class=\"%s\" title=\"%s\" "
               "style=0x%08x %ux%u -> hwnd 0x%08x",
@@ -464,9 +468,15 @@ void imp_user32__SetCursorPos(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     cpu->EAX = 1;
 }
+/* ---- input state (round 14a) -------------------------------------------- */
+/* Screen coordinates == client coordinates here: ScreenToClient and
+ * ClientToScreen are identity shims and the window sits at the origin. */
+static int32_t g_cur_x, g_cur_y;
+static uint8_t g_keydown[256];
+static uint32_t g_mouse_mk;             /* MK_LBUTTON 1 | MK_RBUTTON 2 */
 void imp_user32__GetCursorPos(CpuState *restrict cpu) {
     uint32_t p = isaac_arg(cpu, 0);
-    if (isaac_is_guest_va(p)) { isaac_w32(p, 0); isaac_w32(p + 4, 0); }
+    if (isaac_is_guest_va(p)) { isaac_w32(p, (uint32_t)g_cur_x); isaac_w32(p + 4, (uint32_t)g_cur_y); }
     cpu->EAX = 1;
 }
 void imp_user32__ClipCursor(CpuState *restrict cpu) {
@@ -478,8 +488,13 @@ void imp_user32__SetCursor(CpuState *restrict cpu) {
     cpu->EAX = 0;                       /* previous cursor: none */
 }
 void imp_user32__GetKeyState(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0);
-    cpu->EAX = 0;
+    uint32_t vk = isaac_arg(cpu, 0) & 0xFFu;
+    /* SHORT: bit 15 = down (sign-extended as the real API does) */
+    cpu->EAX = g_keydown[vk] ? 0xFFFF8000u : 0u;
+    if ((vk == 0x10u && (g_keydown[0xA0] || g_keydown[0xA1])) ||   /* VK_SHIFT   */
+        (vk == 0x11u && (g_keydown[0xA2] || g_keydown[0xA3])) ||   /* VK_CONTROL */
+        (vk == 0x12u && (g_keydown[0xA4] || g_keydown[0xA5])))     /* VK_MENU    */
+        cpu->EAX = 0xFFFF8000u;
 }
 void imp_user32__SendInput(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
@@ -552,10 +567,122 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     last_ms = now;
     cpu->EAX = 1;
 }
+/* ---- message queue (round 14a) ------------------------------------------ */
+/* Events arrive from the page (Module.isaacInputPoll(frame, out): four int32s
+ * [type, a, b, c] per call, 0 when none is due) or from C (the selftest, the
+ * node driver) and become Win32 messages for GLFW's pump:
+ *   [1, vk, scancode | (extended << 8), down] -> WM_KEYDOWN / WM_KEYUP with
+ *       lParam = repeat 1 | scancode << 16 | extended << 24 | (up: bits 30,31),
+ *       which is exactly what GLFW's windowProc decodes (HIWORD & 0x1ff)
+ *   [2, x, y, 0]      -> WM_MOUSEMOVE, lParam = x | y << 16
+ *   [3, button, down] -> WM_LBUTTONDOWN/UP (0x201/0x202) or WM_RBUTTONDOWN/UP
+ * The queue is drained by PeekMessageW one message per call; the frame cap's
+ * WM_QUIT (below) goes out only once the queue is empty, so scripted input
+ * before the cap is always delivered. */
+#define MSGQ_MAX 256u
+typedef struct { uint32_t hwnd, message, wParam, lParam, time, x, y; } win_msg;
+static win_msg g_msgq[MSGQ_MAX];
+static unsigned g_msgq_head, g_msgq_count;
+static uint32_t g_input_events, g_input_dropped, g_input_dispatched;
+static uint32_t main_hwnd(void) {
+    /* The game's real window is GLFW's "GLFW30" class (0x00a5b7b0's proc);
+     * "GLFW3 Helper" is GLFW's hidden helper and "Message" the DirectInput
+     * hotplug window created LAST -- keys sent to that one reach 0x00a6cef0
+     * and never the game (round 14a's first run). */
+    for (int i = g_win_n - 1; i >= 0; --i) {
+        int c = g_win[i].cls;
+        if (c >= 0 && strncmp(g_wc[c].name, "GLFW3", 5) == 0 && !strstr(g_wc[c].name, "Helper"))
+            return g_win[i].hwnd;
+    }
+    /* fallback: the biggest window, then the last one */
+    int best = -1;
+    for (int i = 0; i < g_win_n; ++i)
+        if (best < 0 || (uint64_t)g_win[i].w * g_win[i].h > (uint64_t)g_win[best].w * g_win[best].h) best = i;
+    return best >= 0 ? g_win[best].hwnd : 0u;
+}
+static void msgq_push(uint32_t message, uint32_t wParam, uint32_t lParam) {
+    if (g_msgq_count >= MSGQ_MAX) { ++g_input_dropped; return; }
+    win_msg *m = &g_msgq[(g_msgq_head + g_msgq_count) % MSGQ_MAX];
+    m->hwnd = main_hwnd(); m->message = message; m->wParam = wParam; m->lParam = lParam;
+    m->time = (uint32_t)emscripten_get_now();
+    m->x = (uint32_t)g_cur_x; m->y = (uint32_t)g_cur_y;
+    ++g_msgq_count;
+}
+void isaac_input_key(uint32_t vk, uint32_t scancode, int extended, int down) {
+    vk &= 0xFFu;
+    uint32_t lp = 1u | ((scancode & 0xFFu) << 16) | (extended ? (1u << 24) : 0u);
+    if (down) { if (g_keydown[vk]) lp |= 1u << 30; }
+    else lp |= (1u << 30) | (1u << 31);
+    g_keydown[vk] = down ? 1u : 0u;
+    msgq_push(down ? 0x100u : 0x101u, vk, lp);
+    ++g_input_events;
+}
+void isaac_input_mouse_move(int32_t x, int32_t y) {
+    g_cur_x = x; g_cur_y = y;
+    msgq_push(0x200u, g_mouse_mk, ((uint32_t)y << 16) | ((uint32_t)x & 0xFFFFu));
+    ++g_input_events;
+}
+void isaac_input_mouse_button(int button, int down) {
+    uint32_t bit = button ? 2u : 1u;
+    if (down) g_mouse_mk |= bit; else g_mouse_mk &= ~bit;
+    uint32_t message = button ? (down ? 0x204u : 0x205u) : (down ? 0x201u : 0x202u);
+    msgq_push(message, g_mouse_mk, ((uint32_t)g_cur_y << 16) | ((uint32_t)g_cur_x & 0xFFFFu));
+    ++g_input_events;
+}
+uint32_t isaac_input_queued(void) { return g_msgq_count; }
+uint32_t isaac_input_dropped(void) { return g_input_dropped; }
+EM_JS(int, isaac_input_poll_js, (int frame, int32_t *out), {
+    if (typeof Module.isaacInputPoll !== "function") return 0;
+    return Module.isaacInputPoll(frame, out) ? 1 : 0;
+});
+static void input_poll_page(void) {
+    int32_t ev[4];
+    for (unsigned n = 0; n < 64; ++n) {
+        if (!isaac_input_poll_js((int)g_frames_presented, ev)) break;
+        if (g_input_events < 12)
+            isaac_log("[isaac][input] frame %u: scripted event [%d, %d, %d, %d]",
+                      g_frames_presented, ev[0], ev[1], ev[2], ev[3]);
+        switch (ev[0]) {
+        case 1: isaac_input_key((uint32_t)ev[1], (uint32_t)ev[2] & 0xFFu, (ev[2] >> 8) & 1, ev[3] != 0); break;
+        case 2: isaac_input_mouse_move(ev[1], ev[2]); break;
+        case 3: isaac_input_mouse_button(ev[1], ev[2] != 0); break;
+        default: break;
+        }
+    }
+}
+static int msgq_pop_into(uint32_t msg) {
+    if (!g_msgq_count || !msg || !isaac_is_guest_va(msg + 27u)) return 0;
+    win_msg *m = &g_msgq[g_msgq_head];
+    g_msgq_head = (g_msgq_head + 1u) % MSGQ_MAX;
+    --g_msgq_count;
+    isaac_w32(msg + 0u, m->hwnd);
+    isaac_w32(msg + 4u, m->message);
+    isaac_w32(msg + 8u, m->wParam);
+    isaac_w32(msg + 12u, m->lParam);
+    isaac_w32(msg + 16u, m->time);
+    isaac_w32(msg + 20u, m->x);
+    isaac_w32(msg + 24u, m->y);
+    return 1;
+}
+/* Focus. A real window receives WM_ACTIVATEAPP, WM_ACTIVATE and WM_SETFOCUS
+ * before any key; GLFW turns them into its focused state and games gate
+ * input on it. Sent once, at the first pump after the window exists. */
+static int g_focus_sent;
+static void focus_main_window(void) {
+    if (g_focus_sent || !g_win_n) return;
+    g_focus_sent = 1;
+    msgq_push(0x1Cu, 1u, 0u);                     /* WM_ACTIVATEAPP, activating */
+    msgq_push(0x06u, 1u, 0u);                     /* WM_ACTIVATE, WA_ACTIVE     */
+    msgq_push(0x07u, 0u, 0u);                     /* WM_SETFOCUS                */
+}
+uint32_t isaac_input_focused_hwnd(void) { return g_win_n ? main_hwnd() : 0u; }
 void imp_user32__PeekMessageW(CpuState *restrict cpu) {
     uint32_t msg = isaac_arg(cpu, 0);
     (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
     (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
+    focus_main_window();
+    input_poll_page();
+    if (msgq_pop_into(msg)) { cpu->EAX = 1; return; }
     int cap = frame_cap();
     if (cap > 0 && (int)g_frames_presented >= cap && !g_quit_sent && msg &&
         isaac_is_guest_va(msg + 27u)) {
@@ -590,10 +717,35 @@ void imp_user32__DispatchMessageA(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0;
 }
+/* LRESULT DispatchMessageW(const MSG*): call the window class's WndProc as a
+ * guest sub-call (stdcall: lParam, wParam, message, hwnd pushed right to
+ * left, then a 0 return address; the callee's `ret 0x10` pops its arguments
+ * and the dispatcher returns when EIP reaches 0). This is the same shape
+ * host_shims_crt.c uses for _initterm entries. */
 void imp_user32__DispatchMessageW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0);
+    uint32_t msg = isaac_arg(cpu, 0);
     cpu->EAX = 0;
+    if (!msg || !isaac_is_guest_va(msg + 15u)) return;
+    uint32_t hwnd = isaac_r32(msg), message = isaac_r32(msg + 4u),
+             wParam = isaac_r32(msg + 8u), lParam = isaac_r32(msg + 12u);
+    int wi = win_find_hwnd(hwnd);
+    if (wi < 0 || g_win[wi].cls < 0 || !g_wc[g_win[wi].cls].wndproc) return;
+    uint32_t proc = g_wc[g_win[wi].cls].wndproc;
+    CpuState sub = *cpu;
+    sub.ESP = (cpu->ESP - 0x400u) & ~0xFu;
+    sub.ESP -= 4; isaac_w32(sub.ESP, lParam);
+    sub.ESP -= 4; isaac_w32(sub.ESP, wParam);
+    sub.ESP -= 4; isaac_w32(sub.ESP, message);
+    sub.ESP -= 4; isaac_w32(sub.ESP, hwnd);
+    sub.ESP -= 4; isaac_w32(sub.ESP, 0);
+    ++g_input_dispatched;
+    if (g_input_dispatched <= 8)
+        isaac_log("[isaac][input] DispatchMessageW -> WndProc 0x%08x(hwnd 0x%08x, msg 0x%x, w 0x%x, l 0x%08x)",
+                  proc, hwnd, message, wParam, lParam);
+    isaac_guest_call(proc, &sub);
+    cpu->EAX = sub.EAX;
 }
+uint32_t isaac_input_dispatched(void) { return g_input_dispatched; }
 void imp_user32__WaitMessage(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
@@ -646,17 +798,47 @@ void imp_user32__SetClipboardData(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     cpu->EAX = 0;
 }
+/* Window properties: GLFW stores its window object with SetPropW(hWnd,
+ * L"GLFW", window) and its WndProc reads it back with GetPropW; a 0 answer
+ * makes every message fall through to DefWindowProc. Keyed by hwnd and the
+ * FNV-1a hash of the wide name (an atom argument hashes its value). */
+#define WIN_PROPS 64
+static struct { uint32_t hwnd, key, value; int live; } g_props[WIN_PROPS];
+static uint32_t prop_key(uint32_t name_va) {
+    if ((name_va & 0xFFFF0000u) == 0) return name_va;          /* atom */
+    uint32_t h = 2166136261u;
+    for (unsigned i = 0; i < 128 && isaac_is_guest_va(name_va + 2u * i); ++i) {
+        uint16_t c = isaac_r16(name_va + 2u * i);
+        if (!c) break;
+        h ^= c; h *= 16777619u;
+    }
+    return h;
+}
 void imp_user32__SetPropW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    uint32_t hwnd = isaac_arg(cpu, 0), key = prop_key(isaac_arg(cpu, 1)), value = isaac_arg(cpu, 2);
+    int free_slot = -1;
+    for (int i = 0; i < WIN_PROPS; ++i) {
+        if (g_props[i].live && g_props[i].hwnd == hwnd && g_props[i].key == key) { g_props[i].value = value; cpu->EAX = 1; return; }
+        if (!g_props[i].live && free_slot < 0) free_slot = i;
+    }
+    if (free_slot < 0) { cpu->EAX = 0; return; }
+    g_props[free_slot].hwnd = hwnd; g_props[free_slot].key = key;
+    g_props[free_slot].value = value; g_props[free_slot].live = 1;
     cpu->EAX = 1;
 }
 void imp_user32__GetPropW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
+    uint32_t hwnd = isaac_arg(cpu, 0), key = prop_key(isaac_arg(cpu, 1));
     cpu->EAX = 0;
+    for (int i = 0; i < WIN_PROPS; ++i)
+        if (g_props[i].live && g_props[i].hwnd == hwnd && g_props[i].key == key) { cpu->EAX = g_props[i].value; return; }
 }
 void imp_user32__RemovePropW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
+    uint32_t hwnd = isaac_arg(cpu, 0), key = prop_key(isaac_arg(cpu, 1));
     cpu->EAX = 0;
+    for (int i = 0; i < WIN_PROPS; ++i)
+        if (g_props[i].live && g_props[i].hwnd == hwnd && g_props[i].key == key) {
+            cpu->EAX = g_props[i].value; g_props[i].live = 0; return;
+        }
 }
 void imp_user32__TrackMouseEvent(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);

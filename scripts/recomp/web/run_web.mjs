@@ -12,7 +12,7 @@
 // Module.isaacPresent; the page keeps the last frames and this runner writes
 // them out as PNGs next to the log.
 //
-//   node scripts/recomp/web/run_web.mjs [out-dir] [frames] [ISAAC_X=Y ...]
+//   node scripts/recomp/web/run_web.mjs [out-dir] [frames] [ISAAC_X=Y ...] [input=130:Enter,...] [keep=30]
 //
 // Exit code: 0 when main returned 0, 1 otherwise. Reads nothing outside the
 // repo and the instance dir; downloads nothing (Playwright's bundled Chromium
@@ -31,7 +31,10 @@ const SEGS = join(ROOT, 'output', 'recomp', 'host', 'isaac.segs.bin');
 const INSTANCE = join(ROOT, '.scratch', 'game-instance');
 const OUT = process.argv[2] || join(ROOT, 'output', 'recomp', 'web-run');
 const FRAMES = process.argv[3] || '5';
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=')).map((a) => a.split('='));
+// trailing K=V arguments: ISAAC_* go into the module's ENV; `input=` is the
+// scripted input timeline and `keep=` the frame sampling interval (see
+// boot_web.mjs); anything else is passed through as a query parameter.
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {

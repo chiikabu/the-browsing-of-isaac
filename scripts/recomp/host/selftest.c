@@ -580,6 +580,141 @@ int main(int argc, char **argv) {
               "premultiply maps R,G,B through the alpha table and keeps alpha");
     }
 
+    /* Input (round 14a): scripted events become Win32 messages for GLFW's
+     * pump, with the lParam layout its WndProc decodes. */
+    {
+        extern void isaac_input_key(uint32_t vk, uint32_t scancode, int extended, int down);
+        extern void isaac_input_mouse_move(int32_t x, int32_t y);
+        extern void isaac_input_mouse_button(int button, int down);
+        extern uint32_t isaac_input_queued(void);
+        uint32_t msgbuf = ISAAC_STACK_TOP_VA - 0x3800;
+        #define PEEK() do { memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf); \
+            isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); \
+            isaac_w32(cpu.ESP + 20, 1); imp_user32__PeekMessageW(&cpu); } while (0)
+        PEEK();
+        check(cpu.EAX == 0, "an empty queue peeks as no message");
+        isaac_input_key(0x0D, 0x1C, 0, 1);           /* Enter down */
+        isaac_input_key(0x28, 0x50, 1, 1);           /* Down arrow (extended) down */
+        isaac_input_key(0x0D, 0x1C, 0, 0);           /* Enter up */
+        check(isaac_input_queued() == 3, "three events queue three messages");
+        PEEK();
+        check(cpu.EAX == 1 && isaac_r32(msgbuf + 4) == 0x100 && isaac_r32(msgbuf + 8) == 0x0D &&
+              isaac_r32(msgbuf + 12) == ((0x1Cu << 16) | 1u),
+              "first message: WM_KEYDOWN Enter, lParam = scancode 0x1C << 16 | repeat 1");
+        PEEK();
+        check(cpu.EAX == 1 && isaac_r32(msgbuf + 4) == 0x100 && isaac_r32(msgbuf + 8) == 0x28 &&
+              isaac_r32(msgbuf + 12) == ((0x50u << 16) | (1u << 24) | 1u),
+              "second message: WM_KEYDOWN Down with the extended bit (24) set");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0x28);
+        imp_user32__GetKeyState(&cpu);
+        check((cpu.EAX & 0x8000u) != 0, "GetKeyState reports Down as held while its key-up is not yet queued");
+        PEEK();
+        check(cpu.EAX == 1 && isaac_r32(msgbuf + 4) == 0x101 &&
+              (isaac_r32(msgbuf + 12) & ((1u << 30) | (1u << 31))) == ((1u << 30) | (1u << 31)),
+              "third message: WM_KEYUP Enter with the previous-state and transition bits");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0x0D);
+        imp_user32__GetKeyState(&cpu);
+        check((cpu.EAX & 0x8000u) == 0, "GetKeyState reports Enter released after its key-up");
+        PEEK();
+        check(cpu.EAX == 0, "the queue is empty again (messages are delivered once, in order)");
+        isaac_input_mouse_move(480, 270);
+        isaac_input_mouse_button(0, 1);
+        PEEK();
+        check(cpu.EAX == 1 && isaac_r32(msgbuf + 4) == 0x200 && isaac_r32(msgbuf + 12) == ((270u << 16) | 480u),
+              "mouse move: WM_MOUSEMOVE with y << 16 | x");
+        PEEK();
+        check(cpu.EAX == 1 && isaac_r32(msgbuf + 4) == 0x201 && isaac_r32(msgbuf + 8) == 1u,
+              "left button: WM_LBUTTONDOWN with MK_LBUTTON");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf);
+        imp_user32__GetCursorPos(&cpu);
+        check(isaac_r32(msgbuf) == 480 && isaac_r32(msgbuf + 4) == 270, "GetCursorPos follows the last mouse move");
+        isaac_input_mouse_button(0, 0);
+        PEEK();
+        #undef PEEK
+        /* the queue targets GLFW's main window, never the helper or the
+         * DirectInput "Message" window that is created last */
+        {
+            uint32_t wcx = msgbuf + 0x100, cname = msgbuf + 0x200;
+            uint32_t hwnds[3] = {0, 0, 0};
+            const char *classes[3] = {"GLFW3 Helper", "GLFW30", "Message"};
+            for (int k = 0; k < 3; ++k) {
+                for (unsigned i = 0; ; ++i) { isaac_w16(cname + 2 * i, (uint16_t)classes[k][i]); if (!classes[k][i]) break; }
+                for (unsigned i = 0; i < 0x30; i += 4) isaac_w32(wcx + i, 0);
+                isaac_w32(wcx + 0, 0x30);                 /* cbSize */
+                isaac_w32(wcx + 8, 0x00500000u + k);      /* lpfnWndProc (fake) */
+                isaac_w32(wcx + 0x28, cname);             /* lpszClassName */
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, wcx);
+                imp_user32__RegisterClassExW(&cpu);
+                uint32_t atom = cpu.EAX;
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, 0);                /* exstyle */
+                isaac_w32(cpu.ESP + 8, atom);             /* class atom */
+                isaac_w32(cpu.ESP + 12, cname);           /* title (reuse) */
+                isaac_w32(cpu.ESP + 16, 0);               /* style */
+                isaac_w32(cpu.ESP + 20, 0); isaac_w32(cpu.ESP + 24, 0);
+                /* the Message window is the biggest (the real one is created with
+                 * CW_USEDEFAULT and lands on the 1280x720 display size) */
+                isaac_w32(cpu.ESP + 28, k == 1 ? 960 : k == 2 ? 1280 : 1); isaac_w32(cpu.ESP + 32, k == 1 ? 540 : k == 2 ? 720 : 1);
+                imp_user32__CreateWindowExW(&cpu);
+                hwnds[k] = cpu.EAX;
+            }
+            check(hwnds[0] && hwnds[1] && hwnds[2] && hwnds[2] > hwnds[1], "three windows created, the Message window last");
+            isaac_input_key(0x1B, 0x01, 0, 1);
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf);
+            isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); isaac_w32(cpu.ESP + 20, 1);
+            imp_user32__PeekMessageW(&cpu);
+            /* the first pump also queues the focus messages ahead of the key */
+            uint32_t first_hwnd = isaac_r32(msgbuf), first_msg = isaac_r32(msgbuf + 4);
+            check(cpu.EAX == 1 && first_hwnd == hwnds[1] && (first_msg == 0x1C || first_msg == 0x100),
+                  "messages are addressed to the GLFW30 window, not the last-created Message window");
+            for (int n = 0; n < 8 && cpu.EAX; ++n) {
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf);
+                isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); isaac_w32(cpu.ESP + 20, 1);
+                imp_user32__PeekMessageW(&cpu);
+            }
+            isaac_input_key(0x1B, 0x01, 0, 0);
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf);
+            isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); isaac_w32(cpu.ESP + 20, 1);
+            imp_user32__PeekMessageW(&cpu);
+        }
+        /* window properties: GLFW's WndProc finds its window via GetPropW */
+        uint32_t wname = msgbuf + 0x40;
+        const char *nm = "GLFW";
+        for (unsigned i = 0; ; ++i) { isaac_w16(wname + 2 * i, (uint16_t)nm[i]); if (!nm[i]) break; }
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0x20007); isaac_w32(cpu.ESP + 8, wname);
+        isaac_w32(cpu.ESP + 12, 0x0BADF00D);
+        imp_user32__SetPropW(&cpu);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0x20007); isaac_w32(cpu.ESP + 8, wname);
+        imp_user32__GetPropW(&cpu);
+        check(cpu.EAX == 0x0BADF00D, "GetPropW returns what SetPropW stored for that window and name");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0x20008); isaac_w32(cpu.ESP + 8, wname);
+        imp_user32__GetPropW(&cpu);
+        check(cpu.EAX == 0, "a different window has no such property");
+    }
+
     /* Adopted threads (boot round 12): _beginthreadex through the engine's
      * trampoline 0x00a7f130 must leave the thread struct's done flag set, or
      * ~Thread() calls std::terminate() at shutdown. */

@@ -113,7 +113,7 @@ LDFLAGS = [
     "-sNODERAWFS=1",
     "-sMODULARIZE=1",
     "-sEXPORT_ES6=1",
-    "-sEXPORTED_RUNTIME_METHODS=HEAPU8",
+    "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32",
 ]
 
 
@@ -179,9 +179,9 @@ def main():
         host_obj_suffix = ".web.o"
         LDFLAGS = [f for f in LDFLAGS
                    if f not in ("-sENVIRONMENT=node", "-sNODERAWFS=1",
-                                "-sEXPORTED_RUNTIME_METHODS=HEAPU8")]
+                                "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32")]
         LDFLAGS += ["-sENVIRONMENT=web", "-sFORCE_FILESYSTEM=1",
-                    "-sEXPORTED_RUNTIME_METHODS=HEAPU8,FS,ENV",
+                    "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32,FS,ENV",
                     "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",
                     "-sGL_ENABLE_GET_PROC_ADDRESS=0", "-lGL"]
     if args.fast:
