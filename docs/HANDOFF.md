@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12e)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 12f)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -203,13 +203,22 @@ Rule added to AGENTS.md: speed units start from a wall-time profile of the
 whole process, never from the guest-instruction histogram (it was off by
 30x here).
 
-**Exact next unit (B):** run the profiled 600-frame boot
-(`ISAAC_MAX_FRAMES=600 node --cpu-prof ... `, summarise self time per
-function) and read what is left: the instance seeding (`isaac_fs_seed` +
-node `open`/`read`, ~3.5 s of the 10.6 s -- lazy seeding is the obvious
-cut), the lifted PNG chain (inflate_fast ~5 s under the profiler), and the
-per-frame shim traffic. Then the per-frame STUBs (input, audio, GL draw)
-become real host arms so the menu actually renders.
+**Round 12f:** the RAM-FS got a hash index (fs_find was a strcmp over
+all 16,384 slots) and lazy file bytes (the driver registers the 11,197
+instance files with their sizes; bytes are read on first open through
+`Module.isaacLazyRead`). A 5-frame boot reads 643 files (31 MB) and takes
+**12.4 s start to exit**; the host heap no longer carries the 208 MB copy.
+
+**Exact next unit (B):** the boot is now dominated by the lifted PNG
+chain (inflate_fast + inflate_codes + libpng, ~7 s of the 10.7 s to
+frame 3; a host zlib cut is a shadow-state design, see §21.14) -- but the
+functional walls matter more now that the loop outruns real time: the
+frame presents nothing (GL draw arms are tables and counters), takes no
+input, plays no audio, and the engine's three service threads never run
+(`ISAAC_RUN_THREADS=1` is an untested inline runner; the jobs are endless
+loops and need a per-job design). Read the per-frame shim census in the
+stub report of a 600-frame run first (`ISAAC_MAX_FRAMES=600`), then make
+the first real arm the one the menu needs to show anything.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

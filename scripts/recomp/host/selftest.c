@@ -84,6 +84,18 @@ static void check(int cond, const char *what) {
     }
 }
 
+/* Round 12f lazy-FS reader for the selftest: records the path it was asked
+ * for and fills the buffer with a fixed pattern. */
+static unsigned g_lazy_calls;
+static char g_lazy_src[128];
+static int selftest_lazy_reader(const char *src, uint8_t *dst, uint32_t len) {
+    ++g_lazy_calls;
+    strncpy(g_lazy_src, src, sizeof g_lazy_src - 1);
+    for (uint32_t i = 0; i < len; i++) dst[i] = (uint8_t)"LAZY!!"[i % 6];
+    return 1;
+}
+
+
 int main(int argc, char **argv) {
     printf("--- isaac host layer selftest ---\n");
     if (argc > 1) load_image(argv[1]);
@@ -1108,6 +1120,84 @@ int main(int argc, char **argv) {
         for (unsigned i = 0; i < sizeof payload; ++i)
             if (*(uint8_t *)isaac_g(rbuf + i) != payload[i]) { match = 0; break; }
         check(match, "the bytes read back are byte-for-byte what was seeded");
+
+        /* Round 12f: the key -> slot hash index and lazy bytes. */
+        {
+            extern int isaac_fs_seed_lazy(const char *path, uint32_t len);
+            typedef int (*isaac_fs_lazy_reader)(const char *src, uint8_t *dst, uint32_t len);
+            extern void isaac_fs_set_lazy_reader(isaac_fs_lazy_reader fn);
+            extern uint32_t isaac_fs_lazy_loads(void);
+            static const uint8_t one[1] = { 1 };
+            check(isaac_fs_seed("data/idx_a.txt", one, 1) == 1 &&
+                  isaac_fs_seed("data/idx_b.txt", one, 1) == 1 &&
+                  isaac_fs_seed("data/idx_c.txt", one, 1) == 1, "three files seed beside each other");
+            uint32_t nbuf = dbuf + 0x300;
+            #define FS_ATTR(path) do { \
+                const char *q_ = (path); \
+                for (unsigned i_ = 0; ; ++i_) { *(uint8_t *)isaac_g(nbuf + i_) = (uint8_t)q_[i_]; if (!q_[i_]) break; } \
+                memset(&cpu, 0, sizeof cpu); \
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+                isaac_w32(cpu.ESP, 0xDEADBEEF); \
+                isaac_w32(cpu.ESP + 4, nbuf); \
+            } while (0)
+            FS_ATTR("data/idx_b.txt"); imp_kernel32__GetFileAttributesA(&cpu);
+            check(cpu.EAX != 0xFFFFFFFFu, "the index finds a seeded file");
+            FS_ATTR("data/idx_b.txt"); imp_kernel32__DeleteFileA(&cpu);
+            check(cpu.EAX == 1u, "DeleteFileA removes it");
+            FS_ATTR("data/idx_b.txt"); imp_kernel32__GetFileAttributesA(&cpu);
+            int gone = (cpu.EAX == 0xFFFFFFFFu);
+            FS_ATTR("data/idx_a.txt"); imp_kernel32__GetFileAttributesA(&cpu);
+            int a_ok = (cpu.EAX != 0xFFFFFFFFu);
+            FS_ATTR("data/idx_c.txt"); imp_kernel32__GetFileAttributesA(&cpu);
+            int c_ok = (cpu.EAX != 0xFFFFFFFFu);
+            check(gone && a_ok && c_ok, "after a delete the index still finds the neighbours and not the deleted key");
+            FS_ATTR("data/idx_b.txt");
+            check(isaac_fs_seed("data/idx_b.txt", one, 1) == 1, "the deleted key can be seeded again");
+            imp_kernel32__GetFileAttributesA(&cpu);
+            check(cpu.EAX != 0xFFFFFFFFu, "and is found again");
+
+            /* lazy: bytes come from the reader on first open, once */
+            isaac_fs_set_lazy_reader(selftest_lazy_reader);
+            g_lazy_calls = 0; g_lazy_src[0] = 0;
+            check(isaac_fs_seed_lazy("data/Lazy.bin", 6) == 1, "a lazy entry registers with its size");
+            check(g_lazy_calls == 0, "registering a lazy entry reads nothing");
+            FS_ATTR("data/lazy.bin"); imp_kernel32__GetFileAttributesA(&cpu);
+            check(cpu.EAX != 0xFFFFFFFFu, "the lazy entry is visible to stat before any read");
+            uint32_t before_loads = isaac_fs_lazy_loads();
+            for (int round = 0; round < 2; round++) {
+                const char *lp = "data/lazy.bin";
+                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(pbuf + i) = (uint8_t)lp[i]; if (!lp[i]) break; }
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, pbuf);
+                isaac_w32(cpu.ESP + 8, mbuf);
+                imp_api_ms_win_crt_stdio__fopen(&cpu);
+                uint32_t lh = cpu.EAX;
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, rbuf);
+                isaac_w32(cpu.ESP + 8, 1);
+                isaac_w32(cpu.ESP + 12, 6);
+                isaac_w32(cpu.ESP + 16, lh);
+                imp_api_ms_win_crt_stdio__fread(&cpu);
+                if (round == 0)
+                    check(lh && cpu.EAX == 6 && memcmp(isaac_g(rbuf), "LAZY!!", 6) == 0,
+                          "fread of a lazy entry returns the reader's bytes");
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, lh);
+                imp_api_ms_win_crt_stdio__fclose(&cpu);
+            }
+            check(g_lazy_calls == 1 && isaac_fs_lazy_loads() == before_loads + 1,
+                  "the reader ran exactly once across two opens (bytes are kept)");
+            check(strcmp(g_lazy_src, "data/Lazy.bin") == 0,
+                  "the reader receives the seed path verbatim (case kept), not the normalised key");
+            isaac_fs_set_lazy_reader(NULL);
+            #undef FS_ATTR
+        }
 
         /* "." segments must collapse. The game probes its own cwd as "./"
          * during the save-data setup; that was normalising to the key

@@ -47,6 +47,7 @@ EXPORTED_FUNCTIONS = [
     "_isaac_run_boot",
     "_isaac_run_main",
     "_isaac_fs_seed",
+    "_isaac_fs_seed_lazy",
     "_isaac_stub_report",
     "_isaac_heap_report",
     "_isaac_module_report",

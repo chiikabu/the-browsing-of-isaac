@@ -47,11 +47,34 @@
 typedef struct {
     char     key[160];
     uint8_t  is_dir;
+    uint8_t  live;            /* slot in use (a file may be empty or lazy: data == NULL) */
+    uint8_t  lazy;            /* bytes not loaded yet: src names the host file */
     uint8_t *data;            /* file bytes (host heap) */
     uint32_t size, cap;
+    char    *src;             /* lazy entries: the seed path the loader reads */
 } fs_entry;
 
 static fs_entry g_fs[FS_SLOTS];
+
+/* Round 12f: key -> slot hash index (open addressing, FNV-1a). fs_find was a
+ * strcmp over all 16384 slots per lookup -- 1 s of a 12 s boot once the
+ * allocator stopped hiding it. Deletes rebuild the index (rare). */
+#define FS_HASH 65536u
+static uint32_t g_fs_hash[FS_HASH];          /* slot index + 1, 0 = empty */
+static uint32_t fs_hash_key(const char *k) {
+    uint32_t h = 2166136261u;
+    for (; *k; ++k) { h ^= (uint8_t)*k; h *= 16777619u; }
+    return h;
+}
+static void fs_hash_insert(uint32_t slot) {
+    uint32_t h = fs_hash_key(g_fs[slot].key) & (FS_HASH - 1u);
+    while (g_fs_hash[h]) h = (h + 1u) & (FS_HASH - 1u);
+    g_fs_hash[h] = slot + 1u;
+}
+static void fs_hash_rebuild(void) {
+    memset(g_fs_hash, 0, sizeof g_fs_hash);
+    for (uint32_t i = 0; i < FS_SLOTS; ++i) if (g_fs[i].live) fs_hash_insert(i);
+}
 static uint32_t g_file_used[FS_FILE_RG];       /* 0 = free */
 /* open-file registry: guest FILE* -> token -> file index */
 static uint32_t g_file_idx[FS_FILE_RG];
@@ -148,21 +171,27 @@ static int fs_key(const char *p, char *out, size_t cap) {
 }
 
 static fs_entry *fs_find(const char *key) {
-    for (unsigned i = 0; i < FS_SLOTS; ++i)
-        if (g_fs[i].is_dir || g_fs[i].data)       /* slot live */
-            if (strcmp(g_fs[i].key, key) == 0)
-                return &g_fs[i];
+    uint32_t h = fs_hash_key(key) & (FS_HASH - 1u);
+    for (uint32_t n = 0; n < FS_HASH && g_fs_hash[h]; ++n, h = (h + 1u) & (FS_HASH - 1u)) {
+        fs_entry *e = &g_fs[g_fs_hash[h] - 1u];
+        if (e->live && strcmp(e->key, key) == 0) return e;
+    }
     return NULL;
 }
 
+static uint32_t g_fs_next_free;              /* rotating hint for fs_new */
 static fs_entry *fs_new(const char *key, int is_dir) {
     fs_entry *e = fs_find(key);
     if (e) return e;
-    for (unsigned i = 0; i < FS_SLOTS; ++i) {
-        if (!g_fs[i].is_dir && !g_fs[i].data) {
+    for (unsigned n = 0; n < FS_SLOTS; ++n) {
+        uint32_t i = (g_fs_next_free + n) % FS_SLOTS;
+        if (!g_fs[i].live) {
             memset(&g_fs[i], 0, sizeof g_fs[i]);
             strncpy(g_fs[i].key, key, sizeof g_fs[i].key - 1);
             g_fs[i].is_dir = (uint8_t)is_dir;
+            g_fs[i].live = 1;
+            fs_hash_insert(i);
+            g_fs_next_free = (i + 1u) % FS_SLOTS;
             return &g_fs[i];
         }
     }
@@ -171,8 +200,55 @@ static fs_entry *fs_new(const char *key, int is_dir) {
 
 static void fs_free_entry(fs_entry *e) {
     if (e->data) free(e->data);
+    if (e->src) free(e->src);
     memset(e, 0, sizeof *e);
+    fs_hash_rebuild();                        /* deletes are rare; keep the index exact */
 }
+
+/* ---- lazy bytes (round 12f) -------------------------------------------- */
+/* The boot seeds 10,725 files (208 MB) before main(); reading and copying
+ * them all cost ~3 s of a 12 s boot and 208 MB of host heap for files the
+ * run never opens. A lazy entry carries its size and its seed path; the
+ * bytes are fetched on the first access through the loader below, which
+ * the driver supplies (boot_integration.mjs: Module.isaacLazyRead). The
+ * selftest installs a C reader instead. */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+EM_JS(int, isaac_fs_lazy_read_js, (const char *src, uint8_t *dst, uint32_t len), {
+    if (typeof Module.isaacLazyRead !== "function") return 0;
+    var s = "";
+    for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
+    return Module.isaacLazyRead(s, dst, len) ? 1 : 0;
+});
+#else
+static int isaac_fs_lazy_read_js(const char *src, uint8_t *dst, uint32_t len) {
+    (void)src; (void)dst; (void)len; return 0;
+}
+#endif
+typedef int (*isaac_fs_lazy_reader)(const char *src, uint8_t *dst, uint32_t len);
+static isaac_fs_lazy_reader g_lazy_reader = isaac_fs_lazy_read_js;
+void isaac_fs_set_lazy_reader(isaac_fs_lazy_reader fn) { g_lazy_reader = fn ? fn : isaac_fs_lazy_read_js; }
+static uint32_t g_lazy_loads, g_lazy_failures;
+
+static int fs_materialise(fs_entry *e) {
+    if (!e || !e->lazy) return 1;
+    e->lazy = 0;
+    if (!e->size) return 1;
+    uint8_t *buf = (uint8_t *)malloc(e->size);
+    if (!buf || !g_lazy_reader(e->src ? e->src : e->key, buf, e->size)) {
+        ++g_lazy_failures;
+        isaac_log("[isaac][fs] lazy load of '%s' (%u bytes) FAILED -- the file reads as empty",
+                  e->src ? e->src : e->key, e->size);
+        free(buf);
+        e->size = 0;
+        return 0;
+    }
+    e->data = buf; e->cap = e->size;
+    ++g_lazy_loads;
+    return 1;
+}
+uint32_t isaac_fs_lazy_loads(void) { return g_lazy_loads; }
+uint32_t isaac_fs_lazy_failures(void) { return g_lazy_failures; }
 
 /* parent key of a key; "" if none */
 static void fs_parent_key(const char *key, char *out, size_t cap) {
@@ -233,9 +309,29 @@ int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
         else memset(buf, 0, len);
     }
     if (e->data) free(e->data);
+    if (e->src) { free(e->src); e->src = NULL; }
+    e->lazy = 0;
     e->data = buf;
     e->size = len;
     e->cap = len;
+    return 1;
+}
+
+/* Lazy seed: the entry exists with its size (directory scans, stat and
+ * GetFileSize see it); the bytes come through the lazy reader on first use.
+ * `path` is kept verbatim as the loader's argument, so case and separators
+ * are the driver's own, not the normalised key's. */
+int isaac_fs_seed_lazy(const char *path, uint32_t len) {
+    char key[256];
+    if (!path || !fs_key(path, key, sizeof key) || !key[0]) return 0;
+    if (!fs_ensure_dirs(key)) return 0;
+    fs_entry *e = fs_new(key, 0);
+    if (!e || e->is_dir) return 0;
+    if (e->data) { free(e->data); e->data = NULL; }
+    if (e->src) free(e->src);
+    e->src = strdup(path);
+    if (!e->src) return 0;
+    e->size = len; e->cap = 0; e->lazy = 1;
     return 1;
 }
 
@@ -298,7 +394,7 @@ void imp_kernel32__RemoveDirectoryA(CpuState *restrict cpu) {
     /* empty check */
     size_t pref = strlen(key);
     for (unsigned i = 0; i < FS_SLOTS; ++i) {
-        if (!g_fs[i].is_dir && !g_fs[i].data) continue;
+        if (!g_fs[i].live) continue;
         if (strncmp(g_fs[i].key, key, pref) == 0 && g_fs[i].key[pref] == '/') {
             fs_err_set(145u); cpu->EAX = 0; return;      /* ERROR_DIR_NOT_EMPTY */
         }
@@ -355,7 +451,7 @@ static int fs_find_open(const char *key) {
     size_t pref = strlen(key);
     uint32_t cnt = 0;
     for (unsigned i = 0; i < FS_SLOTS && cnt < FS_FIND_MAX; ++i) {
-        if (!g_fs[i].is_dir && !g_fs[i].data) continue;
+        if (!g_fs[i].live) continue;
         const char *k = g_fs[i].key;
         if (strncmp(k, key, pref) == 0 && k[pref] == '/' &&
             !strchr(k + pref + 1, '/'))
@@ -490,6 +586,7 @@ static uint32_t fs_tok_to_idx(uint32_t tok) {
 static fs_entry *fs_file_entry(uint32_t idx) {
     uint32_t ei = g_file_idx[idx];
     if (ei >= FS_SLOTS) return NULL;
+    fs_materialise(&g_fs[ei]);                /* lazy bytes arrive on first use */
     return &g_fs[ei];
 }
 

@@ -2578,6 +2578,41 @@ copies that read `z->state` directly. An API-level host zlib is therefore
 a shadow-state design with those two sites patched -- and at 1% of wall
 time it is not a speed unit.
 
+### 21.15 Round 12f: the RAM-FS -- a hash index and lazy bytes
+
+The 600-frame wall-time profile after the allocator fix (38 s sampled,
+81% lifted code) still showed the FS layer: node `open` 1.5 s,
+`isaac_fs_seed` 0.9 s, `read` 0.5 s, `strcmp` 1.0 s. Two causes, both in
+the seeding phase before `main`: the driver read and copied every file of
+the instance tree into the host heap (11,197 files, 243 MB), and each
+`fs_new` ran `fs_find`, a `strcmp` over all 16,384 slots (183 M string
+compares just to seed).
+
+`host_shims_fs.c` now keeps an open-addressing FNV-1a index from key to
+slot (`g_fs_hash`, 65,536 entries; deletes rebuild it, which is hygiene
+rather than correctness: a stale entry points at a slot whose key no
+longer matches and the probe simply continues). Entries carry a `live`
+flag instead of the old "is_dir or has data" test, so an empty or lazy
+file is a real entry. **Lazy bytes:** `isaac_fs_seed_lazy(path, size)`
+registers a file with its size and its seed path; directory scans, stat
+and `GetFileSize` see it, and the first access through `fs_file_entry`
+materialises the bytes through a reader the driver installs
+(`Module.isaacLazyRead`, reached from C by an `EM_JS` bridge; the
+selftest installs a C reader instead). The seed path is handed to the
+reader verbatim, so case and separators are the driver's own, not the
+lower-cased key's.
+
+**Measured.** 11,197 files registered lazily; a 5-frame boot reads
+**643 of them (31.4 MB)**. Process wall time for the 5-frame boot,
+start to exit: **12.4 s** (the frame-3 stamp is unchanged at 10.7 s
+because the stamp clock starts after seeding). Host heap no longer holds
+the 208 MB the eager seed copied. Selftest pins: the index finds
+neighbours after a delete and finds a re-seeded key; a lazy entry is
+visible to stat before any read, `fread` returns the reader's bytes, the
+reader runs exactly once across two opens, and it receives the verbatim
+seed path -- the index insert, the materialise call and the lazy-flag
+clear are mutation-checked.
+
 ## Appendix: reproduction
 
 ```bash

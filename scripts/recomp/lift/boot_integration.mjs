@@ -1,7 +1,7 @@
 // Boot the lifted module: place the memory image, run the host boot path,
 // then call main. Every stage is reported separately so a failure names
 // the stage it happened in.
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import Module from './boot.mjs';
 
 const segsPath = process.argv[2] || 'output/recomp/host/isaac.segs.bin';
@@ -66,6 +66,36 @@ function seedFile(relPath, bytes) {
   m._free(pp); m._free(dp);
   return ok;
 }
+// Round 12f: the extracted tree is seeded LAZILY. Each file's size is
+// registered (directory scans, stat and GetFileSize see it); the bytes are
+// read from disk on the game's first open through Module.isaacLazyRead,
+// which the RAM-FS calls with the seed path verbatim. Eager seeding cost
+// ~3 s and 208 MB of host heap per boot for files most runs never open.
+let lazyReads = 0, lazyBytes = 0;
+m.isaacLazyRead = (src, dst, len) => {
+  try {
+    const bytes = readFileSync(`${INSTANCE_DIR}/${src}`);
+    if (bytes.length < len) { console.log(`  lazy read of ${src}: ${bytes.length} bytes on disk, ${len} registered`); return 0; }
+    m.HEAPU8.set(bytes.subarray(0, len), dst);
+    lazyReads += 1; lazyBytes += len;
+    return 1;
+  } catch (e) {
+    console.log(`  lazy read FAILED for ${src}: ${e.message}`);
+    return 0;
+  }
+};
+function seedLazy(relPath, size) {
+  if (typeof m._isaac_fs_seed_lazy !== 'function') {
+    return seedFile(relPath, readFileSync(`${INSTANCE_DIR}/${relPath}`));
+  }
+  const pathBytes = Buffer.from(relPath + '\0', 'utf8');
+  const pp = m._malloc(pathBytes.length);
+  m.HEAPU8.set(pathBytes, pp);
+  const ok = m._isaac_fs_seed_lazy(pp, size);
+  m._free(pp);
+  return ok;
+}
+export function isaacLazyStats() { return { lazyReads, lazyBytes }; }
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
     let seeded = 0;
@@ -111,14 +141,14 @@ if (typeof m._isaac_fs_seed === 'function') {
           walk(p, r);
         } else if (e.isFile()) {
           if (SKIP_EXT.test(e.name) || e.name.startsWith('.')) { skipped += 1; continue; }
-          const data = readFileSync(p);
-          if (seedFile(r, data)) { files += 1; bytes += data.length; }
+          const size = statSync(p).size;
+          if (seedLazy(r, size)) { files += 1; bytes += size; }
           else { failed += 1; if (failed <= 5) console.log(`  FAIL seeding ${r}`); }
         }
       }
     };
     walk(INSTANCE_DIR, '');
-    console.log(`  seeded ${files} loose files (${(bytes / 1048576).toFixed(1)} MB) from the instance root, ${skipped} skipped by type${failed ? `, ${failed} FAILED` : ''}`);
+    console.log(`  registered ${files} loose files lazily (${(bytes / 1048576).toFixed(1)} MB on disk, read on first open) from the instance root, ${skipped} skipped by type${failed ? `, ${failed} FAILED` : ''}`);
     // The host Lua module (upstream 5.3.3 in wasm) opens scripts through its
     // OWN libc, which this link maps to the real Node filesystem
     // (-sNODERAWFS=1) relative to process.cwd() -- not through the RAM-FS.
@@ -146,6 +176,7 @@ if (stage === 'boot') { console.log(`\nRESULT: boot rc=${bootRc}`); process.exit
 // --- main --------------------------------------------------------------
 const mainRc = stageOk('main @ 0x00931050', () => m._isaac_run_main());
 console.log(`  isaac_boot_call_main -> ${mainRc}`);
+console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFixed(1)} MB fetched on first open`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 try { m._isaac_stub_report(); } catch (e) { /* best effort */ }
