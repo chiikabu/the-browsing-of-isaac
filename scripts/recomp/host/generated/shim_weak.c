@@ -2926,7 +2926,7 @@ __attribute__((weak)) void imp_eossdk_win32_shipping___EOS_Platform_GetFriendsIn
 __attribute__((weak)) void imp_gdi32__GetDeviceCaps(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[583];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__FindNextFileW(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -2946,7 +2946,7 @@ __attribute__((weak)) void imp_kernel32__GetNumaNodeProcessorMask(CpuState *rest
 __attribute__((weak)) void imp_kernel32__TlsFree(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[587];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__VerSetConditionMask(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -2961,7 +2961,7 @@ __attribute__((weak)) void imp_libcurl__curl_easy_setopt(CpuState *restrict cpu)
 __attribute__((weak)) void imp_lua5_3_3r__lua_getstack(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[590];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_lua5_3_3r__luaopen_base(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -3011,7 +3011,7 @@ __attribute__((weak)) void imp_msvcp140____Unlock___basic_streambuf_DU__char_tra
 __attribute__((weak)) void imp_msvcp140___id___codecvt_DDU_Mbstatet___std__2V0locale_2_A(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[600];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_msvcp140___imbue___basic_streambuf_DU__char_traits_D_std___std__MAEXABVlocale_2__Z(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -3051,12 +3051,12 @@ __attribute__((weak)) void imp_ole32__CoInitializeEx(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_openal32__alGetString(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[608];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_openal32__alcGetProcAddress(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[609];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_user32__DefWindowProcA(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -3071,7 +3071,7 @@ __attribute__((weak)) void imp_user32__GetClassLongW(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_user32__GetRawInputDeviceList(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[612];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_user32__LoadImageA(CpuState *restrict cpu) {
     static const isaac_import *self;

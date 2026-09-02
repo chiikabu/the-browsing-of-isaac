@@ -2357,6 +2357,34 @@ build without `RECOMP_MEM_CHECK`/`--trace-va` for the hot TUs; measure
 before choosing. Note the setjmp pair count differs between runs that take
 different paths, so attribute gaps within one stamped log, not across runs.
 
+### 21.8 Round 11c: the register-held blind spot, closed at the census
+
+`LoadImageA` (window icon), then `SendMessageA` (WM_SETICON, ten
+instructions later) are reached as `mov ebx, [slot]; ...; call ebx`. The
+import census only counted `call [slot]` and ILT-thunk sites, so such an
+import was NEVER_CALLED with an unknown purge, and every one of them that a
+boot reached became a trap: `FindNextFileW` (round 10), `LoadImageA`
+(11b), and — predictable from the code right after it — `SendMessageA`.
+
+`gen_shims.py` now counts `mov r32, dword ptr [slot]` loads in the same
+decode pass that finds the thunks (`regHeldLoads` per row) and treats them
+as reachability: NEVER_CALLED means no call site AND no register load. That
+exposed **27 imports reachable only register-held** (32 NEVER_CALLED rows
+became 11, all genuinely dead: the seven `luaopen_*`, `DefWindowProcA`,
+`__CxxLongjmpUnwind`, `__std_terminate`, `_purecall`). Each of the 27 now
+has a running verdict and a signature-derived purge: inert STUBs where 0 is
+the honest no-Windows answer (`SendMessageA/W` 16, `TranslateMessage` 4,
+`PeekMessageA` 20, `GetClassLongW` 8, `UnregisterClassW` 8,
+`GetNumaNodeProcessorMask` 8, `CoInitialize` 4, `curl_easy_setopt` cdecl, the
+four decorated `_EOS_*@N`), bodies where 0 would mislead
+(`GetDeviceCaps` 8 → 96 dpi / 60 Hz / 32 bpp of the emulated display;
+`GetRawInputDeviceList` 12 → writes `*count = 0`; `lua_getstack` bound to
+the real Lua 5.3.3). `tests/recomp-host.test.js` refuses any reachable
+import that is NEVER_CALLED or carries an unknown purge, and the
+stub-purge-confidence test counts register-held loads as reachability
+(mutation-checked: dropping a curated purge, or blinding the census, fails
+the suite). Host selftest 130/0.
+
 ## Appendix: reproduction
 
 ```bash

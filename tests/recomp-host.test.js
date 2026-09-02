@@ -158,8 +158,11 @@ test('stack purge is never guessed for a stub that returns', (t) => {
   const s = readJson(join(host, 'shim-table.json'));
   // A trapping shim never returns, so its purge is irrelevant. A STUB does
   // return, so a wrong purge desynchronises the guest stack.
+  // A slot loaded into a register (`mov r32,[slot]; call r32`) is reachable
+  // exactly like a call site; the census counts them since round 11b.
+  const reachable = (r) => r.callSites > 0 || (r.regHeldLoads || 0) > 0;
   const returning = s.imports.filter(
-    (r) => r.verdict === 'STUB' && r.isStdcall && r.callSites > 0);
+    (r) => r.verdict === 'STUB' && r.isStdcall && reachable(r));
   assert.ok(returning.length > 0);
   for (const r of returning) {
     assert.equal(r.purgeConfidence, 'high',
@@ -169,6 +172,22 @@ test('stack purge is never guessed for a stub that returns', (t) => {
   // cdecl callees must never pop: the caller cleans.
   for (const r of s.imports) {
     if (r.convention === 'cdecl') assert.equal(r.argBytes, 0);
+  }
+});
+
+test('no reachable import is NEVER_CALLED or has an unknown purge', (t) => {
+  if (!has('shim-table.json')) return t.skip('run gen_shims.py');
+  const s = readJson(join(host, 'shim-table.json'));
+  // Round 11b: LoadImageA, SendMessageA, GetDeviceCaps, ... are reached only
+  // through register-held loads of their IAT slot. The census now records
+  // those (regHeldLoads); an import with any is reachable, so it needs a
+  // verdict that runs and a purge the dispatcher can apply.
+  assert.ok(s.imports.some((r) => (r.regHeldLoads || 0) > 0 && r.callSites === 0),
+    'the register-held census found at least one slot no call site reaches');
+  for (const r of s.imports) {
+    if (r.callSites === 0 && (r.regHeldLoads || 0) === 0) continue;
+    assert.notEqual(r.verdict, 'NEVER_CALLED', `${r.symbol}@${r.dll} is reachable but NEVER_CALLED`);
+    if (r.isStdcall) assert.notEqual(r.argBytes, 0xffff, `${r.symbol}@${r.dll} is reachable with an unknown purge`);
   }
 });
 

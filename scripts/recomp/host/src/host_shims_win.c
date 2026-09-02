@@ -136,6 +136,39 @@ void imp_user32__LoadImageA(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 
+/* int GetDeviceCaps(HDC, int index) -- gdi32, 8 bytes. Reached register-held
+ * from GLFW's monitor/DPI code (0x00a5cd20, 0x00a5dc90, 0x00a816f0); an
+ * inert 0 would put 0 dpi / 0 Hz into ratios. Answer a 96-dpi 60 Hz 32-bpp
+ * display of the emulated size. */
+void imp_gdi32__GetDeviceCaps(CpuState *restrict cpu) {
+    (void)isaac_arg(cpu, 0);
+    uint32_t index = isaac_arg(cpu, 1);
+    switch (index) {
+        case 8:   cpu->EAX = DISPLAY_W; break;   /* HORZRES */
+        case 10:  cpu->EAX = DISPLAY_H; break;   /* VERTRES */
+        case 12:  cpu->EAX = 32; break;          /* BITSPIXEL */
+        case 14:  cpu->EAX = 1; break;           /* PLANES */
+        case 88:  cpu->EAX = 96; break;          /* LOGPIXELSX */
+        case 90:  cpu->EAX = 96; break;          /* LOGPIXELSY */
+        case 116: cpu->EAX = 60; break;          /* VREFRESH */
+        case 118: cpu->EAX = DISPLAY_W; break;   /* DESKTOPHORZRES */
+        case 117: cpu->EAX = DISPLAY_H; break;   /* DESKTOPVERTRES */
+        default:  cpu->EAX = 0; break;
+    }
+}
+
+/* UINT GetRawInputDeviceList(PRAWINPUTDEVICELIST list, PUINT count, UINT size)
+ * -- user32, 12 bytes. Reached register-held (0x00a6d5ea, 0x00aa80ac: raw
+ * input / gamepad enumeration). The two-call protocol (NULL list: report
+ * the count; then fill) must write *count, or the caller sizes its buffer
+ * from stack garbage. No raw input devices: *count = 0, return 0. */
+void imp_user32__GetRawInputDeviceList(CpuState *restrict cpu) {
+    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 2);
+    uint32_t pcount = isaac_arg(cpu, 1);
+    if (pcount && isaac_is_guest_va(pcount)) isaac_w32(pcount, 0);
+    cpu->EAX = 0;
+}
+
 /* LONG SetClassLongA(HWND, int, LONG) -- no class storage; old value 0. */
 void imp_user32__SetClassLongA(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);

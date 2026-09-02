@@ -208,6 +208,27 @@ SYMBOL_OVERRIDE = {
     # Window icon via a register-held call (0x00949b03): census 0 sites, so
     # the verdict would stay NEVER_CALLED although host_shims_win.c provides it.
     "LoadImageA@user32.dll": "PROVIDED",
+    # Round 11b: every import whose IAT slot is loaded into a register
+    # somewhere (the census now counts them: regHeldLoads) gets a verdict and
+    # a purge, so none can trap as "not implemented / unknown purge" when its
+    # path is reached. Inert 0 is the right answer for these:
+    "SendMessageA@user32.dll": "STUB",        # WM_SETICON after LoadImageA (0x00949b30): previous icon = 0
+    "SendMessageW@user32.dll": "STUB",        # 0x00a5d651 (GLFW win32 window)
+    "TranslateMessage@user32.dll": "STUB",    # message pumps 0x00a5e690/0x00a6db02/0x00a81498: nothing translated
+    "PeekMessageA@user32.dll": "STUB",        # 0x00a6daeb: no message
+    "GetClassLongW@user32.dll": "STUB",       # 0x00a5d631: no class storage
+    "UnregisterClassW@user32.dll": "STUB",    # 0x00a81527 (GLFW terminate)
+    "GetNumaNodeProcessorMask@kernel32.dll": "STUB",  # CRT topology probe: FALSE
+    "CoInitialize@ole32.dll": "STUB",         # S_OK
+    "curl_easy_setopt@libcurl.dll": "STUB",   # CURLE_OK; crash uploader / news fetch are offline anyway
+    "_EOS_EpicAccountId_ToString@12@eossdk-win32-shipping.dll": "STUB",
+    "_EOS_Friends_GetBlockedUserAtIndex@8@eossdk-win32-shipping.dll": "STUB",
+    "_EOS_P2P_GetNextReceivedPacketSize@12@eossdk-win32-shipping.dll": "STUB",
+    "_EOS_Platform_GetFriendsInterface@4@eossdk-win32-shipping.dll": "STUB",
+    # ... and these need a real answer (host_shims_win.c / host_lua.c):
+    "GetDeviceCaps@gdi32.dll": "PROVIDED",        # LOGPIXELS/VREFRESH/BITSPIXEL, not 0
+    "GetRawInputDeviceList@user32.dll": "PROVIDED",   # must write *count = 0
+    "lua_getstack@lua5.3.3r.dll": "PROVIDED",     # real Lua 5.3.3 binding
     "EnterCriticalSection@kernel32.dll": "STUB",
     "LeaveCriticalSection@kernel32.dll": "STUB",
     "DeleteCriticalSection@kernel32.dll": "STUB",
@@ -287,6 +308,18 @@ CURATED_PURGE = {
     # Reached ONLY register-held (`call ebx` at 0x00949b03, the window icon) so
     # the census saw 0 sites; boot round 11b stopped on the unknown-purge trap.
     "LoadImageA@user32.dll": 24,
+    # Round 11b: the other register-held-only imports (regHeldLoads > 0,
+    # callSites == 0), purges from the Win32 signatures, 4 bytes per arg.
+    "SendMessageA@user32.dll": 16,            # (HWND, UINT, WPARAM, LPARAM)
+    "SendMessageW@user32.dll": 16,
+    "TranslateMessage@user32.dll": 4,         # (const MSG*)
+    "PeekMessageA@user32.dll": 20,            # (LPMSG, HWND, UINT, UINT, UINT)
+    "GetClassLongW@user32.dll": 8,            # (HWND, int)
+    "UnregisterClassW@user32.dll": 8,         # (LPCWSTR, HINSTANCE)
+    "GetDeviceCaps@gdi32.dll": 8,             # (HDC, int)
+    "GetRawInputDeviceList@user32.dll": 12,   # (PRAWINPUTDEVICELIST, PUINT, UINT)
+    "GetNumaNodeProcessorMask@kernel32.dll": 8,   # (UCHAR promoted, PULONGLONG)
+    "CoInitialize@ole32.dll": 4,              # (LPVOID)
     # msvcp140 C++ methods are __thiscall (this in ECX, callee pops the stack
     # args). The push-count sweep counts the CALLER's unrelated pushes at the
     # inlined construction sites, so three of them measured wrong; the purge is
@@ -532,10 +565,18 @@ def _text_ranges(pe):
     return out
 
 
-def find_thunks(pe, slot_vas, ranges):
+def find_thunks(pe, slot_vas, ranges, reg_loads=None):
     """ILT thunks: a 6-byte `jmp dword ptr [slot]`. MSVC routes most calls
     through these, so `call <thunk>` must be credited to the underlying import
-    or the stack measurement sees almost nothing."""
+    or the stack measurement sees almost nothing.
+
+    The same decode pass also counts REGISTER-HELD loads of a slot
+    (`mov r32, dword ptr [slot]`, later `call r32`) into `reg_loads`
+    {slot: count}. Those calls are invisible to the call-site census, and
+    every one of them that reached the boot (FindNextFileW, LoadImageA,
+    SendMessageA, ...) surfaced as a NEVER_CALLED import with an unknown
+    purge trapping mid-boot. With the count, the verdict below can no longer
+    call a reachable import NEVER_CALLED."""
     md = Cs(CS_ARCH_X86, CS_MODE_32)
     md.detail = True
     text = pe.section(".text")
@@ -552,6 +593,14 @@ def find_thunks(pe, slot_vas, ranges):
                         if d in slot_vas:
                             thunks[ins.address] = d
                     break
+            elif (reg_loads is not None and ins.mnemonic == "mov"
+                    and len(ins.operands) == 2 and ins.operands[1].type == X86_OP_MEM
+                    and ins.operands[1].mem.base == X86_REG_INVALID
+                    and ins.operands[1].mem.index == X86_REG_INVALID
+                    and ins.operands[1].size == 4):
+                d = ins.operands[1].mem.disp & 0xFFFFFFFF
+                if d in slot_vas:
+                    reg_loads[d] = reg_loads.get(d, 0) + 1
     return thunks
 
 
@@ -621,7 +670,8 @@ def main():
     syms = imports["symbols"]
     slot_vas = {int(s["iatVa"], 16) for s in syms}
     ranges = _text_ranges(pe)
-    thunks = find_thunks(pe, slot_vas, ranges)
+    reg_loads = {}
+    thunks = find_thunks(pe, slot_vas, ranges, reg_loads)
     stats = measure_stack_discipline(pe, slot_vas, ranges, thunks)
 
     rows = []
@@ -629,13 +679,15 @@ def main():
         dll, sym = s["dll"], s["symbol"]
         key = "%s@%s" % (sym, dll)
         verdict = SYMBOL_OVERRIDE.get(key, DLL_DEFAULT.get(dll, "UNIMPLEMENTED"))
-        # An explicit override documents a KNOWN reachability gap (e.g. the
-        # register-held call form the census cannot see); trust it. Without an
-        # override, zero measured sites means genuinely unreachable.
-        if s["callSites"] == 0 and key not in SYMBOL_OVERRIDE:
+        # NEVER_CALLED means genuinely unreachable: no `call [slot]` / thunk
+        # site AND no `mov r32, [slot]` load anywhere in .text (round 11b:
+        # the register-held form is how LoadImageA, SendMessageA, ... are
+        # reached). An explicit override still wins.
+        slot = int(s["iatVa"], 16)
+        reg_held = reg_loads.get(slot, 0)
+        if s["callSites"] == 0 and reg_held == 0 and key not in SYMBOL_OVERRIDE:
             verdict = "NEVER_CALLED"
 
-        slot = int(s["iatVa"], 16)
         st = stats.get(slot)
         pushes = addesp = None
         agree = None
@@ -675,6 +727,7 @@ def main():
         rows.append({
             "index": i, "dll": dll, "symbol": sym,
             "iatSlotVa": slot, "callSites": s["callSites"],
+            "regHeldLoads": reg_held,
             "verdict": verdict,
             "convention": conv, "conventionSource": conv_src,
             "argBytes": arg_bytes, "isStdcall": 1 if callee_pops else 0,

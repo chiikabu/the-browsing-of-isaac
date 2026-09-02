@@ -805,6 +805,9 @@ LUA_SHIM(lua_pcallk) {
 }
 LUA_SHIM(lua_gc)      { cpu->EAX = (uint32_t)lua_gc(L_ARG(0), I_ARG(1), I_ARG(2)); }
 LUA_SHIM(lua_getinfo) { cpu->EAX = (uint32_t)lua_getinfo(L_ARG(0), S_ARG(1), (lua_Debug *)P_ARG(2)); }
+/* Register-held only (0x00930b63, the debug-hook path): the call-site census
+ * saw 0 sites, so it had no binding and would have trapped. */
+LUA_SHIM(lua_getstack) { cpu->EAX = (uint32_t)lua_getstack(L_ARG(0), I_ARG(1), (lua_Debug *)P_ARG(2)); }
 
 /* auxiliary */
 LUA_SHIM(luaL_checkinteger) { ret_int(cpu, luaL_checkinteger(L_ARG(0), I_ARG(1))); }
