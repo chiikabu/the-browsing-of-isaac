@@ -334,6 +334,15 @@ spinning. The same scripted run now presents **13,860 frames at a median
 45-s stall that remains early in the engine `Mutex` path (`0x00a157f0`),
 which recovers.
 
+**Rounds 15d-15e:** the game opens `music.a` and `videos.a` once it is
+playing, so both drivers now seed them lazily (registered by size, read on
+first open). That pushes the module past `INITIAL_MEMORY`, and growing a
+wasm memory copies the whole heap -- a 200-s play run went from 7,980
+frames to **900** until the default was raised. It is **768 MiB** now
+(`--initial-memory` overrides; 1536 MiB buys another ~10%). Also: the
+stub-hit recorder was a linear scan run on all 66.5 M stub calls of a
+ten-minute run and is now an import-index table.
+
 **Round 15a claimed `--no-wasm-tier-up` was 41x; round 15b withdrew it**
 (§21.28-21.29). The baseline's ~4,400-s silent phase is real; the flag
 run's 145 s was this session killing it, and an independent run with the
