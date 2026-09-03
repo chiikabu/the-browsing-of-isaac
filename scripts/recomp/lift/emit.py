@@ -121,6 +121,13 @@ def main():
     ap.add_argument("--follow-depth", type=int, default=99)
     ap.add_argument("--split", type=int, default=0,
                     help="split output into N-function translation units")
+    ap.add_argument("--split-va", type=lambda v: int(v, 0), default=0,
+                    help="split into TUs by function ADDRESS: bucket = "
+                         "(va - text_lo) // N, file lifted_<bucket>.c. A "
+                         "function's TU then never moves, so a lifter change "
+                         "that alters one function rewrites one file and "
+                         "build_boot.py recompiles one object (round 14g). "
+                         "0x30000 gives ~40 TUs of ~12 MB of C.")
     ap.add_argument("--split-bytes", type=int, default=0,
                     help="split on cumulative emitted C bytes instead of "
                          "function count; body sizes span 37 B (p50) to "
@@ -229,6 +236,7 @@ def main():
     lifted = {}
     stats = []
     failures = []
+    data_stops = {}      # va -> decode error: data reached by fall-through (soft stop)
     callothers = []
     callothers_wide = []
     imports_used = set()
@@ -241,7 +249,7 @@ def main():
             continue
         try:
             ext = extents.get(va)
-            body, jumps = discover_body(dec, va, func_starts, lo, hi,
+            body, jumps = discover_body(dec, va, func_starts, lo, hi, bad=data_stops,
                                         max_insns=args.max_insns, jt=jt,
                                         extent=ext)
             fopts = dict(opts)
@@ -285,7 +293,7 @@ def main():
             continue
         func_starts.add(va)
         try:
-            body, jumps = discover_body(dec, va, func_starts, lo, hi,
+            body, jumps = discover_body(dec, va, func_starts, lo, hi, bad=data_stops,
                                         max_insns=args.max_insns, jt=jt,
                                         extent=extents.get(va))
             fopts = dict(opts)
@@ -360,7 +368,17 @@ def main():
 
     order = sorted(lifted)
     chunks = []
-    if args.split_bytes:
+    chunk_names = None
+    if args.split_va:
+        text_lo = pe.text().vaddr
+        buckets = {}
+        for va in order:
+            buckets.setdefault((va - text_lo) // args.split_va, []).append(va)
+        chunk_names = []
+        for b in sorted(buckets):
+            chunks.append(buckets[b])
+            chunk_names.append("%s_%03d.c" % (args.module, b))
+    elif args.split_bytes:
         cur, cur_bytes = [], 0
         for va in order:
             n = len(lifted[va])
@@ -380,8 +398,11 @@ def main():
     total_c = 0
     files = []
     for ci, chunk in enumerate(chunks):
-        name = ("%s_%03d.c" % (args.module, ci)) if len(chunks) > 1 \
-            else ("%s.c" % args.module)
+        if chunk_names is not None:
+            name = chunk_names[ci]
+        else:
+            name = ("%s_%03d.c" % (args.module, ci)) if len(chunks) > 1 \
+                else ("%s.c" % args.module)
         path = os.path.join(args.out, name)
         with open(path, "w") as fh:
             fh.write('#include "lifted_decls.h"\n\n')
@@ -426,6 +447,7 @@ def main():
         text_coverage_pct=round(100.0 * len(covered) / text.vsize, 2),
         import_shims_used=len(imports_used),
         fragments_excluded=len(frags),
+        data_stops=len(data_stops),
         fragments_rescued=rescued,
         jt_tables=sum(x.get("jt_tables", 0) for x in stats),
         jt_entries=sum(x.get("jt_entries", 0) for x in stats),

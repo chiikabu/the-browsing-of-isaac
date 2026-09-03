@@ -34,7 +34,10 @@ const FRAMES = process.argv[3] || '5';
 // trailing K=V arguments: ISAAC_* go into the module's ENV; `input=` is the
 // scripted input timeline and `keep=` the frame sampling interval (see
 // boot_web.mjs); anything else is passed through as a query parameter.
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
+// timeout=<ms>: how long to wait for main to return (the page's main thread is
+// inside main for the whole run, so a stalled game can only be caught by time)
+const TIMEOUT_MS = Number((process.argv.slice(4).find((a) => a.startsWith('timeout=')) || 'timeout=1200000').slice(8));
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -158,12 +161,24 @@ await page.goto(`${ORIGIN}/boot_web.html?${qs}`);
 let done;
 try {
   await page.waitForFunction(() => window.isaacDone !== null && window.isaacDone !== undefined,
-                             null, { timeout: 20 * 60 * 1000 });
+                             null, { timeout: TIMEOUT_MS });
   done = await page.evaluate(() => window.isaacDone);
 } catch (e) {
   done = { error: `timeout or navigation failure: ${e.message}` };
 }
 const wall = Date.now() - t0;
+// A timed-out page is still inside main (its main thread is busy in wasm), so
+// page.evaluate would never return and browser.close would hang: skip the
+// read-back and kill the browser process instead.
+const timedOut = !!(done && done.error);
+const killBrowser = () => { try { const p = browser.process(); if (p) p.kill('SIGKILL'); } catch (e) { /* gone */ } };
+if (timedOut) {
+  console.log(`web run: TIMED OUT after ${wall} ms (${served} files served); the page never left main`);
+  writeFileSync(join(OUT, 'web-run.log'), [...consoleLines, `---- timed out after ${wall} ms`].join('\n') + '\n');
+  killBrowser();
+  server.close();
+  process.exit(1);
+}
 const result = await page.evaluate(() => ({
   log: window.isaacLog || [],
   frames: (window.isaacFrames || []).map((f) => {

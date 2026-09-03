@@ -287,6 +287,43 @@ void imp_api_ms_win_crt_math__fminf(CpuState *restrict cpu) {
 void imp_api_ms_win_crt_math__nextafterf(CpuState *restrict cpu) {
     ret_f(cpu, nextafterf(arg_f(cpu, 0), arg_f(cpu, 1)));
 }
+/* ---- x87 register-convention helpers (round 14e) ----------------------
+ * `_CIfmod` / `_CIatan2` take their two arguments on the x87 stack -- MSVC
+ * emits `fld x; fld y; call _CIfmod`, so the FIRST C argument is ST(1) and
+ * the second ST(0) -- and return the result in ST(0) with the stack popped
+ * once (two inputs replaced by one result). The lifter models the x87
+ * stack as ST0..ST7 shifted by 10-byte copies on fld/fstp, values stored as
+ * doubles in the low 8 bytes (see ret_d above), so the pop is a shift of
+ * ST2..ST7 down by one. Reached through the CRT's own `jmp [__imp__CI*]`
+ * thunks (sub_00af08c3 / sub_00af08c9), which the lifter turns into the
+ * shim call plus the thunk's own ret. The room's first entity spawn is the
+ * first caller of _CIfmod (an angle wrap). */
+static double st_d(const CpuState *cpu, int i) {
+    const uint8_t *st = i == 0 ? cpu->ST0 : i == 1 ? cpu->ST1 : cpu->ST2;
+    double v;
+    memcpy(&v, st, 8);
+    return v;
+}
+static void st_pop_result(CpuState *cpu, double r) {
+    memcpy(cpu->ST1, cpu->ST2, 10);
+    memcpy(cpu->ST2, cpu->ST3, 10);
+    memcpy(cpu->ST3, cpu->ST4, 10);
+    memcpy(cpu->ST4, cpu->ST5, 10);
+    memcpy(cpu->ST5, cpu->ST6, 10);
+    memcpy(cpu->ST6, cpu->ST7, 10);
+    memset(cpu->ST7, 0, 10);
+    memcpy(cpu->ST0, &r, 8);
+    memset(cpu->ST0 + 8, 0, 2);
+}
+void imp_api_ms_win_crt_math___CIfmod(CpuState *restrict cpu) {
+    double x = st_d(cpu, 1), y = st_d(cpu, 0);
+    st_pop_result(cpu, fmod(x, y));
+}
+void imp_api_ms_win_crt_math___CIatan2(CpuState *restrict cpu) {
+    double y = st_d(cpu, 1), x = st_d(cpu, 0);
+    st_pop_result(cpu, atan2(y, x));
+}
+
 void imp_api_ms_win_crt_math___fdclass(CpuState *restrict cpu) {
     float f = arg_f(cpu, 0);
     int c = fpclassify(f);

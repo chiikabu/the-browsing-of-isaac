@@ -715,6 +715,95 @@ int main(int argc, char **argv) {
         check(cpu.EAX == 0, "a different window has no such property");
     }
 
+    /* x87 register-convention CRT helpers (round 14e): first argument in
+     * ST(1), second in ST(0), result in ST(0) with the stack popped once. */
+    {
+        memset(&cpu, 0, sizeof cpu);
+        double x = 7.5, y = 2.0, deeper = 42.0;
+        memcpy(cpu.ST1, &x, 8); memcpy(cpu.ST0, &y, 8); memcpy(cpu.ST2, &deeper, 8);
+        imp_api_ms_win_crt_math___CIfmod(&cpu);
+        double r0, r1;
+        memcpy(&r0, cpu.ST0, 8); memcpy(&r1, cpu.ST1, 8);
+        check(r0 == 1.5, "_CIfmod: fmod(ST1, ST0) = fmod(7.5, 2) = 1.5 in ST0");
+        check(r1 == 42.0, "_CIfmod pops the x87 stack once (old ST2 becomes ST1)");
+        memset(&cpu, 0, sizeof cpu);
+        double yy = 1.0, xx = -1.0;
+        memcpy(cpu.ST1, &yy, 8); memcpy(cpu.ST0, &xx, 8);
+        imp_api_ms_win_crt_math___CIatan2(&cpu);
+        memcpy(&r0, cpu.ST0, 8);
+        check(r0 > 2.356 && r0 < 2.357, "_CIatan2: atan2(ST1, ST0) = atan2(1, -1) = 3pi/4");
+    }
+
+    /* Gap shims (round 14f): imports the table promised with only a weak
+     * trap body, found by the link-level audit (audit_shims.py). */
+    {
+        uint32_t sb = ISAAC_STACK_TOP_VA - 0x3c00;
+        /* strerror returns a guest-readable string */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 2);
+        imp_api_ms_win_crt_runtime__strerror(&cpu);
+        check(cpu.EAX && isaac_is_guest_va(cpu.EAX) && *(const char *)isaac_g(cpu.EAX) != 0,
+              "strerror(2) hands back a non-empty guest string");
+        /* __stdio_common_vsnprintf_s formats with the count limit */
+        uint32_t fmt = sb, ap = sb + 0x40, out = sb + 0x80;
+        const char *f = "%d-%s";
+        for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(fmt + i) = (uint8_t)f[i]; if (!f[i]) break; }
+        const char *arg = "abc";
+        for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sb + 0x60 + i) = (uint8_t)arg[i]; if (!arg[i]) break; }
+        isaac_w32(ap, 42); isaac_w32(ap + 4, sb + 0x60);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF);
+        isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0);     /* options (int64) */
+        isaac_w32(cpu.ESP + 12, out); isaac_w32(cpu.ESP + 16, 64); /* buf, n */
+        isaac_w32(cpu.ESP + 20, 0xFFFFFFFFu);                      /* count = _TRUNCATE */
+        isaac_w32(cpu.ESP + 24, fmt); isaac_w32(cpu.ESP + 28, 0); isaac_w32(cpu.ESP + 32, ap);
+        imp_api_ms_win_crt_stdio____stdio_common_vsnprintf_s(&cpu);
+        check(cpu.EAX == 6 && memcmp(isaac_g(out), "42-abc", 7) == 0, "__stdio_common_vsnprintf_s formats into the guest buffer");
+        /* GetStartupInfoW fills cb and zeroes the rest */
+        isaac_w32(sb + 0x100, 0x11111111u); isaac_w32(sb + 0x100 + 64, 0x22222222u);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sb + 0x100);
+        imp_kernel32__GetStartupInfoW(&cpu);
+        check(isaac_r32(sb + 0x100) == 68 && isaac_r32(sb + 0x100 + 64) == 0, "GetStartupInfoW writes cb=68 and zeroes the struct");
+        /* _access on a seeded file and a missing one */
+        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
+        static const uint8_t one[1] = {7};
+        check(isaac_fs_seed("data/access_probe.txt", one, 1) == 1, "seed a file for _access");
+        const char *ap1 = "data/access_probe.txt", *ap2 = "data/no_such_file.txt";
+        for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sb + 0x200 + i) = (uint8_t)ap1[i]; if (!ap1[i]) break; }
+        for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sb + 0x240 + i) = (uint8_t)ap2[i]; if (!ap2[i]) break; }
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sb + 0x200); isaac_w32(cpu.ESP + 8, 0);
+        imp_api_ms_win_crt_filesystem___access(&cpu);
+        int present = (cpu.EAX == 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sb + 0x240); isaac_w32(cpu.ESP + 8, 0);
+        imp_api_ms_win_crt_filesystem___access(&cpu);
+        check(present && cpu.EAX == 0xFFFFFFFFu, "_access: 0 for a RAM-FS file, -1 for a missing one");
+        /* __std_exception_copy duplicates the message into guest memory; destroy frees it */
+        const char *msg = "boom";
+        for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sb + 0x300 + i) = (uint8_t)msg[i]; if (!msg[i]) break; }
+        isaac_w32(sb + 0x310, sb + 0x300); *(uint8_t *)isaac_g(sb + 0x314) = 0;   /* from: {what, doFree=0} */
+        isaac_w32(sb + 0x320, 0); *(uint8_t *)isaac_g(sb + 0x324) = 0;             /* to */
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sb + 0x310); isaac_w32(cpu.ESP + 8, sb + 0x320);
+        imp_vcruntime140____std_exception_copy(&cpu);
+        uint32_t copy = isaac_r32(sb + 0x320);
+        check(copy && copy != sb + 0x300 && strcmp((const char *)isaac_g(copy), "boom") == 0 && *(uint8_t *)isaac_g(sb + 0x324) == 1,
+              "__std_exception_copy duplicates the message into a fresh guest buffer with doFree set");
+        memset(&cpu, 0, sizeof cpu);
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+        isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sb + 0x320);
+        imp_vcruntime140____std_exception_destroy(&cpu);
+        check(isaac_r32(sb + 0x320) == 0 && *(uint8_t *)isaac_g(sb + 0x324) == 0, "__std_exception_destroy clears the copy");
+    }
+
     /* Adopted threads (boot round 12): _beginthreadex through the engine's
      * trampoline 0x00a7f130 must leave the thread struct's done flag set, or
      * ~Thread() calls std::terminate() at shutdown. */

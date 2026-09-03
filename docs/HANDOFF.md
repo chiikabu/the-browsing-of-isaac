@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 14a)
+# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 14e)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -232,15 +232,29 @@ the main menu. Gotchas recorded: the DirectInput "Message" window is
 created last (keys must target the GLFW30 window), and the focus messages
 must be sent before any key.
 
-**Exact next unit (B):** start a run. Extend the timeline through file
-select -> main menu (New Run) -> character select -> the Basement, keeping
-every 50th frame (`keep=50`), and read what the first gameplay frame
-needs: the room renders through the same GL surface, but the update tick
-(`0x954cd0`, half-rate) is now executing Game::Update under lifted code --
-the point where the hand-decomp track's slices can be compared against
-lifted state. Then: audio (OpenAL -> Web Audio, same forwarding shape as
-GL), the per-job thread design of §21.16, a live view (worker +
-OffscreenCanvas), and the PNG chain as the remaining boot-speed unit.
+**Rounds 14b-14c (2026-09-02): the run starts.** Enter x7 (beta notice,
+title, file select, NEW RUN, character select) starts a new run under
+the web build. Three lifter gaps fell on the way in, each fixed in the
+lifter and re-lifted (a lifter change is a whole-tree re-lift + full
+recompile, ~25 min; keep gu-prev*/ for rollback): the jump-table bound
+took a bare `cmp` as the table size (§21.19, censused over all 785 table
+jumps), the 20k-instruction cap dropped the entity-spawn factory
+`0x005d4380`, and jump tables embedded in `.text` failed whole functions
+(§21.20; now soft stops). With the cap raised and the soft stops in, the tree lifts with 0 failures (23,238 functions, 42 TUs) and the spawn factory runs: the first entity spawns (Type 6, Variant 19) -- and both builds then hit V8's 'Maximum call stack size exceeded' with a flat guest stack, the subject of round 14d.
+
+**Rounds 14d-14e:** the run's first entity spawn exposed two more
+walls: guest tail jumps compiled as nested native calls (V8's "Maximum
+call stack size exceeded" with a flat guest stack; fixed by the tail-jump
+trampoline, §21.21 -- the loop lives only in caller frames) and the x87
+register-convention CRT helpers `_CIfmod`/`_CIatan2` (§21.22). With the trampoline, the x87 helpers and the gap shims, the headless play run passes the first entity spawn with no native stack growth and no trap: the start room loads, its entities spawn, and the run is then inside a room-entry crawl -- a 20-second rapidxml attribute-parse stall (FUN_004165a0, parse_node/parse_element recursion over a document in the guest heap) with slow asset loads around it and no frame for minutes. That crawl is round 14h's wall; the V8 profile of it is the next measurement.
+
+**Exact next unit (B):** read the first gameplay frames (web run
+`input=420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter keep=50`,
+1100 frames) and drive the player (`frame:w:30` holds W for 30 frames;
+arrows shoot). Then: compare Game::Update under lifted code with the
+hand-decomp slices, audio (OpenAL -> Web Audio), the per-job thread
+design of §21.16, a live view (worker + OffscreenCanvas), and the PNG
+chain as the remaining boot-speed unit.
 walls (both index-verified, 2026-09-01): the only `CreateThread` is the
 theoraplayer worker (`0x00aab120`); nothing on the init chain waits on it, so
 the stub costs only video decode. **The frame loop** lives inside `main` at

@@ -138,6 +138,7 @@ function stageOk(name, fn) {
     return fn();
   } catch (e) {
     log(`  TRAP in ${name}: ${e.message}`);
+    try { if (typeof m._isaac_dump_va_ring === 'function') m._isaac_dump_va_ring(); } catch (e2) { /* best effort */ }
     log(String(e.stack || '').split('\n').slice(1, 4).join('\n'));
     return null;
   }

@@ -489,6 +489,15 @@ void recomp_stall_tick(void) {
       }
     }
   }
+  /* ISAAC_STALL_EXIT=1: leave through process.exit after the first dump so a
+   * `node --cpu-prof` run writes its profile (a kill loses it). */
+  {
+    const char *x = getenv("ISAAC_STALL_EXIT");
+    if (x && *x && *x != '0') {
+      fprintf(stderr, "[recomp][STALL] ISAAC_STALL_EXIT: exiting now (status 3)\n");
+      emscripten_force_exit(3);
+    }
+  }
 }
 
 /* Only referenced by TUs built with -DRECOMP_MEM_CHECK=1. */

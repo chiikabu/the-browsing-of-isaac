@@ -335,6 +335,14 @@ int isaac_fs_seed_lazy(const char *path, uint32_t len) {
     return 1;
 }
 
+/* Round 14f: _access() and friends ask whether a guest path exists. */
+int isaac_fs_exists_guest_path(uint32_t path_va) {
+    char p[512], key[256];
+    (void)isaac_guest_cstr(path_va, p, sizeof p, "_access");
+    if (!fs_key(p, key, sizeof key)) return 0;
+    return fs_find(key) != NULL;
+}
+
 /* ---- guest helpers ----------------------------------------------------- */
 static uint32_t fs_iobuf_alloc(uint32_t token) {
     uint32_t fp = isaac_guest_alloc(0x20u);

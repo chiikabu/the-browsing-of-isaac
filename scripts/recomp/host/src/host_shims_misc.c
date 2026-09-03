@@ -457,7 +457,7 @@ unsigned isaac_steam_callback_count(void) { return g_steam_cb_n; }
  * argument, so arguments are pulled from guest memory one slot at a time. Only
  * the conversions this binary is observed to use are handled; anything else is
  * reported rather than mis-formatted. */
-static int guest_vsnprintf(uint32_t buf, uint32_t n, uint32_t fmt_va,
+int guest_vsnprintf(uint32_t buf, uint32_t n, uint32_t fmt_va,
                            uint32_t ap, uint32_t caller) {
     char fmt[512];
     unsigned fi = 0;

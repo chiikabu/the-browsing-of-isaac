@@ -7,6 +7,7 @@ import Module from './boot.mjs';
 const segsPath = process.argv[2] || 'output/recomp/host/isaac.segs.bin';
 const stage = process.argv[3] || 'main';   // layout | boot | main
 
+Error.stackTraceLimit = 400;   // a V8 RangeError's trace names the wasm frames: a recursion cycle is in there
 const m = await Module();
 
 function stageOk(name, fn) {
@@ -16,8 +17,25 @@ function stageOk(name, fn) {
     return r;
   } catch (e) {
     console.log(`  TRAP in ${name}: ${e.message}`);
-    const st = String(e.stack || '').split('\n').slice(1, 4).join('\n');
-    if (st) console.log(st);
+    try { if (typeof m._isaac_dump_va_ring === 'function') m._isaac_dump_va_ring(); } catch (e2) { /* best effort */ }
+    const lines = String(e.stack || '').split('\n').slice(1);
+    if (e instanceof RangeError || /call stack/i.test(String(e.message))) {
+      // the whole trace, runs of the same frame collapsed: a cycle reads as a pattern
+      let last = null, run = 0;
+      const out = [];
+      for (const l of lines) {
+        const fr = l.trim().replace(/\s+\(.*$/, '');
+        if (fr === last) { run += 1; continue; }
+        if (last !== null) out.push(run > 1 ? `${last} x${run}` : last);
+        last = fr; run = 1;
+      }
+      if (last !== null) out.push(run > 1 ? `${last} x${run}` : last);
+      console.log(`  stack (${lines.length} frames, runs collapsed):`);
+      for (const l of out.slice(0, 120)) console.log(`    ${l}`);
+    } else {
+      const st = lines.slice(0, 3).join('\n');
+      if (st) console.log(st);
+    }
     return null;
   }
 }

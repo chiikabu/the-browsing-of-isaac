@@ -180,6 +180,8 @@ static void build_bindex(void) {
     g_bindex[g_bva[i] - G_TEXT_LO] = i;
 }
 
+extern uint32_t recomp_jmp_pending;
+void recomp_run_pending(CpuState *restrict cpu);
 static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
   if (!g_bindex) build_bindex();
   uint32_t off = va - G_TEXT_LO;
@@ -220,9 +222,13 @@ void isaac_guest_longjmp(CpuState *restrict cpu) {
   longjmp(g_guest_jmp, 1);
 }
 
+/* Round 14d: the tail-jump trampoline. The dispatch path above only calls;
+ * a parked jump is run here, in the host entry's frame, so a chain of guest
+ * jumps of any length costs a bounded number of native frames. Lifted call
+ * sites carry the same check after every call. */
 void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
   if (setjmp(g_guest_jmp) == 0) {
-    if (isaac_lifted_dispatch(va, cpu)) return;
+    if (isaac_lifted_dispatch(va, cpu)) { recomp_run_pending(cpu); return; }
     fprintf(stderr, "recomp: guest call to 0x%08x has no lifted function "
                     "(%u entries cover the lifted set)\\n", va, G_NDISPATCH);
     abort();
@@ -231,6 +237,7 @@ void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
    * the abandoned guest frames until the guest stack unwinds out of the
    * lifted image (drivers push a fake return address of 0). */
   for (unsigned guard = 0; guard < (1u << 20); ++guard) {
+    if (recomp_jmp_pending) recomp_run_pending(cpu);
     if (!isaac_dispatch_return(cpu->EIP, cpu)) {
       if (cpu->EIP >= G_TEXT_LO && cpu->EIP < G_TEXT_HI)
         fprintf(stderr, "recomp: longjmp replay stopped inside .text at "

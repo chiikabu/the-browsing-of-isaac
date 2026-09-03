@@ -123,7 +123,7 @@ TERMINAL = (OpCode.RETURN, OpCode.BRANCH, OpCode.BRANCHIND)
 
 
 def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
-                  jt=None, extent=None):
+                  jt=None, extent=None, bad=None):
     """Walk direct control flow from `start`.
 
     Returns (body, jumps) where body is {va: (len, ops)} in address order and
@@ -140,6 +140,8 @@ def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
     seen = set()
     lo, hi = extent if extent else (start, text_hi)
     pending_jt = []
+    # the entry itself must decode: a start that is data is a real failure
+    length, ops = dec.at(start)
     while work or pending_jt:
         if not work:
             # resolve computed jumps only once the linear body is known,
@@ -160,7 +162,21 @@ def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
         seen.add(va)
         if not (text_lo <= va < text_hi):
             raise LiftError("control flow left .text at %#x" % va)
-        length, ops = dec.at(va)
+        try:
+            length, ops = dec.at(va)
+        except Exception as e:          # LiftError or pypcode.BadDataError
+            # Data in the code stream: a jump table after a noreturn call, a
+            # byte-index table, alignment padding. It is not part of the
+            # function; end THIS path here rather than failing the whole
+            # function (round 14c: every remaining lift failure but the
+            # size cap was one of these, e.g. the entity family around
+            # 0x00626xxx all absorbing the table at 0x0062a838). The emitter
+            # renders a fall-through into a missing address as
+            # recomp_unreachable() and a branch to it as a weak aborting
+            # stub, so an executed path still stops loudly.
+            if bad is not None:
+                bad[va] = str(e)
+            continue
         body[va] = (length, ops)
         if len(body) > max_insns:
             raise LiftError("function at %#x exceeds %d instructions"
@@ -309,6 +325,7 @@ class FuncEmitter:
         self.branchind = 0
         self.direct_calls = set()
         self.tailcalls = set()
+        self.soft_traps = []           # (va, reason): instructions lowered as traps
         self.stats = {}
 
     # --- varnode access -------------------------------------------------
@@ -649,7 +666,8 @@ class FuncEmitter:
             t = ins[0].offset
             self.direct_calls.add(t)
             self.spill()
-            self.emit("sub_%08x(s);" % t)
+            # the callee may have parked a tail jump: run it from this frame
+            self.emit("sub_%08x(s); if (recomp_jmp_pending) recomp_run_pending(s);" % t)
             self.reload()
         elif oc == OpCode.CALLIND:
             slot = self.const_ptr.get(vnkey(ins[0]))
@@ -665,7 +683,7 @@ class FuncEmitter:
                 self.imports_used.add(name)
                 self.spill()
                 if arg_bytes == 0xFFFF:
-                    self.emit("recomp_call_indirect(s, 0x%08xu);" % token)
+                    self.emit("recomp_call_indirect(s, 0x%08xu); if (recomp_jmp_pending) recomp_run_pending(s);" % token)
                 else:
                     self.emit("%s(s);" % name)
                     self.emit("s->EIP = MEMR32(s->ESP);")
@@ -677,7 +695,8 @@ class FuncEmitter:
                     self.callind_const += 1
                 e = self.rd(ins[0])
                 self.spill()
-                self.emit("recomp_call_indirect(s, %s);" % e)
+                # the callee may have parked a tail jump: run it from this frame
+                self.emit("recomp_call_indirect(s, %s); if (recomp_jmp_pending) recomp_run_pending(s);" % e)
                 self.reload()
         elif oc == OpCode.CALLOTHER:
             name = self.callother_name(op)
@@ -855,10 +874,12 @@ class FuncEmitter:
         if target in self.body:
             self.emit(pre + "goto %s;" % self.label(target))
         else:
-            # tail call / jump out of the function
+            # tail call / jump out of the function: park the target and
+            # return; the caller runs it (round 14d trampoline -- a nested
+            # `sub_T(s); return;` grew one native frame per loop iteration)
             self.tailcalls.add(target)
             self.spill(pre)
-            self.emit(pre + "sub_%08x(s); return;" % target)
+            self.emit(pre + "recomp_jmp_target = %#xu; recomp_jmp_pending = 1u; return;" % target)
 
     def note_const_ptr(self, op):
         """Track `unique = *[ram]CONST` so an indirect call through a
@@ -903,7 +924,7 @@ class FuncEmitter:
                     self.tailcalls.add(t)
                     self.emit("  case %#xu:" % t)
                     self.spill("  ")
-                    self.emit("    sub_%08x(s); return;" % t)
+                    self.emit("    recomp_jmp_target = %#xu; recomp_jmp_pending = 1u; return;" % t)
             self.emit("  default: break;")
             self.emit("}")
             self.spill()
@@ -920,19 +941,20 @@ class FuncEmitter:
                 name, arg_bytes, token = entry
                 self.imports_used.add(name)
                 if arg_bytes == 0xFFFF:
-                    self.emit("recomp_call_indirect(s, 0x%08xu);" % token)
+                    self.emit("recomp_jump_indirect(s, 0x%08xu);" % token)
                 else:
                     self.emit("%s(s);" % name)
                     self.emit("s->EIP = MEMR32(s->ESP);")
                     self.emit("s->ESP += 4u + %du;" % arg_bytes)
                 self.emit("return;")
             else:
-                self.emit("recomp_call_indirect(s, %s); return;" % expr)
+                # a tail jump: park it (round 14d), the caller runs it
+                self.emit("recomp_jump_indirect(s, %s); return;" % expr)
             return
         if kind == "dynamic":
             self.jt_tailcalls += 1
             self.spill()
-            self.emit("recomp_call_indirect(s, %s); return;" % expr)
+            self.emit("recomp_jump_indirect(s, %s); return;" % expr)
             return
         # unresolved
         self.jt_unresolved += 1
@@ -1005,6 +1027,7 @@ class FuncEmitter:
             branchind=self.branchind,
             calls=len(self.direct_calls),
             tailcalls=len(self.tailcalls),
+            soft_traps=len(self.soft_traps),
             jt_tables=self.jt_tables,
             jt_entries=self.jt_entries,
             jt_tailcalls=self.jt_tailcalls,
@@ -1037,14 +1060,16 @@ class FuncEmitter:
                 try:
                     self.lower(va, idx, op, next_va)
                 except LiftError as e:
-                    # Name the guest instruction that failed: failures.txt is
-                    # the lifter's work list, and "subreg size 16" without a
-                    # VA costs a probe script to re-locate.
-                    if not getattr(e, "va_tagged", False):
-                        e2 = LiftError("at %#x: %s" % (va, e))
-                        e2.va_tagged = True
-                        raise e2 from None
-                    raise
+                    # An instruction the lifter cannot lower (round 14c: the
+                    # `les`/`lds` that jump-table bytes decode to, "load size
+                    # 6"). It used to fail the whole function; now it becomes
+                    # a loud trap at that instruction and the block ends,
+                    # so the function's real paths are still lifted. The
+                    # trap fires only if the path executes; soft_traps in
+                    # the stats keeps the list visible.
+                    self.soft_traps.append((va, "%s" % e))
+                    self.emit("recomp_unreachable(s, %#xu); return;" % va)
+                    break
             tail_needed = (need_p is None or (va, len(ops)) in need_p)
             if tail_needed:
                 self.lines.append("P_%08x_%d: ;" % (va, len(ops)))

@@ -49,6 +49,7 @@ EXPORTED_FUNCTIONS = [
     "_isaac_fs_seed",
     "_isaac_fs_seed_lazy",
     "_isaac_stub_report",
+    "_isaac_dump_va_ring",
     "_isaac_heap_report",
     "_isaac_module_report",
 ]
@@ -304,12 +305,32 @@ def main():
     lifted_cs = sorted(lift_dir.glob("lifted_*.c"))
     lifted_objs = []
     need_compile = []
+    # Round 14g: a TU is recompiled when its (patched) text changed since the
+    # object was built -- sha256 stored beside the object -- so a re-lift
+    # with --split-va rebuilds only the TUs whose functions changed.
+    import hashlib
+    def text_sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    lifted_sha = {}
+    skipped_same = 0
     for src in lifted_cs:
         obj = lift_dir / (src.stem + lift_obj_suffix)
+        sha_file = lift_dir / (src.stem + lift_obj_suffix + ".sha")
+        sha = text_sha(src)
+        lifted_sha[src] = (sha, sha_file)
         if args.recompile_lifted or not obj.exists():
             need_compile.append((src, obj))
-        else:
+        elif sha_file.exists() and sha_file.read_text().strip() == sha:
             lifted_objs.append(obj)
+            skipped_same += 1
+        elif not sha_file.exists():
+            # object from before the hashes existed: trust it once, record it
+            sha_file.write_text(sha)
+            lifted_objs.append(obj)
+        else:
+            need_compile.append((src, obj))
+    if skipped_same:
+        print("lift : %d TU(s) unchanged (hash), objects kept" % skipped_same)
     t1 = time.time()
     lift_fail = []
     if need_compile:
@@ -327,6 +348,8 @@ def main():
                     print("FAIL %s\n%s" % (Path(info["src"]).name, info["tail"]))
                 else:
                     lifted_objs.append(Path(info["obj"]))
+                    sha, sha_file = lifted_sha[Path(info["src"])]
+                    sha_file.write_text(sha)
     result["liftCompile_s"] = round(time.time() - t1, 1)
     result["liftedTUs"] = len(lifted_cs)
     result["liftedRecompiled"] = len(need_compile)

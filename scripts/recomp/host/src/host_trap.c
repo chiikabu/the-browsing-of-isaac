@@ -42,6 +42,69 @@ void isaac_dump_regs(const CpuState *s, const char *tag) {
  * in that window is the call stack, which the VA trace alone cannot show
  * once the fault is inside a shared helper (boot round 11: a
  * vector::_Tidy big-allocation check reached from 82 callers). */
+/* For traps the host never sees (V8's "Maximum call stack size exceeded",
+ * a raw wasm trap): the drivers call this from their catch path. Prints the
+ * hottest addresses of the last 512 executed guest VAs (a recursion cycle
+ * is a few addresses repeating) and the last 64 in order. */
+void isaac_dump_va_ring(void) {
+    extern volatile uint32_t recomp_va_trace[512];
+    extern volatile uint32_t recomp_va_trace_idx;
+    uint32_t vas[512]; unsigned cnt[512]; unsigned n = 0;
+    for (unsigned i = 0; i < 512; i++) {
+        uint32_t v = recomp_va_trace[i];
+        unsigned k;
+        for (k = 0; k < n; k++) if (vas[k] == v) { cnt[k]++; break; }
+        if (k == n) { vas[n] = v; cnt[n] = 1; n++; }
+    }
+    fprintf(stderr, "[isaac][ring] ---- hottest guest VAs in the last 512 executed (count va):\n");
+    for (unsigned round = 0; round < 16 && round < n; round++) {
+        unsigned best = 0;
+        for (unsigned k = 1; k < n; k++) if (cnt[k] > cnt[best]) best = k;
+        if (!cnt[best]) break;
+        fprintf(stderr, "[isaac][ring]   %3u 0x%08x\n", cnt[best], vas[best]);
+        cnt[best] = 0;
+    }
+    uint32_t start = recomp_va_trace_idx & 511u;
+    fprintf(stderr, "[isaac][ring] ---- last 64 executed guest VAs (oldest -> newest):\n");
+    for (unsigned i = 448; i < 512; i++) {
+        uint32_t v = recomp_va_trace[(start + i) & 511u];
+        fprintf(stderr, "%s%08x%s", (i - 448) % 8 == 0 ? "[isaac][ring]   " : " ", v, (i - 448) % 8 == 7 ? "\n" : "");
+    }
+    fprintf(stderr, "[isaac][ring] %u distinct addresses in the ring\n", n);
+    /* the guest stack: return addresses between the last spilled ESP and
+     * the stack top, most recent first, plus a histogram of the callers */
+    extern struct CpuState *recomp_last_cpu;
+    if (!recomp_last_cpu) { fprintf(stderr, "[isaac][ring] no register image\n"); return; }
+    uint32_t esp = ((const uint32_t *)recomp_last_cpu)[4];
+    fprintf(stderr, "[isaac][ring] ---- guest stack walk from the spilled ESP 0x%08x (return addresses into .text):\n", esp);
+    uint32_t seen_va[256]; unsigned seen_cnt[256]; unsigned nseen = 0; unsigned printed = 0, total = 0;
+    for (uint32_t a = esp & ~3u; a + 4u <= ISAAC_STACK_TOP_VA && a >= ISAAC_STACK_TOP_VA - 0x110000u; a += 4u) {
+        if (!isaac_is_guest_va(a)) break;
+        uint32_t v = isaac_r32(a);
+        if (v < 0x00401000u || v >= 0x00b10000u) continue;
+        /* a return address: the dword before it must look like a call
+         * (E8 rel32, or FF /2 forms); check the E8 case only */
+        uint8_t op = isaac_is_guest_va(v - 5u) ? *(const uint8_t *)isaac_g(v - 5u) : 0;
+        uint8_t op2 = isaac_is_guest_va(v - 2u) ? *(const uint8_t *)isaac_g(v - 2u) : 0;
+        uint8_t op6 = isaac_is_guest_va(v - 6u) ? *(const uint8_t *)isaac_g(v - 6u) : 0;
+        if (op != 0xE8 && op2 != 0xFF && op6 != 0xFF) continue;
+        ++total;
+        if (printed < 48) { fprintf(stderr, "%s%08x%s", printed % 8 == 0 ? "[isaac][ring]   " : " ", v, printed % 8 == 7 ? "\n" : ""); ++printed; }
+        unsigned k;
+        for (k = 0; k < nseen; k++) if (seen_va[k] == v) { seen_cnt[k]++; break; }
+        if (k == nseen && nseen < 256) { seen_va[nseen] = v; seen_cnt[nseen] = 1; nseen++; }
+    }
+    if (printed % 8) fprintf(stderr, "\n");
+    fprintf(stderr, "[isaac][ring] %u call-shaped return addresses on the guest stack; most repeated:\n", total);
+    for (unsigned round = 0; round < 12 && round < nseen; round++) {
+        unsigned best = 0;
+        for (unsigned k = 1; k < nseen; k++) if (seen_cnt[k] > seen_cnt[best]) best = k;
+        if (seen_cnt[best] < 2) break;
+        fprintf(stderr, "[isaac][ring]   %4u x 0x%08x\n", seen_cnt[best], seen_va[best]);
+        seen_cnt[best] = 0;
+    }
+}
+
 void isaac_dump_trap_context(const CpuState *cpu, const char *tag) {
     extern volatile uint32_t recomp_va_trace_idx;
     extern volatile uint32_t recomp_va_trace[512];
@@ -454,9 +517,29 @@ void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
     abort();
 }
 
+/* Round 14d: the tail-jump trampoline. A guest jmp that leaves the current
+ * lifted function (a tail call, a computed jump to another entry) used to
+ * be run as a nested call from here; a guest loop whose back-edge was such
+ * a jump (sub_0093805f, the room's entity spawn loop) nested one native
+ * frame per iteration until V8 threw "Maximum call stack size exceeded",
+ * with nothing on the guest stack to show for it. Now the target is parked
+ * and the current lifted function returns; whoever called it -- a lifted
+ * call site, the dispatcher, the host entry -- runs the target from its own
+ * frame with recomp_run_pending(). The callee's `ret` still consumes the
+ * original caller's return address off the guest stack, exactly as on x86.
+ * Globals rather than CpuState fields: the host struct is a prefix of the
+ * generated one; execution is single-threaded and LIFO across the
+ * host/guest boundary, so the innermost dispatcher consumes the flag. */
+uint32_t recomp_jmp_pending, recomp_jmp_target;
 void recomp_jump_indirect(CpuState *restrict s, uint32_t target) {
-    /* An indirect TAIL call. The callee's `ret` consumes the caller's return
-     * address off the shared guest stack, exactly as on x86, so this is the
-     * same operation as a call from the host's point of view. */
-    recomp_call_indirect(s, target);
+    (void)s;
+    recomp_jmp_target = target;
+    recomp_jmp_pending = 1u;
+}
+void recomp_run_pending(CpuState *restrict s) {
+    while (recomp_jmp_pending) {
+        uint32_t t = recomp_jmp_target;
+        recomp_jmp_pending = 0u;
+        recomp_call_indirect(s, t);
+    }
 }

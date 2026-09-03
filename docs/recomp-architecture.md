@@ -1770,7 +1770,7 @@ and the first two attempts were wrong in ways the module only reveals at
 compile time. `summary.json` now carries `argv`, and the boot lift is:
 
 ```bash
-python scripts/recomp/lift/emit.py --exe tools/isaac-ng.unpacked.exe     --ghidra-functions output/recomp/export/functions.jsonl     --fragments-tsv    output/recomp/export/recovered-functions.tsv     --imports          output/recomp/census/imports.json     --shim-table       output/recomp/host/shim-table.json     --va-file          output/recomp/lift/starts_union.txt     --hand-written     scripts/recomp/host/src/missing_fns.c     --dispatch auto --split-bytes 12000000 --trace-va     --out output/recomp/lift/gu --module lifted     --stats output/recomp/lift/gu/stats.json
+python scripts/recomp/lift/emit.py --exe tools/isaac-ng.unpacked.exe     --ghidra-functions output/recomp/export/functions.jsonl     --fragments-tsv    output/recomp/export/recovered-functions.tsv     --imports          output/recomp/census/imports.json     --shim-table       output/recomp/host/shim-table.json     --va-file          output/recomp/lift/starts_union.txt     --hand-written     scripts/recomp/host/src/missing_fns.c     --dispatch auto --max-insns 100000 --split-va 0x30000 --trace-va     --out output/recomp/lift/gu --module lifted     --stats output/recomp/lift/gu/stats.json
 python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu     --exe tools/isaac-ng.unpacked.exe
 python scripts/recomp/lift/build_boot.py --dir output/recomp/lift/gu
 ```
@@ -2841,6 +2841,158 @@ whole-tree replacement plus a full lifted recompile (41 TUs, 655 s with 8 jobs);
 previous tree beside it (`gu-prev/`) for a rollback.
 
 **Result.** With the re-lifted tree the node boot is unchanged (frame 3 at 11.3 s, main returned 0) and the web play run passes the generator: the Basement is generated and the start room loads (Room 1.2). The next wall is a V8 'Maximum call stack size exceeded' while loading that room -- round 14c.
+
+### 21.20 Round 14c: the first room -- the lifter's last two gaps on the way in
+
+With the Basement generated, the start room loaded (`Room 1.2(Start
+Room)`, `SpawnRNG seed`, `Spawn Entity with Type(6), Variant(19)`) and
+the headless run trapped on an indirect call to `0x005d4380`, a function
+that was never lifted. `failures.txt` said why: **"function at 0x5d4380
+exceeds 20000 instructions"** -- the lifter's own `--max-insns` cap. Ghidra
+had split the entity-spawn factory into fragments and the absorb policy
+reassembles them into a >20k-instruction function; the cap made it
+vanish, and the vtable slot at `0xb63be8` pointed into nothing. Raised
+to 100,000 (the recorded argv now carries it); `0x005b39d0` was the other
+victim.
+
+The remaining 24 failures were all one thing once decoded: **jump tables
+embedded in `.text`** -- `0x0062a838`, `0x006e2548`, `0x0055a7c6`,
+`0x005c7659`, `0x00607231`, `0x00610438`, `0x007d58ac`, `0x008004d0` are
+pointer arrays (the whole entity family around `0x00626xxx` absorbs the
+same table), and `0x007b8a98` / `0x008151bc` are table bytes that decode
+as `les`/`lds` ("load size 6 unsupported"). The body scanner reached
+them by falling through after a noreturn call and either SLEIGH refused
+the bytes (`BadDataError`) or the lowering did, and the whole function
+was dropped. Two soft stops now replace the hard failure: `discover_body`
+ends *that path* at an undecodable address (counted as `data_stops` in
+the summary), and the block emitter lowers an instruction it cannot
+translate as `recomp_unreachable(va); return;` and ends the block
+(`soft_traps` in the per-function stats). Both fire only if the path
+executes, and the emitter already rendered a fall-through into a missing
+address as `recomp_unreachable` and a branch to it as a weak aborting
+stub. Lifting the 26 failing functions alone: 0 failures, 8 data stops,
+4 soft-trapped instructions in two functions.
+`tests/recomp-jumptables.test.js` lifts `0x006261f0` and `0x0081516d`
+in isolation and pins both behaviours (where `tools/` is present).
+
+**Result.** With the cap raised and the soft stops in, the tree lifts with 0 failures (23,238 functions, 42 TUs) and the spawn factory runs: the first entity spawns (Type 6, Variant 19) -- and both builds then hit V8's 'Maximum call stack size exceeded' with a flat guest stack, the subject of round 14d.
+
+### 21.21 Round 14d: the tail-jump trampoline -- native stack growth without guest frames
+
+With every function lifted, both builds died at the same spot with V8's
+"Maximum call stack size exceeded" right after the first entity spawned.
+A worker with a 512 MB stack failed identically (JS recursion depth there
+is 6.7 M, so the limit applied), the VA ring showed no tight loop (451
+distinct addresses in the last 512), and the guest stack held only stale
+frames -- 24 KB below the top, no recursion. The V8 trace, once the driver
+printed it whole (`Error.stackTraceLimit = 400`, runs collapsed), named
+the cycle:
+
+```
+sub_0093805f -> recomp_jump_indirect -> recomp_call_indirect -> isaac_lifted_dispatch -> sub_0093805f -> ...
+```
+
+The spawn loop's back-edge is a computed jump to an address that is also
+a function entry (Ghidra's fragmentation of the big spawn dispatcher), and
+the lifter emitted every guest `jmp` that leaves the current function as
+`sub_T(s); return;` -- a nested C call that unwinds only when T returns.
+Native frames grew one per loop iteration while the guest stack stayed
+flat, which is why nothing the host could see explained it.
+
+**The trampoline.** A jump that leaves the current lifted function now
+parks its target (`recomp_jmp_target`, `recomp_jmp_pending`) and returns
+-- the static tail calls, the dispatch-loop cases that leave the function,
+and the computed forms (`jmp reg`, `jmp [slot]` with an unknown purge,
+unresolved jumps) alike. Whoever called the function runs the target from
+its own frame: lifted call sites (`sub_Y(s); if (recomp_jmp_pending)
+recomp_run_pending(s);`, and the same after `recomp_call_indirect` for
+`call reg` sites) and the host entry `isaac_guest_call` (plus the longjmp
+replay loop). `recomp_run_pending` loops `recomp_call_indirect` until
+nothing is pending, so a chain of jumps of any length costs a bounded
+number of native frames, and the callee's `ret` still consumes the
+original caller's return address off the guest stack, exactly as on x86.
+The loop must live **only in caller frames**: the first cut also ran it
+inside `isaac_lifted_dispatch`, which is what `recomp_run_pending` calls,
+and the nesting simply moved (`dispatch -> run_pending -> call_indirect
+-> dispatch -> ...`, the same overflow). The dispatch path only calls.
+The state is two globals, not `CpuState` fields: the host struct is only
+a prefix of the generated one (which continues past `ZMM3` to `TR`), so
+trailing fields would sit at different offsets on the two sides -- the
+patch's own layout assertion caught that before anything was built.
+Execution is single-threaded and strictly LIFO across the host/guest
+boundary, so the innermost dispatcher consumes the flag before an outer
+frame looks at it. `tests/recomp-trampoline.test.js` pins the four parts
+(emitter, runtime, header, dispatcher).
+
+**Result.** With the trampoline, the x87 helpers and the gap shims, the headless play run passes the first entity spawn with no native stack growth and no trap: the start room loads, its entities spawn, and the run is then inside a room-entry crawl -- a 20-second rapidxml attribute-parse stall (FUN_004165a0, parse_node/parse_element recursion over a document in the guest heap) with slow asset loads around it and no frame for minutes. That crawl is round 14h's wall; the V8 profile of it is the next measurement.
+
+### 21.22 Round 14e: the x87 register-convention CRT helpers
+
+With the native stack flat, the first entity spawn reached
+`api-ms-win-crt-math!_CIfmod` -- marked PROVIDED in the shim table but
+never given a body, so the weak stub trapped. `_CIfmod` and `_CIatan2`
+take their arguments on the x87 stack (MSVC emits `fld x; fld y; call
+_CIfmod`: the first C argument is ST(1), the second ST(0)) and leave the
+result in ST(0) with the stack popped once. The lifter models the x87
+stack as `ST0..ST7` shifted by 10-byte copies on `fld`/`fstp`, values
+stored as doubles in the low 8 bytes, so the shims read ST1/ST0, shift
+ST2..ST7 down and write the result (`host_shims_forward.c`). Both reach
+the shim through the CRT's own `jmp [__imp__CI*]` thunks
+(`sub_00af08c3`, `sub_00af08c9`), which the lifter turns into the shim
+call plus the thunk's ret. Selftest pins: `fmod(7.5, 2) = 1.5` with the
+old ST2 becoming ST1, `atan2(1, -1) = 3pi/4`; the argument order and the
+pop are mutation-checked.
+
+### 21.23 Round 14f: pre-empting the next walls -- the link-level shim audit
+
+`_CIfmod` was a PROVIDED verdict with no body: the generated `shim_weak.c`
+gives every import a weak trap, so a promised import without a strong
+`imp_*` definition compiles, links, and traps the first time the game
+reaches it -- one wall per play run. `scripts/recomp/host/audit_shims.py`
+asks the link instead: llvm-nm over the host objects lists the strong
+`T imp_*` symbols, and every PROVIDED/REAL table row must be among them.
+The first run found **40**. `host_shims_gaps.c` gives bodies to the ones
+on any plausible play path -- `qsort` (a host merge sort calling the guest
+comparator through the `_initterm` sub-call shape; stable, which only
+narrows the orders the game can see), `_access`, `_Fiopen` (the fstream
+open, routed through the fopen shim with a synthesized frame),
+`__stdio_common_vsnprintf_s`, `strerror`/`perror`, `FormatMessageA`,
+`GetProcessTimes`, `K32GetProcessMemoryInfo`, `WaitForSingleObjectEx`,
+`TerminateProcess`, `RaiseException` (a guest C++ throw: nothing here can
+unwind it, so it stops loudly with the thrown object and throwinfo),
+`GetStartupInfoW`, `OpenProcess`, `K32GetProcessImageFileNameA`,
+`K32GetModuleInformation`, `BCryptGenRandom`, the `__std_exception_copy`
+/`destroy` pair, `__std_type_info_name`, the `__p___argc`/`argv` cells,
+the onexit registrations, `always_noconv`. Ten stay weak on purpose and
+are listed in the audit's `KNOWN_WEAK`: the C++ exception machinery
+(`__current_exception*`, `_except_handler4_common`, `_seh_filter_exe`),
+`CreateFileA` (no handle-level file layer yet) and the codecvt facets.
+The audit runs in the test suite (skipping on a checkout without the
+built objects) so a new promise without a body fails the suite, not the
+game. Selftest pins cover `strerror`, `vsnprintf_s`, `GetStartupInfoW`,
+`_access` against the RAM-FS, and the exception-copy pair.
+
+### 21.24 Round 14g: incremental lifted rebuilds
+
+Every lifter change cost a whole-tree recompile (42 TUs, ~17 min on 8
+jobs) because the split was by cumulative emitted bytes: one longer
+function moved every later boundary and every file changed. Two parts
+end that. `emit.py --split-va N` puts a function in the TU of its
+address bucket (`lifted_<(va - text_lo) // N>.c`; `0x30000` gives ~40
+TUs), so a lifter change that alters one function rewrites one file.
+`build_boot.py` records the sha256 of each TU's patched text beside its
+object (`lifted_NNN.o.sha`) and recompiles only when it differs
+(`--recompile-lifted` still forces everything; an object from before the
+hashes is trusted once and stamped). Measured: the first build on the
+new split compiled all 38 TUs (1,490 s on 12 jobs, on a loaded machine);
+the no-change rebuild right after compiled 0 and linked in 8 s. The
+recorded boot argv now carries `--split-va 0x30000 --max-insns 100000`.
+`tests/recomp-build.test.js`
+pins both halves and the documented argv. Also in this round: the stall
+watchdog's `ISAAC_STALL_EXIT=1` (leave through `process.exit` after the
+first dump, so a `node --cpu-prof` run writes its profile -- a kill
+loses it) and `boot_worker.mjs` (the driver inside a Worker with a large
+native stack, to tell deep recursion from a runaway).
 
 ## Appendix: reproduction
 

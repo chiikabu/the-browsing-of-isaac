@@ -84,6 +84,10 @@ void imp_api_ms_win_crt_stdio____p__commode(CpuState *restrict cpu) {
 #define ATEXIT_MAX 1024
 static uint32_t g_atexit[ATEXIT_MAX];
 static unsigned g_atexit_n;
+/* Round 14f: _register_onexit_function registers into the same list. */
+void isaac_atexit_register(uint32_t fn) {
+    if (fn && g_atexit_n < ATEXIT_MAX) g_atexit[g_atexit_n++] = fn;
+}
 
 void imp_api_ms_win_crt_runtime___crt_atexit(CpuState *restrict cpu) {
     uint32_t fn = isaac_arg(cpu, 0);

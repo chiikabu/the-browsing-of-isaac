@@ -337,6 +337,11 @@ static inline uint64_t recomp_trunc_f64_64(uint64_t a) {
 struct CpuState;
 void recomp_call_indirect(struct CpuState *s, uint32_t target);
 void recomp_jump_indirect(struct CpuState *s, uint32_t target);
+/* Round 14d, the tail-jump trampoline: a guest jmp that leaves the current
+ * lifted function parks its target and returns; the caller (a lifted call
+ * site, the dispatcher, the host entry) runs it from its own frame. */
+extern uint32_t recomp_jmp_pending, recomp_jmp_target;
+void recomp_run_pending(struct CpuState *s);
 void recomp_unreachable(struct CpuState *s, uint32_t va);
 
 #ifdef __cplusplus
