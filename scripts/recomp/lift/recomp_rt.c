@@ -495,6 +495,7 @@ void recomp_stall_tick(void) {
     const char *x = getenv("ISAAC_STALL_EXIT");
     if (x && *x && *x != '0') {
       fprintf(stderr, "[recomp][STALL] ISAAC_STALL_EXIT: exiting now (status 3)\n");
+      { extern void isaac_stub_report(void); isaac_stub_report(); }
       emscripten_force_exit(3);
     }
   }

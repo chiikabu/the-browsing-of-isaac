@@ -284,14 +284,28 @@ is non-empty (empty `mods/` skips it). GL goes through epoxy `.data` slots
   change; it is what caught the Ghidra SLEIGH `PSLLD`/`PSLLQ` per-lane-count
   defect that had been silently miscompiling 12 real sites.
 
-**Rebuilding** (only if you change the lifter): `emit.py` (~400 s; exact
-invocation recorded in `output/recomp/lift/gu/summary.json` → `argv`, and in
-recomp-architecture.md §17.6) → `patch_reentry.py --dir output/recomp/lift/gu
---exe tools/isaac-ng.unpacked.exe` → `build_boot.py --dir
-output/recomp/lift/gu` (compile ~576 s, link ~425 s). `--trace-va` and
+**Rebuilding** (only if you change the lifter): `lift_parallel.py --jobs 12
+<the emit.py argv recorded in output/recomp/lift/gu/summary.json → argv>`
+(**80 s on 12 cores**, byte-identical to the 1,460-s sequential `emit.py`,
+recomp-architecture.md §21.26) → `patch_reentry.py --dir output/recomp/lift/gu
+--exe tools/isaac-ng.unpacked.exe --cont output/recomp/lift/gu/call_cont.txt`
+→ `build_boot.py --dir output/recomp/lift/gu` (recompiles only the TUs whose
+text changed, §21.24; a full compile is ~576 s, the -O0 link ~8 s). `--trace-va` and
 `--hand-written` are both load-bearing — without `--trace-va`
 `dispatch_tbl.c` does not even compile. **A host-only change needs no
 re-lift**: `build_boot.py` reuses the lifted objects (~16 s + ~355 s link).
+
+**Rounds 14h-14i (2026-09-02): the crawl measured, the lift parallel.**
+The room-entry crawl (nothing logged for 20 s at a time after the first
+spawn) is *not* the dispatcher's table (census: 24.4 M dispatches, 0 misses;
+bench `ISAAC_BENCH_DISPATCH`: 0.11 us per dispatch) and *not* V8 lazy
+compilation (`--trace-wasm-compilation-times`: Liftoff 1.1 s total by the
+first room, TurboFan 20.6 s on background threads), yet the V8 profile puts
+61 s of *self* time in `isaac_lifted_dispatch` under one per-room reset
+(`sub_007f2800`). Round 14j measures the dispatcher in place
+(`ISAAC_DISPATCH_TIME=1`: wall time inside each dispatched entry, printed
+with the census). The lift is parallel and byte-identical (above,
+§21.25-21.26).
 
 ## Ground rules that bite (from AGENTS.md, do not relearn the hard way)
 - The tree wins over any doc "checkpoint" number — status.mjs is truth.

@@ -37,7 +37,11 @@ const FRAMES = process.argv[3] || '5';
 // timeout=<ms>: how long to wait for main to return (the page's main thread is
 // inside main for the whole run, so a stalled game can only be caught by time)
 const TIMEOUT_MS = Number((process.argv.slice(4).find((a) => a.startsWith('timeout=')) || 'timeout=1200000').slice(8));
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
+// eager=1: --js-flags=--no-wasm-lazy-compilation (V8 compiles every wasm function at
+// instantiation instead of on first call; first-call compiles of the giant lifted
+// functions are otherwise charged to whoever calls them, round 14h)
+const EAGER = (process.argv.slice(4).find((a) => a.startsWith('eager=')) || 'eager=0').slice(6) !== '0';
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -110,7 +114,7 @@ const mime = (p) => p.endsWith('.mjs') || p.endsWith('.js') ? 'text/javascript'
 const browser = await chromium.launch({
   headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
-         '--enable-webgl', '--disable-web-security'],
+         '--enable-webgl', '--disable-web-security', ...(EAGER ? ['--js-flags=--no-wasm-lazy-compilation'] : [])],
 });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const consoleLines = [];

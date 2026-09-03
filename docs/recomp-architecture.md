@@ -2994,6 +2994,92 @@ first dump, so a `node --cpu-prof` run writes its profile -- a kill
 loses it) and `boot_worker.mjs` (the driver inside a Worker with a large
 native stack, to tell deep recursion from a runaway).
 
+### 21.25 Round 14h: the room-entry crawl
+
+After the first entity spawn the game logs nothing for 20 s at a time and
+presents no frame for minutes (a 5-minute run: 24 slow image loads and
+one 20-s silence in rapidxml's attribute parser, `FUN_004165a0`). Four
+measurements, in order, and what each ruled out:
+
+1. **Guest stack and VA ring** (`ISAAC_STALL_DUMP`): ordinary recursive
+   XML parsing over a heap document, no loop -- the game is doing real
+   work, slowly.
+2. **V8 wall-time profile** (`ISAAC_STALL_EXIT=1` so the process leaves
+   through `process.exit` and the `.cpuprofile` gets written): 61.6% of
+   wall time as *self* time of `isaac_lifted_dispatch`, 60 s of it under
+   one caller (`sub_007f2800`, a per-room reset). The dispatcher is an
+   O(1) table lookup, so that was either a per-call cost or a
+   misattribution. The direct children of the dispatcher's nodes carry
+   almost nothing themselves (`Mutex::Lock` 0.72 s over 6.5 M calls), and
+   this node's V8 has `--wasm-inlining-call-indirect` off, so the self
+   time is not inlined callees either.
+3. **Dispatch census** (`[isaac][dispatch]`, printed with the stub
+   report): 24.4 M dispatches by the first stall, 0 block re-entries,
+   0 misses -- the engine `Mutex` `Lock`/`Unlock` 6.5 M times each through
+   their vtable, a lock-increment-unlock helper `0x0040c690` 1.6 M times,
+   resource lookups `0x00a12240`/`0x00a128f0`/`0x00a129a0` ~0.9-1.6 M --
+   the game's own hot path. And a **micro-benchmark** (`ISAAC_BENCH_DISPATCH=N`
+   before `main`: `Mutex::Init` on a fake mutex, then N Lock(-1)+Unlock
+   pairs): **0.226 us per pair through `recomp_call_indirect`, 0.132 us
+   direct** -- the dispatcher adds ~50 ns per call. 24 M dispatches cost
+   ~3 s, not 61.
+4. **V8 lazy compilation**: a wasm function is compiled on its first
+   call, in the caller's frame, and the first room entry drives thousands
+   of never-run functions through the dispatcher.
+   `node --no-wasm-lazy-compilation` was not a usable test (instantiating
+   the 380 MB module eagerly never settled: six minutes, "unsettled
+   top-level await"). A compile-time trace (`node --trace-wasm-compilation-times`) then ruled that out too: by the first room Liftoff had compiled 3,679 functions in 1.1 s total (the largest took 61 ms) and TurboFan 692 in 20.6 s -- on background threads, not in the caller's frame. Lazy compilation is not the crawl. What remains is the dispatcher's own cost *in the game*, which the pre-main bench does not reproduce; round 14j measures it in place (`ISAAC_DISPATCH_TIME=1`: wall time inside every dispatched entry and the dispatcher's bookkeeping, printed with the census).
+
+### 21.26 Round 14i: the parallel lift
+
+The sequential lift is 1,460 s on one core. The stable split (§21.24)
+makes every TU a function of the function address alone, so
+`scripts/recomp/lift/lift_parallel.py` lifts address buckets in worker
+processes (`--jobs 12`, greedy balance by function count) and merges. Two
+cuts were wrong before the merge was byte-identical, and both failures are
+the same lesson: two of emit.py's decisions are *global*.
+
+1. **Function boundaries.** A worker that knew only its own start subset
+   absorbed callees in other buckets as tail-call bodies: every TU
+   differed (23,340 functions lifted against 23,238; 869 jump tables
+   against 796). `--starts-file` now hands each worker the whole start set
+   as boundaries without lifting them.
+2. **The fragment safety net.** A Ghidra fragment (a
+   `recovered-functions.tsv` row without a prologue) is lifted standalone
+   only when no lifted body anywhere reached it. Each worker rescued what
+   its *own* bodies missed: +102 functions, exactly the difference in
+   `fragments_rescued` (7,063 against 6,961). The lift is now two phases:
+   the workers run with `--no-rescue` and write `covered.txt` (the .text
+   ranges their bodies occupy, merged); then one `emit.py --rescue-only
+   --covered-file` pass over the whole start list rescues against the
+   union -- the sequential safety net, once.
+
+The driver then re-splits the functions by address into emit.py's TU
+format (header, functions in address order), regenerates
+`lifted_decls.h` sorted (a CALLOTHER's arity is the maximum any part
+saw), `missing.txt` (references nobody lifted), `data_stops.txt` and
+`summary.json` (sums where a sum is the sequential meaning, ratios and
+coverage recomputed), and concatenates `stats.json` in lift order. One
+more trap: emit.py writes in text mode, so its TUs carry CRLF on Windows;
+the driver reads and writes in text mode too (the first merge refused
+its own workers' files on the header check).
+
+Result against the built `gu` tree: **36 of 38 TUs byte-identical**, the
+other two differing only by the `lift_patches.py` fastpath wrappers the
+build applies to the built tree; `lifted_decls.h` and `missing.txt`
+identical; every summary count identical (23,238 lifted, 6,961 rescued,
+796 tables, 2,048,793 instructions, 508,912,679 bytes of C). **80.4 s
+wall** (phase 1 55.7 s on 12 workers, phase 2 14.9 s) against 1,460 s.
+`tests/recomp-parallel-lift.test.js` pins the contract.
+
+```
+python scripts/recomp/lift/lift_parallel.py --jobs 12 \
+    <the emit.py argv recorded in output/recomp/lift/gu/summary.json: argv>
+python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu \
+    --exe tools/isaac-ng.unpacked.exe --cont output/recomp/lift/gu/call_cont.txt
+python scripts/recomp/lift/build_boot.py        # recompiles only changed TUs
+```
+
 ## Appendix: reproduction
 
 ```bash

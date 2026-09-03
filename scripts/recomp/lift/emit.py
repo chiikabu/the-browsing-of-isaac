@@ -1,6 +1,7 @@
 """Driver: lift a set of functions from the PE and write compilable C."""
 
 import argparse
+import bisect
 import io
 import json
 import os
@@ -114,6 +115,24 @@ def main():
     ap.add_argument("--va", action="append", default=[],
                     help="function VA to lift (repeatable)")
     ap.add_argument("--va-file", help="file with one VA per line")
+    ap.add_argument("--starts-file",
+                    help="every known function start (one VA per line), added to "
+                         "the function-start set WITHOUT being lifted, so a worker "
+                         "that lifts a subset (lift_parallel.py) makes the same "
+                         "tail-call / absorb decisions as one run over the whole set")
+    ap.add_argument("--no-rescue", action="store_true",
+                    help="skip the fragment safety net: a lift_parallel.py "
+                         "phase-1 worker lifts its wanted functions only; the "
+                         "fragments are rescued once, against the coverage of "
+                         "every worker, in phase 2")
+    ap.add_argument("--rescue-only", action="store_true",
+                    help="lift nothing but the fragments of --va-file that no "
+                         "lifted body reaches (lift_parallel.py phase 2); "
+                         "--covered-file supplies the bodies lifted elsewhere")
+    ap.add_argument("--covered-file",
+                    help="text ranges already lifted by other runs ('lo hi' "
+                         "per line, hi exclusive), as emit.py writes them to "
+                         "covered.txt; a fragment inside one is not rescued")
     ap.add_argument("--out", required=True, help="output directory")
     ap.add_argument("--module", default="lifted", help="base name of the .c")
     ap.add_argument("--follow", action="store_true",
@@ -227,6 +246,15 @@ def main():
     want = [v for v in want if v not in frags]
     for v in want:
         func_starts.add(v)
+    if args.starts_file:
+        with open(args.starts_file) as fh:
+            for line in fh:
+                line = line.split("#")[0].strip()
+                if not line:
+                    continue
+                v = int(line, 0)
+                if v not in handwritten and v not in frags:
+                    func_starts.add(v)
 
     opts = dict(local_flags=not args.spill_flags, max_insns=args.max_insns,
                 state_only=args.state_only, imports=imports,
@@ -241,7 +269,30 @@ def main():
     callothers_wide = []
     imports_used = set()
     covered = set()
-    pending = list(want)
+    # ranges lifted by other runs (lift_parallel.py phase 1), merged so a
+    # fragment absorbed by bodies in two workers is found by one bisect
+    pre = []
+    if args.covered_file:
+        with open(args.covered_file) as fh:
+            for line in fh:
+                p = line.split("#")[0].split()
+                if len(p) == 2:
+                    pre.append((int(p[0], 0), int(p[1], 0)))
+        pre.sort()
+        merged = []
+        for a, b in pre:
+            if merged and a <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        pre = merged
+    pre_lo = [a for a, _b in pre]
+
+    def pre_covered(va):
+        i = bisect.bisect_right(pre_lo, va) - 1
+        return i >= 0 and pre[i][0] <= va < pre[i][1]
+
+    pending = [] if args.rescue_only else list(want)
     depth = {v: 0 for v in want}
     while pending:
         va = pending.pop(0)
@@ -288,8 +339,10 @@ def main():
 
     # coverage safety net: a fragment nothing reached still has to be lifted
     rescued = 0
+    if args.no_rescue:
+        deferred = []
     for va in deferred:
-        if va in covered or va in lifted or va in handwritten:
+        if va in covered or pre_covered(va) or va in lifted or va in handwritten:
             continue
         func_starts.add(va)
         try:
@@ -418,6 +471,22 @@ def main():
     with open(os.path.join(args.out, "failures.txt"), "w") as fh:
         for va, msg in failures:
             fh.write("%#010x %s\n" % (va, msg))
+    # the .text ranges this run's bodies occupy, merged ('lo hi', hi exclusive):
+    # lift_parallel.py unions the workers' files into the phase-2 --covered-file
+    with open(os.path.join(args.out, "covered.txt"), "w") as fh:
+        run_lo = prev = None
+        for a in sorted(covered):
+            if prev is not None and a == prev + 1:
+                prev = a
+                continue
+            if run_lo is not None:
+                fh.write("%#010x %#010x\n" % (run_lo, prev + 1))
+            run_lo = prev = a
+        if run_lo is not None:
+            fh.write("%#010x %#010x\n" % (run_lo, prev + 1))
+    with open(os.path.join(args.out, "data_stops.txt"), "w") as fh:
+        for va in sorted(data_stops):
+            fh.write("%#010x %s\n" % (va, data_stops[va]))
 
     # Reproducibility: the module directory must say how it was produced.
     # The `gu` tree was rebuilt once without this and the invocation had to be

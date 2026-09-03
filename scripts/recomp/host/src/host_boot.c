@@ -37,6 +37,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <emscripten.h>
 
 /* Supplied by the memory-image loader (JS or the wasm data module). */
 extern int  isaac_image_is_loaded(void);
@@ -344,6 +346,38 @@ int isaac_boot_call_main(int argc, char **argv) {
     cpu.ESP -= 4; isaac_w32(cpu.ESP, argv_va);    /* argv  */
     cpu.ESP -= 4; isaac_w32(cpu.ESP, (uint32_t)argc);
     cpu.ESP -= 4; isaac_w32(cpu.ESP, 0);          /* return address */
+    {
+        const char *b = getenv("ISAAC_BENCH_DISPATCH");
+        if (b && *b) {
+            /* the engine Mutex: Init (vtbl +4), Lock(timeout) (+0xc), Unlock (+0x10) */
+            extern void sub_00a15770(CpuState *restrict s);
+            extern void sub_00a157f0(CpuState *restrict s);
+            extern void sub_00a159a0(CpuState *restrict s);
+            extern void recomp_call_indirect(CpuState *restrict s, uint32_t target);
+            uint32_t n = (uint32_t)atoi(b), obj = isaac_guest_alloc(256);
+            memset(isaac_g(obj), 0, 256);
+            isaac_w32(obj, 0x00b81c0cu);              /* the engine Mutex vtable */
+            CpuState b1 = cpu; b1.ECX = obj;
+            b1.ESP -= 4; isaac_w32(b1.ESP, 0); sub_00a15770(&b1);          /* Mutex::Init(this) */
+            double t0 = emscripten_get_now();
+            for (uint32_t i = 0; i < n; ++i) {
+                b1.ECX = obj; b1.ESP -= 4; isaac_w32(b1.ESP, 0xFFFFFFFFu); b1.ESP -= 4; isaac_w32(b1.ESP, 0);
+                recomp_call_indirect(&b1, 0x00a157f0u);                      /* Lock(-1) */
+                b1.ECX = obj; b1.ESP -= 4; isaac_w32(b1.ESP, 0);
+                recomp_call_indirect(&b1, 0x00a159a0u);                      /* Unlock */
+            }
+            double t1 = emscripten_get_now();
+            for (uint32_t i = 0; i < n; ++i) {
+                b1.ECX = obj; b1.ESP -= 4; isaac_w32(b1.ESP, 0xFFFFFFFFu); b1.ESP -= 4; isaac_w32(b1.ESP, 0);
+                sub_00a157f0(&b1);
+                b1.ECX = obj; b1.ESP -= 4; isaac_w32(b1.ESP, 0);
+                sub_00a159a0(&b1);
+            }
+            double t2 = emscripten_get_now();
+            isaac_log("[isaac][bench] %u Lock(-1)+Unlock pairs: via the dispatcher %.3f us/pair, direct %.3f us/pair",
+                      n, (t1 - t0) * 1000.0 / n, (t2 - t1) * 1000.0 / n);
+        }
+    }
     isaac_log("[isaac][boot] entering main() at 0x%08x", ISAAC_MAIN_VA);
     isaac_guest_call(ISAAC_MAIN_VA, &cpu);
     isaac_log("[isaac][boot] main() returned %d", (int)cpu.EAX);
