@@ -223,16 +223,35 @@ static const char *fmt_site(uint32_t ret, char *buf, size_t n) {
     return buf;
 }
 
+/* Import index -> record slot + 1, so a stub hit is a table read rather than a
+ * scan of every record seen so far. A ten-minute play run makes 66.5 M stub
+ * calls, 65.9 M of them the four critical-section symbols that are inert by
+ * design; the scan was walking up to 16 records on each one (round 15e). */
+static uint16_t *g_rec_of;
+
 static stub_record *record_for(const isaac_import *imp) {
+    size_t idx = (size_t)(imp - isaac_imports);
+    int indexed = idx < isaac_import_count;
+    if (indexed) {
+        if (!g_rec_of) {
+            g_rec_of = (uint16_t *)calloc(isaac_import_count, sizeof *g_rec_of);
+            if (!g_rec_of) indexed = 0;
+        }
+        if (indexed && g_rec_of[idx])
+            return &g_records[g_rec_of[idx] - 1u];
+    }
     for (unsigned i = 0; i < g_record_count; ++i)
-        if (g_records[i].imp == imp)
+        if (g_records[i].imp == imp) {
+            if (indexed) g_rec_of[idx] = (uint16_t)(i + 1u);
             return &g_records[i];
+        }
     if (g_record_count >= ISAAC_MAX_TRACKED)
         return NULL;
     stub_record *r = &g_records[g_record_count++];
     r->imp = imp;
     r->hits = 0;
     r->first_caller = 0;
+    if (indexed) g_rec_of[idx] = (uint16_t)g_record_count;
     return r;
 }
 
@@ -250,13 +269,14 @@ static const char *verdict_name(unsigned v) {
 void isaac_stub_hit(const isaac_import *imp, const CpuState *restrict cpu) {
     { extern struct CpuState *recomp_last_cpu; recomp_last_cpu = (struct CpuState *)cpu; }
     stub_record *r = record_for(imp);
-    uint32_t caller = cpu ? isaac_retaddr(cpu) : 0;
     ++g_total_stub_calls;
     if (!r) {
         isaac_log("[isaac][stub] %s!%s (record table full)", imp->dll, imp->symbol);
         return;
     }
     if (r->hits++ == 0) {
+        /* the return address is a guest memory read: only the first hit needs it */
+        uint32_t caller = cpu ? isaac_retaddr(cpu) : 0;
         r->first_caller = caller;
         char sb[96];
         isaac_log("[isaac][stub] FIRST CALL  %s!%s  <- called from %s   "

@@ -105,7 +105,12 @@ LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=1"]
 
 LDFLAGS = [
     "-O2", "-w", "--no-entry", "--profiling-funcs",
-    "-sINITIAL_MEMORY=402653184",
+    # 768 MiB. 384 was enough while only the six boot archives were seeded;
+    # round 15d adds music.a (182 MB) and videos.a (93 MB) lazily, and
+    # growing a wasm memory reallocates and copies the whole heap -- with
+    # the old value a 200-s play run managed 900 frames instead of 7,980
+    # (round 15e). Override with --initial-memory.
+    "-sINITIAL_MEMORY=805306368",
     "-sALLOW_MEMORY_GROWTH=1",
     "-sGLOBAL_BASE=268435456",
     "-sSTACK_SIZE=1048576",

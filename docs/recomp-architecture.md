@@ -3274,6 +3274,38 @@ compilation (0.7 s in a 200-s silent window under
 `--trace-wasm-compilation-times`) and heap size (the crawl was identical
 with `--initial-memory 0x60000000`, 1.5 GiB up front).
 
+### 21.31 Rounds 15d-15e: the archives the game opens once it plays, and the memory that costs
+
+**15d.** `music.a` (182 MB) and `videos.a` (93 MB) sit in the instance but
+the driver skipped them, with a comment saying they are "not on the boot
+path". True while the boot stopped at the menu; a run that reaches
+gameplay opens both and logged `Failed to open archive file` for each.
+They now go through the round-12f lazy path -- registered by size, read on
+first open -- so a run that never asks still pays nothing. The two errors
+are gone; the ones that remain are DLC and language archives this instance
+genuinely does not carry.
+
+**15e.** That has a price, and it showed up immediately: a 200-s play run
+fell from 7,980 frames to **900**. Opening `music.a` pushes the module
+past `INITIAL_MEMORY`, and growing a wasm memory reallocates and copies
+the whole heap. Three points, same build otherwise:
+
+| INITIAL_MEMORY | frames in 200 s | room transitions |
+| --- | --- | --- |
+| 384 MiB (old default) | 900 | 1 |
+| 768 MiB (new default) | 7,260 | 322 |
+| 1536 MiB | 7,980 | 358 |
+
+768 MiB is the default now; `--initial-memory` overrides it. (This is also
+the measurement that ruled memory growth *out* as the room-entry crawl in
+round 15c: the crawl was identical at 1.5 GiB.)
+
+Also in 15e: the stub-hit recorder was a linear scan over every record
+seen so far, run on all 66.5 M stub calls of a ten-minute run -- 65.9 M of
+them the four critical-section symbols, which are inert by design. It is
+now an import-index table, and the return address (a guest memory read) is
+computed only on a symbol's first hit.
+
 ## Appendix: reproduction
 
 ```bash
