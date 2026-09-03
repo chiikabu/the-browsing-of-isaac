@@ -28,7 +28,7 @@ REQUIRE emsdk on PATH:
 - Update slice **ABI 101** (idx-3 leaf-5 `0x74f090` fold landed; count still
   24 open / 27 resolved). `decomp:verify-slice` differential **5392 cases
   pass**, `leaf5=2p/4h` (both 0x74f090 verdicts exercised), 210 s.
-- Slice suite **864/864**; `npm test` **3894/3894** (warm ~80 s).
+- Slice suite **864/864**; `npm test` **3923/3923** (warm ~84 s).
 - Tree consistency (`verify-unit.mjs --preflight`) clean: no literal ABI pins
   in any suite, JSON canonical and in sync with the model layout, no
   stranded mutants.
@@ -39,7 +39,10 @@ REQUIRE emsdk on PATH:
 - Boot (from the instance dir) seeds the whole extracted instance tree
   (11,197 files, 243 MB) + 6 small archives, parses `players.xml` and the
   other xml tables, loads every UI anm2, prints `Viewport: 960x540` and the
-  framebuffer/window metrics, and enters mods-init. See front B below.
+  framebuffer/window metrics, and enters mods-init. **It then plays**: a
+  scripted run reaches a Basement, presents **13,860 frames at a median
+  4 ms**, and walks between rooms (654 transitions) until its wall-clock
+  budget ends it (round 15c). See front B below.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (the flow, not the port)
