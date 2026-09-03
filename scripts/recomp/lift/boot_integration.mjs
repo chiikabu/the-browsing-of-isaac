@@ -77,8 +77,9 @@ if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : '
 // FS returns NULL and the guest faults at 0x009a26c2. Seed the archives the
 // game opens from the locally-owned instance BEFORE main so the KAGE loader
 // finds them. Requires the boot module to export _isaac_fs_seed (add it to
-// the boot link's EXPORTED_FUNCTIONS). music.a/videos.a are not on the boot
-// path and are skipped to keep the seed small.
+// the boot link's EXPORTED_FUNCTIONS). music.a/videos.a are seeded LAZILY
+// (LAZY_ARCHIVES below): they are not on the boot path, but the game does open
+// them once it is playing.
 //
 // Boot round 10: the archives are NOT the whole install. This instance's
 // animations.a holds a single 4 MB compressed bundle (TOC count 1), and the
@@ -90,6 +91,9 @@ if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : '
 const INSTANCE_DIR = 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance';
 const PACKED_DIR = `${INSTANCE_DIR}/resources/packed`;
 const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a'];
+// Opened only once the game is playing (music, cutscenes): registered by size
+// and read on first open, so they cost nothing on a run that never asks.
+const LAZY_ARCHIVES = ['music.a', 'videos.a'];
 function seedFile(relPath, bytes) {
   const pathBytes = Buffer.from(relPath + '\0', 'utf8');
   const pp = m._malloc(pathBytes.length);
@@ -181,6 +185,20 @@ if (typeof m._isaac_fs_seed === 'function') {
       const relPath = `resources/packed/${name}`;
       const ok = seedFile(relPath, bytes);
       console.log(`  seed ${relPath} ${bytes.length} bytes -> ${ok ? 'ok' : 'FAIL'}`);
+      if (ok) seeded += 1;
+    }
+    // music.a (182 MB) and videos.a (93 MB) are not on the boot path, so they
+    // were skipped entirely to keep the seed small -- and the game logged
+    // "Failed to open archive file" for both once it reached gameplay
+    // (round 15d). They go in lazily instead: registered by size now, read
+    // from disk only if the game actually opens them.
+    for (const name of LAZY_ARCHIVES) {
+      const relPath = `resources/packed/${name}`;
+      let size;
+      try { size = statSync(`${PACKED_DIR}/${name}`).size; }
+      catch { console.log(`  (skip ${name}: not present locally)`); continue; }
+      const ok = seedLazy(relPath, size);
+      console.log(`  seed ${relPath} ${size} bytes (lazy) -> ${ok ? 'ok' : 'FAIL'}`);
       if (ok) seeded += 1;
     }
     return seeded;
