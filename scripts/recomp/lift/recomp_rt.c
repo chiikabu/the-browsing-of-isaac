@@ -386,13 +386,14 @@ double recomp_now_ms(void) {
   return emscripten_get_now();
 }
 /* ---- sampling profiler ---------------------------------------------------
- * ISAAC_PROFILE=1: on every tick (RECOMP_TICK_MASK+1 instructions, recomp_rt.h),
- * attribute recomp_cur_va to
- * its containing lifted function (binary search over the dispatch table's
- * sorted entry VAs g_dva[]) and count it. recomp_profile_report() (run with
- * the stub report at exit) prints the hottest functions. One sample per
- * 1,048,576 lifted instructions, so the sample count is also the
- * instruction count in Mi and, against the wall clock, the effective MIPS. */
+ * ISAAC_PROFILE=1: on every tick (RECOMP_TICK_MASK+1 instructions, recomp_rt.h)
+ * attribute recomp_cur_va to its containing lifted function (binary search
+ * over the dispatch table's sorted entry VAs g_dva[]) and count it.
+ * recomp_profile_report() (run with the stub report at exit) prints the
+ * hottest functions, and -- the number that matters for a stall -- the
+ * effective MIPS: lifted code executing at a normal rate means the phase IS
+ * guest work, while a near-zero rate means the wall time is being spent
+ * outside the module (round 15b). */
 extern const uint32_t g_dva[];
 extern const uint32_t g_ndispatch;
 static uint32_t *prof_counts;
