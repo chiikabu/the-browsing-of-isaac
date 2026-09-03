@@ -302,10 +302,18 @@ bench `ISAAC_BENCH_DISPATCH`: 0.11 us per dispatch) and *not* V8 lazy
 compilation (`--trace-wasm-compilation-times`: Liftoff 1.1 s total by the
 first room, TurboFan 20.6 s on background threads), yet the V8 profile puts
 61 s of *self* time in `isaac_lifted_dispatch` under one per-room reset
-(`sub_007f2800`). Round 14j measures the dispatcher in place
-(`ISAAC_DISPATCH_TIME=1`: wall time inside each dispatched entry, printed
-with the census). The lift is parallel and byte-identical (above,
-§21.25-21.26).
+(`sub_007f2800`). **Round 14j then found it is not guest work at all** (§21.27): a V8
+`--prof` tick log of the silent window puts 65% of ticks in ntdll.dll
+directly under the `call_indirect`, the process at 100% CPU and not
+paging, no compile churn, and the phase's wall time nondeterministic (two
+runs exit after ~100 s with identical dispatch counts, four sit for hours).
+Best-fitting candidate: the main thread waiting on V8's per-module lock
+(lazy compiles of never-run room code behind background TurboFan publishes
+of the giant lifted functions). **Next:** the flag batch
+(`--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`)
+via `scripts/recomp/profile/prof_stuck.ps1 -NodeFlags ...`, eager
+compilation with a long wait, and splitting the giant lifted functions.
+The lift is parallel and byte-identical (above, §21.25-21.26).
 
 ## Ground rules that bite (from AGENTS.md, do not relearn the hard way)
 - The tree wins over any doc "checkpoint" number — status.mjs is truth.

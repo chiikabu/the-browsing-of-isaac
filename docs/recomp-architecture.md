@@ -3080,6 +3080,55 @@ python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu \
 python scripts/recomp/lift/build_boot.py        # recompiles only changed TUs
 ```
 
+### 21.27 Round 14j: the crawl is not guest work -- V8 runtime time under the indirect call
+
+Two more instruments, then a different profiler, and the picture changed:
+
+- `ISAAC_DISPATCH_TIME=1` (dispatch_tbl.c): wall time inside every
+  dispatched entry (inclusive) plus the dispatcher's own bookkeeping,
+  printed with the census. Bench: 0.62 us per Lock+Unlock pair with it on,
+  0.15 off (three `performance.now` calls per dispatch, ~78 ns each).
+- `ISAAC_EXIT_AFTER=<s>` (recomp_rt.c): leave with the reports after that
+  much wall time. Both it and the silence watchdog run off the 2^20-block
+  tick, and in the silent phase that tick comes every 25-100 s -- or never:
+  four runs (with and without the timing instrument) sat after the first
+  spawn for 1-2 hours at 100% CPU without one, while two others reached
+  the dump after ~100 s with the same dispatch count (24,433,467 and
+  24,433,472). The guest work is deterministic; the wall time is not.
+- The older stall dump's "hottest VAs" were the 5,000-iteration anm2
+  array init at `0x40fc50` (`mov esi, 0x1388`), simply where the tick
+  landed; a 512-block window says nothing about 20 s. The rapidxml
+  reading of round 14h came from the same dump and is withdrawn.
+- `node --prof` (`scripts/recomp/profile/prof_stuck.ps1`: the tick log
+  survives a kill; Windows samples at 15.6 ms) restricted to the silent
+  window (`prof_window.py`): **65% of ticks in ntdll.dll with
+  `isaac_lifted_dispatch` as the frame beneath** (via
+  `recomp_call_indirect <- sub_007f2800 <- sub_0073e0a0`), 22% in a
+  straight-line 28-instruction fragment `sub_0093805f` whose stack is
+  itself four deep (a broken frame chain, i.e. more native time), 6% the
+  dispatcher's own code, ~1% everything lifted. The process: 101% CPU,
+  19 page faults/s, 8 GB of 32 GB free -- not paging. The compile trace
+  shows no function compiled more than twice (Liftoff, then TurboFan): no
+  code-flush churn.
+
+So the 61% "self time in the dispatcher" of the V8 CPU profile was native
+time reached through the `call_indirect`, attributed to the nearest wasm
+frame. What native work sits there is not yet proven. The candidate that
+fits every measurement: the main thread waiting on V8's per-module lock
+-- a lazy compile of never-run room code (3,679 Liftoff compiles by the
+first room) queues behind a background TurboFan publish of one of the
+giant lifted functions (692 TurboFan compiles, 20.6 s, the largest 1.2 s
+each), and the wait counts as CPU because the compiler threads are busy.
+
+Next (the batch that was cut short): the same run under
+`--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`,
+comparing wall time from "Room 1.2" to the exit; eager compilation
+(`--no-wasm-lazy-compilation`) with a long instantiate wait; and, on the
+lifter side, splitting the giant functions (`--max-insns 100000` pieces)
+so no single TurboFan unit holds the lock for a second. The browser has
+the same V8 defaults, so the fix has to be structural or a warm-up, not
+a node flag.
+
 ## Appendix: reproduction
 
 ```bash

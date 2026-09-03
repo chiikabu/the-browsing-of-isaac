@@ -439,8 +439,28 @@ void recomp_profile_report(void) {
   }
 }
 
+/* ISAAC_EXIT_AFTER=<seconds> (round 14j): leave with the reports after that
+ * much wall time, whatever the log is doing. The silence watchdog never
+ * fires inside a texture load: the reads stamp the log clock without
+ * printing a line. */
+static double exit_after_ms = -1.0, exit_t0;
+static void exit_after_tick(void) {
+  if (exit_after_ms < 0.0) {
+    const char *e = getenv("ISAAC_EXIT_AFTER");
+    exit_after_ms = (e && *e) ? atof(e) * 1000.0 : 0.0;
+    exit_t0 = emscripten_get_now();
+    if (exit_after_ms > 0.0)
+      fprintf(stderr, "[recomp][EXIT] leaving with the reports after %.0f ms\n", exit_after_ms);
+  }
+  if (exit_after_ms <= 0.0 || emscripten_get_now() - exit_t0 < exit_after_ms) return;
+  fprintf(stderr, "[recomp][EXIT] ISAAC_EXIT_AFTER reached at VA 0x%08x: exiting now (status 3)\n", recomp_cur_va);
+  { extern void isaac_stub_report(void); isaac_stub_report(); }
+  emscripten_force_exit(3);
+}
+
 void recomp_stall_tick(void) {
   prof_sample();
+  exit_after_tick();
   if (stall_ms < 0.0) {
     const char *e = getenv("ISAAC_STALL_DUMP");
     stall_ms = (e && *e) ? atof(e) * 1000.0 : 0.0;
