@@ -40,9 +40,10 @@ REQUIRE emsdk on PATH:
   (11,197 files, 243 MB) + 6 small archives, parses `players.xml` and the
   other xml tables, loads every UI anm2, prints `Viewport: 960x540` and the
   framebuffer/window metrics, and enters mods-init. **It then plays**: a
-  scripted run reaches a Basement, presents **13,860 frames at a median
-  4 ms**, and walks between rooms (654 transitions) until its wall-clock
-  budget ends it (round 15c). See front B below.
+  scripted run reaches a Basement, walks between rooms, and holds up: a
+  **30-minute soak presents 142,680 frames (79 fps), 1.12 billion
+  dispatches with 0 misses, no stall, no trap**, ending on its wall-clock
+  budget (rounds 15c-15e). See front B below.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (the flow, not the port)
