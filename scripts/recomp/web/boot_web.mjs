@@ -167,6 +167,7 @@ try {
   log(`  guard armed (layout ${layoutBad ? 'FAIL' : 'OK'})`);
 
   // --- seed the packed archives eagerly, the tree lazily
+  const LAZY_ARCHIVES = new Set(['resources/packed/music.a', 'resources/packed/videos.a']);
   const index = JSON.parse(new TextDecoder().decode(fetchSync('/instance_index.json')));
   stageOk('seed packed archives', () => {
     let n = 0;
@@ -186,7 +187,11 @@ try {
   stageOk('register instance tree lazily', () => {
     let files = 0, bytes = 0;
     for (const { p: rel, s: size } of index) {
-      if (rel.startsWith('resources/packed/')) continue;
+      // packed/ is seeded eagerly above -- except the two archives the game
+      // opens only once it is playing (music 182 MB, videos 93 MB), which get
+      // the same lazy treatment as the tree so they cost nothing until asked
+      // for. Node does the same (round 15d).
+      if (rel.startsWith('resources/packed/') && !LAZY_ARCHIVES.has(rel)) continue;
       const pp = cstr(rel);
       if (m._isaac_fs_seed_lazy(pp, size)) { files += 1; bytes += size; }
       m._free(pp);
