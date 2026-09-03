@@ -583,14 +583,18 @@ void recomp_jump_indirect(CpuState *restrict s, uint32_t target) {
  * progress and stop loudly instead. The counter is generous so a real guest
  * jump chain of any length still runs. */
 #define RECOMP_STUCK_LIMIT 4096u
+uint32_t isaac_dispatch_calls(void);   /* dispatch_tbl.c; weak fallback below */
 void recomp_run_pending(CpuState *restrict s) {
     uint32_t last = 0u, same = 0u;
-    extern volatile uint32_t recomp_va_trace_idx;
-    uint32_t idx_at_last = 0u;
+    /* progress = the dispatcher's call count, which counts in every build
+     * profile (the RECOMP_VA trace index does not: --fast compiles it out,
+     * and a guard that read it there would call a real guest jump chain a
+     * defect). */
+    uint32_t calls_at_last = 0u;
     while (recomp_jmp_pending) {
         uint32_t t = recomp_jmp_target;
         recomp_jmp_pending = 0u;
-        if (t == last && recomp_va_trace_idx == idx_at_last) {
+        if (t == last && isaac_dispatch_calls() == calls_at_last) {
             if (++same >= RECOMP_STUCK_LIMIT) {
                 fprintf(stderr,
                         "recomp: parked jump to 0x%08x repeated %u times with no guest "
@@ -605,7 +609,7 @@ void recomp_run_pending(CpuState *restrict s) {
             same = 0u;
             last = t;
         }
-        idx_at_last = recomp_va_trace_idx;
+        calls_at_last = isaac_dispatch_calls();
         recomp_call_indirect(s, t);
     }
 }

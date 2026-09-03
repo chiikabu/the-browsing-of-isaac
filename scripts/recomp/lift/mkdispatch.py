@@ -248,6 +248,10 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
   g_dfn[id](cpu);
   return 1;
 }
+/* Monotonic progress signal for recomp_run_pending: unlike the RECOMP_VA
+ * trace index this counts in every profile, including --fast, where the
+ * trace is compiled out. */
+uint32_t isaac_dispatch_calls(void) { return g_dcalls; }
 void isaac_dispatch_report(void) {
   fprintf(stderr, "[isaac][dispatch] %u dispatches (%u block re-entries, %u misses); hottest entries:\\n",
           g_dcalls, g_dblocks, g_dmisses);

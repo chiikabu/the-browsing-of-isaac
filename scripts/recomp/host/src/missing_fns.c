@@ -269,6 +269,7 @@ __attribute__((weak)) volatile uint32_t recomp_va_trace_idx;
 __attribute__((weak)) double recomp_last_log_ms;
 __attribute__((weak)) void recomp_profile_report(void) {}
 __attribute__((weak)) void isaac_dispatch_report(void) {}   /* dispatch_tbl.c in the boot link */
+__attribute__((weak)) uint32_t isaac_dispatch_calls(void) { return 0u; }  /* ditto; the no-progress guard in recomp_run_pending reads it */
 __attribute__((weak)) const uint32_t g_dva[1] = {0};
 __attribute__((weak)) const uint32_t g_ndispatch = 0;
 
