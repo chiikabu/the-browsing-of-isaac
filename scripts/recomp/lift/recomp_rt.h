@@ -58,15 +58,24 @@ extern volatile uint32_t recomp_va_trace[512];
 extern struct CpuState *recomp_last_cpu; /* set by shim dispatch; for fault reg dump */
 extern volatile uint32_t recomp_va_trace_idx;
 
-/* Stall watchdog (recomp_rt.c): every 2^20 lifted instructions, see whether
- * the log has been silent longer than ISAAC_STALL_DUMP seconds and dump the
- * VA ring + registers + stack walk if so. Off unless the env var is set. */
+/* Stall watchdog (recomp_rt.c): every RECOMP_TICK_MASK+1 lifted instructions,
+ * see whether the log has been silent longer than ISAAC_STALL_DUMP seconds and
+ * dump the VA ring + registers + stack walk if so; also where ISAAC_PROFILE
+ * samples and ISAAC_EXIT_AFTER checks its deadline. All off unless the env var
+ * is set. The interval was 2^20, which is minutes apart in a phase where each
+ * dispatch costs milliseconds -- so no wall-clock deadline could fire inside
+ * the room-entry crawl, the one place they were needed (round 15b). 2^16 is
+ * ~370 ticks per room entry: the deadline lands within a second, and the
+ * masked compare is the same instruction either way. */
+#ifndef RECOMP_TICK_MASK
+#define RECOMP_TICK_MASK 0xFFFFu
+#endif
 void recomp_stall_tick(void);
 #define RECOMP_VA(v)                                                       \
   do {                                                                     \
     recomp_cur_va = (uint32_t)(v);                                         \
     recomp_va_trace[(recomp_va_trace_idx++) & 511u] = recomp_cur_va;       \
-    if ((recomp_va_trace_idx & 0xFFFFFu) == 0u) recomp_stall_tick();       \
+    if ((recomp_va_trace_idx & RECOMP_TICK_MASK) == 0u) recomp_stall_tick(); \
   } while (0)
 void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
 /* host fastpath (scripts/recomp/host/src/host_fastpath.c; lift_patches.py WRAP_PATCHES) */

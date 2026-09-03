@@ -3149,11 +3149,14 @@ The flag batch round 14j asked for, measured end to end with
 | (none) | 43.2 s | 4,479 s | **4,436 s** |
 | `--no-wasm-tier-up` | 38.0 s | 145 s | **107 s** |
 
-Both runs logged **1,577 stamped lines** -- identical guest progress, so
-the 41x is entirely V8's. `--no-wasm-tier-up` keeps V8 in Liftoff and
-never recompiles in TurboFan, which is exactly the allocation churn the
-round-14j tick log found the main thread waiting behind (the NT heap
-free-list walk under node's malloc). Two consequences:
+**The 41x is withdrawn -- see 21.29.** The `--no-wasm-tier-up` process
+did not finish its silent phase in 107 s; it was killed at 145 s (by this
+session's own cleanup, whose kill line named that command). An
+independent run with the same flag stayed silent past 250 s. What the
+table actually shows is one real number, the baseline's ~4,400-s silent
+phase, and one artefact. Both runs did log the same **1,577 stamped
+lines** before going quiet, so the guest reaches the same place either
+way. Two things are worth keeping:
 
 1. **The dev loop.** `ISAAC_V8_FLAGS=--no-wasm-tier-up` on the node
    driver, `tierup=0` on `run_web.mjs`. Node refuses V8 flags in
@@ -3168,12 +3171,38 @@ free-list walk under node's malloc). Two consequences:
    42,671 x86 instructions, 331,707 lines of C; 21 functions carry 9.5%
    of all instructions and the largest 2 carry 3.1%).
 
-What this does *not* settle: whether Chromium crawls at all. It allocates
-through PartitionAlloc, not the NT heap, and the round-14j walk was
-node-specific. The web run is the one that matters for the port, so it is
-measured next, with and without `tierup=0`. If Chromium is fine, the flag
-stays a dev-loop lever; if it crawls too, the structural fix is splitting
-the giant functions so no TurboFan unit is a second long.
+What this does *not* settle: whether tier-up matters at all, and whether
+Chromium crawls (it allocates through PartitionAlloc, not the NT heap, and
+the round-14j walk was node-specific).
+
+### 21.29 Round 15b: why that measurement could not be trusted, and the fix
+
+Two harness defects, both of which had to be fixed before any A/B of the
+crawl means anything:
+
+1. **No wall-clock deadline could fire inside the crawl.** The stall
+   watchdog, `ISAAC_PROFILE` and `ISAAC_EXIT_AFTER` all ride the
+   `RECOMP_VA` tick, which was every 2^20 lifted instructions. In a phase
+   where a dispatch costs milliseconds, that is minutes between ticks --
+   so a run in the crawl printed nothing, exited nowhere, and could only
+   be ended by a kill, which is exactly how 21.28's 145 s was produced.
+   The interval is now `RECOMP_TICK_MASK` (2^16 by default, ~370 ticks
+   per room entry, same masked compare), and the profiler's
+   instructions-per-sample math derives from it instead of hardcoding
+   2^20.
+2. **The incremental build ignored headers.** `build_boot.py` hashed each
+   TU's own text only (round 14g), so editing `recomp_rt.h` -- where the
+   tick interval lives -- rebuilt nothing and would have produced a
+   module whose lifted code still carried the old interval, silently.
+   The hash now folds in a fingerprint of every header a lifted TU can
+   include plus the flag list, printed as `lift : dependency fingerprint
+   <hex>`, so a header edit rebuilds all 38 TUs and a flag change does
+   too.
+
+With a deadline that fires, the fair comparison is equal wall time rather
+than time-to-completion: run both configurations with the same
+`ISAAC_EXIT_AFTER` and compare how far the guest got (stamped log lines,
+last stamp, dispatch census).
 
 ## Appendix: reproduction
 

@@ -309,8 +309,25 @@ def main():
     # object was built -- sha256 stored beside the object -- so a re-lift
     # with --split-va rebuilds only the TUs whose functions changed.
     import hashlib
+    # A TU's object also depends on the headers it includes and on the compile
+    # flags, neither of which is in its own text: hashing the .c alone made a
+    # `recomp_rt.h` edit a silent no-op rebuild (round 15b -- it would have
+    # produced a module whose lifted code still carried the old tick
+    # interval). The fingerprint covers every header the lifted TUs can
+    # include plus the flag list, so touching one rebuilds all of them.
+    dep_h = sorted(set(lift_dir.glob("*.h")) |
+                   set((HERE / "..").resolve().glob("host/src/*.h")) |
+                   set(HERE.glob("*.h")))
+    dep_fp = hashlib.sha256()
+    for h in dep_h:
+        dep_fp.update(h.name.encode())
+        dep_fp.update(h.read_bytes())
+    dep_fp.update(repr(LIFT_CFLAGS + inc_lift).encode())
+    dep_fp = dep_fp.hexdigest()
+    print("lift : dependency fingerprint %s (%d headers + flags)" % (dep_fp[:12], len(dep_h)))
+
     def text_sha(path):
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashlib.sha256(path.read_bytes() + dep_fp.encode()).hexdigest()
     lifted_sha = {}
     skipped_same = 0
     for src in lifted_cs:

@@ -386,7 +386,8 @@ double recomp_now_ms(void) {
   return emscripten_get_now();
 }
 /* ---- sampling profiler ---------------------------------------------------
- * ISAAC_PROFILE=1: on every 2^20-instruction tick, attribute recomp_cur_va to
+ * ISAAC_PROFILE=1: on every tick (RECOMP_TICK_MASK+1 instructions, recomp_rt.h),
+ * attribute recomp_cur_va to
  * its containing lifted function (binary search over the dispatch table's
  * sorted entry VAs g_dva[]) and count it. recomp_profile_report() (run with
  * the stub report at exit) prints the hottest functions. One sample per
@@ -413,7 +414,8 @@ static void prof_sample(void) {
     if (prof_on) {
       prof_counts = (uint32_t *)calloc(g_ndispatch, sizeof(uint32_t));
       prof_t0 = emscripten_get_now();
-      fprintf(stderr, "[recomp][PROF] sampling every 2^20 lifted instructions over %u functions\n", g_ndispatch);
+      fprintf(stderr, "[recomp][PROF] sampling every %u lifted instructions over %u functions\n",
+              (unsigned)RECOMP_TICK_MASK + 1u, g_ndispatch);
     }
   }
   if (!prof_on || !prof_counts) return;
@@ -425,9 +427,13 @@ static void prof_sample(void) {
 void recomp_profile_report(void) {
   if (!prof_on || !prof_counts || !prof_samples) return;
   double secs = (emscripten_get_now() - prof_t0) / 1000.0;
-  fprintf(stderr, "[recomp][PROF] %u samples = %.0f Mi lifted instructions in %.1f s (%.1f MIPS); %u outside the table\n",
-          prof_samples, (double)prof_samples, secs,
-          secs > 0 ? prof_samples * 1.048576 / secs : 0.0, prof_unknown);
+  {
+    /* one sample per tick: instructions = samples * (mask + 1) */
+    double insns = (double)prof_samples * ((double)RECOMP_TICK_MASK + 1.0);
+    fprintf(stderr, "[recomp][PROF] %u samples = %.1f Mi lifted instructions in %.1f s (%.1f MIPS); %u outside the table\n",
+            prof_samples, insns / 1048576.0, secs,
+            secs > 0 ? insns / 1e6 / secs : 0.0, prof_unknown);
+  }
   fprintf(stderr, "[recomp][PROF] ---- hottest lifted functions (samples, share, entry VA):\n");
   for (unsigned rank = 0; rank < 40; rank++) {
     uint32_t best = 0;

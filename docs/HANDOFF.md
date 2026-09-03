@@ -315,17 +315,28 @@ malloc/free on the main thread, called by V8 under the call_indirect (lazy
 compiles, code publishing). A fragmented NT heap walks O(n) per call, which
 is why the wall time depends on allocation history. This is Windows-node
 specific: Chrome (PartitionAlloc) and Linux (glibc) do not have that walk.
-**Round 15a settled it on node (§21.28):** the flag batch finished --
-baseline 4,479 s wall with a 4,436-s silent phase, `--no-wasm-tier-up`
-145 s with a 107-s one, **41x**, and both runs logged the same 1,577
-stamped lines (identical guest progress). Liftoff-only is also *faster* in
-the menu (median frame 33 ms against 38). So use it for every dev run:
-`ISAAC_V8_FLAGS=--no-wasm-tier-up` on the node driver (it re-execs itself;
-node refuses V8 flags in `NODE_OPTIONS`), `tierup=0` on `run_web.mjs`.
-**Open:** whether Chromium crawls at all -- it allocates through
-PartitionAlloc, and the walk was node's heap. That web measurement is the
-next step; if Chromium crawls too, split the giant lifted functions
-(`0x005d4380` is 42,671 instructions) so no TurboFan unit takes a second. **Next:** the flag batch
+**Round 15a claimed `--no-wasm-tier-up` was 41x; round 15b withdrew it**
+(§21.28-21.29). The baseline's ~4,400-s silent phase is real; the flag
+run's 145 s was this session killing it, and an independent run with the
+flag stayed silent past 250 s. What survives: both runs log the same
+1,577 stamped lines, and menu frames were a median 33 ms with the flag
+against 38 without.
+
+**Two harness defects made that measurement unfalsifiable, both now
+fixed** -- and both are worth knowing before you measure anything:
+- The `RECOMP_VA` tick was every 2^20 lifted instructions, which inside
+  the crawl is minutes, so no wall-clock deadline (`ISAAC_EXIT_AFTER`,
+  the stall watchdog, `ISAAC_PROFILE`) could fire there. Now
+  `RECOMP_TICK_MASK`, 2^16.
+- `build_boot.py` hashed only each TU's own text, so a `recomp_rt.h` edit
+  rebuilt nothing. The hash now folds in all headers + the flags and
+  prints `lift : dependency fingerprint <hex>`.
+
+**Next:** the fair A/B is equal wall budget, not time-to-finish -- same
+`ISAAC_EXIT_AFTER` with and without `ISAAC_V8_FLAGS=--no-wasm-tier-up`,
+comparing how far the guest got. Then the same in Chromium (`tierup=0`),
+which is the one that matters for the port. If both crawl, split the giant
+lifted functions (`0x005d4380` is 42,671 instructions). **Next:** the flag batch
 (`--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`)
 via `scripts/recomp/profile/prof_stuck.ps1 -NodeFlags ...`, eager
 compilation with a long wait, and splitting the giant lifted functions.
