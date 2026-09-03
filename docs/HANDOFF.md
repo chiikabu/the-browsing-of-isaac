@@ -75,6 +75,33 @@ now mechanically caught or impossible:
 - All 15 family suites pin ABI symbolically (`HEADER_ABI_VERSION` parsed
   from the `.h`); 700+ literals swept.
 
+## What the port does NOT do yet (front B)
+
+The engine loop is no longer the blocker -- a 30-minute session runs clean.
+What is missing is feature surface and verification depth, and none of it
+is started:
+
+- **Browser gameplay is unverified.** Chromium renders the menus and the
+  welcome popup with the current build; nothing past that has been driven
+  there, because headless SwiftShader manages about 1 fps and a
+  frame-keyed input timeline of a thousand frames is impractical. Needs a
+  real-GPU run.
+- **No audio at all.** The OpenAL layer answers `AL_VENDOR` with
+  "Isaac Native Headless"; nothing is decoded or output.
+- **No video.** `CreateThread` is an inert stub, so the theoraplayer
+  worker never starts and cutscenes never decode.
+- **Gameplay depth is untested.** The scripted input is a timeline keyed
+  to presented frames, not a player: combat, damage, item pickup, floor
+  descent, bosses and save/load have never been exercised. A run so far
+  walks between two or three rooms.
+- **Online is stubbed** (Steam, EOS), by choice.
+- **The instance is missing DLC and language archives**
+  (`afterbirth.a`, `afterbirthp.a`, `repentance_*.a`), which is why the
+  log still carries "Failed to open archive file" lines for those.
+- **No shipping build has been measured.** Every number in this document
+  is the debug profile (`RECOMP_MEM_CHECK=1`: bounds checks, the VA ring,
+  the stall tick). `build_boot.py --fast` is the profile that drops them.
+
 ## Two work fronts
 
 ### A. Hand-decomp boundaries (the verified per-boundary track)
