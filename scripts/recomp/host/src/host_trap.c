@@ -594,7 +594,11 @@ void recomp_run_pending(CpuState *restrict s) {
     while (recomp_jmp_pending) {
         uint32_t t = recomp_jmp_target;
         recomp_jmp_pending = 0u;
-        if (t == last && isaac_dispatch_calls() == calls_at_last) {
+        /* one dispatch since the last parked jump is exactly this loop's own:
+         * a real guest jump chain dispatches the callee's own work in between,
+         * a self-park cycle does not. Comparing for equality instead would
+         * never fire, because this loop's dispatch always advances it. */
+        if (t == last && isaac_dispatch_calls() - calls_at_last <= 1u) {
             if (++same >= RECOMP_STUCK_LIMIT) {
                 fprintf(stderr,
                         "recomp: parked jump to 0x%08x repeated %u times with no guest "

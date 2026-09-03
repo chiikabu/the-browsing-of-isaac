@@ -99,8 +99,8 @@ test('check_lifted.py enforces the entry-case invariant and the build runs it', 
 test('a parked jump that makes no progress stops loudly', () => {
   const src = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_trap.c'), 'utf8');
   assert.ok(src.includes('#define RECOMP_STUCK_LIMIT 4096u'), 'the repeat limit is named');
-  assert.ok(src.includes('if (t == last && isaac_dispatch_calls() == calls_at_last) {'),
-    'no progress means the same target AND no dispatch in between');
+  assert.ok(src.includes('if (t == last && isaac_dispatch_calls() - calls_at_last <= 1u) {'),
+    'no progress means the same target and no dispatch beyond this loop own');
   assert.ok(src.includes('uint32_t isaac_dispatch_calls(void);'), 'the progress counter is declared');
   assert.ok(src.includes('This is a lifter '), 'the message says what kind of defect it is');
   assert.ok(/abort\(\);/.test(src.slice(src.indexOf('RECOMP_STUCK_LIMIT'))), 'it aborts rather than spinning');

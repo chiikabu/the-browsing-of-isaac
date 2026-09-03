@@ -3306,6 +3306,48 @@ them the four critical-section symbols, which are inert by design. It is
 now an import-index table, and the return address (a guest memory read) is
 computed only on a symbol's first hit.
 
+### 21.32 Round 15f: the fast profile, and the next boundary (an entity trail loop)
+
+**The fast profile builds again.** `build_boot.py --fast` had two
+undeclared-identifier failures, both the same shape: a declaration inside
+`#if RECOMP_MEM_CHECK` with an unconditional user outside it.
+`RECOMP_TICK_MASK` was round 15b's (recomp_rt.c's profiler reads it
+unguarded); the host fastpath declarations predate this session (the
+`lift_patches.py` WRAP_PATCHES wrappers call them in every profile, so
+`lifted_034.c` could not compile). Both are hoisted, and
+`tests/recomp-build.test.js` pins that the unconditional pieces stay above
+the guard.
+
+What it buys: a **50 MB module against the debug profile's 385 MB**, and a
+12,000-frame run in **43 s (279 fps)** with 558 room transitions. The
+debug profile's comparable figure is the 79 fps of the 30-minute soak;
+these are different runs, not a controlled A/B, so read it as "roughly
+3x" rather than a measured ratio.
+
+**And the next boundary, which the soak had hidden.** That soak's "no
+stall in 30 minutes" was one lucky run. Two later runs of the same shape
+both stopped shortly after the first room with enemies in it:
+
+- one hung at 900 frames right after the game's own assertion
+  `[odsa] [ASSERT] - CellSpace::insert: x1 > x2`;
+- one hung at 660 frames with the watchdog naming a tight loop at
+  `0x00942d08..0x00942d79`, inside `FUN_00942c0e` (288 bytes), entered
+  just after `Spawn Entity with Type(222)` and two `Type(244)`.
+
+That loop fills a 120-entry ring (`cmp ecx, 0x78`) of xmm pairs at
+`[esi+0x50]`, with the count at `[esi+0x58]`, the head at `[esi+0x5c]`
+and the capacity at `[esi+0x54]` -- an entity trail or afterimage buffer.
+Its two `idiv dword ptr [ebp-0x14]` both divide by that capacity, and the
+branch at `0x00942d26` reaches a `call 0x00a112c0` (the engine
+log/assert entry) when the count equals the capacity and is not positive
+-- i.e. when the capacity is **zero**. A zero there makes the division
+undefined and the ring never reaches its bound.
+
+So the next unit of work is: who writes `[esi+0x54]`, and why it is zero
+here. It is the same family as the `CellSpace` assertion, a struct field
+that should have been initialised, and both appear only once enemies
+exist, which is why every earlier run missed them.
+
 ## Appendix: reproduction
 
 ```bash
