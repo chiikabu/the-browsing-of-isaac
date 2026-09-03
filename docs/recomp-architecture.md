@@ -3204,6 +3204,76 @@ than time-to-completion: run both configurations with the same
 `ISAAC_EXIT_AFTER` and compare how far the guest got (stamped log lines,
 last stamp, dispatch census).
 
+### 21.30 Round 15c: THE GAME PLAYS. The crawl was a missing `case` label.
+
+The room-entry crawl was never slow. It was **stuck**, and the reason is
+one missing line of generated C.
+
+A lifted function with an unresolved intra-function computed jump gets a
+dispatch loop: `uint32_t pc_ = <entry>; for (;;) { switch (pc_) { ... } }`,
+with a `case` per basic block. The block set came from `block_starts()`,
+which marks branch targets and the **lowest address in the body** -- and a
+function whose body absorbed a lower address range does not have its own
+entry among those. `sub_0093805f` (body from `0x00937d63`) opened with
+`pc_ = 0x93805fu` and had 288 cases, none of them `0x93805fu`. So entry
+fell straight through to `default:`, which spills the registers and parks
+a jump to `pc_` -- the function's own entry -- and returns. The caller's
+trampoline (round 14d) dispatched it again. Forever, executing **not one
+guest instruction**.
+
+That is exactly the shape every earlier measurement reported and none
+could explain: 100% CPU on one thread, no lifted-instruction ticks (so no
+wall-clock deadline could fire -- round 15b), no compilation, no GC, no
+file I/O, no memory growth, a nondeterministic "duration" (it had none;
+runs ended only when something killed them), and a V8 profile that
+charged the time to the nearest wasm frame it could name, the dispatcher.
+
+**What found it:** `ISAAC_HEARTBEAT=<n>` in the dispatcher and at the host
+boundary, printing every n-th call with the wall clock and the target.
+The answer was immediate and unambiguous:
+
+```
+[isaac][hb] 3836000000 dispatches, 200.2 s, now sub_0093805f
+```
+
+3.8 billion dispatches, all to the same address, 20 million a second.
+
+**The fix** is one line in `lift.py`: the dispatch loop's block set is
+`block_starts(body) | {start}`. Six functions in the tree had the defect
+(`0x93805f`, `0x93810f`, `0x938238`, `0xaa94db`, `0xaa94e8`, `0xaa94f7`);
+each was a guaranteed silent hang if the guest ever reached it.
+
+**Two guards so this class cannot hide again:**
+- `scripts/recomp/lift/check_lifted.py` verifies the invariant over a
+  lifted tree and `build_boot.py` runs it before compiling, so a tree with
+  an entry-less dispatch loop is not built at all. It also counts the
+  legitimate "entry case only" functions (a `jmp reg` tail call), which
+  are not failures.
+- `recomp_run_pending` now aborts with a diagnostic when the same parked
+  target repeats 4,096 times with the VA-trace index unchanged: no guest
+  instruction executed means it is a lifter defect, not a guest loop.
+
+**The result.** With the fix, the same scripted run (Enter through the
+menus, then movement keys) plays the game:
+
+| | before | after |
+| --- | --- | --- |
+| log lines in 300 s | 2,455 | 20,202 |
+| frames presented | 660, then stuck | **13,860** |
+| frame time | -- | **median 4 ms, p90 5 ms** |
+| room transitions | 0 | **654** (Start Room <-> Room 13.5) |
+| dispatches | 24 M, then spinning | 77.9 M, 0 misses |
+| exit | killed | `ISAAC_EXIT_AFTER` budget, cleanly |
+
+One 45-s stall remains, early, in the engine `Mutex` path
+(`0x00a157f0`/`0x00a159a0`), and it recovers. That is the next thing to
+look at, and it is an ordinary slow patch rather than a hang.
+
+Two things ruled out along the way and worth not re-testing: wasm
+compilation (0.7 s in a 200-s silent window under
+`--trace-wasm-compilation-times`) and heap size (the crawl was identical
+with `--initial-memory 0x60000000`, 1.5 GiB up front).
+
 ## Appendix: reproduction
 
 ```bash

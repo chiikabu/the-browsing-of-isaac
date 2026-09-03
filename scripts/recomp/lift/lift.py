@@ -301,7 +301,16 @@ class FuncEmitter:
         self.body = body
         self.opts = opts
         self.jumps = jumps or {}
-        self.blocks = block_starts(body) if opts.get("dispatch") else set()
+        # The dispatch loop opens with `pc_ = start`, so the entry MUST have a
+        # case label. block_starts() only marks branch targets and the lowest
+        # address in the body, and a function whose body absorbed a lower
+        # address range does not have its entry among those: `switch (pc_)`
+        # then fell straight to `default:`, which parks a jump to the entry and
+        # re-enters -- an infinite park/dispatch cycle executing no guest
+        # instruction at all. That was the room-entry "crawl" (round 15c:
+        # 3.8 billion dispatches of sub_0093805f, whose body starts at
+        # 0x00937d63).
+        self.blocks = (block_starts(body) | {start}) if opts.get("dispatch") else set()
         self.jtmps = []
         self.jt_tables = 0
         self.jt_entries = 0

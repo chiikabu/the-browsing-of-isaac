@@ -315,6 +315,22 @@ malloc/free on the main thread, called by V8 under the call_indirect (lazy
 compiles, code publishing). A fragmented NT heap walks O(n) per call, which
 is why the wall time depends on allocation history. This is Windows-node
 specific: Chrome (PartitionAlloc) and Linux (glibc) do not have that walk.
+**Round 15c (2026-09-03): THE GAME PLAYS -- the room-entry crawl was a
+missing `case` label** (§21.30). A lifted function's dispatch loop starts
+`pc_ = <entry>`, but the block set that gets `case` labels came from
+`block_starts()`, which marks branch targets and the lowest address in the
+body -- so a function whose body absorbed a lower range had no case for its
+own entry, fell to `default:`, parked a jump to itself and was dispatched
+again forever, executing no guest instruction (3.8 billion dispatches of
+`sub_0093805f` at 20 M/s, found with the new `ISAAC_HEARTBEAT=<n>`). Six
+functions had it. The fix is `block_starts(body) | {start}` in `lift.py`;
+`check_lifted.py` now enforces the invariant inside `build_boot.py`, and
+`recomp_run_pending` aborts on a no-progress park cycle instead of
+spinning. The same scripted run now presents **13,860 frames at a median
+4 ms**, does **654 room transitions**, and exits on its budget. Next: one
+45-s stall that remains early in the engine `Mutex` path (`0x00a157f0`),
+which recovers.
+
 **Round 15a claimed `--no-wasm-tier-up` was 41x; round 15b withdrew it**
 (§21.28-21.29). The baseline's ~4,400-s silent phase is real; the flag
 run's 145 s was this session killing it, and an independent run with the

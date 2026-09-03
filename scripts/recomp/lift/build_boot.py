@@ -165,6 +165,13 @@ def main():
                          "(real WebGL2 GL backend, EM_JS bridges), link with -sENVIRONMENT=web, "
                          "MEMFS (no NODERAWFS), FS/ENV exported; output in boot-web/. Driven by "
                          "scripts/recomp/web/run_web.mjs under Playwright.")
+    ap.add_argument("--initial-memory", type=lambda v: int(v, 0), default=0,
+                    help="override -sINITIAL_MEMORY (bytes). Growing the wasm "
+                         "memory reallocates and copies the whole heap, which "
+                         "on this host is a native, wasm-suspending, "
+                         "compilation-free, GC-free, I/O-free burst of exactly "
+                         "the shape the room-entry crawl has (round 15c). Give "
+                         "the module its peak up front to test that.")
     ap.add_argument("--fast", action="store_true",
                     help="speed profile: lifted TUs with -DRECOMP_MEM_CHECK=0 (no bounds checks, VA "
                          "ring, memory watch or stall tick), objects as lifted_NNN.fast.o, output in "
@@ -174,6 +181,11 @@ def main():
     global BOOT_OUT, LIFT_CFLAGS, LDFLAGS, HOST_CFLAGS
     lift_obj_suffix = ".o"
     host_obj_suffix = ".o"
+    if args.initial_memory:
+        LDFLAGS = [f for f in LDFLAGS if not f.startswith("-sINITIAL_MEMORY=")]
+        LDFLAGS += ["-sINITIAL_MEMORY=%d" % args.initial_memory]
+        print("link : INITIAL_MEMORY overridden to %d bytes (%.0f MiB)"
+              % (args.initial_memory, args.initial_memory / 1048576.0))
     if args.web:
         BOOT_OUT = OUT_LIFT / "boot-web"
         HOST_CFLAGS = HOST_CFLAGS + ["-DISAAC_WEB=1"]
@@ -241,6 +253,18 @@ def main():
     result["emccVersion"] = v.stdout.splitlines()[0] if v.stdout else None
     print("emcc : %s" % result["emccVersion"])
     print("lift : %s" % lift_dir)
+
+    # ---- invariants over the lifted tree ----------------------------------
+    # A generated-code defect that can only show up as a silent infinite hang
+    # has to be caught here rather than in a run: round 15c's room-entry crawl
+    # was six dispatch-loop functions with no `case` for their own entry VA.
+    r = run(py_cmd(str(HERE / "check_lifted.py"), "--dir", str(lift_dir),
+                   "--module", args.module if hasattr(args, "module") else "lifted"))
+    print((r.stdout or "").strip() or "check_lifted.py")
+    if r.returncode:
+        print("check_lifted.py found a lifted-tree defect; not building it\n%s"
+              % ((r.stderr or "").strip()))
+        return 1
 
     # ---- generate dispatch + loud stubs (no imp_* : host owns those) ----
     t_gen = time.time()

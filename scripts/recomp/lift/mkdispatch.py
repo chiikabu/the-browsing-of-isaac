@@ -200,6 +200,7 @@ static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
  * prints the hottest targets; the stub report calls it at exit. */
 static uint32_t *g_dcount;
 static uint32_t g_dcalls, g_dblocks, g_dmisses;
+static int g_hb_every = -1;   /* ISAAC_HEARTBEAT */
 /* ISAAC_DISPATCH_TIME=1 (round 14j): wall time INSIDE each dispatched entry,
  * inclusive of everything it calls (a nested dispatch is charged to both), and
  * the time spent in this function around the calls -- the dispatcher's own
@@ -214,6 +215,20 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
   if (off >= (uint32_t)(G_TEXT_HI - G_TEXT_LO)) { ++g_dmisses; return 0; }
   uint16_t id = g_index[off];
   if (id == 0xFFFFu) { ++g_dblocks; return dispatch_block(va, cpu); }
+  /* ISAAC_HEARTBEAT=<n>: print every n-th dispatch with the wall clock and the
+   * target. The room-entry crawl (round 15c) executes NO lifted instruction
+   * for minutes -- the RECOMP_VA tick never reaches its interval -- so the
+   * question is whether the guest is stopped inside one call or grinding
+   * through dispatches that the tick somehow misses. This answers it. */
+  if (g_hb_every < 0) {
+    const char *e = getenv("ISAAC_HEARTBEAT");
+    g_hb_every = (e && *e) ? atoi(e) : 0;
+    if (g_hb_every > 0)
+      fprintf(stderr, "[isaac][hb] heartbeat every %d dispatches\\n", g_hb_every);
+  }
+  if (g_hb_every > 0 && (g_dcalls % (uint32_t)g_hb_every) == 0u)
+    fprintf(stderr, "[isaac][hb] %u dispatches, %.1f s, now sub_%08x\\n",
+            g_dcalls, emscripten_get_now() / 1000.0, va);
   if (!g_dcount) g_dcount = (uint32_t *)calloc(G_NDISPATCH, sizeof(uint32_t));
   if (g_dcount) g_dcount[id]++;
   if (g_dtime_on < 0) {

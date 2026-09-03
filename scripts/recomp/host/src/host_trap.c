@@ -381,6 +381,24 @@ int isaac_indirect_call(uint32_t target, CpuState *restrict cpu) {
     if (!imp)
         return 0;
 
+    /* ISAAC_HEARTBEAT=<n>: every n-th host-boundary call, with the wall clock
+     * and the symbol. Companion to the dispatcher's heartbeat: during the
+     * room-entry crawl no lifted instruction runs for minutes, so the loop is
+     * either in the shim layer, in host C, or outside the module (round 15c).
+     * These two counters say which. */
+    {
+        static long hb = -1;
+        static unsigned long calls;
+        ++calls;
+        if (hb < 0) {
+            const char *e = getenv("ISAAC_HEARTBEAT");
+            hb = (e && *e) ? atol(e) : 0;
+        }
+        if (hb > 0 && (calls % (unsigned long)hb) == 0ul)
+            fprintf(stderr, "[isaac][hb] %lu host-boundary calls, %.1f s, now %s!%s\n",
+                    calls, emscripten_get_now() / 1000.0, imp->dll, imp->symbol);
+    }
+
     uint32_t ret = isaac_retaddr(cpu);
     int dbg = (ret >= 0x00a6c000u && ret <= 0x00a6fac0u) ||
               (imp->dll[0]=='d' && imp->symbol[0]=='D');
@@ -537,10 +555,37 @@ void recomp_jump_indirect(CpuState *restrict s, uint32_t target) {
     recomp_jmp_target = target;
     recomp_jmp_pending = 1u;
 }
+/* A parked jump that comes straight back with the same target and no guest
+ * instruction executed in between is not a loop -- it is a lifter defect, and
+ * before round 15c it spun at 20 M dispatches a second forever with nothing in
+ * the log (the room-entry "crawl": a dispatch-loop function whose entry VA had
+ * no `case` label fell to `default:` and re-parked its own entry). Detect no
+ * progress and stop loudly instead. The counter is generous so a real guest
+ * jump chain of any length still runs. */
+#define RECOMP_STUCK_LIMIT 4096u
 void recomp_run_pending(CpuState *restrict s) {
+    uint32_t last = 0u, same = 0u;
+    extern volatile uint32_t recomp_va_trace_idx;
+    uint32_t idx_at_last = 0u;
     while (recomp_jmp_pending) {
         uint32_t t = recomp_jmp_target;
         recomp_jmp_pending = 0u;
+        if (t == last && recomp_va_trace_idx == idx_at_last) {
+            if (++same >= RECOMP_STUCK_LIMIT) {
+                fprintf(stderr,
+                        "recomp: parked jump to 0x%08x repeated %u times with no guest "
+                        "instruction executed -- the target has no dispatch-loop case and "
+                        "no block-table entry, so it re-parks itself. This is a lifter "
+                        "defect, not a guest loop.\n", t, same);
+                isaac_dump_trap_context(s, "stuck parked jump");
+                fflush(stderr);
+                abort();
+            }
+        } else {
+            same = 0u;
+            last = t;
+        }
+        idx_at_last = recomp_va_trace_idx;
         recomp_call_indirect(s, t);
     }
 }
