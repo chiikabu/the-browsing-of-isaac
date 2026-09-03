@@ -52,6 +52,18 @@ extern uint8_t *recomp_mem_base;
 struct CpuState;
 extern uint32_t g_reentry_eip;
 
+/* host fastpath (scripts/recomp/host/src/host_fastpath.c; lift_patches.py WRAP_PATCHES) */
+int  isaac_fastpath_mode(void);
+void isaac_fast_unfilter(uint32_t row_info_va, uint32_t row_va, uint32_t prev_va, uint32_t filter);
+uint32_t isaac_fast_adler32(uint32_t adler, uint32_t buf_va, uint32_t len);
+void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va);
+int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
+void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);
+
+#ifndef RECOMP_TICK_MASK
+#define RECOMP_TICK_MASK 0xFFFFu
+#endif
+
 #if RECOMP_MEM_CHECK
 extern uint32_t recomp_cur_va;   /* set by --trace-va emission */
 extern volatile uint32_t recomp_va_trace[512];
@@ -67,9 +79,6 @@ extern volatile uint32_t recomp_va_trace_idx;
  * the room-entry crawl, the one place they were needed (round 15b). 2^16 is
  * ~370 ticks per room entry: the deadline lands within a second, and the
  * masked compare is the same instruction either way. */
-#ifndef RECOMP_TICK_MASK
-#define RECOMP_TICK_MASK 0xFFFFu
-#endif
 void recomp_stall_tick(void);
 #define RECOMP_VA(v)                                                       \
   do {                                                                     \
@@ -78,13 +87,6 @@ void recomp_stall_tick(void);
     if ((recomp_va_trace_idx & RECOMP_TICK_MASK) == 0u) recomp_stall_tick(); \
   } while (0)
 void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
-/* host fastpath (scripts/recomp/host/src/host_fastpath.c; lift_patches.py WRAP_PATCHES) */
-int  isaac_fastpath_mode(void);
-void isaac_fast_unfilter(uint32_t row_info_va, uint32_t row_va, uint32_t prev_va, uint32_t filter);
-uint32_t isaac_fast_adler32(uint32_t adler, uint32_t buf_va, uint32_t len);
-void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va);
-int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
-void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);
 /* Everything the guest may legitimately touch lives below the host base. */
 #ifndef RECOMP_GUEST_LIMIT
 #define RECOMP_GUEST_LIMIT 0x10000000u

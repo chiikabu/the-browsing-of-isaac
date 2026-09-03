@@ -79,3 +79,20 @@ test('the node driver can carry V8 flags, which NODE_OPTIONS refuses', () => {
     'the flags land before the script on the child command line');
   assert.ok(src.includes("stdio: 'inherit'"), 'the child keeps the parent stdio so logs are unchanged');
 });
+
+// The --fast profile compiles the lifted TUs with RECOMP_MEM_CHECK=0, which
+// drops the VA trace, the bounds checks and the stall tick. Anything the rest
+// of the runtime needs unconditionally therefore cannot live inside that
+// guard: RECOMP_TICK_MASK did, and recomp_rt.c's profiler reads it outside,
+// so `build_boot.py --fast` stopped compiling until it was hoisted.
+test('recomp_rt.h keeps the unconditional pieces outside the MEM_CHECK guard', () => {
+  const h = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
+  const guard = h.indexOf('#if RECOMP_MEM_CHECK');
+  assert.ok(guard > 0, 'the guard exists');
+  assert.ok(h.indexOf('#define RECOMP_TICK_MASK') < guard,
+    'the tick interval is defined before the guard: the profiler reads it in every profile');
+  assert.ok(h.indexOf('extern uint32_t g_reentry_eip;') < guard,
+    're-entry is unconditional too (--fast still re-enters)');
+  assert.ok(h.indexOf('int  isaac_fastpath_mode(void);') < guard,
+    'the host fastpath declarations are outside: the WRAP_PATCHES wrappers call them in every profile');
+});
