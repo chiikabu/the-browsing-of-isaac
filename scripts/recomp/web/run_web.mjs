@@ -41,7 +41,14 @@ const TIMEOUT_MS = Number((process.argv.slice(4).find((a) => a.startsWith('timeo
 // instantiation instead of on first call; first-call compiles of the giant lifted
 // functions are otherwise charged to whoever calls them, round 14h)
 const EAGER = (process.argv.slice(4).find((a) => a.startsWith('eager=')) || 'eager=0').slice(6) !== '0';
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)]);
+// tierup=0: --js-flags=--no-wasm-tier-up (Liftoff only, no background TurboFan
+// recompilation). On node this is the difference between a 4436-s and a 107-s
+// room entry, because TurboFan's allocation churn drives the Windows NT heap
+// free-list walk the main thread then waits on (round 15a, §21.28). Chromium
+// allocates through PartitionAlloc, so measure before assuming it helps here.
+const NO_TIERUP = (process.argv.slice(4).find((a) => a.startsWith('tierup=')) || 'tierup=1').slice(7) === '0';
+const JS_FLAGS = [...(EAGER ? ['--no-wasm-lazy-compilation'] : []), ...(NO_TIERUP ? ['--no-wasm-tier-up'] : [])];
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -114,7 +121,8 @@ const mime = (p) => p.endsWith('.mjs') || p.endsWith('.js') ? 'text/javascript'
 const browser = await chromium.launch({
   headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
-         '--enable-webgl', '--disable-web-security', ...(EAGER ? ['--js-flags=--no-wasm-lazy-compilation'] : [])],
+         '--enable-webgl', '--disable-web-security',
+         ...(JS_FLAGS.length ? [`--js-flags=${JS_FLAGS.join(' ')}`] : [])],
 });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const consoleLines = [];

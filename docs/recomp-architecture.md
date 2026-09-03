@@ -3138,6 +3138,43 @@ so no single TurboFan unit holds the lock for a second. The browser has
 the same V8 defaults, so the fix has to be structural or a warm-up, not
 a node flag.
 
+### 21.28 Round 15a: the crawl is TurboFan tier-up (41x, and Liftoff is faster anyway)
+
+The flag batch round 14j asked for, measured end to end with
+`ISAAC_LOG_TIME=1` (every `isaac_log` line stamped with
+`performance.now()`), the same scripted input, the same build:
+
+| flags | last log line | process wall | silent phase after it |
+| --- | --- | --- | --- |
+| (none) | 43.2 s | 4,479 s | **4,436 s** |
+| `--no-wasm-tier-up` | 38.0 s | 145 s | **107 s** |
+
+Both runs logged **1,577 stamped lines** -- identical guest progress, so
+the 41x is entirely V8's. `--no-wasm-tier-up` keeps V8 in Liftoff and
+never recompiles in TurboFan, which is exactly the allocation churn the
+round-14j tick log found the main thread waiting behind (the NT heap
+free-list walk under node's malloc). Two consequences:
+
+1. **The dev loop.** `ISAAC_V8_FLAGS=--no-wasm-tier-up` on the node
+   driver, `tierup=0` on `run_web.mjs`. Node refuses V8 flags in
+   `NODE_OPTIONS`, and `v8.setFlagsFromString` runs too late for the wasm
+   compiler, so `boot_integration.mjs` re-execs itself with the flags on
+   the command line (guarded by `ISAAC_V8_FLAGS_APPLIED`).
+2. **Liftoff is not a sacrifice here.** Menu frame times over the same
+   21 samples: median **33 ms** with tier-up off against **38 ms**
+   baseline, p90 40 against 47. TurboFan's better code does not pay for
+   its own compilation while the game is still loading rooms; the giant
+   lifted functions are the units it is slowest on (`0x005d4380` alone is
+   42,671 x86 instructions, 331,707 lines of C; 21 functions carry 9.5%
+   of all instructions and the largest 2 carry 3.1%).
+
+What this does *not* settle: whether Chromium crawls at all. It allocates
+through PartitionAlloc, not the NT heap, and the round-14j walk was
+node-specific. The web run is the one that matters for the port, so it is
+measured next, with and without `tierup=0`. If Chromium is fine, the flag
+stays a dev-loop lever; if it crawls too, the structural fix is splitting
+the giant functions so no TurboFan unit is a second long.
+
 ## Appendix: reproduction
 
 ```bash

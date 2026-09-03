@@ -315,8 +315,17 @@ malloc/free on the main thread, called by V8 under the call_indirect (lazy
 compiles, code publishing). A fragmented NT heap walks O(n) per call, which
 is why the wall time depends on allocation history. This is Windows-node
 specific: Chrome (PartitionAlloc) and Linux (glibc) do not have that walk.
-Fixes to try: eager compilation (no malloc storms during play), a run on
-Linux/WSL or under Chromium to confirm, splitting the giant functions. **Next:** the flag batch
+**Round 15a settled it on node (§21.28):** the flag batch finished --
+baseline 4,479 s wall with a 4,436-s silent phase, `--no-wasm-tier-up`
+145 s with a 107-s one, **41x**, and both runs logged the same 1,577
+stamped lines (identical guest progress). Liftoff-only is also *faster* in
+the menu (median frame 33 ms against 38). So use it for every dev run:
+`ISAAC_V8_FLAGS=--no-wasm-tier-up` on the node driver (it re-execs itself;
+node refuses V8 flags in `NODE_OPTIONS`), `tierup=0` on `run_web.mjs`.
+**Open:** whether Chromium crawls at all -- it allocates through
+PartitionAlloc, and the walk was node's heap. That web measurement is the
+next step; if Chromium crawls too, split the giant lifted functions
+(`0x005d4380` is 42,671 instructions) so no TurboFan unit takes a second. **Next:** the flag batch
 (`--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`)
 via `scripts/recomp/profile/prof_stuck.ps1 -NodeFlags ...`, eager
 compilation with a long wait, and splitting the giant lifted functions.

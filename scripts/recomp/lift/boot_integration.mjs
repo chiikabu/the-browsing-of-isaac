@@ -2,7 +2,23 @@
 // then call main. Every stage is reported separately so a failure names
 // the stage it happened in.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import Module from './boot.mjs';
+
+// ISAAC_V8_FLAGS: V8 flags for this run, re-exec'd onto the command line
+// because node refuses them in NODE_OPTIONS ("--no-wasm-tier-up is not
+// allowed in NODE_OPTIONS") and v8.setFlagsFromString is read too late for
+// the wasm compiler. Round 15a: `ISAAC_V8_FLAGS=--no-wasm-tier-up` cuts the
+// room-entry crawl from 4436 s to 107 s (recomp-architecture.md §21.28).
+if (process.env.ISAAC_V8_FLAGS && !process.env.ISAAC_V8_FLAGS_APPLIED) {
+  const { spawnSync } = await import('node:child_process');
+  const flags = process.env.ISAAC_V8_FLAGS.trim().split(/\s+/).filter(Boolean);
+  const r = spawnSync(process.execPath, [...flags, ...process.execArgv, ...process.argv.slice(1)], {
+    stdio: 'inherit',
+    env: { ...process.env, ISAAC_V8_FLAGS_APPLIED: '1' },
+  });
+  process.exit(r.status === null ? 1 : r.status);
+}
+
+const Module = (await import('./boot.mjs')).default;
 
 const segsPath = process.argv[2] || 'output/recomp/host/isaac.segs.bin';
 const stage = process.argv[3] || 'main';   // layout | boot | main
