@@ -3120,6 +3120,15 @@ first room) queues behind a background TurboFan publish of one of the
 giant lifted functions (692 TurboFan compiles, 20.6 s, the largest 1.2 s
 each), and the wait counts as CPU because the compiler threads are busy.
 
+**Symbolized** (`prof_ntdll.py` maps the raw tick PCs to ntdll's export
+table; capstone on the bytes): 3,312 of the 3,587 ntdll ticks are one
+instruction (RVA 0x102da) of an unexported linked-list walk that checks
+encoded block headers -- the NT heap allocator's free-list walk. So the
+main thread is inside node's malloc/free, called by V8 under the
+`call_indirect` (lazy compiles, code publishing); a fragmented NT heap
+walks O(n) per call, hence the nondeterministic wall time. Windows-node
+specific: Chrome's PartitionAlloc and glibc have no such walk.
+
 Next (the batch that was cut short): the same run under
 `--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`,
 comparing wall time from "Room 1.2" to the exit; eager compilation

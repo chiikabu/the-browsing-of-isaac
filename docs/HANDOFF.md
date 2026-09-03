@@ -307,9 +307,16 @@ first room, TurboFan 20.6 s on background threads), yet the V8 profile puts
 directly under the `call_indirect`, the process at 100% CPU and not
 paging, no compile churn, and the phase's wall time nondeterministic (two
 runs exit after ~100 s with identical dispatch counts, four sit for hours).
-Best-fitting candidate: the main thread waiting on V8's per-module lock
-(lazy compiles of never-run room code behind background TurboFan publishes
-of the giant lifted functions). **Next:** the flag batch
+Symbolized (`scripts/recomp/profile/prof_ntdll.py`, then capstone on
+ntdll): 3,312 of the 3,587 ntdll ticks sit on ONE instruction of an
+unexported free-list walk in the Windows NT heap allocator (a linked-list
+loop checking encoded block headers, ntdll RVA 0x102da), i.e. node's
+malloc/free on the main thread, called by V8 under the call_indirect (lazy
+compiles, code publishing). A fragmented NT heap walks O(n) per call, which
+is why the wall time depends on allocation history. This is Windows-node
+specific: Chrome (PartitionAlloc) and Linux (glibc) do not have that walk.
+Fixes to try: eager compilation (no malloc storms during play), a run on
+Linux/WSL or under Chromium to confirm, splitting the giant functions. **Next:** the flag batch
 (`--no-wasm-tier-up`, `--no-wasm-dynamic-tiering`, `--no-wasm-inlining`)
 via `scripts/recomp/profile/prof_stuck.ps1 -NodeFlags ...`, eager
 compilation with a long wait, and splitting the giant lifted functions.
