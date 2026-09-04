@@ -87,6 +87,9 @@ REQUIRE emsdk on PATH:
   node cutscene (the Epilogue `finished playing`), browser (3,001 frames,
   Basement, 314 uploads / 14 plays, 76.8 s wall) -- and the engine's own log
   is line-for-line identical to the pre-bundle run (523/523, 750/750).
+  The fast browser module itself is 50,769,868 bytes (code section 49.2 MB,
+  name section 0.4 MB) and **11,341,999 bytes gzipped** -- serve it with
+  `Content-Encoding` and it is 1.5 % of the bundle.
 - **Round 27 (2026-09-04, §21.42): the fast profile's dispatch census had
   a wrong name on its top entry.** The four 17.75 M-dispatch fragments were
   not the CRT memcpy (a vcruntime import) but the `switch (i & 3)` cases
