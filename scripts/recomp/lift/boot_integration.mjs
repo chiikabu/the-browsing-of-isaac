@@ -88,7 +88,11 @@ if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : '
 // ("resources/scripts/main.lua") are LOOSE files under resources/ (476 files,
 // 38 MB) that KAGE's mount-root scan indexes and resolves by path. Seed that
 // tree too, everything except packed/ (handled above by name).
-const INSTANCE_DIR = 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance';
+// ISAAC_INSTANCE_DIR=<dir> boots from another instance tree (round 28: the
+// shipping bundle, .scratch/game-bundle, is proven by booting from it). The
+// cwd rule below still applies: run from that same directory.
+const INSTANCE_DIR = (process.env.ISAAC_INSTANCE_DIR || 'C:/Users/Luca/Desktop/isaac/.scratch/game-instance')
+  .replace(/\\/g, '/').replace(/\/+$/, '');
 const PACKED_DIR = `${INSTANCE_DIR}/resources/packed`;
 const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a'];
 // Opened only once the game is playing (music, cutscenes): registered by size

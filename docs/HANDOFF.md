@@ -70,6 +70,22 @@ REQUIRE emsdk on PATH:
   Vorbis q3 music shrink the mounted set 1,070 → 750 MB, validated in-engine.
   Open: the floor banner shows raw string-table keys (`#BASEMENT_NAME`) now
   that the table comes from `afterbirthp.a` -- its parser returns 0.
+- **Round 28: the shipping bundle** (§21.43, 2026-09-04). `.scratch/game-bundle`
+  is **733,800,939 bytes in 22 files, 37.87 % of the 1,937,711,471-byte
+  instance**: the ten archives the engine mounts (1,069,689,641 →
+  733,456,838 bytes: lossless PNG, music at Vorbis **q4** -- q3 is 9.8 %
+  smaller, outside the 5 % rule -- and the 2,453 entries a later mount
+  shadows dropped, last-mount-wins read off the 0x00a17dc1 insert), the Lua
+  under `resources/scripts` and `savedatapath.txt`. Dropped by census
+  (`ISAAC_FS_TRACE=1` + a host-level fs hook + `run_web.mjs`'s new
+  `served_files.json`): `repentance.a`, the 11 language packs, the loose tree
+  (read 0 times), the executables and run-time state. Built and checked by
+  `scripts/recomp/assets/bundle.py` (manifest `.bundle.json` with sha256s;
+  `tests/recomp-bundle.test.js` 5/5). **Proven from the bundle**: node
+  timeline (Basement, 3,000 frames, 0 asserts, 39 PCM uploads / 11 plays),
+  node cutscene (the Epilogue `finished playing`), browser (3,001 frames,
+  Basement, 314 uploads / 14 plays, 76.8 s wall) -- and the engine's own log
+  is line-for-line identical to the pre-bundle run (523/523, 750/750).
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -129,6 +145,21 @@ node scripts/recomp/web/drive_interactive.mjs "http://127.0.0.1:8099/boot_web.ht
 headless browser; `fast=1` serves the speed-profile module (`build_boot.py
 --web --fast`), which is the one that renders gameplay at ~50 fps. It loads
 ~300 MB of assets before the first frame.
+
+The shipping bundle (round 28, §21.43): build it from the optimised instance,
+check it, and run either driver from it (`ISAAC_INSTANCE_DIR=<dir>` on the
+node driver, `instance=<dir>` on the web runner; the cwd rule still applies):
+
+```
+python scripts/recomp/assets/bundle.py build .scratch/game-instance-opt .scratch/game-bundle --original .scratch/game-instance --strict
+python scripts/recomp/assets/bundle.py check .scratch/game-bundle
+cd .scratch/game-bundle && ISAAC_INSTANCE_DIR=C:/Users/Luca/Desktop/isaac/.scratch/game-bundle ISAAC_EPOCH=1700000000 ISAAC_MAX_FRAMES=3000     ISAAC_INPUT="420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150"     node ../../output/recomp/lift/boot-fast/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main
+node scripts/recomp/web/run_web.mjs output/recomp/web-bundle 3000 fast=1 instance=.scratch/game-bundle     "input=420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150" keep=500
+```
+
+`bundle.py classify <instance> --all` shows every file's verdict and rule;
+`run_web.mjs` writes `served_files.json` (every file it served, requests and
+bytes) next to `web-run.log`.
 
 **Boot cost in the browser:** the DLC archives (1.2 GB) are fetched as 1 MB
 byte slices while the engine verifies every entry at mount, so the first

@@ -22,7 +22,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSy
 import { deflateSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, isAbsolute } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
@@ -34,7 +34,13 @@ const FAST = (process.argv.slice(4).find((a) => a.startsWith('fast=')) || 'fast=
 const BOOT_OVERRIDE = (process.argv.slice(4).find((a) => a.startsWith('boot=')) || 'boot=').slice(5);
 const BOOT = BOOT_OVERRIDE ? join(ROOT, BOOT_OVERRIDE) : join(ROOT, 'output', 'recomp', 'lift', FAST ? 'boot-web-fast' : 'boot-web');
 const SEGS = join(ROOT, 'output', 'recomp', 'host', 'isaac.segs.bin');
-const INSTANCE = join(ROOT, '.scratch', 'game-instance');
+// instance=<dir> (or ISAAC_INSTANCE_DIR): serve another instance tree -- round
+// 28 proves the shipping bundle (.scratch/game-bundle) by running from it.
+// Relative paths are taken from the repo root.
+const INSTANCE_ARG = (process.argv.slice(4).find((a) => a.startsWith('instance=')) || 'instance=').slice(9)
+  || process.env.ISAAC_INSTANCE_DIR || '';
+const INSTANCE = INSTANCE_ARG ? (isAbsolute(INSTANCE_ARG) ? INSTANCE_ARG : join(ROOT, INSTANCE_ARG))
+  : join(ROOT, '.scratch', 'game-instance');
 const OUT = process.argv[2] || join(ROOT, 'output', 'recomp', 'web-run');
 const FRAMES = process.argv[3] || '5';
 // trailing K=V arguments: ISAAC_* go into the module's ENV; `input=` is the
@@ -64,7 +70,7 @@ const SERVE = INTERACTIVE || (process.argv.slice(4).find((a) => a.startsWith('se
 const PORT = Number((process.argv.slice(4).find((a) => a.startsWith('port=')) || 'port=0').slice(5));
 const JS_FLAGS = [...(EAGER ? ['--no-wasm-lazy-compilation'] : []), ...(NO_TIERUP ? ['--no-wasm-tier-up'] : [])];
 const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=') && !a.startsWith('fast=')
-  && !a.startsWith('serve=') && !a.startsWith('port=') && !a.startsWith('boot=') && !a.startsWith('interactive=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
+  && !a.startsWith('serve=') && !a.startsWith('port=') && !a.startsWith('boot=') && !a.startsWith('instance=') && !a.startsWith('interactive=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -146,6 +152,22 @@ page && page.on('console', (msg) => consoleLines.push(msg.text()));
 page && page.on('pageerror', (e) => consoleLines.push(`PAGEERROR ${e.message}`));
 page && page.on('crash', () => consoleLines.push('PAGE CRASHED (renderer died)'));
 let served = 0, missing = 0;
+// Round 28: the files-served index. Every 200 the server answers is recorded
+// by path (requests and bytes before base64), and written next to the log as
+// served_files.json -- the browser-side half of the bundle census: what a run
+// actually pulls from the instance dir, whole files and window slices alike.
+const servedFiles = new Map();
+function recordServed(rel, bytes) {
+  const r = servedFiles.get(rel) || { requests: 0, bytes: 0 };
+  r.requests += 1; r.bytes += bytes;
+  servedFiles.set(rel, r);
+}
+function writeServedIndex() {
+  const files = [...servedFiles.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([path, r]) => ({ path, requests: r.requests, bytes: r.bytes }));
+  writeFileSync(join(OUT, 'served_files.json'), JSON.stringify({ instance: INSTANCE, files }, null, 1) + '\n');
+  return files.length;
+}
 // A real local HTTP server rather than page.route: the 380 MB boot.wasm
 // through route.fulfill crashed the renderer (the body crosses the CDP
 // channel as base64), and streaming compilation wants a normal response.
@@ -188,6 +210,7 @@ const server = createServer((req, res) => {
   } else {
     body = r.body || readFileSync(r.file);
   }
+  recordServed(rel, body.length);
   if (b64) body = Buffer.from(body.toString('base64'), 'ascii');
   res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(rel), 'Content-Length': body.length,
                        'Cache-Control': 'no-store' });
@@ -234,7 +257,7 @@ const wall = Date.now() - t0;
 const timedOut = !!(done && done.error);
 const killBrowser = () => { try { const p = browser.process(); if (p) p.kill('SIGKILL'); } catch (e) { /* gone */ } };
 if (timedOut) {
-  console.log(`web run: TIMED OUT after ${wall} ms (${served} files served); the page never left main`);
+  console.log(`web run: TIMED OUT after ${wall} ms (${served} files served, ${writeServedIndex()} distinct); the page never left main`);
   writeFileSync(join(OUT, 'web-run.log'), [...consoleLines, `---- timed out after ${wall} ms`].join('\n') + '\n');
   killBrowser();
   server.close();
@@ -257,7 +280,7 @@ for (const f of result.frames) {
   const rgba = Buffer.from(f.b64, 'base64');
   writeFileSync(join(OUT, `frame_${String(f.n).padStart(4, '0')}.png`), pngFromRgba(rgba, f.w, f.h, true));
 }
-console.log(`web run: ${wall} ms wall, ${served} files served (${missing} missing), ` +
+console.log(`web run: ${wall} ms wall, ${served} files served (${missing} missing, ${writeServedIndex()} distinct -> served_files.json), ` +
             `${result.frames.length} frame(s) written to ${OUT}`);
 console.log(`done: ${JSON.stringify(done)}`);
 const tail = result.log.slice(-6);

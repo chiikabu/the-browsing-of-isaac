@@ -5,7 +5,9 @@
   png      lossless PNG recompression (oxipng, every reduction OFF, all chunks kept, IHDR and
            decoded pixels verified identical with Pillow) -> a new archive, same table order
   music    re-encode the catalogued music OGGs (music.xml) at a lower Vorbis quality with
-           ffmpeg, comments preserved (-map_metadata 0), verified with ffprobe -> a new archive
+           ffmpeg, comments preserved (-map_metadata 0), verified with ffprobe -> a new archive;
+           --source <pristine.a> takes the bytes to encode from there (no generational loss when
+           re-encoding an archive that already carries an earlier pass)
   sfx      measure the catalogued WAV samples (sounds.xml): PCM totals, what a sample-rate /
            bit-depth reduction or an OGG re-encode would save (report only)
 
@@ -287,6 +289,12 @@ def _music_worker(task):
 def cmd_music(args) -> int:
     t0 = time.time()
     music = music_catalogue(args.music)
+    # --source <archive>: the bytes to encode come from this archive (the pristine
+    # one, by key) while everything else passes through from `archive`. That is
+    # how an already-optimised archive (PNG pass applied, music at one quality)
+    # is re-encoded at another quality with no generational loss (round 28).
+    src_arc = ar.Archive(args.source) if getattr(args, "source", None) else None
+    from_source = 0
     with ar.Archive(args.archive) as a:
         tasks = []
         names = {}
@@ -294,7 +302,12 @@ def cmd_music(args) -> int:
         for e in a.entries:
             if e.key not in music:
                 continue
-            data = a.decode(e)
+            se = src_arc.by_key.get(e.key) if src_arc is not None else None
+            if se is not None:
+                data = src_arc.decode(se)
+                from_source += 1
+            else:
+                data = a.decode(e)
             if sniff(data) != "ogg-vorbis":
                 skipped_ogg += 1
                 continue
@@ -330,14 +343,19 @@ def cmd_music(args) -> int:
             key = "%s Hz x%s" % (info.get("rate"), info.get("channels"))
             rates[key] = rates.get(key, 0) + 1
         rep = {"archive": os.path.basename(args.archive), "out": args.out, "quality": args.quality,
+               "source": args.source if src_arc is not None else None, "from_source": from_source,
                "music_entries": len(tasks), "replaced": len(replaced), "bytes_before": before, "bytes_after": after,
                "file_before": len(a.buf), "file_after": r["size"], "statuses": statuses, "failures": failures,
                "comment_keys": tagkeys, "formats": rates, "seconds": round(time.time() - t0, 1),
                "tracks": [{"index": i, "name": names.get(i), "before": len(d), "after": len(replaced.get(i, d)),
                            "bit_rate": infos[i].get("bit_rate"), "bit_rate_after": infos[i].get("bit_rate_after"),
                            "duration": infos[i].get("duration")} for i, d, _q in tasks]}
-    print("%s: %d catalogued music OGGs (%d catalogued non-vorbis skipped), %d replaced at q%s; bytes %s -> %s (%.1f%%); file %s -> %s; statuses %s; comment keys %s; formats %s; %d failures; %.0f s" % (
-        rep["archive"], len(tasks), skipped_ogg, len(replaced), args.quality, human(before), human(after),
+    if src_arc is not None:
+        src_arc.close()
+    print("%s: %d catalogued music OGGs (%d catalogued non-vorbis skipped%s), %d replaced at q%s; bytes %s -> %s (%.1f%%); file %s -> %s; statuses %s; comment keys %s; formats %s; %d failures; %.0f s" % (
+        rep["archive"], len(tasks), skipped_ogg,
+        ", %d taken from %s" % (from_source, os.path.basename(args.source)) if src_arc is not None else "",
+        len(replaced), args.quality, human(before), human(after),
         100.0 * after / before if before else 0, human(rep["file_before"]), human(rep["file_after"]), statuses,
         tagkeys, rates, len(failures), rep["seconds"]))
     if args.json:
@@ -441,6 +459,7 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_png)
     p = sub.add_parser("music"); p.add_argument("archive"); p.add_argument("out"); p.add_argument("--music", required=True)
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=6); p.add_argument("--json")
+    p.add_argument("--source", help="archive to take the pristine music bytes from (by key); the rest passes through from `archive`")
     p.set_defaults(fn=cmd_music)
     p = sub.add_parser("sfx"); p.add_argument("archive", nargs="+"); p.add_argument("--sounds", required=True)
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=8); p.add_argument("--sample", type=int, default=0)

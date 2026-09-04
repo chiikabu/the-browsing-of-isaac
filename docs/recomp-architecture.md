@@ -4042,6 +4042,185 @@ hand-written bodies untouched, idempotent, `--check`), pins the emitter
 text, and scans the lifted tree when present. Result: `GetString("Items",
 0, "THE_SAD_ONION_NAME")` -> "The Sad Onion"; 0 lookups fail in the boot.
 
+### 21.43 Round 28: the shipping bundle
+
+**The question.** The instance the port boots from is a 1,937,711,471-byte
+ResourceExtractor dump (11,263 files): three copies of the exe, the runtime
+DLLs, the archives' contents extracted loose to the root and again under
+`resources/`, twenty-two archives of which eleven are language packs that
+must not be mounted and one (`repentance.a`) this exe never names. Round 26
+made the archives smaller; this round decides what ships at all, and proves
+the answer by running from it. The tool is `scripts/recomp/assets/bundle.py`
+(`build` / `check` / `classify` / `table` / `rules`); the bundle is
+`.scratch/game-bundle`, hard-linked from the optimised instance (nothing is
+re-encoded by the bundler; nothing game-derived enters the repository).
+
+**The census, at two levels.** Every rule below rests on what the runs
+opened, not on what the tree looks like. The node fast profile was booted from
+`.scratch/game-instance-opt` with `ISAAC_FS_TRACE=1` (every probe the RAM-FS
+shim answers) *and* a `--require` hook on node's `fs` (every open, stat and
+positional read the process makes -- which is where the host Lua's NODERAWFS
+reads live; the shim never sees them), through the HANDOFF timeline to a
+Basement at 3,000 frames (epoch 1700000000) and through `ISAAC_CUTSCENE=300:3`
+(the Epilogue video). Both runs returned 0 from `main` with 0 asserts.
+
+- *Guest level.* The `fopen` hits are the ten archives -- afterbirthp.a
+  11,830 times, afterbirth.a 2,898, graphics.a 2,627, sfx.a 494, music.a 90,
+  config.a 25, videos.a 18, rooms.a 14, fonts.a 13, animations.a 2 (the entry
+  stream reopens its archive per entry) -- plus `savedatapath.txt` once, and
+  the saves under `./Documents/My Games/Binding of Isaac Repentance+/`
+  (MISS, then hit: the game writes them, then reads them back). Misses the
+  game shrugs off: `kage_mount_points.dat`, `resources/secret.a`,
+  `sharedsave{1,2,3}.dat`, the older games' save directories. The mount
+  opens the archives in this order, every run: animations, config, fonts,
+  graphics, music, rooms, sfx, videos, afterbirth, afterbirthp. The mount-root
+  scan (`FindFirstFileW`) touched `resources` and `resources/packed` and
+  nothing else; `/mods/`, `/data/` and the save directory answered `DIR`
+  although nothing was registered under them -- the game creates them
+  itself (`CreateDirectoryA`). `resources/scripts/enums.lua` and `main.lua`
+  MISS in the RAM-FS and `Running Lua Script:` follows anyway, which is the
+  host Lua reading them from the cwd.
+- *Host level.* Bytes read from the instance: afterbirthp.a 740,238,288
+  through 707 positional 1 MB reads, afterbirth.a 87,012,552 / 84, music.a
+  6,020,642 / 6, videos.a 1,778,426 / 2 (2,827,002 / 3 with the cutscene),
+  the six boot archives once each in full, `enums.lua` 158,046 bytes and
+  `main.lua` 46,813 through NODERAWFS (311 + 93 reads of the host Lua's
+  512-byte buffer). Everything else the driver registered was `stat`-ed for
+  its size and never opened. The loose tree was read **zero** times, as in
+  every traced run since round 24.
+- *Browser.* `run_web.mjs` now writes `served_files.json` next to its log
+  (every 200 by path: requests and bytes before base64) and takes
+  `instance=<dir>`. From the bundle it served 27 distinct files over 837
+  requests, 0 missing: the page and module (boot.wasm 50,764,402 bytes,
+  isaac.segs.bin 8,646,165, the 1,032-byte instance index), the ten archives
+  (afterbirthp.a 744,969,360 bytes in 711 slice requests, afterbirth.a
+  93,395,914 / 91, music.a 9,830,214 / 10, videos.a 1,636,046 / 2, the six
+  boot archives once each) and the eleven files under `resources/scripts`,
+  which the page copies into MEMFS before `main`. 942,541,791 bytes in all.
+
+**The rules** (`bundle.py rules`; first match wins). KEEP: the ten mounted
+archives; `resources/scripts/*.lua` + `licenses` (enums/main are read at
+boot, the rest is what `require` can reach from them); `savedatapath.txt`.
+DROP, each with its evidence: `repentance.a` (never named by this exe:
+whole-.text census, not in the 0xbfae60 list, 0 opens, unregistered by both
+drivers; 385,003,320 bytes); the eleven language packs (the hash-table insert
+at 0x00a17dc1 probes for an equal `(h1,h2)` and stores over that slot -- read
+off the decompile this round, the last mount wins -- so a mounted pack would
+shadow English assets; the engine logs `Failed to open archive file` for the
+seven it names and carries on; 89,490,978 bytes); `resources/packed/readme.txt`;
+the executables and libraries (30 files, 44,400,866 bytes; the lifted module
+is the exe, the host shims are its DLLs; the drivers never register them);
+run-time state and provenance (`Documents/`, `data/`, `mods/`, dot files,
+a 9.6 MB `v8-stuck.log` someone left in the instance); and the loose extracted
+tree (11,196 files, 339,151,040 bytes, read 0 times: KAGE resolves a key
+against the archive index before a mount root's loose map and afterbirthp.a
+holds the Repentance+ files; `secret.a` is asked for as `resources/secret.a`
+and misses, `keeper.a` is never asked for). A file no rule matches is dropped
+and listed; `--strict` refuses to build with one.
+
+**Shadowed entries dropped.** With last-mount-wins confirmed, an entry whose
+key recurs in a later archive can never be served, so `archive.py repack
+--drop-shadowed-by` removed them (passthrough, byte-exact for what stays):
+graphics.a 926 of 2,300 entries, afterbirth.a 1,511 of 2,647, fonts.a 6 of
+10, music.a 3 of 83, rooms.a 3 of 13, sfx.a 3 of 301, videos.a 1 of 17 --
+34,539,702 bytes on the optimised set (48.8 MiB measured on the pristine
+archives; the PNG and music passes had already shrunk those entries).
+config.a (24 of 24 shadowed) and animations.a (1 of 1) ship whole: the mount
+opens them by name and 790,982 bytes is not worth an empty archive the
+engine has never seen. Every rebuilt archive re-verifies entry for entry
+(`archive.py verify`): graphics 1374/1374, music 80/80, videos 16/16, sfx
+298/298, rooms 10/10, fonts 4/4, afterbirth 1136/1136, afterbirthp
+10228/10228.
+
+**Music quality, decided with numbers.** `optimize.py music` on the pristine
+music.a (82 catalogued tracks, 182,560,078 bytes of Vorbis):
+
+| quality | music bytes | music.a file | vs q4 |
+|---|---|---|---|
+| q3 | 63,507,630 | 63,692,322 | 9.8 % smaller |
+| **q4** | 70,401,239 | 70,585,930 | -- |
+| q5 | 89,081,846 | 89,266,534 | 26.5 % larger |
+
+The rule was "ship q4 unless q3 is within 5 % of it": q3 is 9.8 % smaller,
+not within 5 %, so **q4 ships** -- Vorbis's nominal 128 kbps point, for
+17,776,343 bytes more than q3 across the three archives that carry music
+(music.a +6,893,609, afterbirth.a +2,337,637, afterbirthp.a +8,545,097), 2.4 %
+of the bundle. The DLC archives were re-encoded from the pristine bytes onto
+the PNG-optimised ones (`optimize.py music --source <pristine.a>`, new this
+round: the music entries come from the source archive by key, everything
+else passes through, so no generation is lost): afterbirth.a 25 of 30 tracks
+replaced (5 are 1-4 kbps layer intros already below q4), afterbirthp.a 72 of
+72, comments preserved, 0 failures. Sound effects stay WAV: the engine
+preloads WAV and would open OGG samples as play-time streams (round 26's
+measurement: 1,557 catalogued samples, 265.6 MiB of PCM as preloaded; q3
+OGG would be 27.7 MiB but changes the behaviour). Not applied.
+
+**The size table** (`bundle.py build .scratch/game-instance-opt
+.scratch/game-bundle --original .scratch/game-instance --strict`, exact bytes):
+
+| archive / group | original | optimised instance | bundle |
+|---|---|---|---|
+| resources/packed/animations.a | 660,301 | 660,301 | 660,301 |
+| resources/packed/config.a | 130,681 | 130,681 | 130,681 |
+| resources/packed/fonts.a | 15,061 | 7,271 | 7,271 |
+| resources/packed/graphics.a | 17,554,022 | 6,301,054 | 6,301,054 |
+| resources/packed/music.a | 182,744,758 | 65,404,742 | 65,404,742 |
+| resources/packed/rooms.a | 655,906 | 501,695 | 501,695 |
+| resources/packed/sfx.a | 25,333,050 | 25,196,098 | 25,196,098 |
+| resources/packed/videos.a | 93,004,538 | 85,522,126 | 85,522,126 |
+| resources/packed/afterbirth.a | 145,319,513 | 86,356,974 | 86,356,974 |
+| resources/packed/afterbirthp.a | 604,271,811 | 463,375,896 | 463,375,896 |
+| scripts + save path (12 files, kept) | 344,101 | 344,101 | 344,101 |
+| repentance.a (dropped) | 385,003,320 | 368,793,706 | -- |
+| language packs (11, dropped) | 89,490,978 | 89,490,978 | -- |
+| loose extracted tree (11,196, dropped) | 339,151,040 | 339,151,040 | -- |
+| executables, libraries (30, dropped) | 44,400,866 | 44,400,866 | -- |
+| run-time state, provenance (2, dropped) | 9,630,470 | 9,630,470 | -- |
+| dev leftovers (1, dropped) | 1,055 | 1,055 | -- |
+| **TOTAL** | **1,937,711,471** | **1,585,269,054** | **733,800,939** |
+
+The ten mounted archives: 1,069,689,641 → 733,456,838 bytes (68.57 %). The
+bundle: **733,800,939 bytes in 22 files, 37.87 % of the original instance**,
+22 hard links, manifest `.bundle.json` (path, size, sha256 per file, the
+dropped groups, the mount order). `bundle.py check .scratch/game-bundle`
+re-hashes every file and refuses an extra, a missing, a resized or an altered
+one, or a manifest whose totals do not add up (`tests/recomp-bundle.test.js`
+breaks a synthetic bundle each of those ways).
+
+**Proof: the port runs from the bundle.** Same epoch, same timeline, the
+drivers pointed at `.scratch/game-bundle` (`ISAAC_INSTANCE_DIR=<dir>` on the
+node driver, `instance=<dir>` on `run_web.mjs`, both new and pinned), the
+fast modules copied to `boot-fast-r28` / `boot-web-fast-r28` so a concurrent
+relink could not trap the runs:
+
+- node, timeline: `[RoomConfig] load stage 1: Basement`, 3,000 frames, `main`
+  returned 0, guard intact, **0 asserts**, `39 buffer uploads (2.4 MB of PCM,
+  14.4 s of audio), 11 plays`, 804.5 MB through the archive windows, 11.4 s
+  wall; 12 loose files registered (the scripts and the save-path note), 0 read
+  through the RAM-FS.
+- node, cutscene: `ShowCutscene(3)` at frame 300, `001_Epilogue.ogv` created
+  (16 precached frames) and `finished playing`, 3,000 frames, `main` returned
+  0, 0 asserts, 69 uploads / 6 plays, 16.3 s wall.
+- browser (headless Chromium, fast module): 3,001 frames presented, `load
+  stage 1: Basement`, `main` returned 0, 0 asserts, 314 uploads (19.6 MB,
+  115.9 s of audio) / 14 plays, 76.8 s wall, 18 scripted inputs delivered;
+  frame 1000 is Isaac walking to the start room's right door. The two `Failed
+  to compile fragment shader` lines (Bloom, Hallucination: a GLSL ES `for`
+  init) and the one GL error are in every web run since round 26, before
+  this round; both shaders exist only in afterbirthp.a.
+- The A/B that matters: the engine's own `[odsa]` log from the bundle run is
+  **identical** to the census run's on the un-dropped q3 archives -- 523 of
+  523 lines for the timeline, 750 of 750 for the cutscene, the one differing
+  line a heap pointer in `CURRENT ROOM INDEX`. Room, stage and seed sequences
+  match line for line. The bundle changes nothing the engine reports.
+- `bundle.py check` passes again after the runs: the game writes its saves
+  into the RAM-FS, not into the bundle.
+
+What the bundle does not settle: `resources/secret.a` (the root `secret.a`
+is a 10-entry version-5 archive the game asks for under `resources/` and
+does not get -- shipping it there would mount content today's runs never
+see), and the gameplay depth of round 27's list. Try it: HANDOFF.md.
+
 ## Appendix: reproduction
 
 ```bash
