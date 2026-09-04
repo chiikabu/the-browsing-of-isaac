@@ -68,6 +68,63 @@ cfg.isaacLazyRead = (src, dst, len) => {
 // serves as a byte slice (?off=&len=, base64 like every sync fetch here).
 // That is what lets the DLC archives (afterbirth.a 145 MB, afterbirthp.a
 // 604 MB, repentance.a 385 MB) mount inside a wasm32 heap.
+// Round 31: saves persist. The FS shim hands every file the game wrote to
+// Module.isaacPersist when it is closed (the persistentgamedata*.dat under
+// Documents/My Games/... on each game over) and announces deletes through
+// Module.isaacUnlink; they go into an IndexedDB store keyed by the FS key
+// and are seeded back before main at the next boot. `persist=0` on the URL
+// turns the store off (a fresh profile every load).
+const persistOn = params.get('persist') !== '0';
+const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';
+function openSaveDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
+    const req = indexedDB.open(SAVE_DB, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(SAVE_STORE); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+let saveDb = null, persisted = 0, unlinked = 0;
+const persistPending = [];
+cfg.isaacPersist = (key, src, ptr, len) => {
+  if (!persistOn) return 0;
+  const bytes = m.HEAPU8.slice(ptr, ptr + len);      // a copy: the guest buffer is freed after the call
+  persistPending.push({ key, src, bytes });
+  persisted += 1;
+  flushSaves();
+  return 1;
+};
+cfg.isaacUnlink = (key, src) => {
+  if (!persistOn) return 0;
+  persistPending.push({ key, src, bytes: null });
+  unlinked += 1;
+  flushSaves();
+  return 1;
+};
+function flushSaves() {
+  if (!saveDb || !persistPending.length) return;
+  const tx = saveDb.transaction(SAVE_STORE, 'readwrite'), st = tx.objectStore(SAVE_STORE);
+  for (const p of persistPending.splice(0)) {
+    if (p.bytes) st.put({ src: p.src, bytes: p.bytes }, p.key); else st.delete(p.key);
+  }
+  tx.onerror = () => log(`  save store write FAILED: ${tx.error}`);
+}
+function readSaves() {
+  return new Promise((resolve) => {
+    if (!saveDb) { resolve([]); return; }
+    const out = [];
+    const req = saveDb.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) { resolve(out); return; }
+      out.push({ key: c.key, src: c.value.src, bytes: c.value.bytes });
+      c.continue();
+    };
+    req.onerror = () => resolve(out);
+  });
+}
+window.isaacSaveStats = () => ({ persisted, unlinked, pending: persistPending.length });
 let preads = 0, preadBytes = 0;
 cfg.isaacLazyPread = (src, dst, off, len) => {
   try {
@@ -296,6 +353,26 @@ try {
     }
     log(`  registered ${files} files lazily (${(bytes / 1048576).toFixed(1)} MB)`);
     return files;
+  });
+  // --- round 31: the saves of earlier loads come back from IndexedDB (after
+  // the instance tree, so a saved file wins over a seeded one)
+  await stageOk('restore saves', async () => {
+    if (!persistOn) { log('  persist=0: the save store is off'); return 0; }
+    try { saveDb = await openSaveDb(); } catch (e) { log(`  save store unavailable: ${e.message}`); return 0; }
+    if (!saveDb) { log('  no IndexedDB here: saves live for this load only'); return 0; }
+    const saved = await readSaves();
+    let n = 0;
+    for (const { key, src, bytes } of saved) {
+      const rel = src || key;
+      const pp = cstr(rel), dp = m._malloc(bytes.length || 1);
+      m.HEAPU8.set(bytes, dp);
+      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
+      m._free(pp); m._free(dp);
+      if (ok) n += 1;
+      log(`  restored ${rel} (${bytes.length} bytes) -> ${ok ? 'ok' : 'FAIL'}`);
+    }
+    log(`  ${n} saved file(s) restored from the store`);
+    return n;
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there
   await stageOk('lua scripts into MEMFS', () => {

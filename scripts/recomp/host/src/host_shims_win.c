@@ -435,19 +435,75 @@ void imp_user32__EnumDisplayMonitors(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3);
     cpu->EAX = 1;                       /* nothing enumerated */
 }
+/* Round 31: one display adapter with one monitor and one mode. GLFW's
+ * _glfwPollMonitorsWin32 builds its monitor list from EnumDisplayDevicesW
+ * (adapters, then the monitors of each) and reads the current mode with
+ * EnumDisplaySettingsW(adapter, ENUM_CURRENT_SETTINGS); with nothing
+ * enumerated glfwGetPrimaryMonitor() is NULL and the game's VSync setter
+ * (0x00925ce0, reached when a written options.ini is read back) asserts
+ * `monitor != NULL` -- the second load of a persisted profile aborted on it.
+ * DISPLAY_DEVICEW is 840 bytes: cb, DeviceName[32], DeviceString[128],
+ * StateFlags, DeviceID[128], DeviceKey[128] (wide strings). DEVMODEW is 220
+ * bytes: dmDeviceName[32] at 0, dmSize at 68, dmFields at 72, dmBitsPerPel
+ * at 168, dmPelsWidth 172, dmPelsHeight 176, dmDisplayFrequency 184. */
+static void put_wstr(uint32_t va, const char *s, uint32_t max_chars) {
+    uint32_t i = 0;
+    for (; s[i] && i + 1 < max_chars; ++i) isaac_w16(va + 2u * i, (uint16_t)(uint8_t)s[i]);
+    isaac_w16(va + 2u * i, 0);
+}
+static int wstr_is(uint32_t va, const char *s) {
+    if (!isaac_is_guest_va(va)) return 0;
+    for (uint32_t i = 0; ; ++i) {
+        uint16_t c = isaac_r16(va + 2u * i);
+        if (c != (uint16_t)(uint8_t)s[i]) return 0;
+        if (!s[i]) return 1;
+    }
+}
+#define ISAAC_ADAPTER_NAME "\\\\.\\DISPLAY1"
+#define ISAAC_MONITOR_NAME "\\\\.\\DISPLAY1\\Monitor0"
 void imp_user32__EnumDisplayDevicesW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
-    (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3);
-    cpu->EAX = 0;
+    uint32_t dev = isaac_arg(cpu, 0), idx = isaac_arg(cpu, 1), out = isaac_arg(cpu, 2);
+    (void)isaac_arg(cpu, 3);
+    if (idx != 0 || !isaac_is_guest_va(out) || !isaac_is_guest_va(out + 839u)) { cpu->EAX = 0; return; }
+    int adapter = (dev == 0);
+    if (!adapter && !wstr_is(dev, ISAAC_ADAPTER_NAME)) { cpu->EAX = 0; return; }
+    for (uint32_t i = 4; i < 840u; i += 4) isaac_w32(out + i, 0);
+    isaac_w32(out + 0, 840);
+    put_wstr(out + 4, adapter ? ISAAC_ADAPTER_NAME : ISAAC_MONITOR_NAME, 32);
+    put_wstr(out + 68, adapter ? "Isaac Display Adapter" : "Isaac Monitor", 128);
+    /* adapter: ATTACHED_TO_DESKTOP | PRIMARY_DEVICE; monitor: ACTIVE | ATTACHED */
+    isaac_w32(out + 324, adapter ? (0x1u | 0x4u) : (0x1u | 0x2u));
+    put_wstr(out + 328, adapter ? "PCI\\VEN_1AF4&DEV_1050" : "MONITOR\\ISAAC01", 128);
+    put_wstr(out + 584, "", 128);
+    cpu->EAX = 1;
+}
+static void fill_devmode(uint32_t dm) {
+    for (uint32_t i = 0; i < 220u; i += 4) isaac_w32(dm + i, 0);
+    put_wstr(dm, ISAAC_ADAPTER_NAME, 32);
+    isaac_w16(dm + 64, 0x0401);         /* dmSpecVersion */
+    isaac_w16(dm + 66, 0x0401);         /* dmDriverVersion */
+    isaac_w16(dm + 68, 220);            /* dmSize */
+    isaac_w32(dm + 72, 0x40000u | 0x80000u | 0x100000u | 0x400000u | 0x20u); /* BITSPERPEL|PELSWIDTH|PELSHEIGHT|DISPLAYFREQUENCY|POSITION */
+    isaac_w32(dm + 168, 32);            /* dmBitsPerPel */
+    isaac_w32(dm + 172, DISPLAY_W);
+    isaac_w32(dm + 176, DISPLAY_H);
+    isaac_w32(dm + 184, 60);            /* dmDisplayFrequency */
 }
 void imp_user32__EnumDisplaySettingsW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
-    cpu->EAX = 0;                       /* no custom modes */
+    uint32_t dev = isaac_arg(cpu, 0), mode = isaac_arg(cpu, 1), dm = isaac_arg(cpu, 2);
+    /* the one mode: index 0, ENUM_CURRENT_SETTINGS (-1) and ENUM_REGISTRY_SETTINGS (-2) */
+    if (!(mode == 0 || mode == 0xFFFFFFFFu || mode == 0xFFFFFFFEu) || !isaac_is_guest_va(dm) || !isaac_is_guest_va(dm + 219u)
+        || (dev && !wstr_is(dev, ISAAC_ADAPTER_NAME))) { cpu->EAX = 0; return; }
+    fill_devmode(dm);
+    cpu->EAX = 1;
 }
 void imp_user32__EnumDisplaySettingsExW(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
-    (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3);
-    cpu->EAX = 0;
+    uint32_t dev = isaac_arg(cpu, 0), mode = isaac_arg(cpu, 1), dm = isaac_arg(cpu, 2);
+    (void)isaac_arg(cpu, 3);
+    if (!(mode == 0 || mode == 0xFFFFFFFFu || mode == 0xFFFFFFFEu) || !isaac_is_guest_va(dm) || !isaac_is_guest_va(dm + 219u)
+        || (dev && !wstr_is(dev, ISAAC_ADAPTER_NAME))) { cpu->EAX = 0; return; }
+    fill_devmode(dm);
+    cpu->EAX = 1;
 }
 void imp_user32__ChangeDisplaySettingsExW(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);

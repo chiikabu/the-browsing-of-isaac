@@ -133,6 +133,37 @@ function seedFile(relPath, bytes) {
 // which the RAM-FS calls with the seed path verbatim. Eager seeding cost
 // ~3 s and 208 MB of host heap per boot for files most runs never open.
 let lazyReads = 0, lazyBytes = 0;
+// Round 31: saves persist. ISAAC_SAVE_DIR=<dir> keeps every file the game
+// writes (the FS shim hands a written file to Module.isaacPersist when it is
+// closed, a deleted one to Module.isaacUnlink -- the persistentgamedata*.dat
+// under Documents/My Games/... on each game over) as a real file under that
+// directory, and seeds them back over the instance tree at the next boot.
+// Unset, nothing persists (the instance dir is never written to).
+const SAVE_STORE = process.env.ISAAC_SAVE_DIR ? process.env.ISAAC_SAVE_DIR.replace(/\\/g, '/').replace(/\/+$/, '') : null;
+let persisted = 0, unlinked = 0;
+if (SAVE_STORE) {
+  const { writeFileSync, mkdirSync, rmSync } = await import('node:fs');
+  const { dirname: dirOf, join: joinPath } = await import('node:path');
+  // the FS key of a file the game created carries the fake cwd root the
+  // host answers USERPROFILE with ("c:/isaac/"); a seeded file's src is the
+  // instance-relative seed path already
+  const storeRel = (key, src) => src || key.replace(/^c:\/isaac\//, '');
+  m.isaacPersist = (key, src, ptr, len) => {
+    try {
+      const rel = storeRel(key, src);
+      const abs = joinPath(SAVE_STORE, rel);
+      mkdirSync(dirOf(abs), { recursive: true });
+      writeFileSync(abs, m.HEAPU8.subarray(ptr, ptr + len));
+      persisted += 1;
+      return 1;
+    } catch (e) { console.log(`  save store write FAILED for ${key}: ${e.message}`); return 0; }
+  };
+  m.isaacUnlink = (key, src) => {
+    try { rmSync(joinPath(SAVE_STORE, storeRel(key, src)), { force: true }); unlinked += 1; return 1; }
+    catch (e) { console.log(`  save store unlink FAILED for ${key}: ${e.message}`); return 0; }
+  };
+  console.log(`  ISAAC_SAVE_DIR=${SAVE_STORE}: written files persist there and seed back at boot`);
+}
 m.isaacLazyRead = (src, dst, len) => {
   try {
     const bytes = readFileSync(`${INSTANCE_DIR}/${src}`);
@@ -381,6 +412,23 @@ if (typeof m._isaac_fs_seed === 'function') {
     }
     return files;
   });
+  // round 31: the saves of earlier boots, over the instance tree (a saved
+  // file wins over a seeded one; eager, they are small)
+  if (SAVE_STORE) stageOk('restore saves', () => {
+    if (!existsSync(SAVE_STORE)) { console.log('  (no save store yet)'); return 0; }
+    let n = 0;
+    const walkSaves = (dir, rel) => {
+      for (const name of readdirSync(dir)) {
+        const p = `${dir}/${name}`, r = rel ? `${rel}/${name}` : name;
+        const st = statSync(p);
+        if (st.isDirectory()) walkSaves(p, r);
+        else if (seedFile(r, readFileSync(p))) { n += 1; console.log(`  restored ${r} (${st.size} bytes)`); }
+      }
+    };
+    walkSaves(SAVE_STORE, '');
+    console.log(`  ${n} saved file(s) restored from ${SAVE_STORE}`);
+    return n;
+  });
   // Round 30: the console's two files, seeded into the RAM-FS only (an eager
   // seed replaces the lazy registration of a disk file with the same key, so
   // an options.ini the instance already has is merged, not overwritten, and
@@ -421,6 +469,7 @@ console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFi
             `windowed reads: ${preads} host reads, ${(preadBytes / 1048576).toFixed(1)} MB`);
 if (inputTimeline.length || inputsDelivered) console.log(`  scripted input: ${inputsDelivered} events delivered, ${inputTimeline.length} pending`);
 if (explorer) console.log(`  explorer: ${JSON.stringify(explorer.report())}`);
+if (SAVE_STORE) console.log(`  save store: ${persisted} file(s) persisted, ${unlinked} unlinked`);
 if (consoleDrv) console.log(`  console: ${JSON.stringify(consoleDrv.report())}`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);

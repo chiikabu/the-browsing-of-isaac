@@ -100,6 +100,22 @@ static int selftest_lazy_reader(const char *src, uint8_t *dst, uint32_t len) {
 #define WIN_FILE_SIZE 3000000u
 static unsigned g_pread_calls;
 static uint8_t win_byte(uint32_t off) { return (uint8_t)(off * 7u + 3u); }
+/* Round 31: the persist/unlink hooks the FS shim calls for written and
+ * deleted files (the node driver / the browser page stand here at run time). */
+static int g_persist_calls, g_unlink_calls;
+static uint32_t g_persist_len;
+static char g_persist_key[256];
+static uint8_t g_persist_data[64];
+static int selftest_persist(const char *key, const char *src, const uint8_t *data, uint32_t len) {
+    (void)src;
+    ++g_persist_calls;
+    g_persist_len = len;
+    snprintf(g_persist_key, sizeof g_persist_key, "%s", key);
+    memcpy(g_persist_data, data, len < sizeof g_persist_data ? len : sizeof g_persist_data);
+    return 1;
+}
+static int selftest_unlink(const char *key, const char *src) { (void)key; (void)src; ++g_unlink_calls; return 1; }
+
 static int selftest_preader(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
     (void)src;
     ++g_pread_calls;
@@ -1510,6 +1526,82 @@ int main(int argc, char **argv) {
             check(isaac_fs_seed("data/idx_b.txt", one, 1) == 1, "the deleted key can be seeded again");
             imp_kernel32__GetFileAttributesA(&cpu);
             check(cpu.EAX != 0xFFFFFFFFu, "and is found again");
+
+            /* Round 31: one display adapter, one monitor, one mode -- what
+             * GLFW's monitor poll needs so glfwGetPrimaryMonitor() is not NULL. */
+            {
+                extern void imp_user32__EnumDisplayDevicesW(CpuState *restrict cpu);
+                extern void imp_user32__EnumDisplaySettingsW(CpuState *restrict cpu);
+                uint32_t dd = dbuf + 0x800, dm = dbuf + 0x1000;
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0);
+                isaac_w32(cpu.ESP + 12, dd); isaac_w32(cpu.ESP + 16, 0);
+                imp_user32__EnumDisplayDevicesW(&cpu);
+                check(cpu.EAX == 1u && isaac_r32(dd) == 840u && isaac_r16(dd + 4) == '\\' && (isaac_r32(dd + 324) & 4u),
+                      "adapter 0 is a primary display device named \\\\.\\DISPLAY1");
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 1);
+                isaac_w32(cpu.ESP + 12, dd); isaac_w32(cpu.ESP + 16, 0);
+                imp_user32__EnumDisplayDevicesW(&cpu);
+                check(cpu.EAX == 0u, "there is no second adapter");
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, dd + 4); isaac_w32(cpu.ESP + 8, 0);
+                isaac_w32(cpu.ESP + 12, dd); isaac_w32(cpu.ESP + 16, 0);
+                imp_user32__EnumDisplayDevicesW(&cpu);
+                check(cpu.EAX == 1u && (isaac_r32(dd + 324) & 1u), "the adapter has one active monitor");
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0xFFFFFFFFu);
+                isaac_w32(cpu.ESP + 12, dm);
+                imp_user32__EnumDisplaySettingsW(&cpu);
+                check(cpu.EAX == 1u && isaac_r16(dm + 68) == 220u && isaac_r32(dm + 172) == 1280u && isaac_r32(dm + 176) == 720u
+                      && isaac_r32(dm + 184) == 60u && isaac_r32(dm + 168) == 32u,
+                      "ENUM_CURRENT_SETTINGS is the 1280x720 32-bit 60 Hz mode");
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 1);
+                isaac_w32(cpu.ESP + 12, dm);
+                imp_user32__EnumDisplaySettingsW(&cpu);
+                check(cpu.EAX == 0u, "and mode 1 does not exist");
+            }
+
+            /* Round 31: a file the guest writes reaches the persist hook on
+             * fclose with its bytes and key; a delete reaches the unlink hook. */
+            {
+                typedef int (*persist_fn)(const char *, const char *, const uint8_t *, uint32_t);
+                typedef int (*unlink_fn)(const char *, const char *);
+                extern void isaac_fs_set_persist_hooks(persist_fn, unlink_fn);
+                extern uint32_t isaac_fs_persisted(void);
+                extern uint32_t isaac_fs_unlinked(void);
+                isaac_fs_set_persist_hooks(selftest_persist, selftest_unlink);
+                uint32_t p0 = isaac_fs_persisted(), u0 = isaac_fs_unlinked();
+                g_persist_calls = 0; g_persist_len = 0; g_persist_key[0] = 0; g_unlink_calls = 0;
+                uint32_t sbuf = dbuf + 0x500, sdata = dbuf + 0x600;
+                const char *sp = "./Documents/My Games/Binding of Isaac Repentance+/persistentgamedata1.dat";
+                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)sp[i]; if (!sp[i]) break; }
+                *(uint8_t *)isaac_g(mbuf) = 'w'; *(uint8_t *)isaac_g(mbuf + 1) = 'b'; *(uint8_t *)isaac_g(mbuf + 2) = 0;
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sbuf); isaac_w32(cpu.ESP + 8, mbuf);
+                imp_api_ms_win_crt_stdio__fopen(&cpu);
+                uint32_t sfh = cpu.EAX;
+                check(sfh != 0, "a save file opens for writing under Documents");
+                for (unsigned i = 0; i < 5; ++i) *(uint8_t *)isaac_g(sdata + i) = (uint8_t)('A' + i);
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sdata); isaac_w32(cpu.ESP + 8, 1);
+                isaac_w32(cpu.ESP + 12, 5); isaac_w32(cpu.ESP + 16, sfh);
+                imp_api_ms_win_crt_stdio__fwrite(&cpu);
+                check(cpu.EAX == 5u, "fwrite stores five bytes");
+                check(g_persist_calls == 0, "nothing reaches the host before the close");
+                memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sfh);
+                imp_api_ms_win_crt_stdio__fclose(&cpu);
+                check(g_persist_calls == 1 && g_persist_len == 5 && memcmp(g_persist_data, "ABCDE", 5) == 0,
+                      "fclose hands the written bytes to the persist hook");
+                check(strstr(g_persist_key, "persistentgamedata1.dat") != NULL, "with the file's key");
+                check(isaac_fs_persisted() == p0 + 1, "and the persisted count rises");
+                FS_ATTR("./Documents/My Games/Binding of Isaac Repentance+/persistentgamedata1.dat"); imp_kernel32__DeleteFileA(&cpu);
+                check(cpu.EAX == 1u && g_unlink_calls == 1 && isaac_fs_unlinked() == u0 + 1, "DeleteFileA reaches the unlink hook");
+                isaac_fs_set_persist_hooks(NULL, NULL);
+                *(uint8_t *)isaac_g(mbuf) = 'r'; *(uint8_t *)isaac_g(mbuf + 1) = 'b'; *(uint8_t *)isaac_g(mbuf + 2) = 0;   /* the tests below reopen with "rb" */
+            }
 
             /* lazy: bytes come from the reader on first open, once */
             isaac_fs_set_lazy_reader(selftest_lazy_reader);

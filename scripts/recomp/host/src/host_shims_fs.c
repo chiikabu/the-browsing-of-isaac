@@ -281,6 +281,59 @@ static uint32_t fs_window_min(void) {
 typedef int (*isaac_fs_lazy_preader)(const char *src, uint8_t *dst, uint32_t off, uint32_t len);
 static isaac_fs_lazy_preader g_lazy_preader;
 void isaac_fs_set_lazy_preader(isaac_fs_lazy_preader fn) { g_lazy_preader = fn; }
+
+/* Round 31: saves persist. A file the guest opened for writing is handed to
+ * the host when it is closed, and a deleted one is announced: the node
+ * driver writes it under ISAAC_SAVE_DIR, the browser page into IndexedDB,
+ * and both seed it back at the next boot (the persistentgamedata*.dat the
+ * game writes on every game over live under Documents/My Games/...). The C
+ * hooks are the selftest's; the JS ones are Module.isaacPersist(key, src,
+ * dataPtr, len) and Module.isaacUnlink(key, src); `src` is the seed path the
+ * file was registered with (verbatim case), "" for a file the game created. */
+typedef int (*isaac_fs_persist_fn)(const char *key, const char *src, const uint8_t *data, uint32_t len);
+typedef int (*isaac_fs_unlink_fn)(const char *key, const char *src);
+static isaac_fs_persist_fn g_persist_hook;
+static isaac_fs_unlink_fn g_unlink_hook;
+static uint32_t g_persisted, g_unlinked;
+void isaac_fs_set_persist_hooks(isaac_fs_persist_fn p, isaac_fs_unlink_fn u) { g_persist_hook = p; g_unlink_hook = u; }
+uint32_t isaac_fs_persisted(void) { return g_persisted; }
+uint32_t isaac_fs_unlinked(void) { return g_unlinked; }
+#ifdef __EMSCRIPTEN__
+EM_JS(int, isaac_fs_persist_js, (const char *key, const char *src, const uint8_t *data, uint32_t len), {
+    if (typeof Module.isaacPersist !== "function") return 0;
+    var k = "", s = "";
+    for (var i = key; HEAPU8[i]; i++) k += String.fromCharCode(HEAPU8[i]);
+    for (var j = src; HEAPU8[j]; j++) s += String.fromCharCode(HEAPU8[j]);
+    return Module.isaacPersist(k, s, data, len) ? 1 : 0;
+});
+EM_JS(int, isaac_fs_unlink_js, (const char *key, const char *src), {
+    if (typeof Module.isaacUnlink !== "function") return 0;
+    var k = "", s = "";
+    for (var i = key; HEAPU8[i]; i++) k += String.fromCharCode(HEAPU8[i]);
+    for (var j = src; HEAPU8[j]; j++) s += String.fromCharCode(HEAPU8[j]);
+    return Module.isaacUnlink(k, s) ? 1 : 0;
+});
+#else
+static int isaac_fs_persist_js(const char *key, const char *src, const uint8_t *data, uint32_t len) {
+    (void)key; (void)src; (void)data; (void)len; return 0;
+}
+static int isaac_fs_unlink_js(const char *key, const char *src) { (void)key; (void)src; return 0; }
+#endif
+static void fs_persist(fs_entry *e) {
+    static const uint8_t empty[1] = { 0 };
+    if (!e || e->is_dir || e->windowed) return;
+    const char *src = e->src ? e->src : "";
+    const uint8_t *data = e->data ? e->data : empty;
+    int r = g_persist_hook ? g_persist_hook(e->key, src, data, e->size)
+                           : isaac_fs_persist_js(e->key, src, data, e->size);
+    if (r > 0) ++g_persisted;
+}
+static void fs_unpersist(const fs_entry *e) {
+    if (!e || e->is_dir || e->windowed) return;
+    const char *src = e->src ? e->src : "";
+    int r = g_unlink_hook ? g_unlink_hook(e->key, src) : isaac_fs_unlink_js(e->key, src);
+    if (r > 0) ++g_unlinked;
+}
 static int fs_pread_avail(void) { return g_lazy_preader ? 1 : isaac_fs_lazy_pread_avail(); }
 static int fs_pread(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
     return g_lazy_preader ? g_lazy_preader(src, dst, off, len) : isaac_fs_lazy_pread_js(src, dst, off, len);
@@ -518,6 +571,7 @@ void imp_kernel32__DeleteFileA(CpuState *restrict cpu) {
     if (!fs_key(p, key, sizeof key)) { fs_err_set(2u); cpu->EAX = 0; return; }
     fs_entry *e = fs_find(key);
     if (!e || e->is_dir) { fs_err_set(2u); cpu->EAX = 0; return; }
+    fs_unpersist(e);
     fs_free_entry(e);
     fs_err_set(0);
     cpu->EAX = 1;
@@ -774,7 +828,10 @@ void imp_api_ms_win_crt_stdio__fclose(CpuState *restrict cpu) {
     if (!fp) { cpu->EAX = 0; return; }
     uint32_t tok = isaac_r32(fp + 0x10u);
     uint32_t fi = fs_tok_to_idx(tok);
-    if (fi != 0xFFFFFFFFu) g_file_used[fi] = 0;
+    if (fi != 0xFFFFFFFFu) {
+        if (g_file_w[fi]) fs_persist(fs_file_entry(fi));   /* round 31: a written file reaches the host store */
+        g_file_used[fi] = 0;
+    }
     isaac_guest_free(fp);
     cpu->EAX = 0;
 }
@@ -991,6 +1048,7 @@ void imp_api_ms_win_crt_filesystem__remove(CpuState *restrict cpu) {
     if (!fs_key(p, key, sizeof key)) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = (uint32_t)-1; return; }
     fs_entry *e = fs_find(key);
     if (!e || e->is_dir) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = (uint32_t)-1; return; }
+    fs_unpersist(e);
     fs_free_entry(e);
     isaac_w32(ERRNO_CELL_VA, 0);
     cpu->EAX = 0;

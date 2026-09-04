@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-04, recomp rounds 26-29: fixes, video, bundle, automated player)
+# Handoff — read this first (2026-09-04, recomp rounds 26-31: fixes, video, bundle, automated player, console, saves)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -144,6 +144,12 @@ REQUIRE emsdk on PATH:
   (9) + four explorer tests. Both runs went quiet for **474 s at the music
   restart** (frames 360-420; the first boss attempt sat >10 min there and
   was killed): round 14j's node-on-Windows heap class, not the game.
+- **Round 31: saves persist** (§21.46). A file the game writes reaches the
+  host when it is closed: `ISAAC_SAVE_DIR=<dir>` on the node driver keeps
+  the `persistentgamedata*.dat` as real files and seeds them back at the
+  next boot; the browser page keeps them in IndexedDB and restores them
+  before main (`persist=0` turns it off; `drive_persist.mjs` proves a
+  reload restores them). Node: two boots of the automated player (6,000 frames, epoch 1700000000, fast profile): boot 1 persisted 36 file closes (persistentgamedata1..3.dat, their save_backups, gamestate1.dat, options.ini, log.txt), boot 2 restored 10 files, the game found every save (0 misses, no 'No Repentance save found'), same 3 runs / 2 deaths, main 0. Browser: one Chromium profile, the headless timeline to 1,500 frames then a reload: load 1 persisted 24 closes, load 2 restored 10 files before main and ran its 1,500 frames, main 0, 0 asserts (drive_persist.mjs OK). The first attempt aborted on load 2 in the game's VSync setter: with the written options.ini read back it asks GLFW for the primary monitor, and EnumDisplayDevicesW enumerated nothing -- the shims now describe one adapter, one monitor and one 1280x720@60 mode (selftest 241/0).
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -549,6 +555,8 @@ is non-empty (empty `mods/` skips it). GL goes through epoxy `.data` slots
   (timeline mode) prints the engine's key-state tables every 30 frames.
   `ISAAC_DISPATCH_WATCH` counts DISPATCHED entries only (indirect calls,
   tail jumps): a direct callee reads 0 there even when it runs every frame.
+- `ISAAC_SAVE_DIR=<dir>` (node) — written files persist there and seed
+  back at boot (§21.46); the page's `persist=0` disables its IndexedDB store.
 - `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.
 - `ISAAC_DUMP32=0xc379e8:4,0xc37b14:2` — prints guest dwords after `main`
   traps. Guest memory is identity-mapped into the wasm heap and the harness

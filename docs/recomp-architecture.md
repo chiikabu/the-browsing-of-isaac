@@ -4749,6 +4749,39 @@ keys pressed, the empty line noticed, recall as the fallback); and
 floor change, the trapdoor walk (and its timeout), the boss counter, and
 suspend/resume.
 
+### 21.46 Saves persist (round 31)
+
+**Before.** The RAM-FS lived for one process. The game writes its
+`persistentgamedata1..3.dat` (and a dated copy under `save_backups/`) to
+`Documents/My Games/Binding of Isaac Repentance+/` through `fopen`/`fwrite`
+on every game over and run start -- 26 opens of the first file in one
+20,000-frame soak -- and every byte of it was gone at the next boot, in
+node and in the browser alike. "Save/load" was the one gameplay path the
+automated player could not exercise.
+
+**Mechanism.** The FS shim (`host_shims_fs.c`) hands a file the guest
+opened for writing to the host when it is closed -- `Module.isaacPersist(key,
+src, dataPtr, len)`, where `key` is the normalised FS key and `src` the seed
+path the file was registered with (verbatim case; "" for a file the game
+created) -- and announces `remove`/`DeleteFileA` through
+`Module.isaacUnlink(key, src)`. Directories and windowed archives never
+persist. The selftest holds the contract with C hooks
+(`isaac_fs_set_persist_hooks`): fwrite stores, nothing reaches the host
+before the close, fclose hands the five bytes and the key, DeleteFileA
+unlinks (236 checks, 0 failures).
+
+The node driver (`ISAAC_SAVE_DIR=<dir>`) writes each file under that
+directory and seeds the directory back over the instance tree at the next
+boot (a saved file wins over a seeded one); unset, nothing is written --
+the instance and the bundle are never touched. The browser page keeps the
+files in IndexedDB (`isaac-saves`/`files`, keyed by the FS key) and seeds
+them back in a "restore saves" stage after the instance tree and before
+main; `persist=0` on the URL turns the store off. `drive_persist.mjs` is
+the proof: one browser, the headless timeline to its budget, then a reload
+of the same page.
+
+**Census.** Node: two boots of the automated player (6,000 frames, epoch 1700000000, fast profile): boot 1 persisted 36 file closes (persistentgamedata1..3.dat, their save_backups, gamestate1.dat, options.ini, log.txt), boot 2 restored 10 files, the game found every save (0 misses, no 'No Repentance save found'), same 3 runs / 2 deaths, main 0. Browser: one Chromium profile, the headless timeline to 1,500 frames then a reload: load 1 persisted 24 closes, load 2 restored 10 files before main and ran its 1,500 frames, main 0, 0 asserts (drive_persist.mjs OK). The first attempt aborted on load 2 in the game's VSync setter: with the written options.ini read back it asks GLFW for the primary monitor, and EnumDisplayDevicesW enumerated nothing -- the shims now describe one adapter, one monitor and one 1280x720@60 mode (selftest 241/0).
+
 ## Appendix: reproduction
 
 ```bash
