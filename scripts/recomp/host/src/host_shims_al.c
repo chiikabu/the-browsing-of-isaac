@@ -40,6 +40,7 @@
  * version string; module tokens start at 0x0e010000. 0x0e006100..0x0e006180
  * sits between, below ISAAC_GUEST_LIMIT_VA, written by the host only. */
 #define AL_SCRATCH_VA 0x0e006100u
+static uint32_t g_alc_device;
 
 /* A float argument arrives as its raw IEEE bits in a stack slot. */
 static float al_bits2f(uint32_t b) { float f; memcpy(&f, &b, 4); return f; }
@@ -118,6 +119,7 @@ void imp_openal32__alcOpenDevice(CpuState *restrict cpu) {
         al_log_once("alcOpenDevice", "NULL");
     }
     cpu->EAX = al_next_token();
+    g_alc_device = cpu->EAX;
 }
 
 /* ALCcontext *alcCreateContext(ALCdevice *device, const ALCint *attrlist) */
@@ -180,15 +182,41 @@ void imp_openal32__alcIsExtensionPresent(CpuState *restrict cpu) {
         buf[n] = 0;
         al_log_once("alcIsExtensionPresent", buf);
     }
-    cpu->EAX = 0;                     /* no extensions: engine falls back */
+    /* ALC_SOFT_system_events is provided (round 22): its event callback is
+     * what sets the engine's audio-manager drain flag. Everything else still
+     * falls back. */
+    if (isaac_is_guest_va(ext)) {
+        const char *q = (const char *)isaac_g(ext);
+        if (!strncmp(q, "ALC_SOFT_system_events", 23)) { cpu->EAX = 1; return; }
+    }
+    cpu->EAX = 0;                     /* no other extensions: engine falls back */
 }
 
 /* void *alcGetProcAddress(const ALCchar *funcname) -- never statically
  * called by the game (census: 0 sites); defined for completeness. */
 void imp_openal32__alcGetProcAddress(CpuState *restrict cpu) {
     al_hit("alcGetProcAddress");
-    (void)isaac_arg(cpu, 0);
-    cpu->EAX = 0;
+    /* Round 22: which extension entry points the game wants. The queued
+     * sounds are drained by a handler gated on a byte that only the
+     * ALC_SOFT_system_events callback sets, and this is where the game would
+     * fetch the functions to register it. */
+    uint32_t name = isaac_arg(cpu, 1);
+    uint32_t addr = 0;
+    if (isaac_is_guest_va(name)) {
+        char buf[64];
+        size_t n = 0;
+        const char *q = (const char *)isaac_g(name);
+        while (n + 1 < sizeof buf && q[n]) { buf[n] = q[n]; ++n; }
+        buf[n] = 0;
+        /* the same resolver the module layer uses for wglGetProcAddress: a
+         * shim token the guest can call through recomp_call_indirect */
+        /* the shim token for that name: the same value GetProcAddress
+         * hands back for a dynamically resolved export */
+        for (unsigned i = 0; i < isaac_import_count; ++i)
+            if (!strcmp(isaac_imports[i].symbol, buf)) { addr = isaac_imports[i].shim_va; break; }
+        isaac_log("[isaac][al] alcGetProcAddress(\"%s\") -> 0x%08x", buf, addr);
+    }
+    cpu->EAX = addr;
 }
 
 /* ALenum alGetError(void) */
@@ -346,4 +374,69 @@ void imp_openal32__alListenerfv(CpuState *restrict cpu) {
     al_hit("alListenerfv");
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     cpu->EAX = 0;
+}
+
+/* ---------------------------------------------------------- ALC_SOFT ---- */
+/* The engine resolves five OpenAL-SOFT entry points through alcGetProcAddress
+ * and, given them, registers an event handler whose only job here is to set
+ * its audio manager's drain flag (FUN_00a9e890: eventType 0x19d6, deviceType
+ * 0x19d4, then [userParam + 0x60] = 1). Answering null for all five, as this
+ * port used to, leaves that flag clear and every queued sound unplayed.
+ *
+ * cdecl, so nothing purges. The callback is remembered and delivered once,
+ * from the frame pump, after the game has registered it. */
+static uint32_t g_alc_event_cb, g_alc_event_user;
+static int g_alc_event_sent;
+
+void imp_openal32__alcEventCallbackSOFT(CpuState *restrict cpu) {
+    al_hit("alcEventCallbackSOFT");
+    g_alc_event_cb = isaac_arg(cpu, 0);
+    g_alc_event_user = isaac_arg(cpu, 1);
+    isaac_log("[isaac][al] alcEventCallbackSOFT(callback=0x%08x, user=0x%08x)",
+              g_alc_event_cb, g_alc_event_user);
+    cpu->EAX = 0;
+}
+
+void imp_openal32__alcEventControlSOFT(CpuState *restrict cpu) {
+    al_hit("alcEventControlSOFT");
+    isaac_log("[isaac][al] alcEventControlSOFT(count=%u, events=0x%08x, enable=%u)",
+              isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2));
+    cpu->EAX = 1;                      /* ALC_TRUE */
+}
+
+void imp_openal32__alcDevicePauseSOFT(CpuState *restrict cpu) {
+    al_hit("alcDevicePauseSOFT");
+    (void)isaac_arg(cpu, 0);
+    cpu->EAX = 0;
+}
+
+void imp_openal32__alcDeviceResumeSOFT(CpuState *restrict cpu) {
+    al_hit("alcDeviceResumeSOFT");
+    (void)isaac_arg(cpu, 0);
+    cpu->EAX = 0;
+}
+
+void imp_openal32__alcReopenDeviceSOFT(CpuState *restrict cpu) {
+    al_hit("alcReopenDeviceSOFT");
+    (void)isaac_arg(cpu, 0);
+    cpu->EAX = 1;                      /* ALC_TRUE: the device is unchanged */
+}
+
+/* Deliver the one event the engine is waiting for:
+ *   void (ALCenum eventType, ALCenum deviceType, ALCdevice *device,
+ *         ALCsizei length, const ALCchar *message, void *userParam)
+ * cdecl, so the arguments are pushed right to left and this cleans up. */
+int isaac_al_send_device_event(CpuState *restrict cpu) {
+    if (!g_alc_event_cb || g_alc_event_sent || !cpu) return 0;
+    g_alc_event_sent = 1;
+    CpuState sub = *cpu;
+    sub.ESP = (cpu->ESP - 0x4000u) & ~0xFu;
+    uint32_t args[6] = { 0x19d6u, 0x19d4u, g_alc_device, 0u, 0u, g_alc_event_user };
+    for (int i = 5; i >= 0; --i) { sub.ESP -= 4u; isaac_w32(sub.ESP, args[i]); }
+    sub.ESP -= 4u;
+    isaac_w32(sub.ESP, 0u);            /* return address */
+    isaac_log("[isaac][al] delivering ALC_EVENT_TYPE_DEFAULT_DEVICE_CHANGED to 0x%08x(user 0x%08x)",
+              g_alc_event_cb, g_alc_event_user);
+    isaac_guest_call(g_alc_event_cb, &sub);
+    return 1;
 }

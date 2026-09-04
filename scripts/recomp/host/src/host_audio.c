@@ -529,11 +529,23 @@ void isaac_audio_pump(const CpuState *cpu) {
             forced = (e && *e && *e != '0') ? 1 : 0;
         }
         if (forced == 1 && isaac_is_guest_va(g_pump_this + 0x60u)) {
-            *(uint8_t *)isaac_g(g_pump_this + 0x60u) = 1u;
-            forced = 2;
-            isaac_log("[isaac][audio] forced the device-changed flag at 0x%08x", g_pump_this + 0x60u);
+            /* only once the manager has something queued: the callback this
+             * stands in for would have arrived with the game already running */
+            uint32_t lo = isaac_r32(g_pump_this + 0x1cu), hi = isaac_r32(g_pump_this + 0x20u);
+            if (hi > lo) {
+                *(uint8_t *)isaac_g(g_pump_this + 0x60u) = 1u;
+                forced = 2;
+                isaac_log("[isaac][audio] device-changed flag set with %u sound(s) queued",
+                          (hi - lo) / 4u);
+            }
         }
     }
+    /* Once the engine has registered its ALC_SOFT event handler, give it the
+     * device-changed event it is waiting for. Its handler sets the audio
+     * manager's drain flag, which is the gate on everything downstream
+     * (round 22). */
+    { extern int isaac_al_send_device_event(CpuState *restrict cpu);
+      isaac_al_send_device_event((CpuState *)cpu); }
     uint32_t eax = 0;
     ++g_pump_iters;
     pump_call(cpu, step, g_pump_this, &eax);

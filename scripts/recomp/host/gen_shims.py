@@ -756,6 +756,16 @@ def main():
     # resolved address is stored at 0x00c75adc and called directly, so a
     # missing row would leave that cell NULL and crash main().
     DYNAMIC_EXPORTS = [
+        # OpenAL-SOFT extensions the engine resolves through
+        # alcGetProcAddress (round 22). ALC_APIENTRY is cdecl, so the
+        # caller cleans and these purge 0. Without alcEventCallbackSOFT
+        # the engine never registers the handler that sets its audio
+        # manager's drain flag, and every queued sound sits forever.
+        ("openal32.dll", "alcEventCallbackSOFT", 8, 0),   # (callback, userptr)
+        ("openal32.dll", "alcEventControlSOFT", 12, 0),   # (count, events, enable)
+        ("openal32.dll", "alcDevicePauseSOFT", 4, 0),     # (device)
+        ("openal32.dll", "alcDeviceResumeSOFT", 4, 0),    # (device)
+        ("openal32.dll", "alcReopenDeviceSOFT", 16, 0),   # (device, name, attribs)
         ("version.dll", "VerifyVersionInfoA", 16),  # (ptr, DWORD, ULONGLONG)
         # The game probes ntdll.dll!RtlVerifyVersionInfo at 0x00a8074e and
         # stores the result at 0x00c75adc, then calls through that cell
