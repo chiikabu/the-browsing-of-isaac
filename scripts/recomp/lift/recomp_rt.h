@@ -56,6 +56,7 @@ extern uint32_t g_reentry_eip;
 int  isaac_fastpath_mode(void);
 void isaac_fast_unfilter(uint32_t row_info_va, uint32_t row_va, uint32_t prev_va, uint32_t filter);
 uint32_t isaac_fast_adler32(uint32_t adler, uint32_t buf_va, uint32_t len);
+uint32_t isaac_fast_pathhash(uint32_t str_va);
 void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va);
 int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
 void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);

@@ -3502,6 +3502,45 @@ here.** Everything downstream of it is known good -- the archive is read
 in full, the play call queues, the bind call runs, and the host side has a
 complete OpenAL implementation waiting for the first `alBufferData`.
 
+### 21.36 Round 18: the path hash, and what the grind really is
+
+The stall watchdog now prints 16 dwords at each pointer register, not just
+the register image, because a hang is nearly always a loop over an object
+and reading that object used to need a bespoke rebuild. The first dump it
+produced named the work immediately: ECX held
+`gfx/1000.021_Tiny Bug.anm2`, and the hot addresses were the engine's
+path hash (`FUN_00a159d0`) and the path normalisation above it
+(`FUN_00a17180`) -- the game was grinding resource lookups while spawning
+one enemy.
+
+The hash is a pure leaf and now has a host fastpath:
+
+```
+h = 0x1505
+for each byte b until NUL:
+    c = ('A' <= b <= 'Z') ? b + 0x20 : b     /* lowercase */
+    if (c == '\') c = '/'                    /* separator folded */
+    h = h * 33 + c
+```
+
+thiscall, string in ECX, hash in EAX. Run under `ISAAC_FASTPATH_VERIFY=1`,
+which executes both the host version and the lifted one and compares every
+call, it produced **1,800 frames in 90 s with zero mismatches**. On the
+scenario that used to stop at 660 frames it now reaches **900**.
+
+**But the grind is not gone, and the next dump says why.** The hot loop
+moved to `FUN_0041bb50` -- a spatial grid insert. It walks a rectangle of
+cells (`row * width + column`), bounds-checks the index against the cell
+count, and appends an entity into each cell's 40-entry list. That is the
+same class as the assertion an earlier run hit,
+`[odsa] [ASSERT] - CellSpace::insert: x1 > x2`.
+
+So both symptoms are one function, and the shape of the problem is a
+rectangle that should be a few cells and is not. The next step is the
+computation that produces those bounds, which is entity-position float
+work -- a conversion defect there would produce exactly this: an
+assertion when the bounds invert, and a very long loop when they do not.
+
 ## Appendix: reproduction
 
 ```bash

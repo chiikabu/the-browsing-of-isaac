@@ -92,6 +92,25 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 # so the equivalence is measured on the game's own data, not assumed.
 # Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
 WRAP_PATCHES: dict[int, str] = {
+    # the engine's path hash: thiscall, string in ecx, hash in eax. The hot
+    # leaf of resource lookup (round 18).
+    0x00a159d0: """void sub_00a159d0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a159d0: host path hash (host_fastpath.c) */
+  RECOMP_VA(0xa159d0u);
+  uint32_t str = s->ECX;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0) { sub_00a159d0__lifted(s); return; }
+  uint32_t r = isaac_fast_pathhash(str);
+  if (mode == 2) {
+    sub_00a159d0__lifted(s);
+    if (s->EAX != r) isaac_fastpath_mismatch("pathhash", s->EAX, r);
+    return;
+  }
+  s->EAX = r;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
     # png_read_filter_row (SSE2 build): edx = png_row_info*, stack = (row,
     # prev_row, filter); caller cleans (plain ret). Touches rowbytes bytes at
     # row.

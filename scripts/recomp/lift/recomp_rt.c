@@ -505,6 +505,25 @@ void recomp_stall_tick(void) {
     extern void isaac_dump_regs(const struct CpuState *s, const char *tag);
     if (recomp_last_cpu) {
       isaac_dump_regs(recomp_last_cpu, "register image (from the last spill; stale inside a call-free loop)");
+      /* A hang is almost always a loop over an object, and the object is
+       * whatever a pointer register holds. Print the first 16 dwords at each
+       * of them: the round-15f hang was a ring-buffer fill whose count and
+       * capacity live at [esi+0x50..0x5c], and reading those needed a rebuild
+       * with a bespoke probe. CpuState's leading dwords are
+       * EAX ECX EDX EBX ESP EBP ESI EDI. */
+      {
+        static const char *rn[] = {"EAX","ECX","EDX","EBX","ESP","EBP","ESI","EDI"};
+        const uint32_t *r = (const uint32_t *)recomp_last_cpu;
+        for (unsigned k = 0; k < 8; ++k) {
+          uint32_t p = r[k];
+          if (k == 4u || p < 0x1000u || p >= 0x0ff00000u) continue;   /* ESP is walked below */
+          fprintf(stderr, "[recomp][STALL] ---- 16 dwords at %s = 0x%08x:\n", rn[k], p);
+          for (uint32_t i = 0; i < 16u; i += 4u)
+            fprintf(stderr, "[recomp][STALL]   +0x%02x: %08x %08x %08x %08x\n", i * 4u,
+                    MEMR32(p + i * 4u), MEMR32(p + i * 4u + 4u),
+                    MEMR32(p + i * 4u + 8u), MEMR32(p + i * 4u + 12u));
+        }
+      }
       uint32_t esp = ((const uint32_t *)recomp_last_cpu)[4];
       fprintf(stderr, "[recomp][STALL] ---- guest stack from the spilled ESP 0x%08x:\n", esp);
       for (uint32_t i = 0; i < 64; i += 4) {

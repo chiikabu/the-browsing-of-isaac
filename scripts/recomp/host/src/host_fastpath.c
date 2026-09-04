@@ -120,3 +120,23 @@ void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b) {
                   g_mismatches, what, a, b);
 }
 uint32_t isaac_fastpath_mismatches(void) { return g_mismatches; }
+
+/* The engine's path hash (FUN_00a159d0): djb2 over the string with ASCII
+ * upper-case folded down and '\\' folded to '/', so "GFX\\X.PNG" and
+ * "gfx/x.png" hash alike. It is the hot leaf of every resource lookup -- the
+ * round-18 stall dump found it and the path normalisation above it dominating
+ * the ring while the game resolved one enemy's anm2. Pure: same string, same
+ * answer, no state. */
+uint32_t isaac_fast_pathhash(uint32_t str_va) {
+    if (!str_va) return 0u;
+    uint32_t h = 0x1505u;
+    for (uint32_t a = str_va;; ++a) {
+        if (!isaac_is_guest_va(a)) break;
+        uint8_t b = *(const uint8_t *)isaac_g(a);
+        if (!b) break;
+        uint32_t c = (b >= 'A' && b <= 'Z') ? (uint32_t)(b + 0x20u) : (uint32_t)b;
+        if (c == 0x5Cu) c = 0x2Fu;
+        h = h * 33u + c;
+    }
+    return h;
+}
