@@ -124,3 +124,14 @@ test('the web backend asks before reading a frame back, and the page answers', (
   assert.ok(page.includes('const frame = { n: wantedFrame || presented, w, h,'),
     'kept frames carry the host frame number, which no longer tracks the capture count');
 });
+
+test('a served page is playable from the bare origin: it redirects to the run query, the live page has no 5-frame budget, the type follows the file', () => {
+  const r = readFileSync(join(root, 'scripts', 'recomp', 'web', 'run_web.mjs'), 'utf8');
+  assert.ok(r.includes("res.writeHead(302, { Location: `/boot_web.html?${qs}`, 'Cache-Control': 'no-store' });"),
+    'GET / redirects to the page with the frames budget and ISAAC_YIELD');
+  assert.ok(r.includes("'Content-Type': b64 ? 'text/plain' : mime(r.file || rel)"),
+    'the content type is the served file\'s, so / is text/html and not a download');
+  const w = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(w.includes("cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');"),
+    'a live page without frames= plays until it is closed');
+});

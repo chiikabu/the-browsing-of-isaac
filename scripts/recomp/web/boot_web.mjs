@@ -44,7 +44,8 @@ const cfg = {
   print: log,
   printErr: log,
   preRun: [() => {
-    cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || '5';
+    // a live page (ISAAC_YIELD=1) with no budget plays until it is closed
+    cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');
     cfg.ENV.ISAAC_LOG_TIME = '1';
     for (const [k, v] of params) if (k.startsWith('ISAAC_')) cfg.ENV[k] = v;
   }],
@@ -139,7 +140,7 @@ cfg.isaacLazyPread = (src, dst, off, len) => {
 };
 let presented = 0;
 const keepEvery = Number(params.get('keep') || '0');      // also keep every Nth frame
-const frameBudget = Number(params.get('frames') || '5');
+const frameBudget = Number(params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5'));
 // Which frames are worth reading back off the GPU. The host asks before it
 // spends a 2 MB glReadPixels on a frame nobody keeps (round 17): the sampled
 // ones, and the tail that ends up in isaacFrames anyway.

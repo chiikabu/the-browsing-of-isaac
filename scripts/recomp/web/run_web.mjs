@@ -181,6 +181,14 @@ function resolveFile(rel) {
   return {};
 }
 const server = createServer((req, res) => {
+  // the bare origin: send the browser to the page WITH the run's query
+  // (frames budget, ISAAC_YIELD for the live page); without it the page runs
+  // its 5-frame default and ends before the menus
+  if (new URL(req.url, 'http://x').pathname === '/') {
+    res.writeHead(302, { Location: `/boot_web.html?${qs}`, 'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
   const u = new URL(req.url, 'http://x');
   const rel = decodeURIComponent(u.pathname);
   // ?b64=1: the page's synchronous XHR can only read text, and Chromium
@@ -212,7 +220,8 @@ const server = createServer((req, res) => {
   }
   recordServed(rel, body.length);
   if (b64) body = Buffer.from(body.toString('base64'), 'ascii');
-  res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(rel), 'Content-Length': body.length,
+  // the type follows the file served, not the request path: '/' is the page
+  res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(r.file || rel), 'Content-Length': body.length,
                        'Cache-Control': 'no-store' });
   res.end(body);
 });
