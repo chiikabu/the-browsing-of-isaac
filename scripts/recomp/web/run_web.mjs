@@ -50,8 +50,14 @@ const EAGER = (process.argv.slice(4).find((a) => a.startsWith('eager=')) || 'eag
 // free-list walk the main thread then waits on (round 15a, §21.28). Chromium
 // allocates through PartitionAlloc, so measure before assuming it helps here.
 const NO_TIERUP = (process.argv.slice(4).find((a) => a.startsWith('tierup=')) || 'tierup=1').slice(7) === '0';
+// serve=1: keep the server up and print the URL instead of driving a headless
+// browser, so the page can be opened by hand. The port can be pinned with
+// port=<n> so the URL is stable across restarts.
+const SERVE = (process.argv.slice(4).find((a) => a.startsWith('serve=')) || 'serve=0').slice(6) !== '0';
+const PORT = Number((process.argv.slice(4).find((a) => a.startsWith('port=')) || 'port=0').slice(5));
 const JS_FLAGS = [...(EAGER ? ['--no-wasm-lazy-compilation'] : []), ...(NO_TIERUP ? ['--no-wasm-tier-up'] : [])];
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=') && !a.startsWith('fast=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=') && !a.startsWith('fast=')
+  && !a.startsWith('serve=') && !a.startsWith('port=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -121,17 +127,17 @@ const mime = (p) => p.endsWith('.mjs') || p.endsWith('.js') ? 'text/javascript'
   : p.endsWith('.html') ? 'text/html'
   : p.endsWith('.json') ? 'application/json' : 'application/octet-stream';
 
-const browser = await chromium.launch({
+const browser = SERVE ? null : await chromium.launch({
   headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
          '--enable-webgl', '--disable-web-security',
          ...(JS_FLAGS.length ? [`--js-flags=${JS_FLAGS.join(' ')}`] : [])],
 });
-const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+const page = SERVE ? null : await browser.newPage({ viewport: { width: 960, height: 540 } });
 const consoleLines = [];
-page.on('console', (msg) => consoleLines.push(msg.text()));
-page.on('pageerror', (e) => consoleLines.push(`PAGEERROR ${e.message}`));
-page.on('crash', () => consoleLines.push('PAGE CRASHED (renderer died)'));
+page && page.on('console', (msg) => consoleLines.push(msg.text()));
+page && page.on('pageerror', (e) => consoleLines.push(`PAGEERROR ${e.message}`));
+page && page.on('crash', () => consoleLines.push('PAGE CRASHED (renderer died)'));
 let served = 0, missing = 0;
 // A real local HTTP server rather than page.route: the 380 MB boot.wasm
 // through route.fulfill crashed the renderer (the body crosses the CDP
@@ -166,11 +172,22 @@ const server = createServer((req, res) => {
                        'Cache-Control': 'no-store' });
   res.end(body);
 });
-await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+await new Promise((ok) => server.listen(PORT, '127.0.0.1', ok));
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 
 const qs = new URLSearchParams({ frames: FRAMES });
 for (const [k, v] of EXTRA_ENV) qs.set(k, v);
+
+if (SERVE) {
+  console.log(`\n  ${ORIGIN}/boot_web.html?${qs}\n`);
+  console.log(`  module: ${BOOT}`);
+  console.log('  The page loads ~300 MB of assets before the first frame, so give it a minute.');
+  console.log('  Input is the scripted `input=` timeline, not the keyboard: the guest frame');
+  console.log('  loop runs inside main() and never returns to the event loop, so no browser');
+  console.log('  event can reach it and the canvas may not repaint until the run ends.');
+  console.log('  Ctrl+C to stop the server.');
+  await new Promise(() => {});
+}
 const t0 = Date.now();
 await page.goto(`${ORIGIN}/boot_web.html?${qs}`);
 let done;

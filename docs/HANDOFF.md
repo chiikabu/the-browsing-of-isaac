@@ -78,6 +78,26 @@ now mechanically caught or impossible:
 - All 15 family suites pin ABI symbolically (`HEADER_ABI_VERSION` parsed
   from the `.h`); 700+ literals swept.
 
+## Try it yourself
+
+```
+node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 serve=1 port=8099 fast=1     "input=420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150" keep=200
+```
+
+`serve=1` holds the local server open and prints the URL instead of driving a
+headless browser; `fast=1` serves the speed-profile module (`build_boot.py
+--web --fast`), which is the one that renders gameplay at ~50 fps. It loads
+~300 MB of assets before the first frame.
+
+**It is not interactive yet, and that is structural.** The guest's frame loop
+runs inside `main()` and never returns to the JS event loop, so no browser
+event can be delivered while the game runs and the canvas may not repaint
+until the run ends. Input comes from the scripted `input=` timeline in the
+query string (frame:key[:hold]). Making it playable means moving the module
+into a Worker and feeding real key events through a SharedArrayBuffer the
+game thread can read without the page yielding -- that is the next piece of
+work on the visual front.
+
 ## What the port does NOT do yet (front B)
 
 The engine loop is no longer the blocker -- a 30-minute session runs clean.
