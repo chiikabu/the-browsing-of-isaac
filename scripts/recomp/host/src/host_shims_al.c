@@ -5,8 +5,16 @@
  * surface through the static IAT (0x00b18504..0x00b18570). All rows are
  * cdecl (the guest cleans its own pushes), so these bodies never purge.
  *
- * Policy (headless native port): benign answers chosen so init succeeds and
- * the engine keeps running silent:
+ * Round 16: the AL object calls are no longer benign constants. Buffers,
+ * sources, their state and their queues live in host_audio.c, which times
+ * playback on the wall clock so a source stops when its sound would have
+ * finished and a streaming source reports buffers as processed -- without
+ * that the music path had nothing to unqueue and the slot poller reused one
+ * slot forever. The ALC half below is unchanged: device and context are still
+ * tokens, because there is nothing per-device to model.
+ *
+ * Policy for the ALC half (headless native port): benign answers chosen so
+ * init succeeds:
  *   alcOpenDevice(NULL)          -> fake device token (init stores it at
  *                                   [eng+0x38], NULL would be the error path)
  *   alcCreateContext(dev, attr)  -> fake context token ([eng+0x34])
@@ -33,6 +41,27 @@
  * sits between, below ISAAC_GUEST_LIMIT_VA, written by the host only. */
 #define AL_SCRATCH_VA 0x0e006100u
 
+/* A float argument arrives as its raw IEEE bits in a stack slot. */
+static float al_bits2f(uint32_t b) { float f; memcpy(&f, &b, 4); return f; }
+static uint32_t al_f2bits(float f) { uint32_t b; memcpy(&b, &f, 4); return b; }
+
+/* host_audio.c: the object model, its timing and the backend hooks. */
+void isaac_audio_gen_sources(uint32_t n, uint32_t out_va);
+void isaac_audio_gen_buffers(uint32_t n, uint32_t out_va);
+void isaac_audio_delete_sources(uint32_t n, uint32_t va);
+void isaac_audio_delete_buffers(uint32_t n, uint32_t va);
+void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
+                             uint32_t bytes, uint32_t freq);
+void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value);
+void isaac_audio_source_f(uint32_t src, uint32_t param, float value);
+int32_t isaac_audio_get_source_i(uint32_t src, uint32_t param);
+float isaac_audio_get_source_f(uint32_t src, uint32_t param);
+void isaac_audio_play(uint32_t src);
+void isaac_audio_stop(uint32_t src);
+void isaac_audio_pause(uint32_t src);
+void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va);
+uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va);
+
 static void al_log_once(const char *name, const char *args) {
     static const char *seen[128];
     static unsigned nseen = 0;
@@ -40,6 +69,26 @@ static void al_log_once(const char *name, const char *args) {
         if (seen[i] == name) return;
     if (nseen < 128) seen[nseen++] = name;
     fprintf(stderr, "[al] %s(%s)\n", name, args);
+}
+
+/* Per-name call census. The one-shot log below says which names were reached
+ * first; this says how many times each was called, which is what tells a
+ * silent run apart from one whose audio path stops after context creation
+ * (round 16: the game logged "Preload sound 0." and never generated a
+ * source). Printed by isaac_audio_report(). */
+static const char *g_al_names[40];
+static uint32_t g_al_hits[40];
+static unsigned g_al_n;
+static void al_hit(const char *name) {
+    for (unsigned i = 0; i < g_al_n; ++i)
+        if (g_al_names[i] == name) { ++g_al_hits[i]; return; }
+    if (g_al_n < 40) { g_al_names[g_al_n] = name; g_al_hits[g_al_n++] = 1u; }
+}
+void isaac_al_census(void) {
+    if (!g_al_n) { isaac_log("[isaac][al] no openal32 entry point was ever called."); return; }
+    isaac_log("[isaac][al] ---- openal32 calls (%u distinct names) ----", g_al_n);
+    for (unsigned i = 0; i < g_al_n; ++i)
+        isaac_log("[isaac][al]   %9u x %s", g_al_hits[i], g_al_names[i]);
 }
 
 static uint32_t al_next_token(void) {
@@ -56,6 +105,7 @@ static void al_write_tokens(uint32_t count, uint32_t out) {
 
 /* ALCdevice *alcOpenDevice(const ALCchar *devicename) */
 void imp_openal32__alcOpenDevice(CpuState *restrict cpu) {
+    al_hit("alcOpenDevice");
     uint32_t name = isaac_arg(cpu, 0);
     if (isaac_is_guest_va(name)) {
         char buf[64];
@@ -72,6 +122,7 @@ void imp_openal32__alcOpenDevice(CpuState *restrict cpu) {
 
 /* ALCcontext *alcCreateContext(ALCdevice *device, const ALCint *attrlist) */
 void imp_openal32__alcCreateContext(CpuState *restrict cpu) {
+    al_hit("alcCreateContext");
     al_log_once("alcCreateContext", "dev, attrlist");
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     cpu->EAX = al_next_token();
@@ -79,30 +130,35 @@ void imp_openal32__alcCreateContext(CpuState *restrict cpu) {
 
 /* ALCboolean alcMakeContextCurrent(ALCcontext *ctx) */
 void imp_openal32__alcMakeContextCurrent(CpuState *restrict cpu) {
+    al_hit("alcMakeContextCurrent");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 1;
 }
 
 /* void alcProcessContext(ALCcontext *ctx) */
 void imp_openal32__alcProcessContext(CpuState *restrict cpu) {
+    al_hit("alcProcessContext");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0;
 }
 
 /* void alcDestroyContext(ALCcontext *ctx) */
 void imp_openal32__alcDestroyContext(CpuState *restrict cpu) {
+    al_hit("alcDestroyContext");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0;
 }
 
 /* ALCboolean alcCloseDevice(ALCdevice *device) */
 void imp_openal32__alcCloseDevice(CpuState *restrict cpu) {
+    al_hit("alcCloseDevice");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 1;
 }
 
 /* const ALCchar *alcGetString(ALCdevice *device, ALCenum param) */
 void imp_openal32__alcGetString(CpuState *restrict cpu) {
+    al_hit("alcGetString");
     uint32_t param = isaac_arg(cpu, 1);
     if (param == 0x1006u) {            /* ALC_EXTENSIONS: empty string */
         memcpy(isaac_g(AL_SCRATCH_VA), "", 1);
@@ -114,6 +170,7 @@ void imp_openal32__alcGetString(CpuState *restrict cpu) {
 
 /* ALCboolean alcIsExtensionPresent(ALCdevice *device, const ALCchar *ext) */
 void imp_openal32__alcIsExtensionPresent(CpuState *restrict cpu) {
+    al_hit("alcIsExtensionPresent");
     uint32_t ext = isaac_arg(cpu, 1);
     if (isaac_is_guest_va(ext)) {
         char buf[64];
@@ -129,17 +186,20 @@ void imp_openal32__alcIsExtensionPresent(CpuState *restrict cpu) {
 /* void *alcGetProcAddress(const ALCchar *funcname) -- never statically
  * called by the game (census: 0 sites); defined for completeness. */
 void imp_openal32__alcGetProcAddress(CpuState *restrict cpu) {
+    al_hit("alcGetProcAddress");
     (void)isaac_arg(cpu, 0);
     cpu->EAX = 0;
 }
 
 /* ALenum alGetError(void) */
 void imp_openal32__alGetError(CpuState *restrict cpu) {
+    al_hit("alGetError");
     cpu->EAX = 0;                     /* AL_NO_ERROR */
 }
 
 /* const ALchar *alGetString(ALenum param) */
 void imp_openal32__alGetString(CpuState *restrict cpu) {
+    al_hit("alGetString");
     uint32_t param = isaac_arg(cpu, 0);
     static const char vendor[] = "Isaac Native Headless";
     static const char renderer[] = "wasm headless";
@@ -163,44 +223,49 @@ void imp_openal32__alGetString(CpuState *restrict cpu) {
 
 /* void alGenSources(ALsizei n, ALuint *sources) */
 void imp_openal32__alGenSources(CpuState *restrict cpu) {
-    al_log_once("alGenSources", "n, out");
-    al_write_tokens(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
+    al_hit("alGenSources");
+    isaac_audio_gen_sources(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     cpu->EAX = 0;
 }
 
 /* void alDeleteSources(ALsizei n, const ALuint *sources) */
 void imp_openal32__alDeleteSources(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
+    al_hit("alDeleteSources");
+    isaac_audio_delete_sources(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     cpu->EAX = 0;
 }
 
 /* void alGenBuffers(ALsizei n, ALuint *buffers) */
 void imp_openal32__alGenBuffers(CpuState *restrict cpu) {
-    al_log_once("alGenBuffers", "n, out");
-    al_write_tokens(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
+    al_hit("alGenBuffers");
+    isaac_audio_gen_buffers(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     cpu->EAX = 0;
 }
 
 /* void alDeleteBuffers(ALsizei n, const ALuint *buffers) */
 void imp_openal32__alDeleteBuffers(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
+    al_hit("alDeleteBuffers");
+    isaac_audio_delete_buffers(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
     cpu->EAX = 0;
 }
 
 /* void alSourcei(ALuint src, ALenum param, ALint value) */
 void imp_openal32__alSourcei(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    al_hit("alSourcei");
+    isaac_audio_source_i(isaac_arg(cpu, 0), isaac_arg(cpu, 1), (int32_t)isaac_arg(cpu, 2));
     cpu->EAX = 0;
 }
 
 /* void alSourcef(ALuint src, ALenum param, ALfloat value) */
 void imp_openal32__alSourcef(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    al_hit("alSourcef");
+    isaac_audio_source_f(isaac_arg(cpu, 0), isaac_arg(cpu, 1), al_bits2f(isaac_arg(cpu, 2)));
     cpu->EAX = 0;
 }
 
 /* void alSource3f(ALuint src, ALenum param, ALfloat v1, v2, v3) */
 void imp_openal32__alSource3f(CpuState *restrict cpu) {
+    al_hit("alSource3f");
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
     cpu->EAX = 0;
@@ -208,58 +273,69 @@ void imp_openal32__alSource3f(CpuState *restrict cpu) {
 
 /* void alSourcePlay(ALuint src) */
 void imp_openal32__alSourcePlay(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0);
+    al_hit("alSourcePlay");
+    isaac_audio_play(isaac_arg(cpu, 0));
     cpu->EAX = 0;
 }
 
 /* void alSourceStop(ALuint src) */
 void imp_openal32__alSourceStop(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0);
+    al_hit("alSourceStop");
+    isaac_audio_stop(isaac_arg(cpu, 0));
     cpu->EAX = 0;
 }
 
 /* void alSourcePause(ALuint src) */
 void imp_openal32__alSourcePause(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0);
+    al_hit("alSourcePause");
+    isaac_audio_pause(isaac_arg(cpu, 0));
     cpu->EAX = 0;
 }
 
 /* void alSourceQueueBuffers(ALuint src, ALsizei n, const ALuint *bufs) */
 void imp_openal32__alSourceQueueBuffers(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    al_hit("alSourceQueueBuffers");
+    isaac_audio_queue(isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2));
     cpu->EAX = 0;
 }
 
 /* void alSourceUnqueueBuffers(ALuint src, ALsizei n, ALuint *bufs) */
 void imp_openal32__alSourceUnqueueBuffers(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
+    al_hit("alSourceUnqueueBuffers");
+    isaac_audio_unqueue(isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2));
     cpu->EAX = 0;
 }
 
 /* void alGetSourcei(ALuint src, ALenum param, ALint *out) */
 void imp_openal32__alGetSourcei(CpuState *restrict cpu) {
+    al_hit("alGetSourcei");
     uint32_t out = isaac_arg(cpu, 2);
-    if (isaac_is_guest_va(out)) isaac_w32(out, 0);   /* AL_INITIAL / 0 */
+    int32_t v = isaac_audio_get_source_i(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
+    if (isaac_is_guest_va(out)) isaac_w32(out, (uint32_t)v);
     cpu->EAX = 0;
 }
 
 /* void alGetSourcef(ALuint src, ALenum param, ALfloat *out) */
 void imp_openal32__alGetSourcef(CpuState *restrict cpu) {
+    al_hit("alGetSourcef");
     uint32_t out = isaac_arg(cpu, 2);
-    if (isaac_is_guest_va(out)) isaac_w32(out, 0);   /* 0.0f */
+    float v = isaac_audio_get_source_f(isaac_arg(cpu, 0), isaac_arg(cpu, 1));
+    if (isaac_is_guest_va(out)) isaac_w32(out, al_f2bits(v));
     cpu->EAX = 0;
 }
 
 /* void alBufferData(ALuint buf, ALenum format, const ALvoid *data,
  *                   ALsizei size, ALsizei freq) */
 void imp_openal32__alBufferData(CpuState *restrict cpu) {
-    (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
-    (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
+    al_hit("alBufferData");
+    isaac_audio_buffer_data(isaac_arg(cpu, 0), isaac_arg(cpu, 1), isaac_arg(cpu, 2),
+                            isaac_arg(cpu, 3), isaac_arg(cpu, 4));
     cpu->EAX = 0;
 }
 
 /* void alListener3f(ALenum param, ALfloat v1, v2, v3) */
 void imp_openal32__alListener3f(CpuState *restrict cpu) {
+    al_hit("alListener3f");
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     (void)isaac_arg(cpu, 2); (void)isaac_arg(cpu, 3);
     cpu->EAX = 0;
@@ -267,6 +343,7 @@ void imp_openal32__alListener3f(CpuState *restrict cpu) {
 
 /* void alListenerfv(ALenum param, const ALfloat *vals) */
 void imp_openal32__alListenerfv(CpuState *restrict cpu) {
+    al_hit("alListenerfv");
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1);
     cpu->EAX = 0;
 }

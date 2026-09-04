@@ -1,0 +1,433 @@
+/* host_audio.c -- the audio engine behind the OpenAL surface.
+ *
+ * host_shims_al.c used to answer the whole 26-name openal32 surface with
+ * benign constants: buffers and sources were tokens nobody remembered, every
+ * play was a no-op, and `alGetSourcei(AL_SOURCE_STATE)` always said
+ * AL_INITIAL so the engine's slot poller reused the first slot forever. The
+ * game ran silent and, more importantly, could not stream: a source that is
+ * never "playing" never reports a processed buffer, so the music path had
+ * nothing to unqueue.
+ *
+ * This file is the object model that surface needs, and it is deliberately
+ * independent of whether anything can actually be heard:
+ *
+ *   buffers   remember their PCM (format, channels, bit depth, rate) and the
+ *             duration that implies
+ *   sources   have a state, a gain, a pitch, an optional static buffer and a
+ *             queue; they advance on the wall clock, so a source stops when
+ *             its sound would have finished and a streaming source reports
+ *             buffers as processed when their audio would have played out
+ *
+ * That much makes the guest's audio logic behave correctly with no output
+ * device at all, which is what the node profile has. A backend can then be
+ * plugged underneath to make it audible; the web build's is WebAudio, in
+ * host_audio_web.c. The backend hooks are weak, so a profile that provides
+ * none links and runs silent.
+ *
+ * ISAAC_AUDIO_TRACE=1 logs every state change; isaac_audio_report() prints
+ * the census with the stub report.
+ */
+
+#include "isaac_host.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#else
+static double emscripten_get_now(void) { return 0.0; }
+#endif
+
+/* ---- AL constants (the subset the game uses) ---------------------------- */
+#define AL_NONE               0x0000u
+#define AL_PITCH              0x1003u
+#define AL_POSITION           0x1004u
+#define AL_LOOPING            0x1007u
+#define AL_BUFFER             0x1009u
+#define AL_GAIN               0x100Au
+#define AL_SOURCE_STATE       0x1010u
+#define AL_INITIAL            0x1011u
+#define AL_PLAYING            0x1012u
+#define AL_PAUSED             0x1013u
+#define AL_STOPPED            0x1014u
+#define AL_BUFFERS_QUEUED     0x1015u
+#define AL_BUFFERS_PROCESSED  0x1016u
+#define AL_SEC_OFFSET         0x1024u
+#define AL_SAMPLE_OFFSET      0x1025u
+#define AL_BYTE_OFFSET        0x1026u
+#define AL_SOURCE_TYPE        0x1027u
+#define AL_STATIC             0x1028u
+#define AL_STREAMING          0x1029u
+#define AL_UNDETERMINED       0x1030u
+
+#define AL_FORMAT_MONO8       0x1100u
+#define AL_FORMAT_MONO16      0x1101u
+#define AL_FORMAT_STEREO8     0x1102u
+#define AL_FORMAT_STEREO16    0x1103u
+
+/* ---- backend hooks (weak: a profile with no output still links) --------- */
+__attribute__((weak)) void isaac_audio_backend_buffer(uint32_t id, const void *pcm, uint32_t bytes,
+                                                      int channels, int bits, int freq) {
+    (void)id; (void)pcm; (void)bytes; (void)channels; (void)bits; (void)freq;
+}
+__attribute__((weak)) void isaac_audio_backend_play(uint32_t src, uint32_t buffer,
+                                                    float gain, float pitch, int looping) {
+    (void)src; (void)buffer; (void)gain; (void)pitch; (void)looping;
+}
+__attribute__((weak)) void isaac_audio_backend_stop(uint32_t src) { (void)src; }
+__attribute__((weak)) void isaac_audio_backend_pause(uint32_t src) { (void)src; }
+__attribute__((weak)) void isaac_audio_backend_gain(uint32_t src, float gain) { (void)src; (void)gain; }
+__attribute__((weak)) void isaac_audio_backend_drop_buffer(uint32_t id) { (void)id; }
+
+/* ---- objects ------------------------------------------------------------ */
+#define AL_MAX_QUEUE 64
+
+typedef struct {
+    uint32_t id;
+    uint8_t *pcm;
+    uint32_t bytes;
+    int channels, bits, freq;
+    double seconds;
+} al_buffer;
+
+typedef struct {
+    uint32_t id;
+    uint32_t state;
+    uint32_t buffer;                 /* AL_BUFFER, static play */
+    float gain, pitch;
+    int looping;
+    double start_ms;                 /* when the CURRENT buffer began */
+    double pause_ms;                 /* offset held while paused */
+    uint32_t queue[AL_MAX_QUEUE];    /* streaming: not-yet-unqueued buffers */
+    unsigned qn;                     /* entries in queue[] */
+    unsigned processed;              /* how many of them have played out */
+    uint32_t type;                   /* AL_STATIC / AL_STREAMING / AL_UNDETERMINED */
+} al_source;
+
+static al_buffer *g_buf;
+static unsigned g_nbuf, g_cbuf;
+static al_source *g_src;
+static unsigned g_nsrc, g_csrc;
+static uint32_t g_next_token = 0x7788c000u;
+static int g_trace = -1;
+
+/* census, printed with the stub report */
+static unsigned g_stat_buffers, g_stat_plays, g_stat_queued, g_stat_unqueued;
+static unsigned long long g_stat_pcm_bytes;
+static double g_stat_seconds;
+
+static int trace_on(void) {
+    if (g_trace < 0) {
+        const char *e = getenv("ISAAC_AUDIO_TRACE");
+        g_trace = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return g_trace;
+}
+
+static double now_ms(void) { return emscripten_get_now(); }
+
+static al_buffer *buf_find(uint32_t id) {
+    for (unsigned i = 0; i < g_nbuf; ++i) if (g_buf[i].id == id) return &g_buf[i];
+    return NULL;
+}
+static al_source *src_find(uint32_t id) {
+    for (unsigned i = 0; i < g_nsrc; ++i) if (g_src[i].id == id) return &g_src[i];
+    return NULL;
+}
+
+static al_buffer *buf_new(void) {
+    if (g_nbuf == g_cbuf) {
+        unsigned c = g_cbuf ? g_cbuf * 2u : 64u;
+        al_buffer *p = (al_buffer *)realloc(g_buf, c * sizeof *p);
+        if (!p) return NULL;
+        g_buf = p; g_cbuf = c;
+    }
+    al_buffer *b = &g_buf[g_nbuf++];
+    memset(b, 0, sizeof *b);
+    b->id = (g_next_token += 0x10u);
+    return b;
+}
+static al_source *src_new(void) {
+    if (g_nsrc == g_csrc) {
+        unsigned c = g_csrc ? g_csrc * 2u : 64u;
+        al_source *p = (al_source *)realloc(g_src, c * sizeof *p);
+        if (!p) return NULL;
+        g_src = p; g_csrc = c;
+    }
+    al_source *s = &g_src[g_nsrc++];
+    memset(s, 0, sizeof *s);
+    s->id = (g_next_token += 0x10u);
+    s->state = AL_INITIAL;
+    s->gain = 1.0f;
+    s->pitch = 1.0f;
+    s->type = AL_UNDETERMINED;
+    return s;
+}
+
+static double buf_seconds(const al_buffer *b) { return b ? b->seconds : 0.0; }
+
+/* The head of a streaming source is the first queue entry not yet processed;
+ * a static source plays s->buffer. */
+static uint32_t src_current_buffer(const al_source *s) {
+    if (s->qn > s->processed) return s->queue[s->processed];
+    return s->buffer;
+}
+
+/* Advance a playing source over the wall clock: retire whole buffers whose
+ * audio would have finished, and stop (or loop) when nothing is left. */
+static void src_advance(al_source *s) {
+    if (s->state != AL_PLAYING) return;
+    double pitch = s->pitch > 0.01f ? (double)s->pitch : 1.0;
+    for (;;) {
+        uint32_t cur = src_current_buffer(s);
+        al_buffer *b = buf_find(cur);
+        double dur = buf_seconds(b) * 1000.0 / pitch;
+        if (dur <= 0.0) {
+            /* nothing playable: a source with no buffer is not playing */
+            if (s->qn > s->processed) { ++s->processed; continue; }
+            s->state = AL_STOPPED;
+            return;
+        }
+        if (now_ms() - s->start_ms < dur) return;      /* still inside it */
+        s->start_ms += dur;
+        if (s->qn > s->processed) {
+            ++s->processed;                            /* streaming: retire it */
+            if (s->qn > s->processed) continue;        /* next queued buffer */
+            s->state = AL_STOPPED;                     /* queue ran dry */
+            return;
+        }
+        if (s->looping) continue;                      /* static loop: keep going */
+        s->state = AL_STOPPED;
+        return;
+    }
+}
+
+/* ---- the surface host_shims_al.c calls --------------------------------- */
+
+void isaac_audio_gen_buffers(uint32_t n, uint32_t out_va) {
+    for (uint32_t i = 0; i < n; ++i) {
+        al_buffer *b = buf_new();
+        if (isaac_is_guest_va(out_va + 4u * i))
+            isaac_w32(out_va + 4u * i, b ? b->id : 0u);
+    }
+}
+
+void isaac_audio_gen_sources(uint32_t n, uint32_t out_va) {
+    for (uint32_t i = 0; i < n; ++i) {
+        al_source *s = src_new();
+        if (isaac_is_guest_va(out_va + 4u * i))
+            isaac_w32(out_va + 4u * i, s ? s->id : 0u);
+    }
+}
+
+void isaac_audio_delete_buffers(uint32_t n, uint32_t va) {
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!isaac_is_guest_va(va + 4u * i)) continue;
+        uint32_t id = isaac_r32(va + 4u * i);
+        al_buffer *b = buf_find(id);
+        if (!b) continue;
+        isaac_audio_backend_drop_buffer(id);
+        free(b->pcm);
+        *b = g_buf[--g_nbuf];
+    }
+}
+
+void isaac_audio_delete_sources(uint32_t n, uint32_t va) {
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!isaac_is_guest_va(va + 4u * i)) continue;
+        uint32_t id = isaac_r32(va + 4u * i);
+        al_source *s = src_find(id);
+        if (!s) continue;
+        isaac_audio_backend_stop(id);
+        *s = g_src[--g_nsrc];
+    }
+}
+
+void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
+                             uint32_t bytes, uint32_t freq) {
+    al_buffer *b = buf_find(buf);
+    if (!b) return;
+    int channels = (format == AL_FORMAT_STEREO8 || format == AL_FORMAT_STEREO16) ? 2 : 1;
+    int bits = (format == AL_FORMAT_MONO16 || format == AL_FORMAT_STEREO16) ? 16 : 8;
+    uint32_t frame = (uint32_t)channels * (uint32_t)(bits / 8);
+    free(b->pcm);
+    b->pcm = NULL;
+    b->bytes = 0;
+    b->channels = channels;
+    b->bits = bits;
+    b->freq = (int)freq;
+    b->seconds = (freq && frame) ? (double)bytes / (double)(frame * freq) : 0.0;
+    if (bytes && isaac_is_guest_va(data_va) && isaac_is_guest_va(data_va + bytes - 1u)) {
+        b->pcm = (uint8_t *)malloc(bytes);
+        if (b->pcm) {
+            memcpy(b->pcm, isaac_g(data_va), bytes);
+            b->bytes = bytes;
+        }
+    }
+    ++g_stat_buffers;
+    g_stat_pcm_bytes += bytes;
+    g_stat_seconds += b->seconds;
+    if (b->pcm) isaac_audio_backend_buffer(b->id, b->pcm, b->bytes, channels, bits, (int)freq);
+    if (trace_on())
+        isaac_log("[isaac][audio] buffer %u: %u bytes, %d ch, %d bit, %u Hz, %.3f s",
+                  buf, bytes, channels, bits, freq, b->seconds);
+}
+
+void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    switch (param) {
+    case AL_BUFFER:
+        s->buffer = (uint32_t)value;
+        s->type = value ? AL_STATIC : AL_UNDETERMINED;
+        s->qn = s->processed = 0;
+        break;
+    case AL_LOOPING: s->looping = value != 0; break;
+    default: break;
+    }
+}
+
+void isaac_audio_source_f(uint32_t src, uint32_t param, float value) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    switch (param) {
+    case AL_GAIN:
+        s->gain = value;
+        isaac_audio_backend_gain(src, value);
+        break;
+    case AL_PITCH: s->pitch = value; break;
+    default: break;
+    }
+}
+
+int32_t isaac_audio_get_source_i(uint32_t src, uint32_t param) {
+    al_source *s = src_find(src);
+    if (!s) return 0;
+    src_advance(s);
+    switch (param) {
+    case AL_SOURCE_STATE:      return (int32_t)s->state;
+    case AL_BUFFERS_QUEUED:    return (int32_t)(s->qn - s->processed);
+    case AL_BUFFERS_PROCESSED: return (int32_t)s->processed;
+    case AL_BUFFER:            return (int32_t)src_current_buffer(s);
+    case AL_LOOPING:           return s->looping;
+    case AL_SOURCE_TYPE:       return (int32_t)s->type;
+    case AL_SAMPLE_OFFSET:
+    case AL_BYTE_OFFSET: {
+        al_buffer *b = buf_find(src_current_buffer(s));
+        if (!b || s->state != AL_PLAYING) return 0;
+        double sec = (now_ms() - s->start_ms) / 1000.0;
+        if (sec < 0.0) sec = 0.0;
+        double samples = sec * (double)b->freq;
+        if (param == AL_SAMPLE_OFFSET) return (int32_t)samples;
+        return (int32_t)(samples * (double)b->channels * (double)(b->bits / 8));
+    }
+    default: return 0;
+    }
+}
+
+float isaac_audio_get_source_f(uint32_t src, uint32_t param) {
+    al_source *s = src_find(src);
+    if (!s) return 0.0f;
+    src_advance(s);
+    switch (param) {
+    case AL_GAIN:  return s->gain;
+    case AL_PITCH: return s->pitch;
+    case AL_SEC_OFFSET:
+        if (s->state != AL_PLAYING) return 0.0f;
+        return (float)((now_ms() - s->start_ms) / 1000.0);
+    default: return 0.0f;
+    }
+}
+
+void isaac_audio_play(uint32_t src) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    if (s->state == AL_PAUSED) {
+        s->start_ms = now_ms() - s->pause_ms;     /* resume where it stopped */
+    } else {
+        s->start_ms = now_ms();
+    }
+    s->state = AL_PLAYING;
+    uint32_t cur = src_current_buffer(s);
+    ++g_stat_plays;
+    isaac_audio_backend_play(src, cur, s->gain, s->pitch, s->looping);
+    if (trace_on())
+        isaac_log("[isaac][audio] play source %u buffer %u gain %.2f pitch %.2f%s",
+                  src, cur, (double)s->gain, (double)s->pitch, s->looping ? " looping" : "");
+}
+
+void isaac_audio_stop(uint32_t src) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    s->state = AL_STOPPED;
+    s->pause_ms = 0.0;
+    isaac_audio_backend_stop(src);
+    if (trace_on()) isaac_log("[isaac][audio] stop source %u", src);
+}
+
+void isaac_audio_pause(uint32_t src) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    if (s->state == AL_PLAYING) s->pause_ms = now_ms() - s->start_ms;
+    s->state = AL_PAUSED;
+    isaac_audio_backend_pause(src);
+}
+
+void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va) {
+    al_source *s = src_find(src);
+    if (!s) return;
+    s->type = AL_STREAMING;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!isaac_is_guest_va(bufs_va + 4u * i)) break;
+        if (s->qn >= AL_MAX_QUEUE) {
+            /* compact: drop the already-processed head entries */
+            if (s->processed) {
+                memmove(s->queue, s->queue + s->processed,
+                        (s->qn - s->processed) * sizeof s->queue[0]);
+                s->qn -= s->processed;
+                s->processed = 0;
+            }
+            if (s->qn >= AL_MAX_QUEUE) break;
+        }
+        s->queue[s->qn++] = isaac_r32(bufs_va + 4u * i);
+        ++g_stat_queued;
+    }
+    if (trace_on()) isaac_log("[isaac][audio] queue %u buffer(s) on source %u (%u waiting)",
+                              n, src, s->qn - s->processed);
+}
+
+uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
+    al_source *s = src_find(src);
+    if (!s) return 0;
+    src_advance(s);
+    uint32_t take = n < s->processed ? n : s->processed;
+    for (uint32_t i = 0; i < take; ++i)
+        if (isaac_is_guest_va(out_va + 4u * i))
+            isaac_w32(out_va + 4u * i, s->queue[i]);
+    if (take) {
+        memmove(s->queue, s->queue + take, (s->qn - take) * sizeof s->queue[0]);
+        s->qn -= take;
+        s->processed -= take;
+        g_stat_unqueued += take;
+    }
+    return take;
+}
+
+void isaac_audio_report(void) {
+    { extern void isaac_al_census(void); isaac_al_census(); }
+    if (!g_stat_buffers && !g_stat_plays) {
+        isaac_log("[isaac][audio] no audio data was ever submitted.");
+        return;
+    }
+    unsigned playing = 0;
+    for (unsigned i = 0; i < g_nsrc; ++i) {
+        src_advance(&g_src[i]);
+        if (g_src[i].state == AL_PLAYING) ++playing;
+    }
+    isaac_log("[isaac][audio] %u buffer uploads (%.1f MB of PCM, %.1f s of audio), "
+              "%u plays, %u queued / %u unqueued, %u source(s) live (%u playing), %u buffer(s) live",
+              g_stat_buffers, (double)g_stat_pcm_bytes / 1048576.0, g_stat_seconds,
+              g_stat_plays, g_stat_queued, g_stat_unqueued, g_nsrc, playing, g_nbuf);
+}

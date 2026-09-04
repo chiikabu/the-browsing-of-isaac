@@ -358,6 +358,10 @@ void isaac_stub_report(void) {
     { extern void recomp_profile_report(void); recomp_profile_report(); }
     { extern void isaac_gl_census_report(void); isaac_gl_census_report(); }
     { extern void isaac_dispatch_report(void); isaac_dispatch_report(); }
+    { extern void isaac_audio_report(void); isaac_audio_report(); }
+#ifdef ISAAC_WEB
+    { extern void isaac_audio_web_report(void); isaac_audio_web_report(); }
+#endif
     { extern uint32_t isaac_input_dispatched(void); extern uint32_t isaac_input_queued(void);
       extern uint32_t isaac_input_dropped(void);
       isaac_log("[isaac][input] %u messages dispatched to the WndProc, %u still queued, %u dropped (queue full)",
