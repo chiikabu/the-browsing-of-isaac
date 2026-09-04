@@ -62,6 +62,9 @@ int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
 void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);
 /* round 16d audio probe (host_audio.c; lift_patches.py WRAP_PATCHES) */
 void isaac_audio_probe_bind(uint32_t self);
+/* observe-only probes (lift_patches.py PROBE_PATCHES) */
+int  isaac_probe_on(void);
+void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c);
 
 #ifndef RECOMP_TICK_MASK
 #define RECOMP_TICK_MASK 0xFFFFu

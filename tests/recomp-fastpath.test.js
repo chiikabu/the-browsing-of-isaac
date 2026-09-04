@@ -19,11 +19,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const lift = join(root, 'scripts', 'recomp', 'lift');
 const hostSrc = join(root, 'scripts', 'recomp', 'host', 'src');
 
-function wrapPatches() {
+function patchesIn(startMarker, endMarker) {
   const lp = readFileSync(join(lift, 'lift_patches.py'), 'utf8');
-  const a = lp.indexOf('WRAP_PATCHES: dict');
-  const b = lp.indexOf('def apply_wrap_patches');
-  assert.ok(a > 0 && b > a, 'WRAP_PATCHES block found');
+  const a = lp.indexOf(startMarker);
+  const b = lp.indexOf(endMarker, a);
+  assert.ok(a > 0 && b > a, `${startMarker} block found`);
   const block = lp.slice(a, b);
   const out = [];
   for (const m of block.matchAll(/^\s*(0x[0-9a-f]{8}): """([\s\S]*?)^""",/gm)) {
@@ -31,6 +31,10 @@ function wrapPatches() {
   }
   return out;
 }
+// the fastpath wrappers stop where the probe table starts: they are different
+// categories with different contracts (round 23)
+const wrapPatches = () => patchesIn('WRAP_PATCHES: dict', 'PROBE_PATCHES: dict');
+const probePatches = () => patchesIn('PROBE_PATCHES: dict', 'def apply_wrap_patches');
 
 test('WRAP_PATCHES: every wrapper keeps the lifted body, consults the mode, and owns the ret', () => {
   const patches = wrapPatches();
@@ -85,4 +89,32 @@ test('host_fastpath.c: bounds-checked guest access and the verify counter', () =
   assert.ok(fast.includes('uint32_t isaac_fastpath_mismatches(void)'), 'mismatch counter exported');
   assert.ok(/getenv\("ISAAC_FASTPATH"\)/.test(fast) && /getenv\("ISAAC_FASTPATH_VERIFY"\)/.test(fast),
     'mode switches documented in the env');
+});
+
+// Round 23: observe-only probes. The dispatch watch can only see functions
+// reached through the dispatcher, and the audio investigation kept needing the
+// other question -- did this directly called function run, and with what?
+// A probe answers it, and its contract is the opposite of a fastpath wrapper's:
+// it must NOT emulate the ret, because the lifted body it always calls does
+// that itself, and it must not depend on the fastpath mode.
+test('PROBE_PATCHES: every probe delegates once and leaves the guest untouched', () => {
+  for (const { va, body } of probePatches()) {
+    const name = `sub_${va.slice(2)}`;
+    assert.ok(body.startsWith(`void ${name}(CpuState *restrict s) {`), `${name}: wrapper signature`);
+    assert.ok(body.includes(`RECOMP_VA(0x${va.slice(2).replace(/^0+/, '')}u);`), `${name}: stamps its VA`);
+    assert.equal((body.match(new RegExp(`${name}__lifted\\(s\\)`, 'g')) || []).length, 1,
+      `${name}: calls the lifted body exactly once`);
+    assert.ok(!/s->EIP\s*=/.test(body), `${name}: a probe must not touch EIP -- the lifted body owns the ret`);
+    assert.ok(!/s->ESP\s*(\+|-)?=/.test(body), `${name}: a probe must not touch ESP`);
+    assert.ok(body.includes('isaac_probe_on()'), `${name}: logging is off unless ISAAC_PROBE=1`);
+  }
+});
+
+test('the probe helpers exist where lifted code can reach them', () => {
+  const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
+  const rt = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
+  for (const fn of ['isaac_probe_on', 'isaac_probe_hit']) {
+    assert.match(fast, new RegExp(`^[a-z0-9_ ]*\\b${fn}\\(`, 'm'), `${fn}: defined in host_fastpath.c`);
+    assert.ok(rt.includes(`${fn}(`), `${fn}: declared in recomp_rt.h`);
+  }
 });

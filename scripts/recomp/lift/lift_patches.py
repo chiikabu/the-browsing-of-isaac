@@ -189,13 +189,40 @@ WRAP_PATCHES: dict[int, str] = {
 }
 
 
+# Observe-only wrappers. Contract, pinned by tests/recomp-fastpath.test.js:
+# each calls its lifted body exactly once and touches neither EIP nor ESP, so
+# the guest cannot tell a probed function from an unprobed one. Logging is off
+# unless ISAAC_PROBE=1.
+#
+# These two answer the standing audio question. The dispatch watch says the WAV
+# loader is never dispatched, but its callers reach it directly, so "never
+# dispatched" and "never called" are not the same claim -- and the same is true
+# of the sounds.xml catalogue reader above it.
+PROBE_PATCHES: dict[int, str] = {
+    # SFX catalogue: reads sounds.xml and builds the sound records
+    0x00952df0: """void sub_00952df0(CpuState *restrict s) {
+  RECOMP_VA(0x952df0u);
+  if (isaac_probe_on()) isaac_probe_hit(0x952df0u, s->ECX, s->EDX, MEMR32(s->ESP + 4u));
+  sub_00952df0__lifted(s);
+}
+""",
+    # the sound class's slot +0x1c: load a WAV by path and attach the sample
+    0x00a7b6a0: """void sub_00a7b6a0(CpuState *restrict s) {
+  RECOMP_VA(0xa7b6a0u);
+  if (isaac_probe_on()) isaac_probe_hit(0xa7b6a0u, s->ECX, MEMR32(s->ESP + 4u), 0u);
+  sub_00a7b6a0__lifted(s);
+}
+""",
+}
+
+
 def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
     """Install the fastpath wrappers: rename `void sub_X(` to `void sub_X__lifted(`
     (definition only; call sites keep calling sub_X = the wrapper) and append
     the wrapper after the lifted body. Idempotent via the __lifted name."""
     touched: list[Path] = []
     tus = sorted(lift_dir.glob("lifted_*.c"))
-    for va, body in WRAP_PATCHES.items():
+    for va, body in list(WRAP_PATCHES.items()) + list(PROBE_PATCHES.items()):
         name = "sub_%08x" % va
         for tu in tus:
             text = tu.read_text(encoding="utf-8")

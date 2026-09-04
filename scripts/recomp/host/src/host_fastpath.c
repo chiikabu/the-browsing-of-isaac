@@ -140,3 +140,22 @@ uint32_t isaac_fast_pathhash(uint32_t str_va) {
     }
     return h;
 }
+
+/* ---- probes (lift_patches.py PROBE_PATCHES) ------------------------------
+ * ISAAC_PROBE=1: log the first calls of a lifted function that the dispatch
+ * watch cannot see because its callers reach it directly. `tag` is the
+ * function's VA; the three values are whatever the probe wants to show. */
+int isaac_probe_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("ISAAC_PROBE"); v = (e && *e && *e != '0') ? 1 : 0; }
+    return v;
+}
+void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c) {
+    static uint32_t tags[16];
+    static unsigned hits[16], n;
+    unsigned i = 0;
+    for (; i < n; ++i) if (tags[i] == tag) break;
+    if (i == n) { if (n >= 16u) return; tags[n] = tag; hits[n] = 0u; n++; }
+    if (++hits[i] > 8u) return;
+    isaac_log("[isaac][probe] sub_%08x #%u: %08x %08x %08x", tag, hits[i], a, b, c);
+}
