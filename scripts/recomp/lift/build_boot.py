@@ -498,6 +498,8 @@ def main():
     driver_src = HERE / "boot_integration.mjs"
     driver_dst = BOOT_OUT / "boot_integration.mjs"
     shutil.copy2(driver_src, driver_dst)
+    # Round 27: the door-aware explorer the driver imports for ISAAC_DRIVE=explore.
+    shutil.copy2(HERE / "explore.mjs", BOOT_OUT / "explore.mjs")
 
     result["ok"] = True
     result["out"] = str(out_mjs)

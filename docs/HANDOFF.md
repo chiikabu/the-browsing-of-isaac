@@ -68,8 +68,9 @@ REQUIRE emsdk on PATH:
   The archive toolchain (`scripts/recomp/assets/`) reverses all three
   container versions with a 27,236/27,236 checksum proof; lossless PNG and
   Vorbis q3 music shrink the mounted set 1,070 → 750 MB, validated in-engine.
-  Open: the floor banner shows raw string-table keys (`#BASEMENT_NAME`) now
-  that the table comes from `afterbirthp.a` -- its parser returns 0.
+  The raw string-table keys (`#BASEMENT_NAME`) turned out to be the
+  entry-first lifter bug (§21.41), fixed the same day: the banner reads
+  "Basement".
 - **Round 28: the shipping bundle** (§21.43, 2026-09-04). `.scratch/game-bundle`
   is **733,800,939 bytes in 22 files, 37.87 % of the 1,937,711,471-byte
   instance**: the ten archives the engine mounts (1,069,689,641 →
@@ -216,7 +217,20 @@ is started:
   existing tree the same goto at build time; the HUD reads "The Sad
   Onion" instead of `#THE_SAD_ONION_NAME`. Any lifter change that
   reorders blocks must keep `tests/recomp-entry-first.test.js` green.
-- **Gameplay depth is untested.** The scripted input is a timeline keyed
+- **Round 29: gameplay is exercised by an automated player** (§21.44).
+  `ISAAC_DRIVE=explore` on the node driver reads room, doors, players and
+  the pooled NPC objects from the guest heap and plays: doors, hunting,
+  sidesteps, death, the next run. 20,000 frames on one seed: **62 room
+  transitions, 9 distinct rooms (shop, treasure, curse), 10 runs, 9
+  deaths, 0 asserts**; enemies spawn, move, take damage and die; the
+  player is killed (`Game Over. Killed by (244.0)`) and the game-over
+  screen leads to the next run. The rendered browser run shows the head
+  turn and the tears (`drive_interactive.mjs` holds ArrowLeft and keeps
+  `shot_fire.png`).
+- **Gameplay depth beyond that is untested**: item pickup, the trapdoor
+  and floor descent, bosses, save/load -- the explorer does not know where
+  pickups or the trapdoor are.
+- ~~**Gameplay depth is untested.**~~ The scripted input is a timeline keyed
   to presented frames, not a player: combat, damage, item pickup, floor
   descent, bosses and save/load have never been exercised. A run so far
   walks between two or three rooms.
@@ -446,6 +460,11 @@ is non-empty (empty `mods/` skips it). GL goes through epoxy `.data` slots
   start below its entry (§21.41; `build_boot.py` applies the fix itself).
 - A PROBE wrapper's "result" line is EAX when the lifted body returns to
   the wrapper — for a tail jump that is before the jump runs (§21.41).
+- `ISAAC_DRIVE=explore` (node) — the automated player (§21.44);
+  `ISAAC_EXPLORE_CENSUS=1` adds the NPC census; `ISAAC_INPUT_WATCH=1`
+  (timeline mode) prints the engine's key-state tables every 30 frames.
+  `ISAAC_DISPATCH_WATCH` counts DISPATCHED entries only (indirect calls,
+  tail jumps): a direct callee reads 0 there even when it runs every frame.
 - `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.
 - `ISAAC_DUMP32=0xc379e8:4,0xc37b14:2` — prints guest dwords after `main`
   traps. Guest memory is identity-mapped into the wasm heap and the harness

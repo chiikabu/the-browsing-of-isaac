@@ -4221,6 +4221,69 @@ is a 10-entry version-5 archive the game asks for under `resources/` and
 does not get -- shipping it there would mount content today's runs never
 see), and the gameplay depth of round 27's list. Try it: HANDOFF.md.
 
+### 21.44 The explorer: an automated play test (round 29)
+
+**Why.** Every scripted timeline so far was blind: a held D walks the
+player into the east wall on whatever row the run started, and no room was
+ever left except by the sqrt defect. "Gameplay" had been verified as "a
+run starts and frames present". The explorer turns the node profile into
+a play test that reads the game's own state and reports a census.
+
+**What it reads** (`scripts/recomp/lift/explore.mjs`; the guest arena is
+identity-mapped into the wasm heap, so a guest VA indexes `HEAP32`; the
+boot module exports `HEAP32`/`HEAPU8` only, a Float32 view is kept over the
+same buffer): `Game` at `[0x00c71678]`; the current room at `Game+0x18300`
+(width `+0xc`, height `+0x10`, index `Game+0x18304`); `RoomTransition` at
+`Game+0x1b83c` (idle == 0); the player vector at `Game+0x1baa8..+0x1baac`;
+eight door slots at `room+0x724` (state `+0xc`, open == 2; grid index
+`+0x24`; target room `+0x394`; trigger point = cell centre + 18 px outward,
+slot & 3 = west/north/east/south); every entity's type `+0x28` (player 1,
+tear 2, NPCs 10..0x3ed), position `+0x33c/+0x340` and dead byte `+0x173`.
+NPC objects are found by their vtable (`0x00b67468`, from the constructor
+0x006b8590) with one linear scan of the arena (~0.3 s, once): the 512
+pooled `Entity_NPC` objects; a live enemy is one with an NPC type, a
+position inside the room and the dead byte clear. Tears: `0x00b64eac`.
+
+**What it does.** Enter through the menus until a run exists; per room,
+pick an open door (preferring targets not yet visited), line up on the
+axis along that wall, walk through, fire along the way; when every door is
+closed (enemies) hunt: chase the nearest live NPC and fire along the axis
+it is farther on, alternating the line-up axis every 60 frames against
+rocks; after 30 frames without movement on the way to a door, sidestep for
+25 frames, alternating sides; give a door up after 600 frames or 150
+still frames; on death (the player's own dead byte) release everything and
+Enter through the game-over screen into the next run. `ISAAC_DRIVE=explore`
+on the node driver; `ISAAC_EXPLORE_CENSUS=1` prints the NPC census at each
+idle status line; `ISAAC_INPUT_WATCH=1` (timeline mode) prints the engine's
+GLFW-key-indexed state tables (0x00c78c10 down, 0x15d entries) every 30
+frames. `tests/recomp-explore.test.js` (8) drives the brain against a fake
+heap: menus, door line-up, transition hands-off, patrol, hunt with a corpse
+excluded, sidestep, death and the next run.
+
+**What it found, in order.** Movement works (D: 320 → 570 px at 4.3
+px/frame, stopped by the wall); the first explorer left the start room by
+its west door into a 28x16 room whose three doors stayed closed for 19,500
+frames -- the head-direction field (`+0x1624`) never turned while an arrow
+was held, which in node means nothing: it is render-side and node has no
+GL. The dispatcher's watch counters are blind to direct calls, so
+`ISAAC_DISPATCH_WATCH` reporting 0 for `Weapon::Fire` meant nothing either.
+The rendered headless browser run settled it: Isaac's head turns, tears fly
+and splash on the rocks boxing him in; the room holds five moving type-244
+NPCs. Hunting killed two of them within 1,200 frames (their dead byte
+flipped), then the player was killed: `Game Over. Killed by (244.0)`, the
+game-over screen, a clean shutdown at the frame budget.
+
+**Census, 20,000 frames, epoch 1700000000, fast node profile:** 62 room
+transitions over 9 distinct rooms (the start room, a shop, treasure and
+curse rooms, six ordinary ones), 10 runs, 9 deaths, 105 door attempts, 41
+stalls, 5,742 hunting frames, 0 asserts, 0 invalid positions, main
+returned 0. The floor repeats because the epoch pins the seed; a second
+epoch exercises another layout.
+
+**Not yet exercised:** item pickup, the trapdoor and floor descent, bosses,
+save/load. The explorer knows nothing about pickups or the trapdoor's
+position; those are the next census targets.
+
 ## Appendix: reproduction
 
 ```bash

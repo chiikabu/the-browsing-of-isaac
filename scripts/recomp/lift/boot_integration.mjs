@@ -205,15 +205,64 @@ for (const item of (process.env.ISAAC_INPUT || '').split(',').map((t) => t.trim(
 }
 inputTimeline.sort((a, b) => a.frame - b.frame);
 let inputsDelivered = 0;
-if (inputTimeline.length) {
-  console.log(`  ISAAC_INPUT: ${inputTimeline.length} scripted events`);
+// Round 27: ISAAC_DRIVE=explore replaces the blind timeline with the
+// door-aware explorer (explore.mjs): it reads the game's room/door/player
+// state out of the identity-mapped guest heap each frame and walks door to
+// door, firing. Prints its census after main returns.
+let explorer = null;
+if (process.env.ISAAC_DRIVE === 'explore') {
+  const { makeExplorer } = await import('./explore.mjs');
+  const GUEST_LO = 0x00400000, GUEST_HI = 0x34000000;
+  // The module exports HEAP32/HEAPU8 only; a Float32 view is kept over the
+  // same buffer and renewed if the heap grows (growth swaps the buffer).
+  let f32 = new Float32Array(m.HEAPU8.buffer);
+  const HEAP_LO = 0x00d00000, HEAP_HI = 0x00d00000 + 768 * 1048576;   // the guest arena (isaac_host.h)
+  const mem = {
+    ok: (va) => va >= GUEST_LO && va + 4 <= GUEST_HI && va + 4 <= m.HEAPU8.length,
+    u32: (va) => m.HEAP32[va >> 2] >>> 0,
+    u8: (va) => m.HEAPU8[va],
+    f32: (va) => { if (f32.buffer !== m.HEAPU8.buffer) f32 = new Float32Array(m.HEAPU8.buffer); return f32[va >> 2]; },
+    // every 4-aligned guest address in the arena holding `value` (a vtable
+    // pointer finds every object of that class); one linear pass, ~0.3 s
+    findAll: (value, max = 4096) => {
+      const h = m.HEAP32, v = value | 0, out = [];
+      const lo = HEAP_LO >> 2, hi = Math.min(HEAP_HI, m.HEAPU8.length) >> 2;
+      for (let i = lo; i < hi; i++) if (h[i] === v) { out.push(i << 2); if (out.length >= max) break; }
+      return out;
+    },
+  };
+  explorer = makeExplorer(mem, { log: (s) => console.log(s), scanEntityList: !!process.env.ISAAC_EXPLORE_SCAN, census: !!process.env.ISAAC_EXPLORE_CENSUS });
   m.isaacInputPoll = (frame, out) => {
+    const r = explorer.poll(frame, out, m.HEAP32);
+    if (r) inputsDelivered += 1;
+    return r;
+  };
+  console.log('  ISAAC_DRIVE=explore: door-aware explorer driving the input');
+} else if (inputTimeline.length) {
+  // ISAAC_INPUT_WATCH=1: every 30 frames, print the engine's own key-state
+  // bytes (GLFW-key-indexed tables at 0x00c78c10 down / 0x00c78ab0 pressed /
+  // 0x00c78950 released; 0x15d entries) for the keys the timeline uses.
+  const watchKeys = { D: 0x44, W: 0x57, A: 0x41, S: 0x53, ENTER: 0x101, RIGHT: 0x106, LEFT: 0x107, DOWN: 0x108, UP: 0x109 };
+  const inputWatch = !!process.env.ISAAC_INPUT_WATCH;
+  let lastWatch = -1;
+  const origPoll = (frame, out) => {
     if (!inputTimeline.length || inputTimeline[0].frame > frame) return 0;
     const { ev } = inputTimeline.shift();
     m.HEAP32.set(ev, out >> 2);
     inputsDelivered += 1;
     return 1;
   };
+  m.isaacInputPoll = (frame, out) => {
+    if (inputWatch && frame !== lastWatch && frame % 30 === 0) {
+      lastWatch = frame;
+      const down = Object.entries(watchKeys).filter(([, k]) => m.HEAPU8[0x00c78c10 + k]).map(([n]) => n);
+      const pressed = Object.entries(watchKeys).filter(([, k]) => m.HEAPU8[0x00c78ab0 + k]).map(([n]) => n);
+      console.log(`  [input-watch] frame ${frame}: down [${down.join(' ')}] pressed [${pressed.join(' ')}]`);
+    }
+    return origPoll(frame, out);
+  };
+  if (inputWatch) console.log('  ISAAC_INPUT_WATCH: printing the engine key tables every 30 frames');
+  console.log(`  ISAAC_INPUT: ${inputTimeline.length} scripted events`);
 }
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
@@ -312,6 +361,7 @@ console.log(`  isaac_boot_call_main -> ${mainRc}`);
 console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFixed(1)} MB fetched on first open; ` +
             `windowed reads: ${preads} host reads, ${(preadBytes / 1048576).toFixed(1)} MB`);
 if (inputTimeline.length || inputsDelivered) console.log(`  scripted input: ${inputsDelivered} events delivered, ${inputTimeline.length} pending`);
+if (explorer) console.log(`  explorer: ${JSON.stringify(explorer.report())}`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 try { m._isaac_stub_report(); } catch (e) { /* best effort */ }

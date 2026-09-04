@@ -105,6 +105,13 @@ try {
   const b = await shot('shot_b.png');
   summary.shotsDiffer = !a.equals(b);
   console.log(`[drive] shots after walking differ: ${summary.shotsDiffer}`);
+  // fire left for 1.5 s; the screenshot in the middle of the hold shows the
+  // tears (round 27: the node explorer found no room ever clearing)
+  await page.keyboard.down('ArrowLeft'); await sleep(700);
+  const fireShot = await shot('shot_fire.png');
+  await sleep(800); await page.keyboard.up('ArrowLeft');
+  summary.fireShotDiffers = !fireShot.equals(b);
+  { const s = await state(); console.log(`[drive] ArrowLeft held 1.5 s, now frame ${s.f}; fire shot differs: ${summary.fireShotDiffers}`); }
   // fps until the module ends (the frame budget ends the run)
   let last = await state(), lastT = now();
   for (;;) {
