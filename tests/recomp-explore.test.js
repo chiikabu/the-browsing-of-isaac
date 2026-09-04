@@ -8,7 +8,7 @@
 // tried, and the report is an exact census.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeExplorer, GAME_PTR, OFF, VT_NPC, VT_PICKUP, ENT, PLAYER } from '../scripts/recomp/lift/explore.mjs';
+import { makeExplorer, GAME_PTR, OFF, VT_NPC, VT_PICKUP, VT_TRAPDOOR, GRID, ENT, PLAYER } from '../scripts/recomp/lift/explore.mjs';
 
 const VK = { enter: 0x0D, a: 0x41, d: 0x44, s: 0x53, w: 0x57, left: 0x25, up: 0x26, right: 0x27, down: 0x28 };
 const NAME = Object.fromEntries(Object.entries(VK).map(([k, v]) => [v, k]));
@@ -202,6 +202,28 @@ test('pickups: with the doors open, walk into the nearest live pickup first; its
   assert.equal(ex.report().doorAttempts, 1, 'then a door is chosen');
 });
 
+test('an abandoned pickup gives way to the next pickup (a boss room: the heart, then the pedestal), not to the door', () => {
+  const w = world();
+  const heart = 0x02200000, pedestal = 0x02400000;
+  for (const [e, v, s, x, y] of [[heart, 10, 2, 320, 300], [pedestal, 100, 659, 320, 200]]) {
+    w.u.set(e, VT_PICKUP); w.u.set(e + ENT.type, 5); w.u.set(e + ENT.variant, v); w.u.set(e + ENT.subtype, s);
+    w.f.set(e + ENT.posX, x); w.f.set(e + ENT.posY, y);
+  }
+  w.mem.findAll = (value) => (value === VT_PICKUP ? [heart, pedestal] : []);
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, pickupTimeout: 20, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  for (let f = 0; f < 30; f++) drain(ex, f, heap32);          // the heart (nearer) is never collected: abandoned at 21, the pedestal chosen at 22
+  let r = ex.report();
+  assert.equal(r.pickupAttempts, 2, 'the pedestal is tried next');
+  assert.equal(r.doorAttempts, 0, 'no door while a pickup is still worth trying');
+  assert.ok(log.some((s) => /-> pickup variant 100\.659 at \(320, 200\) of 1/.test(s)), log.join('\n'));
+  for (let f = 30; f < 60; f++) drain(ex, f, heap32);         // the pedestal times out too (frame 43): then the door
+  r = ex.report();
+  assert.equal(r.pickupAttempts, 2);
+  assert.equal(r.doorAttempts, 1, 'nothing left to pick up: a door');
+});
+
 test('door choice spreads out: an unvisited target first, then the door used least from this room', () => {
   const w = world();
   // a second open door (south, slot 3) leading to room 97; the east door (slot 2) leads to 85
@@ -245,12 +267,105 @@ test('death: keys released, Enter through the game-over screen, the next run is 
   assert.equal(r.deaths, 1); assert.equal(r.runs, 1);
   assert.ok(log.some((s) => /the player died in room 84 \(run 1\)/.test(s)), log.join('\n'));
   for (let f = 12; f < 100; f++) drain(ex, f, heap32);   // game over: only Enters
-  // a new run: alive again in a new room
+  // a new run: alive again in a new room; its first floor is a fresh census, not a floor change
   w.u.set(w.player + (ENT.dead & ~3), 0);
   w.u.set(w.game + OFF.roomIdx, 90);
   drain(ex, 100, heap32);
   r = ex.report();
   assert.equal(r.runs, 2);
-  assert.deepEqual(r.rooms, [84, 90]);
-  assert.ok(log.some((s) => /run 2 started \(room 90/.test(s)), log.join('\n'));
+  assert.deepEqual(r.rooms, [90]);
+  assert.deepEqual(r.floors, { 'run1/0.0': [84], 'run2/0.0': [90] });
+  assert.equal(r.floorChanges, 0);
+  assert.ok(log.some((s) => /run 2 started \(floor 0\.0, room 90/.test(s)), log.join('\n'));
+});
+
+// ---- round 30: floors, the trapdoor, bosses, suspend/resume ----------------
+
+test('a floor change (Game+0 / +4: stage, type) resets the room list; the old floor keeps its census', () => {
+  const w = world();
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  drain(ex, 1, heap32);
+  assert.equal(ex.report().floor, '0.0');
+  // the console's `stage 2`: the stage number changes and the room is a new object
+  w.u.set(w.game + OFF.stage, 2);
+  w.u.set(w.game + OFF.roomIdx, 90);
+  const room2 = 0x01500000, door2 = 0x01600000;
+  w.u.set(w.game + OFF.room, room2);
+  w.u.set(room2 + OFF.roomW, 13); w.u.set(room2 + OFF.roomH, 7);
+  w.u.set(room2 + OFF.doors + 0, door2);
+  w.u.set(door2 + OFF.doorState, 2); w.u.set(door2 + OFF.doorGrid, 3 * 13); w.u.set(door2 + OFF.doorTarget, 84);
+  drain(ex, 2, heap32);
+  const r = ex.report();
+  assert.equal(r.floor, '2.0');
+  assert.equal(r.floorChanges, 1);
+  assert.equal(r.descents, 1, 'stage 0 -> 2 is a descent');
+  assert.deepEqual(r.rooms, [90], 'the room list starts over on the new floor');
+  assert.deepEqual(r.floors, { 'run1/0.0': [84], 'run1/2.0': [90] });
+  assert.ok(log.some((s) => /floor 0\.0 -> 2\.0 \(stage 2 type 0\); room list reset \(1 room\(s\) on the old floor\)/.test(s)), log.join('\n'));
+  // room 84 on the new floor is unvisited again: the west door (target 84) is taken
+  assert.match(log.at(-1), /door slot 0 .* target 84$/);
+});
+
+test('a trapdoor in a cleared room (grid slot by vtable) is walked onto before any door; it is censused with its cell', () => {
+  const w = world();
+  const hole = 0x01800000, slot = 3 * 13 + 6;             // row 3, col 6 -> cell centre (280, 240)
+  w.u.set(w.room + OFF.grid + 4 * slot, hole);
+  w.u.set(hole, VT_TRAPDOOR); w.u.set(hole + GRID.index, slot); w.u.set(hole + GRID.state, 1);
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  const ev = drain(ex, 1, heap32);
+  assert.deepEqual(ev.filter((e) => ['a', 'w', 'd', 's'].includes(e.key)).map((e) => [e.key, e.down]), [['w', true]], 'the trapdoor is north of the player (380 -> 240): W');
+  const r = ex.report();
+  assert.equal(r.trapdoorAttempts, 1);
+  assert.equal(r.doorAttempts, 0, 'no door while a trapdoor is there');
+  assert.ok(log.some((s) => /room 84 -> trapdoor at grid 45 \(280, 240\) state 1$/.test(s)), log.join('\n'));
+  // lined up on x, it keeps walking north until the game takes over (a floor change)
+  w.f.set(w.player + OFF.posX, 280); w.f.set(w.player + OFF.posY, 300);
+  const ev2 = drain(ex, 2, heap32);
+  assert.ok(!ev2.some((e) => e.key === 'w' && !e.down), 'W stays down');
+  // a trapdoor the player cannot reach is abandoned after trapdoorTimeout and a door is chosen
+  const ex2 = makeExplorer(w.mem, { settle: 0, trapdoorTimeout: 20, log: () => {} });
+  for (let f = 0; f < 30; f++) drain(ex2, f, heap32);
+  assert.equal(ex2.report().doorAttempts, 1);
+});
+
+test('bosses: room+0x7224 counts the live bosses; entering a boss room and each kill are censused, the room type/variant come from the config', () => {
+  const w = world({ doorOpen: false });
+  const desc = 0x01900000, cfg = 0x01a00000;
+  w.u.set(w.room + OFF.roomDesc, desc); w.u.set(desc + OFF.descData, cfg);
+  w.u.set(cfg + OFF.cfgType, 5); w.u.set(cfg + OFF.cfgVariant, 1010);
+  w.u.set(w.room + OFF.bosses, 1);
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  drain(ex, 1, heap32);
+  assert.ok(log.some((s) => /run started at frame 1 \(floor 0\.0, room 84, 13x7, type 5 variant 1010, bosses 1\)/.test(s)), log.join('\n'));
+  assert.equal(ex.report().bossRoomsEntered, 1);
+  w.u.set(w.room + OFF.bosses, 0);
+  drain(ex, 2, heap32);
+  assert.equal(ex.report().bossKills, 1);
+  assert.ok(log.some((s) => /boss down in room 84 \(1 -> 0 alive\)/.test(s)), log.join('\n'));
+});
+
+test('suspend releases every held key and stops the brain; resume re-reads the room and carries on', () => {
+  const w = world();
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  drain(ex, 1, heap32);                                    // W held toward the door row
+  ex.suspend(2);
+  const ev = drain(ex, 2, heap32);
+  assert.ok(ev.some((e) => e.key === 'w' && !e.down), 'W released on suspend');
+  assert.equal(ex.suspended(), true);
+  for (let f = 3; f < 60; f++) assert.deepEqual(drain(ex, f, heap32), [], 'silent while suspended');
+  assert.equal(ex.report().suspensions, 1);
+  w.u.set(w.game + OFF.roomIdx, 91);                       // the console moved us
+  ex.resume(60);
+  const ev2 = drain(ex, 61, heap32);
+  assert.ok(ev2.some((e) => e.key === 'w' && e.down), 'walking again');
+  assert.ok(log.some((s) => /resumed in room 91/.test(s)), log.join('\n'));
+  assert.deepEqual(ex.report().rooms, [84, 91]);
 });

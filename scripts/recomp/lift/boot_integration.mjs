@@ -1,7 +1,10 @@
 // Boot the lifted module: place the memory image, run the host boot path,
 // then call main. Every stage is reported separately so a failure names
 // the stage it happened in.
-import { readFileSync, readdirSync, statSync, openSync, readSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, openSync, readSync, existsSync } from 'node:fs';
+// Round 30: the key table, the explorer and the console driver share one
+// module; the debug profile runs COPIES of both files from the boot dir.
+import { KEYS, makeExplorer, makeConsole, consoleSeedFiles, SAVE_DIR } from './explore.mjs';
 
 // ISAAC_V8_FLAGS: V8 flags for this run, re-exec'd onto the command line
 // because node refuses them in NODE_OPTIONS ("--no-wasm-tier-up is not
@@ -179,14 +182,9 @@ export function isaacLazyStats() { return { lazyReads, lazyBytes, preads, preadB
 // same timeline syntax as the web runner's input= (frame:Key, frame:mouse:x:y,
 // frame:click): the host's PeekMessageW polls m.isaacInputPoll(frame, out)
 // and turns each event into a Win32 message for GLFW's pump, so a headless
-// node run can navigate the menus and start a run without rendering.
-const KEYS = {
-  enter: [0x0D, 0x1C, 0], escape: [0x1B, 0x01, 0], space: [0x20, 0x39, 0], tab: [0x09, 0x0F, 0],
-  up: [0x26, 0x48, 1], down: [0x28, 0x50, 1], left: [0x25, 0x4B, 1], right: [0x27, 0x4D, 1],
-  shift: [0x10, 0x2A, 0], ctrl: [0x11, 0x1D, 0], a: [0x41, 0x1E, 0], d: [0x44, 0x20, 0],
-  e: [0x45, 0x12, 0], q: [0x51, 0x10, 0], r: [0x52, 0x13, 0], s: [0x53, 0x1F, 0], w: [0x57, 0x11, 0],
-  f: [0x46, 0x21, 0], m: [0x4D, 0x32, 0], '1': [0x31, 0x02, 0], '2': [0x32, 0x03, 0],
-};
+// node run can navigate the menus and start a run without rendering. The key
+// table (KEYS: name -> [vk, scancode, extended], every letter, digit and the
+// US punctuation since round 30) lives in explore.mjs.
 const inputTimeline = [];
 for (const item of (process.env.ISAAC_INPUT || '').split(',').map((t) => t.trim()).filter(Boolean)) {
   const [fr, what, ...rest] = item.split(':');
@@ -209,28 +207,29 @@ let inputsDelivered = 0;
 // door-aware explorer (explore.mjs): it reads the game's room/door/player
 // state out of the identity-mapped guest heap each frame and walks door to
 // door, firing. Prints its census after main returns.
+// The guest arena is identity-mapped into the wasm heap: a guest VA indexes
+// HEAP32/HEAPU8 directly. The module exports those two views only; a Float32
+// view is kept over the same buffer and renewed if the heap grows (growth
+// swaps the buffer). Shared by the explorer and the console driver.
+const GUEST_LO = 0x00400000, GUEST_HI = 0x34000000;
+const HEAP_LO = 0x00d00000, HEAP_HI = 0x00d00000 + 768 * 1048576;   // the guest arena (isaac_host.h)
+let f32 = new Float32Array(m.HEAPU8.buffer);
+const mem = {
+  ok: (va) => va >= GUEST_LO && va + 4 <= GUEST_HI && va + 4 <= m.HEAPU8.length,
+  u32: (va) => m.HEAP32[va >> 2] >>> 0,
+  u8: (va) => m.HEAPU8[va],
+  f32: (va) => { if (f32.buffer !== m.HEAPU8.buffer) f32 = new Float32Array(m.HEAPU8.buffer); return f32[va >> 2]; },
+  // every 4-aligned guest address in the arena holding `value` (a vtable
+  // pointer finds every object of that class); one linear pass, ~0.3 s
+  findAll: (value, max = 4096) => {
+    const h = m.HEAP32, v = value | 0, out = [];
+    const lo = HEAP_LO >> 2, hi = Math.min(HEAP_HI, m.HEAPU8.length) >> 2;
+    for (let i = lo; i < hi; i++) if (h[i] === v) { out.push(i << 2); if (out.length >= max) break; }
+    return out;
+  },
+};
 let explorer = null;
 if (process.env.ISAAC_DRIVE === 'explore') {
-  const { makeExplorer } = await import('./explore.mjs');
-  const GUEST_LO = 0x00400000, GUEST_HI = 0x34000000;
-  // The module exports HEAP32/HEAPU8 only; a Float32 view is kept over the
-  // same buffer and renewed if the heap grows (growth swaps the buffer).
-  let f32 = new Float32Array(m.HEAPU8.buffer);
-  const HEAP_LO = 0x00d00000, HEAP_HI = 0x00d00000 + 768 * 1048576;   // the guest arena (isaac_host.h)
-  const mem = {
-    ok: (va) => va >= GUEST_LO && va + 4 <= GUEST_HI && va + 4 <= m.HEAPU8.length,
-    u32: (va) => m.HEAP32[va >> 2] >>> 0,
-    u8: (va) => m.HEAPU8[va],
-    f32: (va) => { if (f32.buffer !== m.HEAPU8.buffer) f32 = new Float32Array(m.HEAPU8.buffer); return f32[va >> 2]; },
-    // every 4-aligned guest address in the arena holding `value` (a vtable
-    // pointer finds every object of that class); one linear pass, ~0.3 s
-    findAll: (value, max = 4096) => {
-      const h = m.HEAP32, v = value | 0, out = [];
-      const lo = HEAP_LO >> 2, hi = Math.min(HEAP_HI, m.HEAPU8.length) >> 2;
-      for (let i = lo; i < hi; i++) if (h[i] === v) { out.push(i << 2); if (out.length >= max) break; }
-      return out;
-    },
-  };
   explorer = makeExplorer(mem, { log: (s) => console.log(s), scanEntityList: !!process.env.ISAAC_EXPLORE_SCAN, census: !!process.env.ISAAC_EXPLORE_CENSUS });
   m.isaacInputPoll = (frame, out) => {
     const r = explorer.poll(frame, out, m.HEAP32);
@@ -263,6 +262,46 @@ if (process.env.ISAAC_DRIVE === 'explore') {
   };
   if (inputWatch) console.log('  ISAAC_INPUT_WATCH: printing the engine key tables every 30 frames');
   console.log(`  ISAAC_INPUT: ${inputTimeline.length} scripted events`);
+}
+// Round 30: ISAAC_CONSOLE="cmd1;cmd2" runs commands through the game's own
+// debug console (recomp-architecture.md §21.45). The console is enabled by
+// options.ini (EnableDebugConsole=1) and the commands are recalled from
+// cmd_history.txt with UP, both seeded into the RAM-FS below -- nothing is
+// written to the instance on disk. In explore mode the sequence starts
+// ISAAC_CONSOLE_DELAY frames (default 150) after the explorer's run starts and
+// the explorer is suspended while it runs; in timeline mode it starts at
+// ISAAC_CONSOLE_AT (a presented-frame number) and the timeline waits.
+// ISAAC_CONSOLE_MODE=type presses the characters' keys first (they do not
+// reach the console without WM_CHAR; the driver reports that and recalls).
+const consoleCommands = (process.env.ISAAC_CONSOLE || '').split(';').map((s) => s.trim()).filter(Boolean);
+let consoleDrv = null;
+if (consoleCommands.length) {
+  const consoleDelay = Number(process.env.ISAAC_CONSOLE_DELAY || 150);
+  const consoleAt = Number(process.env.ISAAC_CONSOLE_AT || 0);
+  const ready = explorer
+    ? (frame) => { const r = explorer.report(); return r.firstRunFrame >= 0 && frame - r.firstRunFrame >= consoleDelay; }
+    : (frame) => frame >= consoleAt;
+  consoleDrv = makeConsole(mem, { commands: consoleCommands, mode: process.env.ISAAC_CONSOLE_MODE, ready, log: (s) => console.log(s) });
+  const basePoll = m.isaacInputPoll || (() => 0);
+  m.isaacInputPoll = (frame, out) => {
+    // the console driver ticks first (idle -> open once `ready`); while it is
+    // active the explorer is suspended (its key releases drain first) and the
+    // timeline waits; when it is done the explorer resumes in whatever room
+    // and floor the commands left it
+    const ev = consoleDrv.poll(frame, out, m.HEAP32);
+    const active = consoleDrv.active();
+    if (explorer) {
+      if (active && !explorer.suspended()) explorer.suspend(frame);
+      else if (!active && explorer.suspended()) explorer.resume(frame);
+    }
+    if (ev) { inputsDelivered += 1; return 1; }
+    if (active) {
+      if (explorer && explorer.poll(frame, out, m.HEAP32)) { inputsDelivered += 1; return 1; }
+      return 0;
+    }
+    return basePoll(frame, out);
+  };
+  console.log(`  ISAAC_CONSOLE: ${consoleCommands.length} command(s) through the debug console, ${explorer ? `${consoleDelay} frames after the run starts` : `at frame ${consoleAt}`}${process.env.ISAAC_CONSOLE_MODE === 'type' ? ', typed first' : ', by history recall'}`);
 }
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
@@ -342,6 +381,26 @@ if (typeof m._isaac_fs_seed === 'function') {
     }
     return files;
   });
+  // Round 30: the console's two files, seeded into the RAM-FS only (an eager
+  // seed replaces the lazy registration of a disk file with the same key, so
+  // an options.ini the instance already has is merged, not overwritten, and
+  // the disk is never touched). The engine opens
+  // ./Documents/My Games/Binding of Isaac Repentance+/options.ini relative
+  // to the cwd (ISAAC_FS_TRACE, round 30) and the console loads
+  // cmd_history.txt from the same directory (0x00686220).
+  if (consoleCommands.length) {
+    stageOk('seed console files (RAM-FS only)', () => {
+      const optPath = `${INSTANCE_DIR}/${SAVE_DIR}/options.ini`;
+      const existing = existsSync(optPath) ? readFileSync(optPath, 'latin1') : null;
+      let n = 0;
+      for (const f of consoleSeedFiles(consoleCommands, existing)) {
+        const ok = seedFile(f.path, Buffer.from(f.text, 'latin1'));
+        console.log(`  seed ${f.path} ${f.text.length} bytes${f.merged ? ' (merged with the instance\'s own options.ini)' : ''} -> ${ok ? 'ok' : 'FAIL'}`);
+        if (ok) n += 1;
+      }
+      return n;
+    });
+  }
 } else {
   console.log('  (seed skipped: boot module has no _isaac_fs_seed export — rebuild the boot link)');
 }
@@ -362,6 +421,7 @@ console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFi
             `windowed reads: ${preads} host reads, ${(preadBytes / 1048576).toFixed(1)} MB`);
 if (inputTimeline.length || inputsDelivered) console.log(`  scripted input: ${inputsDelivered} events delivered, ${inputTimeline.length} pending`);
 if (explorer) console.log(`  explorer: ${JSON.stringify(explorer.report())}`);
+if (consoleDrv) console.log(`  console: ${JSON.stringify(consoleDrv.report())}`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 try { m._isaac_stub_report(); } catch (e) { /* best effort */ }

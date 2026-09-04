@@ -4511,6 +4511,244 @@ treasure rooms the explorer has not reached with coins to spare), the
 trapdoor and floor descent, bosses, save/load. The explorer knows nothing
 about the trapdoor's position; those are the next census targets.
 
+### 21.45 The debug console: a floor descent and a boss through the game's own console (round 30)
+
+**Why.** The explorer (§21.44) plays what it can reach on one floor. A
+floor descent and a boss fight need either luck or the debug console, and
+the console is the game's own: `stage N` and `goto` are what a modder
+types. Reaching it in the port meant answering three questions with the
+binary, not the wiki: how it is enabled, which key opens it and how typed
+text reaches it, and what the commands are called.
+
+**1. Enabling it.** `OptionsConfig`'s loader (0x00924440) reads
+`EnableDebugConsole` (default 0; stored at Options+0x5c, which is
+Manager+0x2a398; `OptionsConfig::Save` 0x00924d10 writes it back as
+`EnableDebugConsole=%d`) from `<save path>/options.ini`. The path is built
+by 0x00952410 as `"%s%s"` of the save-path global at 0x00c72a28 and
+`options.ini`; the host resolves it to `./Documents/My Games/Binding of
+Isaac Repentance+/` relative to the cwd, i.e. inside the instance dir --
+`ISAAC_FS_TRACE=1` shows it opened once at boot (a MISS in a fresh
+instance; the game then writes a default file into the RAM-FS). Console::Update
+(0x0068b260) opens on that flag and three more gates: the online-players
+vector at Manager+0x4b3d8..0x4b3dc empty (offline), Game+0x26630 == 0 (no
+session) and Manager state 2 or 5 (in a run; the call site is the frame's
+update 0x00954cd0). Mods are not involved (`EnableMods` is separate; the
+mods vector only lets a mod claim the command first). `SaveCommandHistory`
+(default 1, Options+0x65 = Manager+0x2a3a1) gates the history file below:
+the loader **deletes** `cmd_history.txt` when either flag is off.
+
+**2. The key, and how text reaches it.** The open key is GLFW key 0x60
+(GRAVE_ACCENT, the backquote): with the console closed, Console::Update
+asks the InputManager (`[0x00c57b18]+0x74`) with the "pressed" predicate
+0x00a207d0 for key 0x60 -- the keyboard device's edge test 0x00a6c540 over
+the GLFW-key-indexed tables at 0x00c78c10 / 0x00c78950. The driver sends it
+as VK_OEM_3 with scancode 0x29; GLFW's WndProc decodes the scancode from
+lParam, so the scancode is what the game sees. Everything else the console
+reads is key state too: Enter / KP_Enter (0x101 / 0x14f) run the line
+(FUN_00686b70 → the dispatcher 0x0068cdc0) or, with the line empty, close
+the console (FUN_00686950); UP / DOWN (0x109 / 0x108) walk the history and
+DOWN at the head clears the line; Backspace, Delete, Left, Right, Home,
+End, PgUp, PgDn edit and scroll; Ctrl+V pastes `glfwGetClipboardString`
+and runs every complete line of the paste; KP+ / KP- change the font.
+**The characters themselves are not key state.** On its first open the
+console installs its char callback FUN_00686730 on the GLFW window
+(`window+0x2a8`, the window at 0x00c7999c); GLFW's `_glfwInputChar`
+(0x00a25d60) reaches it only from the WndProc's WM_CHAR / WM_SYSCHAR /
+WM_UNICHAR cases (0x00a5b7b0: messages 0x102 / 0x106 / 0x109). On Windows
+those come from `TranslateMessage`, which the host stubs (`gen_shims.py`:
+STUB, "nothing translated"), and the host's queue builds WM_KEYDOWN /
+WM_KEYUP (0x100 / 0x101), mouse and focus messages only
+(`host_shims_win.c`, msgq_push). Typed letters therefore land in the key
+tables and never in the line. Making typing work is a host change of one
+of two shapes: a `TranslateMessage` that synthesises WM_CHAR from WM_KEYDOWN
+through a vk-to-character map (with Shift), or a fourth input event
+`[4, codepoint]` → `msgq_push(0x102, cp, 1)`. Neither is done in this round
+(the C host was off limits); the paste route needs `OpenClipboard` /
+`GetClipboardData` shims, the same class of change.
+
+**The way in without WM_CHAR: the command history.** Console+0x58 is a
+ring of `std::string*` slots (capacity +0x5c, head +0x60, count +0x64;
+Console is Game+0x68d78, the state at +0: 0 closed, 1 opening, 2 open, 4
+closing; the input line is Console+0x1c). Console init (0x00686060, from
+Game's constructor 0x006f4740) loads `<save path>/cmd_history.txt` line by
+line (the save-data stream's ReadLine 0x00a28190, trailing whitespace
+trimmed, at most 64 lines) with push_back; executing a line push_fronts
+it (0x006864a0) -- moving an entry already in the ring to the front rather
+than duplicating it: with the three seeded lines the live run recalled
+them with 1, 2 and 3 UPs, which is the move-to-front count (a duplicating
+ring would have needed 1, 3 and 5) -- and resets the cursor to the head;
+UP shows the head slot first, then older ones; closing writes the ring
+back (0x00686950). A seeded history file therefore makes the first UP
+recall its first line.
+`makeConsole` (explore.mjs) opens the console, taps UP until the input
+line -- an MSVC std::string read back out of guest memory -- equals the
+wanted command, taps Enter, waits for the line to clear, and at the end
+closes with Enter on the empty line. Every step is verified against the
+console's own state, so a key that did not land is retried and a command
+that never appears in the line is reported, not assumed.
+`ISAAC_CONSOLE_MODE=type` presses the characters' keys first (`planTyping`)
+and, when the line stays empty, says so and recalls. Every key is held 3
+frames (the engine samples key state per frame).
+
+**3. The commands** (the dispatcher 0x0068cdc0 carries its own presets as
+strings: "stage 9", "stage 11a", "goto s.boss.5000",
+"goto x.itemdungeon.666", "debug 3", "giveitem Sad Onion"): `stage N[a-d]`,
+N in 1..14, the letter selecting the alternate type (a 1, b 2, c 4, d 5),
+runs Level::SetStage (0x007466d0), Level::Init(0) (0x00744940, which logs
+`Level::Init m_Stage %d, m_StageType %d Seed %u`) and Level::Update, then
+answers "Changed stage." -- a floor change without the stage transition
+animation. `goto <s|x|d>.<type>[.<variant>]`: `s` looks the room up in
+stage 0 (the special rooms), `x` in the current stage, `d` takes a default
+room by variant; the type is a name (`boss` is 5);
+RoomConfig::GetRoomByStageTypeAndVariant (0x0082c720; it logs
+`[warn] StageID %d Room type %d, variant %d not found!`) then
+Level::DEBUG_goto_room (0x0073fa20: the debug descriptor, room index -3)
+and "Changed room." or "Error changing room.". Every boss room lives in
+the special set: `rooms/00.special rooms.stb` (an `STB1` file: per room
+`<IIIBH>` type, variant, subtype, difficulty, name length, the name,
+`<fBBBBH>` weight, width, height, shape, door count, spawn count, the
+doors `<hhB>` and the spawns `<hhB>` + `<HHHf>` entries; the parse consumes
+all 437,972 bytes) holds **565 type-5 rooms, none with variant 0**, so a
+plain `goto s.boss` answers "Error changing room."; the lowest variant is
+1010, Monstro's 13x7 one-entity room; `01.basement.stb` (571,141 bytes,
+1,220 rooms) has no boss rooms at all. `debug N` toggles bit N of the flag
+word at Game+0x26544 (Game::GetDebugFlag 0x00431760); the dispatcher's own
+presets use 3 and 4 (infinite HP, high damage). The console's replies go
+to its output buffer, not the log; the engine log carries `Level::Init`,
+`[RoomConfig] load stage N: <name> (mode M)`, `Room <type>.<variant>(<name>)`
+(0x007f2800 prints the config's type at +8 and variant at +0xc) and
+`TriggerBossDeath: %d bosses remaining.` (0x007fec00: `Room+0x7224 - 1`,
+the room's live-boss counter). `censusFromLog` (explore.mjs) counts those,
+plus `[odsa] [ASSERT]` lines.
+
+**The options.ini trap.** The first console run aborted at boot: with an
+options.ini present the loader applies every value it parsed, and
+`OptionsConfig::SetVSync(1)` (0x00925ce0; VSync defaults to 1) calls
+`glfwGetPrimaryMonitor` for the refresh rate -- NULL on the headless host,
+so GLFW's `monitor != NULL` assert (monitor.c:449) fired. Without a file
+the whole block is skipped, which is why every earlier run was fine. The
+seed forces `VSync=0`; the block's other apply-calls (the cursor mode
+`glfwSetInputMode`, the window size from GLFW's own globals) read the
+window, which exists. The seeding is RAM-FS only: `consoleSeedFiles`
+builds options.ini (merged with the instance's own file when there is one:
+only EnableDebugConsole, SaveCommandHistory and VSync change) and
+cmd_history.txt, and the driver seeds them eagerly after the lazy tree
+walk -- an eager `isaac_fs_seed` replaces a lazy entry with the same key
+-- so nothing is written to disk and the instance stays as it was.
+`ISAAC_CONSOLE="cmd1;cmd2"` on the node driver; in explore mode the
+sequence starts `ISAAC_CONSOLE_DELAY` frames (default 150) after the
+explorer reports the run started and the explorer is suspended while it
+runs (its held keys released; it re-reads the room, and the floor, when it
+resumes); in timeline mode it starts at `ISAAC_CONSOLE_AT` and the
+timeline waits.
+
+**Census: the floor descent** (`ISAAC_CONSOLE="stage 2"`, epoch
+1700000000, 3,000 frames, debug profile; `r30-stage2.log`). The run starts
+at frame 322 in the Basement's start room (`Room 1.2(Start Room)`, 15x9,
+type 1 variant 2). The console driver starts at 472, taps the grave key at
+473 and reads state 2 at **474** (the console opened two frames after the
+tap; the history ring read back holds the one seeded line, `"stage 2"`);
+one UP puts `stage 2` in the line at 487, Enter runs it and the engine
+logs **`Level::Init m_Stage 2, m_StageType 0 Seed 1037090446`** on that
+frame; the line is empty again at 488; Enter on the empty line at 532
+closes the console, state 0 at 547 (59 frames: the closing animation).
+The explorer resumes at 547 and reports **`floor 1.0 -> 2.0 (stage 2 type
+0); room list reset (1 room(s) on the old floor)`**: Basement II's start
+room (room 84 again, `Room 1.2(Start Room)`, doors open 3/4), then its
+curse room (71, `Room 10.7`, a pickup 5.360.1 attempted) and room 85
+(`Room 1.1105(New Room)`); 973 hunting frames on that floor, one death at
+frame 1895, and run 2 starts on a fresh Basement (`Level::Init m_Stage 1
+... Seed 2677005421`), which the census keeps apart (`floors:
+{run1/1.0: [84], run1/2.0: [84, 71, 85], run2/1.0: [84, 71, 85]}`). Whole
+run: 6 room transitions, 7 door attempts, 2 pickup attempts, **0 asserts,
+0 invalid positions**, `main` returned 0, guard intact. No new
+`[RoomConfig] load stage` line appears for Basement II: stage 2 is the same
+stage config (`Basement`, mode 0) the boot had loaded.
+
+**Census: the boss** (`ISAAC_CONSOLE="debug 3;debug 4;goto s.boss.1010"`,
+`ISAAC_EXPLORE_CENSUS=1`, the same epoch, 4,000 frames, `ISAAC_LOG_TIME=1`;
+`r30-boss.log`). The same run start at 322; the console opens at **474**
+with the three seeded lines in its ring; `debug 3` is in the line after 1
+UP and runs at 488, `debug 4` after 2 UPs at 509, `goto s.boss.1010` after
+3 UPs at 537 (each line cleared the frame after Enter; 6 UPs in all);
+closed at 596. The engine logs **`Room 5.1010(Monstro)`** -- type 5, the
+boss room -- and the explorer resumes at 807 in **room -3** (the debug
+descriptor's index; 15x9, config type 5 variant 1010, `bosses 1`, its one
+door closed), with the NPC census reading one typed object,
+`t20.0 (320,280) dead=0`: Monstro at the room's centre. The hunt runs
+from 828; at 1123 the engine logs **`TriggerBossDeath: 0 bosses
+remaining.`** and `deathspawn_boss`, spawns two hearts (5.10.2) and the boss
+item, a pedestal collectible **5.100.659**, and the explorer reports
+`boss down in room -3 (1 -> 0 alive)`; the door reopens (the pickup branch,
+which needs an open door, targets a heart at 1143), and the explorer
+leaves for the start room at 1599, then rooms 85 and 97. Whole run: 852
+hunting frames, `bossRoomsEntered 1`, `bossKills 1`, 6 transitions, 0
+deaths in 3,555 play frames (`debug 3`), 3 pickup attempts, 0 collected
+(the hearts are refused at full health and the explorer walked past the
+pedestal for the exit -- fixed: an abandoned pickup now yields to the next
+candidate on the following tick, pinned by a test), **0 asserts, 0 invalid
+positions**, `main` returned 0, guard intact. The NPC census printed at
+each idle line names the corpse afterwards (`t20.0 (431,270) dead=1`
+next to two live `t289` in room 85).
+
+**No trapdoor in a `goto`'d boss room -- the engine's own rule.** The
+room's grid was scanned every frame after the clear and never held the
+trapdoor's vtable. Room::Update (0x007fb250) explains it: its clear path
+tests `roomIdx == -3` (Ghidra prints the 0xfffffffd compare as `-NAN`)
+together with `type == 5` and takes a branch of its own -- a trophy
+(pickup variant 0x154) in the challenge modes, nothing in a normal run --
+while the trapdoor spawns (`SpawnGridEntity(idx, 17, 0, seed, ...)`, six
+sites in the same function) sit on the floor's real boss room's clear.
+The way down through a boss fight therefore needs the level's own boss
+room, reached by walking (the explorer's door walk, or a door preference
+toward the level's boss-room index), not the console; the census here is
+the boss room, the fight, the kill and the reopened door. The boss reward
+is unaffected: `deathspawn_boss` is the NPC death's own spawn.
+
+**The silent window, quantified.** Both console runs went quiet for
+minutes right after frame 360 -- the log's `music stopped playing` pair,
+the Basement track restarting. With `ISAAC_LOG_TIME=1` the stamps put
+frames 360 to 420 at **64.8 s to 538.5 s of wall time (474 s for 60
+frames)**, every stamped frame around them at 7-16 ms; the first attempt
+at the boss run sat in that window for over ten minutes at 100 % CPU and
+was killed for a fresh process, which passed it in eight. That is round
+14j's class (§21.27): identical guest work, wall time set by node's NT
+heap history under Windows, not by the game. The `music stopped playing`
+window is the next thing to profile on this platform; the runs' game
+frames themselves are 7-16 ms on the debug profile.
+
+**What the explorer gained** (explore.mjs, all read-only): the floor
+(`Game+0` / `+4`: Level is Game's first member; a change within a run
+resets the room list, `floorChanges` / `descents` count it and the census
+keeps one room list per `run<n>/<stage>.<type>`); the room's config
+through `room+4 -> desc+0x10 -> RoomConfig_Room` (type +8, variant +0xc,
+logged at every room entry); the live-boss counter `room+0x7224`
+(`bossRoomsEntered`, `bossKills`, and a `boss down` line when it drops);
+the room's grid-entity array (`room+0x24`, 448 slots, ending exactly at the
+door array) scanned for the trapdoor's vtable 0x00b6946c -- in a cleared
+room with nothing left to pick up the explorer walks onto it (the cell
+centre from the slot index, the engine's own formula) and abandons it after
+600 frames; and `suspend()` / `resume()` for the console hand-over. The key
+table is one (`KEYS`: every letter, digit, space, the grave key and the US
+punctuation, `[vk, scancode, extended]`), exported to the node driver's
+timeline.
+
+**Tests.** `tests/recomp-console.test.js` (9): the key table (every key the
+commands need, unique scancodes and vks, the grave key pinned to VK_OEM_3 /
+0x29); `planTyping` (one key per character, Shift where needed); the two
+seed files (fresh, and merged on a temp dir with an options.ini whose
+`EnableDebugConsole=0`, `VSync=1` and `SaveCommandHistory=0` are the only
+lines that change, the disk file untouched); the sequencer against a fake
+console that behaves like Console::Update (grave -> state 1 -> 2, UP walks
+the seeded ring, Enter runs and push-fronts, Enter on the empty line
+closes): three commands in order with the key trace pinned, a ring that
+keeps duplicates, a command missing from the history (reported, skipped),
+a console that never opens (retries, then gives up), type mode (the seven
+keys pressed, the empty line noticed, recall as the fallback); and
+`censusFromLog`. `tests/recomp-explore.test.js` grew by four (14): the
+floor change, the trapdoor walk (and its timeout), the boss counter, and
+suspend/resume.
+
 ## Appendix: reproduction
 
 ```bash

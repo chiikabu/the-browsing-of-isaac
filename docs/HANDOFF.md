@@ -117,6 +117,33 @@ REQUIRE emsdk on PATH:
   Lust miniboss room, 11 transitions, 5 runs, 4 deaths, 3 pickups), 0
   asserts, 0 raw string keys, **0 fastpath mismatches**, 1,694 PCM uploads /
   1,518 plays, 61 M dispatches (200 M before the fastpaths), main 0.
+- **Round 30 (2026-09-04, §21.45): a floor descent and a boss through the
+  game's own debug console.** `ISAAC_CONSOLE="cmd1;cmd2"` on the node
+  driver seeds `options.ini` (`EnableDebugConsole=1`, `SaveCommandHistory=1`,
+  `VSync=0` -- with a file present `OptionsConfig::SetVSync(1)` asks for a
+  monitor the headless host has not got) and `cmd_history.txt` into the
+  RAM-FS only, opens the console with the grave key (GLFW key 0x60) once the
+  explorer's run has started, recalls each command from the history with
+  UP -- typed characters cannot reach it: the console reads text through
+  GLFW's char callback, i.e. WM_CHAR, which the host never builds
+  (`TranslateMessage` is a stub); a host change of one of two shapes is
+  written up in §21.45 -- verifies the input line's text in guest memory,
+  Enter, and closes. Debug profile, epoch 1700000000: `stage 2` ran at
+  frame 488 (`Level::Init m_Stage 2, m_StageType 0 Seed 1037090446` that
+  frame; the explorer's room list reset to Basement II, three rooms walked,
+  3,000 frames, 0 asserts); `debug 3; debug 4; goto s.boss.1010` put the
+  explorer in **`Room 5.1010(Monstro)`** (room -3, `bosses 1`, the NPC
+  census reading `t20.0` at the centre), 295 frames of hunting later
+  **`TriggerBossDeath: 0 bosses remaining`**, the boss item `5.100.659`
+  spawned, the door reopened, 4,000 frames, 0 asserts, main 0. **No trapdoor
+  in a `goto`'d boss room by the engine's own rule** (Room::Update's clear
+  path branches on room index -3; the trapdoor spawns belong to the floor's
+  real boss room). The explorer now knows the floor, the room config's
+  type/variant, the live-boss counter, the trapdoor's vtable in the grid
+  (it walks onto one it sees) and suspend/resume; `tests/recomp-console.test.js`
+  (9) + four explorer tests. Both runs went quiet for **474 s at the music
+  restart** (frames 360-420; the first boss attempt sat >10 min there and
+  was killed): round 14j's node-on-Windows heap class, not the game.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -170,6 +197,15 @@ hunting, deaths and restarts on a pinned floor, with a census at the end
 
 ```
 cd .scratch/game-instance && ISAAC_EPOCH=1700000000 ISAAC_MAX_FRAMES=20000 ISAAC_DRIVE=explore node ../../output/recomp/lift/boot-fast/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main
+```
+
+The debug console (round 30, §21.45): `ISAAC_CONSOLE="cmd1;cmd2"` runs the
+game's own commands once the run has started (a floor: `stage 2`; a boss:
+`debug 3;debug 4;goto s.boss.1010`), by history recall -- nothing is written
+to the instance; `console: {...}` at the end says what ran and when:
+
+```
+cd .scratch/game-instance && ISAAC_EPOCH=1700000000 ISAAC_MAX_FRAMES=4000 ISAAC_DRIVE=explore ISAAC_EXPLORE_CENSUS=1 ISAAC_CONSOLE="debug 3;debug 4;goto s.boss.1010" node ../../output/recomp/lift/boot/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main
 ```
 
 To drive that page with real key presses under Playwright (state-driven:
@@ -269,9 +305,15 @@ is started:
   (a key raised the counter at `Entity_Player+0x135c` from 0 to 1; pedestal
   items in a shop are abandoned with no coins), and door choice spreads
   over the least-used door so a floor is walked, not bounced.
-- **Gameplay depth beyond that is untested**: pedestal collectibles, the
-  trapdoor and floor descent, bosses, save/load -- the explorer does not
-  know where the trapdoor is.
+- ~~**Gameplay depth beyond that is untested**: pedestal collectibles, the
+  trapdoor and floor descent, bosses, save/load.~~ **Round 30 (§21.45)
+  exercised a floor change (`stage 2`: Level::Init, the new floor's rooms)
+  and a boss fight (`goto s.boss.1010`: Monstro, its death, the reopened
+  door, the boss item) through the debug console.** Still open: the real
+  descent (the trapdoor spawns only in the floor's own boss room, which
+  the explorer must reach by walking -- a door preference toward the
+  level's boss-room index is the next unit), pedestal collectibles (the
+  explorer now tries them after the other pickups), save/load.
 - ~~**Gameplay depth is untested.**~~ The scripted input is a timeline keyed
   to presented frames, not a player: combat, damage, item pickup, floor
   descent, bosses and save/load have never been exercised. A run so far

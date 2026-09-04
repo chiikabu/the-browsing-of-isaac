@@ -73,19 +73,27 @@ test('the web build wires the frame capture and the context', () => {
 
 test('scripted input: the page and the node driver agree on the key table, the host has the queue', () => {
   const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  const node = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'boot_integration.mjs'), 'utf8');
-  const table = (src) => {
+  // round 30: the node driver's table lives in explore.mjs (`export const KEYS`),
+  // shared with the explorer and the console driver, and covers every letter,
+  // digit and the US punctuation -- more than the page's; the two must agree on
+  // every key both define
+  const node = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'explore.mjs'), 'utf8');
+  const table = (src, decl) => {
     const out = {};
-    const block = src.slice(src.indexOf('const KEYS = {'), src.indexOf('};', src.indexOf('const KEYS = {')));
+    const block = src.slice(src.indexOf(decl), src.indexOf('};', src.indexOf(decl)));
     for (const m of block.matchAll(/'?([a-z0-9]+)'?:\s*\[(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),\s*([01])\]/g))
       out[m[1]] = [Number(m[2]), Number(m[3]), Number(m[4])];
     return out;
   };
-  const pk = table(page), nk = table(node);
+  const pk = table(page, 'const KEYS = {'), nk = table(node, 'export const KEYS = {');
   assert.ok(Object.keys(pk).length >= 40, 'page key table parsed');
-  assert.ok(Object.keys(nk).length >= 10, 'node key table parsed');
-  for (const k of Object.keys(nk))
+  assert.ok(Object.keys(nk).length >= 60, 'node key table parsed');
+  const common = Object.keys(nk).filter((k) => k in pk);
+  assert.ok(common.length >= 10, `page and node tables share at least ten keys (${common.length})`);
+  for (const k of common)
     assert.deepEqual(pk[k], nk[k], `key '${k}': page and node driver disagree on vk/scancode/extended`);
+  for (const k of ['enter', 'escape', 'up', 'down', 'left', 'right', 'a', 'd', 's', 'w'])
+    assert.ok(k in nk && k in pk, `key '${k}' in both tables`);
   // GLFW decodes the scancode from lParam bits 16..23 (+24 extended); pin the
   // canonical ones so a typo cannot silently map Enter to another key
   assert.deepEqual(pk.enter, [0x0D, 0x1C, 0]); assert.deepEqual(pk.escape, [0x1B, 0x01, 0]);
