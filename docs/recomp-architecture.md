@@ -4280,9 +4280,162 @@ stalls, 5,742 hunting frames, 0 asserts, 0 invalid positions, main
 returned 0. The floor repeats because the epoch pins the seed; a second
 epoch exercises another layout.
 
-**Not yet exercised:** item pickup, the trapdoor and floor descent, bosses,
-save/load. The explorer knows nothing about pickups or the trapdoor's
-position; those are the next census targets.
+**Pickups and door spreading (the same day).** The pooled `Entity_Pickup`
+objects (vtable `0x00b67f24`, constructor 0x006e0010; type 5, variant
+`+0x2c`, subtype `+0x30`) are found the same way; with the doors open and
+no door chosen, the explorer walks into the nearest live pickup first and
+counts it collected when it vanishes (300 frames, then abandoned). The
+player's counters are read back from the fields the `Add*` methods
+update along with the HUD counter: coins `+0x1368` (0x00759400), bombs
+`+0x1364` (0x00759500, clamped 0..99; a bomb pickup moved it 1 -> 2), keys
+`+0x135c` (`Entity_Player::AddKeys` 0x007595b0); `+0x1340` reads 6 at run
+start (three red hearts).
+20,000 frames on the debug profile: 7 pickup attempts, 3 collected -- a key
+(keys 0 -> 1 in the counter), a red heart, a bomb pickup; the pedestal
+items in the shop were abandoned, as they should be with 0 coins. Door
+choice was widened after the second seed (epoch 1700000001) bounced 172
+times between one room and its treasure room: an open door with an
+unvisited target first, then the door used least from this room (a use
+count per room and slot), then the lowest slot.
+
+**Not yet exercised:** collectibles from a pedestal (the free ones sit in
+treasure rooms the explorer has not reached with coins to spare), the
+trapdoor and floor descent, bosses, save/load. The explorer knows nothing
+about the trapdoor's position; those are the next census targets.
+
+### 21.42 Round 27: the dispatch census's leaves -- it was ISAAC, not memcpy
+
+**The census, and a wrong name.** The fast profile has no instruction tick,
+so its only profile is the dispatch census (`ISAAC_PROFILE=1
+ISAAC_DISPATCH_TIME=1`): how often each lifted entry is reached through the
+dispatcher, and the wall time inside it. On the HANDOFF timeline (epoch
+1700000000, `ISAAC_MAX_FRAMES=3000`) it counted **92.8 M dispatches**, and
+71.0 M of them were four entries with the same count, 17,754,432 each:
+`sub_00aa94ce / db / e8 / f7`. The round brief read them as the jump-table
+tail cases of the CRT memcpy. They are not. `memcpy` is a vcruntime140
+import (`0x00af05df` is its thunk; the shim serves it), and the function
+whose body ends in `and eax,3; jmp [0xaa956c+eax*4]` is `0x00aa94a0` --
+Bob Jenkins' `isaac()`:
+
+```
+c++; b += c
+for i in 0..255:
+    x = mm[i]
+    a ^= {a<<13, a>>6, a<<2, a>>16}[i & 3]        <- the jump table
+    a += mm[(i+128) & 255]
+    mm[i] = y = mm[(x>>2) & 255] + a + b
+    r[i] = b = mm[(y>>10) & 255] + x
+```
+
+on a context laid out `{index, r[256], mm[256], a, b, c}` (0x810 bytes). It
+is the refill of the v2 archive keystream (21.40), called from the consumer
+`0x00a89d70` every 256 words -- once per stored 1 KB piece. Each `switch`
+case is its own lifted fragment, so every iteration whose case differs from
+the running fragment's is a `recomp_jump_indirect` through the dispatcher:
+256 dispatches per call, 277,413 calls in 3,000 frames, 284 MB of keystream.
+That volume is the sound catalogue: the PCM it preloads from `afterbirthp.a`
+is stored, not deflated, so every byte of it goes through the XOR loop and
+every kilobyte through `isaac()`.
+
+**Nine exact host versions** (`host_fastpath.c`, installed by
+`lift_patches.py WRAP_PATCHES`; `ISAAC_FASTPATH=0` lifted,
+`ISAAC_FASTPATH_VERIFY=1` both and compare, default host):
+
+| VA | function | host path | left to the lifted body |
+|---|---|---|---|
+| `0x00aa94a0` | `isaac()` | the 256-step mix on the guest context; a, b kept in locals (no mm/r index can alias them), stored at the end; EAX/EDX handed back as the loop leaves them | a context outside the guest |
+| `0x00a89d70` | keystream XOR (thiscall; buf, len) | byte loop, word r[idx] every fourth byte, refill on r[255] | an index past r[] (never seen) |
+| `0x00a69510` | `ArchivedFile::read` (thiscall; buf, size, count; `ret 0xc`) | the copy out of the 0x400-byte window at +0x81c, pos/fill/eof at +0xc1c/+0xc20/+0xc28, stream position +0x18; also the eof-cut read | any read that needs the refill `0x00a68cf0` (LZW / deflate / keystream state) |
+| `0x00a157f0` | `Mutex::Lock(timeout)` (`ret 4`) | INFINITE and uncontended: `EnterCriticalSection`'s report to the thread slicer (`isaac_threads_note_cs`, which may yield exactly where the lifted Enter would), then the locked byte at cs+0x18, EAX = 1 | a set byte (the Sleep(1000) spin), a finite timeout (QPC deadline), an uninitialised mutex (the fatal) |
+| `0x00a159a0` | `Mutex::Unlock` | the byte cleared; Leave is a no-op here; EAX = 0 | uninitialised |
+| `0x0040c690` | handle `AddRef` | lock, `++count` (u16 at +4), unlock; EAX = 0 as the tail jump into Unlock returns | a mutex whose vtable is not the engine's Lock/Unlock pair |
+| `0x0040c6b0` | handle `TryAddRef` | lock, unlock, then `vt+8` -- checked to be AddRef -- inline; EAX = count != 0 | any other `vt+8` |
+| `0x0040c630` | handle `Release` | lock, `--count`, unlock, EAX = 1 | a count of exactly 1 (the dispose path: two virtuals and a tail jump) |
+| `0x00a12240` | owner check (cdecl; holder) | lock, read the count, unlock | a NULL handle, a count of 1 (calls `0x00a121b0`) |
+
+The handle helpers explain the Mutex counts: each `TryAddRef` was six
+dispatches (itself, Lock, Unlock, AddRef through `vt+8`, its Lock and its
+Unlock) and every one of the 1,235,942 AddRefs came from a TryAddRef. The
+mutex is embedded at handle+8 (`lea ecx,[esi+8]`), reached through its own
+vtable (+0xc Lock, +0x10 Unlock), so the host path first checks that those
+slots are the engine's pair; anything else runs the lifted body.
+
+Three rules beyond the round-12 contract, all pinned by
+`tests/recomp-fastpath.test.js`:
+
+- **the decision comes before any side effect.** A wrapper reads what it
+  needs (the count, the locked byte, the window fill, the vtable slots) and
+  either runs the host path to its `ret` or the lifted body from its first
+  instruction -- never half of each. Nothing can change between the peek and
+  the lifted body's own test: the runtime is single-threaded, and a yield
+  inside Enter abandons the slice, wrapper and all.
+- **the purge equals the callee's `ret N`** (`s->ESP += 4u + 12u` for the
+  read, `+ 8u` for the XOR, `+ 4u` for Lock): a wrong one is the one-slot
+  drift of round 11 again.
+- **a verify path runs the trampoline** (`if (recomp_jmp_pending)
+  recomp_run_pending(s)`) after the lifted body, because these bodies end in
+  parked tail jumps -- `isaac()`'s cases, AddRef's jump into Unlock -- and a
+  compare without it reads the state mid-function (the same trap 21.41 met
+  in the PROBE wrappers).
+
+Verify mode compares the whole 0x810-byte context for `isaac()`, buffer
+plus context for the XOR, the delivered bytes and the three fields for the
+read, and count / locked byte / EAX / ESP for the mutex family; each wrapper
+counts its lifted fallbacks and completed compares and the stub report
+prints them (`[isaac][fastpath] ---- mode ...`), so "0 mismatches" is
+stated over a number. The selftest pins the host code on its own: Jenkins'
+two-half-loop formulation of `isaac()` (rand.c, `rngstep` over m/m2) is the
+reference for the merged single loop the engine compiled, the XOR is
+checked across a refill boundary (r[254], r[255], refill, r[0]), the
+read's window arithmetic through its seven cases, and the mutex predicates;
+seven mutants (shift 13->12, the second-pointer offset, the `y>>10` index,
+the refill threshold, the eof clause, the Unlock slot, the byte's offset)
+are killed through `mutate.mjs`. The installer also refreshes a wrapper
+whose text changed since it was installed -- before this round an edited
+`WRAP_PATCHES` entry silently kept the stale wrapper in the tree (it found
+one: the round-26 probe on `0x00a26af0`).
+
+**Measured** (fast node profile, the HANDOFF timeline, 3,000 frames;
+another session's boot run held one core throughout):
+
+| | before | after |
+|---|---|---|
+| dispatches | 92,553,339 | **11,251,305** (-88 %) |
+| `sub_00aa94ce/db/e8/f7` | 4 x 17,745,088 | 0 |
+| `sub_00a157f0` Lock / `sub_00a159a0` Unlock | 5,074,905 / 5,071,905 | 537,878 / 534,878 |
+| `sub_0040c690` AddRef | 1,235,942 | 0 (inside TryAddRef) |
+| boot to frame 3 (the catalogue preload) | 4,371 ms | **3,207 ms** |
+| steady-state gameplay, median per 60 frames | 30 ms | 31 ms |
+| verify (`ISAAC_FASTPATH_VERIFY=1`) | | **0 mismatches**, Basement reached, `main` returned 0 |
+
+The verify census of that run (`ISAAC_FASTPATH_VERIFY=1`: every wrapper
+computes the host result, restores, runs the lifted body and compares):
+
+| wrapper | calls compared | ran the lifted body instead (why) |
+|---|---|---|
+| `Mutex::Lock` / `Unlock` | 5,071,906 / 5,071,906 | 0 (no contended lock, no finite timeout in the whole run) |
+| `AddRef` / `TryAddRef` | 1,235,942 / 1,235,942 | 0 |
+| `Release` | 1,037,894 | 16,551 (the count reaching zero: the dispose path) |
+| owner check | 1,027,248 | 10,645 (a count of 1, or a NULL handle) |
+| `isaac()` | 277,278 | 0 |
+| keystream XOR | 262,684 | 0 |
+| `ArchivedFile::read` | 948,597 | 10,749 (reads that need a refill: the bulk PCM copies, which loop refill-and-copy inside the lifted body) |
+
+**16,169,397 calls compared, 0 mismatches**, over a run that reaches the
+Basement, presents 3,000 frames and returns 0 from `main`.
+
+@@R27_AB@@
+
+**What stays hot, and why it is not a wrapper.** `sub_0040c200`
+(`guard_check_icall`, 568 k) is a bare `ret` reached through
+`call [__guard_check_icall_fptr]`: the dispatch is the caller's indirect
+call, and a wrapper cannot remove it. The WAV loader `sub_00a7b6a0`'s 15 s
+of inclusive time was the read chain under it (the keystream and the
+window copies), not its own code. `sub_00a129a0` / `sub_00a128f0` are the
+renderer's shader and texture binding (GL calls), `sub_00a52820` is the
+`fread` wrapper, and `Image::LoadPNG` (`sub_00a64a50`) is libpng's inflate
+in lifted code -- a host `inflate_fast` on zlib's exact state layout is the
+next exact leaf if it ever matters.
 
 ## Appendix: reproduction
 

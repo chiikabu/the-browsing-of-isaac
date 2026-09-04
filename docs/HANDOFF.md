@@ -134,6 +134,14 @@ takes real keyboard/mouse input):
 node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 interactive=1 port=8099 fast=1
 ```
 
+The automated player (round 29, §21.44): 20,000 frames of rooms, pickups,
+hunting, deaths and restarts on a pinned floor, with a census at the end
+(`explorer: {...}` -- transitions, rooms, runs, deaths, pickups, counters):
+
+```
+cd .scratch/game-instance && ISAAC_EPOCH=1700000000 ISAAC_MAX_FRAMES=20000 ISAAC_DRIVE=explore node ../../output/recomp/lift/boot-fast/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main
+```
+
 To drive that page with real key presses under Playwright (state-driven:
 Enter, held, until the game's own log says a run started, then walk; exit 0
 only if the picture changed and `main` returned 0):
@@ -227,9 +235,13 @@ is started:
   screen leads to the next run. The rendered browser run shows the head
   turn and the tears (`drive_interactive.mjs` holds ArrowLeft and keeps
   `shot_fire.png`).
-- **Gameplay depth beyond that is untested**: item pickup, the trapdoor
-  and floor descent, bosses, save/load -- the explorer does not know where
-  pickups or the trapdoor are.
+- Pickups too: the explorer walks into keys, hearts, bombs and coins
+  (a key raised the counter at `Entity_Player+0x135c` from 0 to 1; pedestal
+  items in a shop are abandoned with no coins), and door choice spreads
+  over the least-used door so a floor is walked, not bounced.
+- **Gameplay depth beyond that is untested**: pedestal collectibles, the
+  trapdoor and floor descent, bosses, save/load -- the explorer does not
+  know where the trapdoor is.
 - ~~**Gameplay depth is untested.**~~ The scripted input is a timeline keyed
   to presented frames, not a player: combat, damage, item pickup, floor
   descent, bosses and save/load have never been exercised. A run so far

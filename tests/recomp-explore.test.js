@@ -8,7 +8,7 @@
 // tried, and the report is an exact census.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeExplorer, GAME_PTR, OFF, VT_NPC, ENT } from '../scripts/recomp/lift/explore.mjs';
+import { makeExplorer, GAME_PTR, OFF, VT_NPC, VT_PICKUP, ENT, PLAYER } from '../scripts/recomp/lift/explore.mjs';
 
 const VK = { enter: 0x0D, a: 0x41, d: 0x44, s: 0x53, w: 0x57, left: 0x25, up: 0x26, right: 0x27, down: 0x28 };
 const NAME = Object.fromEntries(Object.entries(VK).map(([k, v]) => [v, k]));
@@ -172,6 +172,63 @@ test('an obstacle on the way to a door: after 30 still frames the walk steps asi
   // heading north to the door row (W) and never moving: W, then A for 25, then D for 25, then A...
   assert.deepEqual(presses.slice(0, 4), [[0, 'w'], [30, 'a'], [55, 'd'], [80, 'a']]);
   assert.equal(ex.report().sidesteps, 4);
+});
+
+test('pickups: with the doors open, walk into the nearest live pickup first; its vanishing counts as collected', () => {
+  const w = world();
+  const coin = 0x02200000, dead = 0x02300000;
+  for (const [e, x, y, deadFlag] of [[coin, 320, 300, 0], [dead, 330, 380, 1]]) {
+    w.u.set(e, VT_PICKUP); w.u.set(e + ENT.type, 5); w.u.set(e + ENT.variant, 20); w.u.set(e + ENT.subtype, 1);
+    w.f.set(e + ENT.posX, x); w.f.set(e + ENT.posY, y);
+    w.u.set(e + (ENT.dead & ~3), deadFlag << ((ENT.dead & 3) * 8));
+  }
+  w.u.set(w.player + PLAYER.coins, 0);
+  w.mem.findAll = (value) => (value === VT_PICKUP ? [coin, dead] : []);
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  const ev0 = drain(ex, 5, heap32);
+  assert.deepEqual(ev0.filter((e) => ['a', 'w', 'd', 's'].includes(e.key)).map((e) => [e.key, e.down]), [['w', true]], 'the coin is north of the player: W');
+  assert.equal(ex.report().pickupAttempts, 1);
+  assert.equal(ex.report().doorAttempts, 0, 'no door chosen while a pickup is live');
+  // the coin is collected: its type resets and the counter rises
+  w.u.set(coin + ENT.type, 0); w.u.set(w.player + PLAYER.coins, 1);
+  const ev1 = drain(ex, 6, heap32);
+  assert.ok(ev1.some((e) => e.key === 'w' && !e.down), 'W released once it is gone');
+  const r = ex.report();
+  assert.equal(r.pickupsCollected, 1);
+  assert.equal(r.counters.coins, 1);
+  assert.ok(log.some((s) => /picked up variant 20\.1 in room 84; coins 1 bombs 0 keys 0/.test(s)), log.join('\n'));
+  assert.equal(ex.report().doorAttempts, 1, 'then a door is chosen');
+});
+
+test('door choice spreads out: an unvisited target first, then the door used least from this room', () => {
+  const w = world();
+  // a second open door (south, slot 3) leading to room 97; the east door (slot 2) leads to 85
+  const door3 = 0x01700000;
+  w.u.set(w.room + OFF.doors + 4 * 3, door3);
+  w.u.set(door3 + OFF.doorState, 2); w.u.set(door3 + OFF.doorGrid, 6 * 13 + 6); w.u.set(door3 + OFF.doorTarget, 97);
+  const log = [];
+  const ex = makeExplorer(w.mem, { settle: 0, log: (s) => log.push(s) });
+  const heap32 = new Int32Array(64);
+  drain(ex, 1, heap32);
+  assert.match(log.at(-1), /door slot 2 .* target 85/, 'both unvisited: the lowest slot');
+  // come back to room 84 twice (via transitions) with 85 visited: slot 3 (target 97, unvisited) wins;
+  // with both visited: slot 3 again, because slot 2 has been used once more
+  const bounce = (f, viaRoom) => {
+    w.u.set(w.game + OFF.rt, 1); drain(ex, f, heap32);
+    w.u.set(w.game + OFF.rt, 0); w.u.set(w.game + OFF.roomIdx, viaRoom); drain(ex, f + 1, heap32);
+    w.u.set(w.game + OFF.rt, 1); drain(ex, f + 2, heap32);
+    w.u.set(w.game + OFF.rt, 0); w.u.set(w.game + OFF.roomIdx, 84); drain(ex, f + 3, heap32);
+  };
+  bounce(10, 85);
+  assert.match(log.at(-1), /door slot 3 .* target 97/, '97 is unvisited');
+  bounce(20, 97);
+  assert.match(log.at(-1), /door slot 2 .* target 85 \(seen\)/, 'both seen, both used once: the tie goes to the lowest slot');
+  bounce(30, 85);
+  assert.match(log.at(-1), /door slot 3 .* target 97 \(seen\)/, 'slot 2 used twice, slot 3 once: the least-used door');
+  bounce(40, 97);
+  assert.match(log.at(-1), /door slot 2 .* target 85 \(seen\)/, 'and back: the doors alternate instead of one winning forever');
 });
 
 test('death: keys released, Enter through the game-over screen, the next run is counted', () => {

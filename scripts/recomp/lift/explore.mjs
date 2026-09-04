@@ -33,8 +33,11 @@ const OFFX = [-18, 0, 18, 0], OFFY = [0, -18, 0, 18];
 // 0x006b8590 and 0x00665cf0): the pooled NPC and tear objects are found in
 // the heap by these. Entity fields: type +0x28 (NPC types are 10..0x3ed,
 // player 1, tear 2), variant +0x2c, position +0x33c/+0x340.
-export const VT_NPC = 0x00b67468, VT_TEAR = 0x00b64eac;
-export const ENT = { type: 0x28, variant: 0x2c, posX: 0x33c, posY: 0x340, dead: 0x173 };
+export const VT_NPC = 0x00b67468, VT_TEAR = 0x00b64eac, VT_PICKUP = 0x00b67f24;   // Entity_Pickup ctor 0x006e0010
+export const ENT = { type: 0x28, variant: 0x2c, subtype: 0x30, posX: 0x33c, posY: 0x340, dead: 0x173 };
+// Entity_Player counters, from the Add* methods that also refresh the HUD
+// counter (FUN_007597e0(n)); a bomb pickup moved +0x1364 1 -> 2 in-engine.
+export const PLAYER = { coins: 0x1368, bombs: 0x1364, keys: 0x135c, hearts: 0x1340 };   // AddCoins 0x00759400 (HUD counter 1), AddBombs 0x00759500 (counter 4, clamped 0..99), AddKeys 0x007595b0 (counter 2); +0x1340 reads 6 at run start (three red hearts)
 // key -> [vk, scancode, extended]; the same table as the node driver's
 const KEYS = {
   enter: [0x0D, 0x1C, 0],
@@ -52,21 +55,22 @@ function keyEvent(name, down) {
 // mem: { u32(va) -> number, f32(va) -> number, ok(va) -> boolean }
 export function makeExplorer(mem, opts = {}) {
   const log = opts.log || (() => {});
-  const menuEvery = opts.menuEvery || 40;       // frames between Enters in the menus
-  const menuHold = opts.menuHold || 12;          // frames an Enter stays down
-  const doorTimeout = opts.doorTimeout || 600;   // frames on one door before giving up on it
-  const stuckFrames = opts.stuckFrames || 150;   // no movement while walking -> give up on the door
-  const settle = opts.settle || 20;              // frames to wait after a transition
-  const align = opts.align || 6;                 // px tolerance when lining up with a door
-  const sidestepAfter = opts.sidestepAfter || 30; // frames without movement before stepping aside
-  const sidestepFor = opts.sidestepFor || 25;     // frames of each sidestep
+  const menuEvery = opts.menuEvery ?? 40;       // frames between Enters in the menus
+  const menuHold = opts.menuHold ?? 12;          // frames an Enter stays down
+  const doorTimeout = opts.doorTimeout ?? 600;   // frames on one door before giving up on it
+  const stuckFrames = opts.stuckFrames ?? 150;   // no movement while walking -> give up on the door
+  const settle = opts.settle ?? 20;              // frames to wait after a transition
+  const align = opts.align ?? 6;                 // px tolerance when lining up with a door
+  const sidestepAfter = opts.sidestepAfter ?? 30; // frames without movement before stepping aside
+  const sidestepFor = opts.sidestepFor ?? 25;     // frames of each sidestep
+  const pickupTimeout = opts.pickupTimeout ?? 300; // frames spent on one pickup before abandoning it
 
   const queue = [];
   const held = new Set();
   let lastFrame = -1;
   let lastEnter = -1e9;
   const visited = new Set();
-  const stats = { menuFrames: 0, playFrames: 0, huntFrames: 0, transitions: 0, doorAttempts: 0, doorTimeouts: 0, stuck: 0, firstRunFrame: -1, runs: 0, deaths: 0, sidesteps: 0 };
+  const stats = { menuFrames: 0, playFrames: 0, huntFrames: 0, transitions: 0, doorAttempts: 0, doorTimeouts: 0, stuck: 0, firstRunFrame: -1, runs: 0, deaths: 0, sidesteps: 0, pickupAttempts: 0, pickupsCollected: 0 };
   let dead = false;
   let cur = null;         // { roomIdx, roomPtr, tried:Set<slot>, door:{slot, tx, ty, target} | null, since, lastPos, lastMove, fireAt }
   let transitionSeen = false;
@@ -92,6 +96,29 @@ export function makeExplorer(mem, opts = {}) {
     out.sort((a, b) => a.d - b.d);
     return out;
   }
+  // The pickup pool, the same way. A live pickup has type 5, a position in
+  // the room and the dead byte clear; coins/keys/bombs/hearts are collected
+  // by touch, collectibles (variant 100) by touching the pedestal.
+  let pickupPool = null;
+  function livePickups(st) {
+    if (!mem.findAll) return [];
+    if (!pickupPool) { pickupPool = mem.findAll(VT_PICKUP, 4096); log(`[explore] pickup pool: ${pickupPool.length} object(s) by vtable`); }
+    const out = [];
+    for (const e of pickupPool) {
+      if (rd(e + ENT.type) !== 5) continue;
+      const x = rf(e + ENT.posX), y = rf(e + ENT.posY);
+      if (!(x > 0 && x < 40 + st.w * 40 + 40 && y > 0 && y < 120 + st.h * 40 + 80)) continue;
+      if (rb(e + ENT.dead)) continue;
+      out.push({ e, v: rd(e + ENT.variant), s: rd(e + ENT.subtype), x, y, d: Math.abs(x - st.px) + Math.abs(y - st.py) });
+    }
+    out.sort((a, b) => a.d - b.d);
+    return out;
+  }
+  function counters(st) {
+    const p = st.player;
+    return { coins: rd(p + PLAYER.coins) | 0, bombs: rd(p + PLAYER.bombs) | 0, keys: rd(p + PLAYER.keys) | 0 };
+  }
+
   function npcCensus(st, frame) {
     if (!npcPool) return;
     const rows = [];
@@ -129,7 +156,7 @@ export function makeExplorer(mem, opts = {}) {
       });
     }
     return {
-      game, inGame: w > 0 && w < 64 && h > 0 && h < 64,
+      game, player, inGame: w > 0 && w < 64 && h > 0 && h < 64,
       roomIdx: rd(game + OFF.roomIdx) | 0, roomPtr: room, w, h, doors,
       rtState: rd(game + OFF.rt), px: rf(player + OFF.posX), py: rf(player + OFF.posY),
       playerDead: rb(player + ENT.dead),
@@ -174,11 +201,19 @@ export function makeExplorer(mem, opts = {}) {
     }
   }
 
+  // Door choice: an open door not given up on in this visit; a target never
+  // visited first; then the door used least from this room (the second seed
+  // bounced 172 times between a room and its treasure room when "the lowest
+  // open slot" was the rule); then the lowest slot.
+  const doorUse = new Map();   // "room:slot" -> times walked through
   function chooseDoor(st) {
     const open = st.doors.filter((d) => d.state === 2 && !cur.tried.has(d.slot));
     if (!open.length) return null;
-    const fresh = open.filter((d) => !visited.has(d.target));
-    const pick = (fresh.length ? fresh : open)[0];
+    const key = (d) => `${st.roomIdx}:${d.slot}`;
+    open.sort((a, b) => (visited.has(a.target) - visited.has(b.target))
+      || ((doorUse.get(key(a)) || 0) - (doorUse.get(key(b)) || 0)) || (a.slot - b.slot));
+    const pick = open[0];
+    doorUse.set(key(pick), (doorUse.get(key(pick)) || 0) + 1);
     stats.doorAttempts++;
     return pick;
   }
@@ -201,7 +236,14 @@ export function makeExplorer(mem, opts = {}) {
     }
     if (dead) { dead = false; cur = null; stats.runs++; log(`[explore] frame ${frame}: run ${stats.runs} started (room ${st.roomIdx}, ${st.w}x${st.h})`); }
     if (stats.firstRunFrame < 0) {
-      stats.firstRunFrame = frame; stats.runs = 1; log(`[explore] run started at frame ${frame} (room ${st.roomIdx}, ${st.w}x${st.h})`);
+      stats.firstRunFrame = frame; stats.runs = 1;
+      const c = counters(st);
+      log(`[explore] run started at frame ${frame} (room ${st.roomIdx}, ${st.w}x${st.h}); coins ${c.coins} bombs ${c.bombs} keys ${c.keys}`);
+      if (opts.scanEntityList) {
+        const words = [];
+        for (let off = 0x1330; off < 0x1380; off += 4) words.push(`+${off.toString(16)}=${rd(st.player + off)}`);
+        log(`[explore] player counters region: ${words.join(' ')}`);
+      }
       if (opts.scanEntityList) scanEntityList(st.game);
     }
     stats.playFrames++;
@@ -213,10 +255,50 @@ export function makeExplorer(mem, opts = {}) {
     if (!cur || cur.roomPtr !== st.roomPtr || cur.roomIdx !== st.roomIdx) {
       if (cur) log(`[explore] frame ${frame}: room ${cur.roomIdx} -> ${st.roomIdx} (${st.w}x${st.h}), doors open ${st.doors.filter((d) => d.state === 2).length}/${st.doors.length}`);
       visited.add(st.roomIdx);
-      cur = { roomIdx: st.roomIdx, roomPtr: st.roomPtr, tried: new Set(), door: null, since: frame, idleSince: -1, lastPos: [st.px, st.py], lastMove: frame, fireAt: frame, aim: -1 };
+      cur = { roomIdx: st.roomIdx, roomPtr: st.roomPtr, tried: new Set(), door: null, since: frame, idleSince: -1, lastPos: [st.px, st.py], lastMove: frame, fireAt: frame, aim: -1, pickup: null, abandoned: new Set() };
       releaseAll();
     }
     if (frame < settleUntil) return;
+    // Something to pick up in this room (and no door chosen yet, and the
+    // doors are open -- a pickup in a fight is a distraction): walk into it.
+    // A pickup that vanishes while targeted counts as collected; one that
+    // stays for pickupTimeout frames is abandoned.
+    if (!cur.door && st.doors.some((d) => d.state === 2)) {
+      const items = livePickups(st).filter((p) => !cur.abandoned.has(p.e));
+      if (cur.pickup && !items.some((p) => p.e === cur.pickup.e)) {
+        stats.pickupsCollected++;
+        const c = counters(st);
+        log(`[explore] frame ${frame}: picked up variant ${cur.pickup.v}.${cur.pickup.s} in room ${st.roomIdx}; coins ${c.coins} bombs ${c.bombs} keys ${c.keys} hearts ${rd(st.player + PLAYER.hearts)} (raw +1354..+1368: ${[0x1354, 0x1358, 0x135c, 0x1360, 0x1364, 0x1368].map((o) => rd(st.player + o)).join(',')})`);
+        cur.pickup = null; releaseAll();
+      }
+      if (!cur.pickup && items.length) {
+        cur.pickup = { ...items[0], since: frame };
+        cur.lastMove = frame; cur.lastPos = [st.px, st.py];
+        stats.pickupAttempts++;
+        log(`[explore] frame ${frame}: room ${st.roomIdx} -> pickup variant ${cur.pickup.v}.${cur.pickup.s} at (${cur.pickup.x.toFixed(0)}, ${cur.pickup.y.toFixed(0)}) of ${items.length}`);
+      }
+      if (cur.pickup) {
+        const p = cur.pickup;
+        if (frame - p.since > pickupTimeout) {
+          log(`[explore] frame ${frame}: giving up on the pickup at (${p.x.toFixed(0)}, ${p.y.toFixed(0)})`);
+          cur.abandoned.add(p.e); cur.pickup = null; releaseAll();
+        } else {
+          const moved = Math.abs(st.px - cur.lastPos[0]) + Math.abs(st.py - cur.lastPos[1]) > 0.5;
+          if (moved) { cur.lastMove = frame; cur.lastPos = [st.px, st.py]; }
+          const dx = p.x - st.px, dy = p.y - st.py;
+          let want = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'd' : 'a') : (dy > 0 ? 's' : 'w');
+          const stalled = frame - cur.lastMove;
+          if (stalled >= sidestepAfter) {
+            const n = Math.floor((stalled - sidestepAfter) / sidestepFor);
+            const perp = (want === 'a' || want === 'd') ? ['w', 's'] : ['a', 'd'];
+            want = perp[n & 1];
+          }
+          for (const k of WALK) if (k !== want) release(k);
+          press(want);
+          return;
+        }
+      }
+    }
     if (!cur.door) {
       cur.door = chooseDoor(st);
       if (cur.door) {
@@ -314,7 +396,8 @@ export function makeExplorer(mem, opts = {}) {
       return 1;
     },
     report() {
-      return { ...stats, roomsVisited: visited.size, rooms: [...visited] };
+      const st = readState();
+      return { ...stats, roomsVisited: visited.size, rooms: [...visited], counters: st && st.inGame ? counters(st) : null };
     },
   };
 }
