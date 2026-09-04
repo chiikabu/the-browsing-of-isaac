@@ -557,6 +557,9 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     static double last_ms;
     double now = emscripten_get_now();
     ++g_frames_presented;
+    /* The engine mixes on a thread this port does not have; one iteration
+     * of it per presented frame is what feeds OpenAL (round 16b). */
+    { extern void isaac_audio_pump(const CpuState *cpu); isaac_audio_pump(cpu); }
     /* every frame for the first 10 (with the frame's wall time), then every
      * 60th: the per-frame cost of the lifted code is a number the log must
      * carry (boot round 12: the loop ran at well under 0.1 fps, invisible

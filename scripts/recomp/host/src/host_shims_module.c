@@ -518,6 +518,19 @@ void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
         uint32_t tobj = isaac_r32(arglist + 8u);
         if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
     }
+    /* The audio mixer's job never returns (round 16b): it is a
+     * while-not-stopped loop around two virtual calls. Do not adopt it as a
+     * runnable job -- host_audio.c pumps one iteration per frame instead. */
+    if (fn2 == 0x00a7da80u && arg2) {
+        extern void isaac_audio_pump_register(uint32_t this_va);
+        isaac_audio_pump_register(arg2);
+        if (isaac_is_guest_va(arglist + 11u)) {
+            uint32_t tobj = isaac_r32(arglist + 8u);
+            if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
+        }
+        cpu->EAX = h;
+        return;
+    }
     if (g_thr_n < THR_MAX) {
         g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = arglist;
         g_thr[g_thr_n].fn = fn; g_thr[g_thr_n].arg = arg; g_thr[g_thr_n].handle = h;

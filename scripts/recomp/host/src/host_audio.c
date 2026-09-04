@@ -415,10 +415,63 @@ uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
     return take;
 }
 
+/* ---- driving the game's audio thread ------------------------------------
+ * The engine runs its mixer on a thread (FUN_00a7da80) whose body is
+ *
+ *     while ((self[1] & 4) == 0) {
+ *         if (!vt[0x20](self)) vt[0x3c](self);
+ *         Sleep(5);
+ *     }
+ *
+ * and which therefore never returns. The port has no threads, and running
+ * that job inline hangs the boot. Since one iteration is a pair of virtual
+ * calls, the host can be the thread instead: host_shims_module.c hands the
+ * `this` pointer over when the job is spawned, and the frame present pumps
+ * one iteration. That is the whole reason the game submits no audio without
+ * it: every alBufferData and alSourcePlay is downstream of this loop. */
+static uint32_t g_pump_this;
+static unsigned g_pump_iters, g_pump_idle;
+
+void isaac_audio_pump_register(uint32_t this_va) {
+    g_pump_this = this_va;
+    isaac_log("[isaac][audio] mixer object 0x%08x adopted: the frame present now "
+              "pumps one iteration of the engine's audio thread per frame", this_va);
+}
+
+/* One call of a guest thiscall method: `this` in ECX, a fake return address,
+ * and a stack well below the caller's frame (the same shape the cooperative
+ * thread runner and _initterm use). */
+static void pump_call(const CpuState *cpu, uint32_t fn, uint32_t self, uint32_t *eax_out) {
+    CpuState sub = *cpu;
+    sub.ECX = self;
+    sub.ESP = (cpu->ESP - 0x4000u) & ~0xFu;
+    sub.ESP -= 4u;
+    isaac_w32(sub.ESP, 0u);
+    isaac_guest_call(fn, &sub);
+    if (eax_out) *eax_out = sub.EAX;
+}
+
+void isaac_audio_pump(const CpuState *cpu) {
+    if (!g_pump_this || !cpu) return;
+    if (!isaac_is_guest_va(g_pump_this + 8u)) return;
+    if (*(const uint8_t *)isaac_g(g_pump_this + 4u) & 4u) return;   /* stopping */
+    uint32_t vt = isaac_r32(g_pump_this);
+    if (!isaac_is_guest_va(vt + 0x40u)) return;
+    uint32_t step = isaac_r32(vt + 0x20u), idle = isaac_r32(vt + 0x3cu);
+    if (!step) return;
+    uint32_t eax = 0;
+    ++g_pump_iters;
+    pump_call(cpu, step, g_pump_this, &eax);
+    if (!(eax & 0xFFu) && idle) {
+        ++g_pump_idle;
+        pump_call(cpu, idle, g_pump_this, NULL);
+    }
+}
+
 void isaac_audio_report(void) {
     { extern void isaac_al_census(void); isaac_al_census(); }
     if (!g_stat_buffers && !g_stat_plays) {
-        isaac_log("[isaac][audio] no audio data was ever submitted.");
+        isaac_log("[isaac][audio] no audio data was ever submitted (mixer pumped %u iteration(s)).", g_pump_iters);
         return;
     }
     unsigned playing = 0;
@@ -426,6 +479,8 @@ void isaac_audio_report(void) {
         src_advance(&g_src[i]);
         if (g_src[i].state == AL_PLAYING) ++playing;
     }
+    isaac_log("[isaac][audio] mixer pumped %u iteration(s), %u of them idle",
+              g_pump_iters, g_pump_idle);
     isaac_log("[isaac][audio] %u buffer uploads (%.1f MB of PCM, %.1f s of audio), "
               "%u plays, %u queued / %u unqueued, %u source(s) live (%u playing), %u buffer(s) live",
               g_stat_buffers, (double)g_stat_pcm_bytes / 1048576.0, g_stat_seconds,
