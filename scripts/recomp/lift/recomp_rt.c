@@ -465,6 +465,10 @@ static void exit_after_tick(void) {
   emscripten_force_exit(3);
 }
 
+/* guest range check for the dump above: below the host base, above the
+ * first page */
+static int isaac_is_guest_addr(uint32_t a) { return a >= 0x1000u && a < 0x0ff00000u; }
+
 void recomp_stall_tick(void) {
   prof_sample();
   exit_after_tick();
@@ -517,11 +521,16 @@ void recomp_stall_tick(void) {
         for (unsigned k = 0; k < 8; ++k) {
           uint32_t p = r[k];
           if (k == 4u || p < 0x1000u || p >= 0x0ff00000u) continue;   /* ESP is walked below */
-          fprintf(stderr, "[recomp][STALL] ---- 16 dwords at %s = 0x%08x:\n", rn[k], p);
-          for (uint32_t i = 0; i < 16u; i += 4u)
-            fprintf(stderr, "[recomp][STALL]   +0x%02x: %08x %08x %08x %08x\n", i * 4u,
-                    MEMR32(p + i * 4u), MEMR32(p + i * 4u + 4u),
-                    MEMR32(p + i * 4u + 8u), MEMR32(p + i * 4u + 12u));
+          fprintf(stderr, "[recomp][STALL] ---- dwords around %s = 0x%08x:\n", rn[k], p);
+          /* below the pointer as well as above it: a loop's bounds live in
+           * stack locals at negative offsets from EBP */
+          for (int32_t off = -32; off < 48; off += 4) {
+            uint32_t a = (uint32_t)((int32_t)p + off * 4);
+            if (!isaac_is_guest_addr(a) || !isaac_is_guest_addr(a + 12u)) continue;
+            fprintf(stderr, "[recomp][STALL]   %c0x%02x: %08x %08x %08x %08x\n",
+                    off < 0 ? '-' : '+', (unsigned)(off < 0 ? -off : off) * 4u,
+                    MEMR32(a), MEMR32(a + 4u), MEMR32(a + 8u), MEMR32(a + 12u));
+          }
         }
       }
       uint32_t esp = ((const uint32_t *)recomp_last_cpu)[4];

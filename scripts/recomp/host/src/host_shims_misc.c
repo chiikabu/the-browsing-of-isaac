@@ -596,10 +596,12 @@ void imp_api_ms_win_crt_heap___set_new_mode(CpuState *restrict cpu) {
  * XMM0 -- that register convention is the whole reason these variants exist.
  * In the lifter's CpuState, XMM0 is the low 16 bytes of ZMM0.
  *
- * NOTE: this convention is asserted from the symbol family's documented
- * behaviour, not measured at a call site -- the sweep found no decodable call
- * site for it in the sampled window. If a value comes back wrong, this is the
- * first thing to re-check. Marked UNVERIFIED in docs/recomp-boot.md. */
+ * VERIFIED (round 19) by tracing the calls the game actually makes:
+ * ISAAC_LIBM_TRACE=1 on a play run prints sane radians and correct results --
+ * sin(-3.14057) = -0.00102265, cos(-4.26358986) = -0.433883893 -- from the
+ * entity rotation path (0x0041d520/0x0041d540 wrap these for float), so XMM0
+ * in and XMM0 out is right. It was previously asserted from the symbol
+ * family's documented behaviour and flagged UNVERIFIED. */
 static double xmm0_get(CpuState *restrict cpu) {
     double d;
     memcpy(&d, cpu->ZMM0, 8);
@@ -609,9 +611,24 @@ static void xmm0_set(CpuState *restrict cpu, double v) {
     memcpy(cpu->ZMM0, &v, 8);
 }
 
+/* ISAAC_LIBM_TRACE=1 prints the first calls of each: the convention above is
+ * asserted, not measured, and it feeds the entity rotation extents that
+ * decide how many cells CellSpace::insert walks (round 19). */
+static int libm_trace(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("ISAAC_LIBM_TRACE"); v = (e && *e && *e != '0') ? 1 : 0; }
+    return v;
+}
 #define LIBM1(name, fn) \
     void imp_api_ms_win_crt_math___libm_sse2_##name##_precise( \
-            CpuState *restrict cpu) { xmm0_set(cpu, fn(xmm0_get(cpu))); }
+            CpuState *restrict cpu) { \
+        double a_ = xmm0_get(cpu), r_ = fn(a_); \
+        xmm0_set(cpu, r_); \
+        if (libm_trace()) { \
+            static unsigned n_; \
+            if (n_++ < 6u) isaac_log("[isaac][libm] " #name "(%.9g) = %.9g", a_, r_); \
+        } \
+    }
 
 LIBM1(sin,   sin)
 LIBM1(cos,   cos)
