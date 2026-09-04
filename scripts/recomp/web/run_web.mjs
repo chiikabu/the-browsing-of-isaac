@@ -26,7 +26,10 @@ import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..');
-const BOOT = join(ROOT, 'output', 'recomp', 'lift', 'boot-web');
+// fast=1 serves the speed-profile browser module (build_boot.py --web --fast),
+// which is what a run of more than a few hundred frames wants.
+const FAST = (process.argv.slice(4).find((a) => a.startsWith('fast=')) || 'fast=0').slice(5) !== '0';
+const BOOT = join(ROOT, 'output', 'recomp', 'lift', FAST ? 'boot-web-fast' : 'boot-web');
 const SEGS = join(ROOT, 'output', 'recomp', 'host', 'isaac.segs.bin');
 const INSTANCE = join(ROOT, '.scratch', 'game-instance');
 const OUT = process.argv[2] || join(ROOT, 'output', 'recomp', 'web-run');
@@ -48,7 +51,7 @@ const EAGER = (process.argv.slice(4).find((a) => a.startsWith('eager=')) || 'eag
 // allocates through PartitionAlloc, so measure before assuming it helps here.
 const NO_TIERUP = (process.argv.slice(4).find((a) => a.startsWith('tierup=')) || 'tierup=1').slice(7) === '0';
 const JS_FLAGS = [...(EAGER ? ['--no-wasm-lazy-compilation'] : []), ...(NO_TIERUP ? ['--no-wasm-tier-up'] : [])];
-const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
+const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=') && !a.startsWith('fast=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {

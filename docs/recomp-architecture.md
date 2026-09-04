@@ -3569,6 +3569,33 @@ is a real saving in both profiles -- but it does change what "slow" means
 here. Measure with `--fast`; debug with the default, and read its wall
 times as roughly 20x inflated.
 
+### 21.38 Round 21: THE GAME PLAYS IN THE BROWSER
+
+`--web` and `--fast` were mutually exclusive by accident -- each assigned
+the output directory, so asking for both produced a browser module written
+into the fast directory with the host objects half-applied. The browser is
+where the speed profile matters most (21.37 measured it 20x in gameplay),
+and a demo of more than a few hundred frames cannot afford the debug
+build. They now combine into `boot-web-fast`, and `run_web.mjs fast=1`
+serves it.
+
+The result, in Chromium with software WebGL2 and no GPU:
+
+| | frames | wall |
+| --- | --- | --- |
+| debug browser module | 300 | 46.6 s |
+| **fast browser module** | **1,500** | **44.9 s** |
+
+Five times the frames in the same wall clock, including a fixed ~16 s of
+startup and 300 MB of asset fetching, with all 20 scripted inputs
+delivered and `main` returning 0.
+
+And the frames show the game. `output/recomp/web-gameplay/frame_1500.png`
+is a Basement room: Isaac with a three-heart HUD, the coin/bomb/key
+counters, the minimap, rocks, a door, and two enemies on screen. That is
+the browser target working end to end -- boot, asset load, menus, a
+started run, room generation, input, and gameplay rendering.
+
 ## Appendix: reproduction
 
 ```bash

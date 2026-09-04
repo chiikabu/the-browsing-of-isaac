@@ -84,11 +84,13 @@ The engine loop is no longer the blocker -- a 30-minute session runs clean.
 What is missing is feature surface and verification depth, and none of it
 is started:
 
-- **Browser gameplay is unverified.** Chromium renders the menus and the
-  welcome popup with the current build; nothing past that has been driven
-  there, because headless SwiftShader manages about 1 fps and a
-  frame-keyed input timeline of a thousand frames is impractical. Needs a
-  real-GPU run.
+- ~~Browser gameplay is unverified.~~ **It is verified** (§21.38): the fast
+  browser module (`build_boot.py --web --fast`, served by `run_web.mjs
+  fast=1`) runs **1,500 frames in 44.9 s** under headless Chromium with
+  software WebGL2, delivers every scripted input, returns 0 from `main`,
+  and `output/recomp/web-gameplay/frame_1500.png` shows a Basement room
+  with Isaac, the HUD, the minimap and two enemies. The old 1-fps figure
+  was the debug module.
 - **No audio yet, but the host side is built** (§21.33). host_audio.c is a
   real OpenAL object model with wall-clock timing, host_audio_web.c is a
   WebAudio backend for the browser profile, and the frame present pumps

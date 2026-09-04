@@ -203,7 +203,12 @@ def main():
                     "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",
                     "-sGL_ENABLE_GET_PROC_ADDRESS=0", "-lGL"]
     if args.fast:
-        BOOT_OUT = OUT_LIFT / "boot-fast"
+        # --web --fast is a browser module built with the speed profile: the
+        # web flags above stay, only the lifted objects and the output
+        # directory change. Round 20 measured the speed profile 20x faster in
+        # gameplay, which is what makes a browser demo of more than a few
+        # hundred frames practical at all.
+        BOOT_OUT = OUT_LIFT / ("boot-web-fast" if args.web else "boot-fast")
         LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=0"]
         lift_obj_suffix = ".fast.o"
         args.fast_link = False
