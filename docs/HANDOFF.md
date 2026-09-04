@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-02, harness round 3 + recomp boot round 14e)
+# Handoff — read this first (2026-09-04, recomp rounds 26-29: fixes, video, bundle, automated player)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -87,6 +87,27 @@ REQUIRE emsdk on PATH:
   node cutscene (the Epilogue `finished playing`), browser (3,001 frames,
   Basement, 314 uploads / 14 plays, 76.8 s wall) -- and the engine's own log
   is line-for-line identical to the pre-bundle run (523/523, 750/750).
+- **Round 27 (2026-09-04, §21.42): the fast profile's dispatch census had
+  a wrong name on its top entry.** The four 17.75 M-dispatch fragments were
+  not the CRT memcpy (a vcruntime import) but the `switch (i & 3)` cases
+  of Bob Jenkins' `isaac()` -- the v2 archive keystream refill, 256
+  dispatches per call, 71 M of 93 M. Nine exact host wrappers
+  (`host_fastpath.c`, `WRAP_PATCHES`): `isaac()`, the keystream XOR,
+  `ArchivedFile::read`'s window path, `Mutex::Lock/Unlock`, the handle
+  `AddRef/TryAddRef/Release` and the owner check. **Verified: 16,169,397
+  calls compared, 0 mismatches** (`ISAAC_FASTPATH_VERIFY=1`; the stub
+  report now prints a per-wrapper census). Dispatches **92.55 M -> 11.25 M**;
+  on one module, A/B medians of three pairs: boot to frame 3 **4,615 ->
+  2,913 ms**, steady gameplay 30 -> 27 ms per 60 frames, whole module run
+  **10,979 -> 9,597 ms**; the floor-load window alone is 0.7 s slower
+  (§21.42 says what was tested). @@R27_HANDOFF_WEB@@
+- **Everything together** (2026-09-04): the automated player on the fast
+  profile with the round-27 fastpaths, booted from the shipping bundle
+  (`ISAAC_INSTANCE_DIR=.scratch/game-bundle`), 20,000 frames: the same
+  census as the debug profile on the original instance (8 rooms incl. a
+  Lust miniboss room, 11 transitions, 5 runs, 4 deaths, 3 pickups), 0
+  asserts, 0 raw string keys, **0 fastpath mismatches**, 1,694 PCM uploads /
+  1,518 plays, 61 M dispatches (200 M before the fastpaths), main 0.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
