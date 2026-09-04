@@ -432,6 +432,15 @@ void isaac_audio_probe_bind(uint32_t self) {
               "format=0x%x rate=%u source=%u",
               n, self, vt, isaac_r32(self + 40u), isaac_r32(self + 44u),
               isaac_r32(self + 48u), isaac_r32(self + 36u), isaac_r32(self + 52u));
+    /* this[0x44] is the sample descriptor {ptr, len} that vt+0x08 hands to
+     * vt+0x04 (FUN_00a9fb00), which is what fills this[10]/this[0xb]. If it
+     * is null or empty, nothing ever loaded the sample. */
+    uint32_t desc = isaac_r32(self + 0x44u);
+    isaac_log("[isaac][audio]   sample descriptor this[0x44]=0x%08x -> ptr=0x%08x len=%u, loaded flag this[8]=%u",
+              desc,
+              (desc && isaac_is_guest_va(desc + 8u)) ? isaac_r32(desc) : 0u,
+              (desc && isaac_is_guest_va(desc + 8u)) ? isaac_r32(desc + 4u) : 0u,
+              *(const uint8_t *)isaac_g(self + 8u));
     if (n == 1u && isaac_is_guest_va(vt + 0x50u)) {
         /* the class's methods, read from the live image: the loader that
          * should have filled the PCM fields is one of these */

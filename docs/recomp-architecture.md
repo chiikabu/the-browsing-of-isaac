@@ -3464,6 +3464,44 @@ What is left is the ordinary route: something calls `0x00a9fa00`
 happens. That call site is the whole remaining gap between a game that
 loads every sound and a game that can be heard.
 
+### 21.35 Round 16d-16e: the sound objects are never given a sample
+
+The dispatch watch had said `sub_00a9fb80` was never dispatched, which was
+misleading: `sub_00a9fa00` IS dispatched, and it reaches the other as a
+DIRECT call, which never goes through the dispatcher. A lift-patch wrapper
+that only observes (the lifted body still runs and owns its `ret`) settles
+what the bind gate sees:
+
+```
+bind probe #1: this=0x0213636c vtable=0x00ba2974 pcm=0x00000000 bytes=0 format=0x0 rate=0 source=0
+  sample descriptor this[0x44]=0x00000000 -> ptr=0x00000000 len=0, loaded flag this[8]=0
+```
+
+So the source-binding function runs, several times per run, on sound
+objects whose PCM pointer, length, format and rate are all zero -- because
+the sample descriptor they read from, `this[0x44]`, is null and their
+"loaded" flag is clear. Nothing ever attached a sample.
+
+The class is now mapped from its live vtable (`0x00ba2974`):
+
+| slot | function | role |
+| --- | --- | --- |
+| +0x04 | `0x00a9fb00` | `SetSampleData(ptr, len)`: writes `this[10]`, `this[0xb]`, derives the AL format |
+| +0x08 | `0x00a9f840` | getter for the descriptor's length |
+| +0x2c | `0x00a9fa00` | the bind path: `vt[0x3c]` then `0x00a9fb80` |
+
+and `0x00a9f850` is the method that would carry a sample across: it reads
+`this[0x44]`, sets the loaded flag, and calls slot +0x04 with the
+descriptor's `{ptr, len}`. The constructor (inside `0x00a2b1e0`, which
+allocates 100 bytes for a static sound or 0xA8 for a streaming one) nulls
+`this[0x44]` and the object never gets one.
+
+So the audio question is now one specific question: **what should fill a
+sound's sample descriptor after construction, and why does it not run
+here.** Everything downstream of it is known good -- the archive is read
+in full, the play call queues, the bind call runs, and the host side has a
+complete OpenAL implementation waiting for the first `alBufferData`.
+
 ## Appendix: reproduction
 
 ```bash
