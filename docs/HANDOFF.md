@@ -89,8 +89,14 @@ is started:
   there, because headless SwiftShader manages about 1 fps and a
   frame-keyed input timeline of a thousand frames is impractical. Needs a
   real-GPU run.
-- **No audio at all.** The OpenAL layer answers `AL_VENDOR` with
-  "Isaac Native Headless"; nothing is decoded or output.
+- **No audio yet, but the host side is built** (§21.33). host_audio.c is a
+  real OpenAL object model with wall-clock timing, host_audio_web.c is a
+  WebAudio backend for the browser profile, and the frame present pumps
+  the engine's mixer thread, which never returns and so cannot be run
+  cooperatively. What is missing is upstream of all of it: the game's
+  sound objects hold no decoded PCM, so `FUN_00a9fb80` never reaches its
+  `alBufferData`. It does open `sounds.xml` and `sfx.a` (303 times), so
+  the gap is the decode between archive entry and PCM.
 - **No video.** `CreateThread` is an inert stub, so the theoraplayer
   worker never starts and cutscenes never decode.
 - **Gameplay depth is untested.** The scripted input is a timeline keyed

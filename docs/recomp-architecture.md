@@ -3348,6 +3348,73 @@ here. It is the same family as the `CellSpace` assertion, a struct field
 that should have been initialised, and both appear only once enemies
 exist, which is why every earlier run missed them.
 
+### 21.33 Round 16: the audio pipeline
+
+Three pieces, of which two are done and the third is now precisely located.
+
+**The engine (host_audio.c).** `host_shims_al.c` answered all 26 openal32
+names with benign constants: buffers and sources were tokens nobody
+remembered, play was a no-op, and `alGetSourcei(AL_SOURCE_STATE)` always
+said `AL_INITIAL`, so the slot poller reused one voice forever and a
+streaming source could never report a processed buffer for the music path
+to unqueue. There is now a real object model. Buffers keep their PCM with
+format, channels, depth and rate, and the duration those imply. Sources
+have state, gain, pitch, an optional static buffer and a queue, and they
+advance on the wall clock: a source stops when its sound would have
+finished, and a streaming source retires queued buffers as they play out.
+That is correct with no output device at all, which is what node has.
+
+**The backend (host_audio_web.c).** WebAudio, `-DISAAC_WEB=1` only. An AL
+buffer becomes an `AudioBuffer` (interleaved 8- or 16-bit PCM
+de-interleaved into float channels), a source becomes a `BufferSource`
+into a `GainNode`, and gain, pitch and looping map straight across. The
+hooks in host_audio.c are weak, so the node profile links and runs silent.
+No entry point may throw into the guest, so each swallows its own errors.
+
+**The thread the port does not have (round 16b).** The game mixes on a job
+spawned through `_beginthreadex` that never returns:
+
+```
+while ((self[1] & 4) == 0) {          /* until asked to stop */
+    if (!vt[0x20](self)) vt[0x3c](self);
+    Sleep(5);
+}
+```
+
+`ISAAC_RUN_THREADS=1` enters it at 19 s and never comes back (10 frames in
+200 s), exactly as the cooperative runner's comment warned. But one
+iteration is a pair of virtual calls, so the host is the thread instead:
+the spawn hands the mixer's `this` to host_audio.c rather than adopting a
+runnable job, marks the thread struct done so the engine's destructor does
+not `std::terminate`, and the frame present pumps one iteration per frame.
+Measured: 869 iterations over 840 frames, no trap, no slowdown.
+
+**Where it still stops, exactly.** A run now says what the game does with
+the surface: 64 sources and 64 buffers at init, three deleted, and then
+**no `alBufferData` and no `alSourcePlay` at all** -- through 199 room
+transitions of real play. The play path is `FUN_00a9fb80`, and it opens
+with
+
+```
+if (vt[0x38](this) == 0 && this[10] != 0 && this[0xb] != 0) { ... alBufferData(..., this[10], this[0xb], ...) }
+```
+
+`this[10]` and `this[0xb]` are the sample's PCM pointer and its size. They
+are zero, so nothing is ever submitted: the sound objects exist but hold
+no decoded audio. The game does reach the data -- the FS trace shows
+`sounds.xml` opened and `resources/packed/sfx.a` opened **303 times** --
+so the gap is between reading the archive entry and decoding it into PCM.
+That decode is the next thing to chase, and it is the last piece of the
+audio pipeline.
+
+Two smaller findings from the same round. The AL string answers all share
+one scratch address, so a guest that keeps the pointer from `alcGetString`
+reads whatever `alGetString` wrote later (the boot log's "ALC_EXTENSIONS :
+wasm headless" is that aliasing, not a real answer). And copying the
+user's real `options.ini` into the instance makes the boot abort after
+shader init, so the port reads that file but cannot yet satisfy something
+in it; the run stays on defaults for now.
+
 ## Appendix: reproduction
 
 ```bash
