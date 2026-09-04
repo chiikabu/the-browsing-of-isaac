@@ -59,6 +59,8 @@ uint32_t isaac_fast_adler32(uint32_t adler, uint32_t buf_va, uint32_t len);
 void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va);
 int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
 void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);
+/* round 16d audio probe (host_audio.c; lift_patches.py WRAP_PATCHES) */
+void isaac_audio_probe_bind(uint32_t self);
 
 #ifndef RECOMP_TICK_MASK
 #define RECOMP_TICK_MASK 0xFFFFu

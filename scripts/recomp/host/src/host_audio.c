@@ -415,6 +415,33 @@ uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
     return take;
 }
 
+/* Round 16d: why the game never submits PCM. sub_00a9fb80 binds a free AL
+ * source to a sound and uploads its buffer, but only when
+ *
+ *     vt[0x38](this) == 0 && this[10] != 0 && this[0xb] != 0
+ *
+ * where this[10] and this[0xb] are the sample's PCM pointer and length. The
+ * wrapper in lift_patches.py calls this first, so a run says which of the
+ * three is the one that fails. */
+void isaac_audio_probe_bind(uint32_t self) {
+    static unsigned n;
+    if (n >= 12u || !isaac_is_guest_va(self + 0x40u)) return;
+    ++n;
+    uint32_t vt = isaac_r32(self);
+    isaac_log("[isaac][audio] bind probe #%u: this=0x%08x vtable=0x%08x pcm=0x%08x bytes=%u "
+              "format=0x%x rate=%u source=%u",
+              n, self, vt, isaac_r32(self + 40u), isaac_r32(self + 44u),
+              isaac_r32(self + 48u), isaac_r32(self + 36u), isaac_r32(self + 52u));
+    if (n == 1u && isaac_is_guest_va(vt + 0x50u)) {
+        /* the class's methods, read from the live image: the loader that
+         * should have filled the PCM fields is one of these */
+        for (uint32_t i = 0; i < 0x50u; i += 0x10u)
+            isaac_log("[isaac][audio]   vt+0x%02x: %08x %08x %08x %08x", i,
+                      isaac_r32(vt + i), isaac_r32(vt + i + 4u),
+                      isaac_r32(vt + i + 8u), isaac_r32(vt + i + 12u));
+    }
+}
+
 /* ---- driving the game's audio thread ------------------------------------
  * The engine runs its mixer on a thread (FUN_00a7da80) whose body is
  *
