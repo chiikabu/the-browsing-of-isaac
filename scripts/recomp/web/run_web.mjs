@@ -12,13 +12,13 @@
 // Module.isaacPresent; the page keeps the last frames and this runner writes
 // them out as PNGs next to the log.
 //
-//   node scripts/recomp/web/run_web.mjs [out-dir] [frames] [ISAAC_X=Y ...] [input=130:Enter,...] [keep=30]
+//   node scripts/recomp/web/run_web.mjs [out-dir] [frames] [ISAAC_X=Y ...] [input=130:Enter,...] [keep=30] [serve=1 port=N] [interactive=1]
 //
 // Exit code: 0 when main returned 0, 1 otherwise. Reads nothing outside the
 // repo and the instance dir; downloads nothing (Playwright's bundled Chromium
 // must already be installed).
 import { chromium } from 'playwright';
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -29,7 +29,10 @@ const ROOT = join(HERE, '..', '..', '..');
 // fast=1 serves the speed-profile browser module (build_boot.py --web --fast),
 // which is what a run of more than a few hundred frames wants.
 const FAST = (process.argv.slice(4).find((a) => a.startsWith('fast=')) || 'fast=0').slice(5) !== '0';
-const BOOT = join(ROOT, 'output', 'recomp', 'lift', FAST ? 'boot-web-fast' : 'boot-web');
+// boot=<dir>: serve a module from another directory (an A/B against a kept
+// build, e.g. output/recomp/lift/boot-web-fast-r24) instead of the profile's own.
+const BOOT_OVERRIDE = (process.argv.slice(4).find((a) => a.startsWith('boot=')) || 'boot=').slice(5);
+const BOOT = BOOT_OVERRIDE ? join(ROOT, BOOT_OVERRIDE) : join(ROOT, 'output', 'recomp', 'lift', FAST ? 'boot-web-fast' : 'boot-web');
 const SEGS = join(ROOT, 'output', 'recomp', 'host', 'isaac.segs.bin');
 const INSTANCE = join(ROOT, '.scratch', 'game-instance');
 const OUT = process.argv[2] || join(ROOT, 'output', 'recomp', 'web-run');
@@ -53,11 +56,15 @@ const NO_TIERUP = (process.argv.slice(4).find((a) => a.startsWith('tierup=')) ||
 // serve=1: keep the server up and print the URL instead of driving a headless
 // browser, so the page can be opened by hand. The port can be pinned with
 // port=<n> so the URL is stable across restarts.
-const SERVE = (process.argv.slice(4).find((a) => a.startsWith('serve=')) || 'serve=0').slice(6) !== '0';
+// interactive=1 (round 25): ISAAC_YIELD=1 on the page -- the module yields to the
+// event loop every frame (JSPI) and paces on the wall clock, so the canvas repaints
+// as the game runs and keyboard/mouse events reach it. Implies serve=1.
+const INTERACTIVE = (process.argv.slice(4).find((a) => a.startsWith('interactive=')) || 'interactive=0').slice(12) !== '0';
+const SERVE = INTERACTIVE || (process.argv.slice(4).find((a) => a.startsWith('serve=')) || 'serve=0').slice(6) !== '0';
 const PORT = Number((process.argv.slice(4).find((a) => a.startsWith('port=')) || 'port=0').slice(5));
 const JS_FLAGS = [...(EAGER ? ['--no-wasm-lazy-compilation'] : []), ...(NO_TIERUP ? ['--no-wasm-tier-up'] : [])];
 const EXTRA_ENV = process.argv.slice(4).filter((a) => a.includes('=') && !a.startsWith('timeout=') && !a.startsWith('eager=') && !a.startsWith('tierup=') && !a.startsWith('fast=')
-  && !a.startsWith('serve=') && !a.startsWith('port=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
+  && !a.startsWith('serve=') && !a.startsWith('port=') && !a.startsWith('boot=') && !a.startsWith('interactive=')).map((a) => [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=')+ 1)]);
 
 for (const f of ['boot.mjs', 'boot.wasm']) {
   if (!existsSync(join(BOOT, f))) {
@@ -166,7 +173,21 @@ const server = createServer((req, res) => {
     res.writeHead(404); res.end('not found'); return;
   }
   served += 1;
-  let body = r.body || readFileSync(r.file);
+  let body;
+  if (r.file && u.searchParams.has('off')) {
+    // Round 24e: ?off=&len= is a byte slice of the file -- the browser's
+    // windowed archive reads (boot_web.mjs isaacLazyPread). Positional read,
+    // never the whole 600 MB archive per 1 MB window.
+    const off = Number(u.searchParams.get('off')), len = Number(u.searchParams.get('len'));
+    const fd = openSync(r.file, 'r');
+    try {
+      const buf = Buffer.alloc(len);
+      const n = readSync(fd, buf, 0, len, off);
+      body = buf.subarray(0, n);
+    } finally { closeSync(fd); }
+  } else {
+    body = r.body || readFileSync(r.file);
+  }
   if (b64) body = Buffer.from(body.toString('base64'), 'ascii');
   res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(rel), 'Content-Length': body.length,
                        'Cache-Control': 'no-store' });
@@ -177,14 +198,22 @@ const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 
 const qs = new URLSearchParams({ frames: FRAMES });
 for (const [k, v] of EXTRA_ENV) qs.set(k, v);
+if (INTERACTIVE) qs.set('ISAAC_YIELD', '1');
 
 if (SERVE) {
   console.log(`\n  ${ORIGIN}/boot_web.html?${qs}\n`);
   console.log(`  module: ${BOOT}`);
   console.log('  The page loads ~300 MB of assets before the first frame, so give it a minute.');
-  console.log('  Input is the scripted `input=` timeline, not the keyboard: the guest frame');
-  console.log('  loop runs inside main() and never returns to the event loop, so no browser');
-  console.log('  event can reach it and the canvas may not repaint until the run ends.');
+  if (INTERACTIVE) {
+    console.log('  interactive=1: the module yields to the event loop every frame (JSPI) and paces');
+    console.log('  on the wall clock -- the canvas repaints live and the keyboard/mouse reach the');
+    console.log('  game (click the canvas first). The scripted `input=` timeline still applies.');
+  } else {
+    console.log('  Input is the scripted `input=` timeline, not the keyboard: the guest frame');
+    console.log('  loop runs inside main() and never returns to the event loop, so no browser');
+    console.log('  event can reach it and the canvas may not repaint until the run ends.');
+    console.log('  Add interactive=1 for a live, playable page.');
+  }
   console.log('  Ctrl+C to stop the server.');
   await new Promise(() => {});
 }

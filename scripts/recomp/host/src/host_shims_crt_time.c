@@ -15,11 +15,12 @@
 #include "shim_decls.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#define CRT_TM_LOCAL_VA  0x0e00d800u
-#define CRT_TM_GM_VA     0x0e00d840u
+#define CRT_TM_LOCAL_VA  (ISAAC_TEB_VA + 0xd800u)
+#define CRT_TM_GM_VA     (ISAAC_TEB_VA + 0xd840u)
 
 /* struct tm layout: 9 x int32, end to end.  Host musl's struct tm matches. */
 #define TM_FIELDS 9
@@ -43,9 +44,24 @@ static void tm_from_guest(const uint32_t src, struct tm *tm) {
     tm->tm_wday = v[6]; tm->tm_yday = v[7]; tm->tm_isdst = v[8];
 }
 
+/* ISAAC_EPOCH=<unix seconds>: a fixed wall clock for reproducible runs. The
+ * engine seeds its run RNG from the time of day, so without it every run is
+ * a different floor and a floor-dependent defect (round 24: the start-room
+ * ping-pong) cannot be replayed. -1 = not set. */
+int64_t isaac_epoch_override(void) {
+    static int64_t v = -2;
+    if (v == -2) {
+        const char *e = getenv("ISAAC_EPOCH");
+        v = (e && *e) ? (int64_t)strtoll(e, NULL, 10) : -1;
+        if (v >= 0) isaac_log("[isaac][crt] ISAAC_EPOCH=%lld: the wall clock is pinned", (long long)v);
+    }
+    return v;
+}
+
 /* int64_t _time64(int64_t *t) -- return in EDX:EAX, optional out. */
 void imp_api_ms_win_crt_time___time64(CpuState *restrict cpu) {
-    int64_t now = (int64_t)time(NULL);
+    int64_t ov = isaac_epoch_override();
+    int64_t now = ov >= 0 ? ov : (int64_t)time(NULL);
     uint32_t out = isaac_arg(cpu, 0);
     if (out && isaac_is_guest_va(out) &&
         isaac_is_guest_va(out + 7)) {

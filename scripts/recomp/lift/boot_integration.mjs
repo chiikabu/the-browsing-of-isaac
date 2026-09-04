@@ -1,7 +1,7 @@
 // Boot the lifted module: place the memory image, run the host boot path,
 // then call main. Every stage is reported separately so a failure names
 // the stage it happened in.
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, openSync, readSync } from 'node:fs';
 
 // ISAAC_V8_FLAGS: V8 flags for this run, re-exec'd onto the command line
 // because node refuses them in NODE_OPTIONS ("--no-wasm-tier-up is not
@@ -93,7 +93,19 @@ const PACKED_DIR = `${INSTANCE_DIR}/resources/packed`;
 const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a'];
 // Opened only once the game is playing (music, cutscenes): registered by size
 // and read on first open, so they cost nothing on a run that never asks.
-const LAZY_ARCHIVES = ['music.a', 'videos.a'];
+// Round 24e: the DLC archive set. The instance only ever carried the eight
+// base-game archives; the Repentance sounds and music (the title theme is
+// resources/music/Repentance/Genesis Retake Light Loop.ogg) live in
+// repentance.a, most of the 1,557 catalogued sound effects in afterbirth.a
+// and afterbirthp.a. The engine mounts every one it finds and reads it front
+// to back (per-entry checksum), so they are lazy AND windowed (see
+// isaacLazyPread): registered by size, read from disk 1 MB at a time.
+// The language packs (afterbirth_jp/kr, afterbirthp_jp/kr, repentance_de/es/
+// fr/jp/kr/ru/zh) stay unlisted on purpose: the mount loop overwrites an
+// equal-hash entry, so a mounted pack would shadow English assets with its
+// own. The engine asks for them and logs "Failed to open archive file",
+// which is what an install without them does too.
+const LAZY_ARCHIVES = ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a', 'repentance.a'];
 function seedFile(relPath, bytes) {
   const pathBytes = Buffer.from(relPath + '\0', 'utf8');
   const pp = m._malloc(pathBytes.length);
@@ -133,7 +145,27 @@ function seedLazy(relPath, size) {
   m._free(pp);
   return ok;
 }
-export function isaacLazyStats() { return { lazyReads, lazyBytes }; }
+// Round 24e: windowed reads. A lazy file at or above ISAAC_FS_WINDOW_MIN MiB
+// (default 32) is never loaded whole -- the RAM-FS keeps a 1 MB window per
+// file and refills it through this positional read. That is what makes the
+// DLC archives (1.2 GB between afterbirth.a, afterbirthp.a and repentance.a)
+// mountable at all inside a wasm32 heap.
+const lazyFds = new Map();
+let preads = 0, preadBytes = 0;
+m.isaacLazyPread = (src, dst, off, len) => {
+  try {
+    let fd = lazyFds.get(src);
+    if (fd === undefined) { fd = openSync(`${INSTANCE_DIR}/${src}`, 'r'); lazyFds.set(src, fd); }
+    const view = new Uint8Array(m.HEAPU8.buffer, dst, len);
+    const n = readSync(fd, view, 0, len, off);
+    preads += 1; preadBytes += n;
+    return n;
+  } catch (e) {
+    console.log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${e.message}`);
+    return -1;
+  }
+};
+export function isaacLazyStats() { return { lazyReads, lazyBytes, preads, preadBytes }; }
 
 // Round 14a: scripted input for the node profile too. ISAAC_INPUT holds the
 // same timeline syntax as the web runner's input= (frame:Key, frame:mouse:x:y,
@@ -269,7 +301,8 @@ if (stage === 'boot') { console.log(`\nRESULT: boot rc=${bootRc}`); process.exit
 // --- main --------------------------------------------------------------
 const mainRc = stageOk('main @ 0x00931050', () => m._isaac_run_main());
 console.log(`  isaac_boot_call_main -> ${mainRc}`);
-console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFixed(1)} MB fetched on first open`);
+console.log(`  lazy file reads: ${lazyReads} files, ${(lazyBytes / 1048576).toFixed(1)} MB fetched on first open; ` +
+            `windowed reads: ${preads} host reads, ${(preadBytes / 1048576).toFixed(1)} MB`);
 if (inputTimeline.length || inputsDelivered) console.log(`  scripted input: ${inputsDelivered} events delivered, ${inputTimeline.length} pending`);
 g = m._isaac_guard_check();
 console.log(`  guard after main: ${g ? g + ' words CORRUPTED' : 'intact'}`);

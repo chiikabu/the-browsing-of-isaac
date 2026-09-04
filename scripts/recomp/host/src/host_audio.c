@@ -484,6 +484,7 @@ void isaac_audio_pump_register(uint32_t this_va) {
 /* One call of a guest thiscall method: `this` in ECX, a fake return address,
  * and a stack well below the caller's frame (the same shape the cooperative
  * thread runner and _initterm use). */
+static void pump_call(const CpuState *cpu, uint32_t fn, uint32_t self, uint32_t *eax_out) __attribute__((unused));
 static void pump_call(const CpuState *cpu, uint32_t fn, uint32_t self, uint32_t *eax_out) {
     CpuState sub = *cpu;
     sub.ECX = self;
@@ -509,11 +510,21 @@ void isaac_audio_pump(const CpuState *cpu) {
                   isaac_is_guest_va(g_pump_this + 0x60u) ? *(const uint8_t *)isaac_g(g_pump_this + 0x60u) : 0xFFu,
                   isaac_is_guest_va(g_pump_this + 0x20u) ? isaac_r32(g_pump_this + 0x1cu) : 0u,
                   isaac_is_guest_va(g_pump_this + 0x24u) ? isaac_r32(g_pump_this + 0x20u) : 0u);
-    if (g_pump_iters && (g_pump_iters % 600u) == 0u)
-        isaac_log("[isaac][audio] pump %u: gate=%u pending=%u sounds",
+    if (g_pump_iters && (g_pump_iters % 600u) == 0u) {
+        uint32_t lo = isaac_r32(g_pump_this + 0x1cu), hi = isaac_r32(g_pump_this + 0x20u), p;
+        isaac_log("[isaac][audio] pump %u: gate=%u active=%u sounds",
                   g_pump_iters,
                   isaac_is_guest_va(g_pump_this + 0x60u) ? *(const uint8_t *)isaac_g(g_pump_this + 0x60u) : 0xFFu,
-                  (isaac_r32(g_pump_this + 0x20u) - isaac_r32(g_pump_this + 0x1cu)) / 4u);
+                  (hi - lo) / 4u);
+        /* the active list (round 24d): each entry's class, bound source id
+         * [+0x34] and the sample-loaded state the load path would set */
+        for (p = lo; p < hi && p < lo + 16u && isaac_is_guest_va(p + 3u); p += 4u) {
+            uint32_t s = isaac_r32(p);
+            if (!isaac_is_guest_va(s + 0x3bu)) continue;
+            isaac_log("[isaac][audio]   active 0x%08x: vtable 0x%08x source=%u [+0x8]=0x%08x [+0xc]=0x%08x [+0x10]=0x%08x",
+                      s, isaac_r32(s), isaac_r32(s + 0x34u), isaac_r32(s + 8u), isaac_r32(s + 0xcu), isaac_r32(s + 0x10u));
+        }
+    }
     /* ISAAC_AUDIO_DEVICE_EVENT=1: set the byte the OpenAL-SOFT
      * device-changed callback would set. The engine's audio thread handler
      * (FUN_00a9e720) does all of its work inside `if (this[0x60])`, and the
@@ -546,13 +557,11 @@ void isaac_audio_pump(const CpuState *cpu) {
      * (round 22). */
     { extern int isaac_al_send_device_event(CpuState *restrict cpu);
       isaac_al_send_device_event((CpuState *)cpu); }
-    uint32_t eax = 0;
+    /* The watcher's own loop now runs as a per-frame slice (round 24), so
+     * this no longer calls its step/idle pair; what stays here is the
+     * device-event delivery above and the census. */
+    (void)step; (void)idle;
     ++g_pump_iters;
-    pump_call(cpu, step, g_pump_this, &eax);
-    if (!(eax & 0xFFu) && idle) {
-        ++g_pump_idle;
-        pump_call(cpu, idle, g_pump_this, NULL);
-    }
 }
 
 void isaac_audio_report(void) {

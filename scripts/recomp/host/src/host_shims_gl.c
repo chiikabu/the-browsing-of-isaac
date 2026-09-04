@@ -242,7 +242,7 @@ void isaac_gl_census_report(void) {
  * tokens start at 0x0e010000. 0x0e006000 sits between them, is below
  * ISAAC_GUEST_LIMIT_VA, and is written by the host only -- safe for the
  * game's own sscanf/strncmp to read. */
-#define GL_VERSION_SCRATCH_VA 0x0e006000u
+#define GL_VERSION_SCRATCH_VA (ISAAC_TEB_VA + 0x6000u)
 
 /* void glGetIntegerv(GLenum pname, GLint *out) -- cdecl. The refresh reads
  * these pnames: 0x821e (GL_MAJOR_VERSION), 0x821d (GL_NUM_EXTENSIONS),

@@ -49,9 +49,13 @@ typedef struct {
     uint8_t  is_dir;
     uint8_t  live;            /* slot in use (a file may be empty or lazy: data == NULL) */
     uint8_t  lazy;            /* bytes not loaded yet: src names the host file */
+    uint8_t  windowed;        /* round 24e: never loaded whole; reads go to the host file */
     uint8_t *data;            /* file bytes (host heap) */
     uint32_t size, cap;
     char    *src;             /* lazy entries: the seed path the loader reads */
+    uint8_t *win[2];          /* windowed entries: two FS_WIN-byte caches of the host file */
+    uint32_t win_off[2], win_len[2];
+    uint8_t  win_last;        /* the slot used last; a miss refills the other one */
 } fs_entry;
 
 static fs_entry g_fs[FS_SLOTS];
@@ -201,6 +205,8 @@ static fs_entry *fs_new(const char *key, int is_dir) {
 static void fs_free_entry(fs_entry *e) {
     if (e->data) free(e->data);
     if (e->src) free(e->src);
+    if (e->win[0]) free(e->win[0]);
+    if (e->win[1]) free(e->win[1]);
     memset(e, 0, sizeof *e);
     fs_hash_rebuild();                        /* deletes are rare; keep the index exact */
 }
@@ -228,10 +234,106 @@ static int isaac_fs_lazy_read_js(const char *src, uint8_t *dst, uint32_t len) {
 typedef int (*isaac_fs_lazy_reader)(const char *src, uint8_t *dst, uint32_t len);
 static isaac_fs_lazy_reader g_lazy_reader = isaac_fs_lazy_read_js;
 void isaac_fs_set_lazy_reader(isaac_fs_lazy_reader fn) { g_lazy_reader = fn ? fn : isaac_fs_lazy_read_js; }
-static uint32_t g_lazy_loads, g_lazy_failures;
+static uint32_t g_lazy_loads, g_lazy_failures, g_lazy_windowed;
+
+/* ---- windowed lazy files (round 24e) ----------------------------------
+ * The DLC archives (afterbirth.a 145 MB, afterbirthp.a 604 MB,
+ * repentance.a 385 MB) cannot be loaded whole: with music.a and videos.a
+ * that is 1.5 GB of file bytes in a wasm32 heap that also holds the game.
+ * A lazy entry at or above ISAAC_FS_WINDOW_MIN MiB (default 32) is never
+ * materialised when the driver offers Module.isaacLazyPread(src, dst, off,
+ * len): fread serves it through one FS_WIN-byte window per file, refilled
+ * from the host file at the offset the game asks for. The engine reads
+ * every archive front to back at mount (its per-entry checksum), so the
+ * window turns ~1.5 million 1 KB freads into ~1,500 host reads. */
+#define FS_WIN (1u << 20)
+#ifdef __EMSCRIPTEN__
+EM_JS(int, isaac_fs_lazy_pread_avail, (void), {
+    return (typeof Module.isaacLazyPread === "function") ? 1 : 0;
+});
+EM_JS(int, isaac_fs_lazy_pread_js, (const char *src, uint8_t *dst, uint32_t off, uint32_t len), {
+    if (typeof Module.isaacLazyPread !== "function") return -1;
+    var s = "";
+    for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
+    var n = Module.isaacLazyPread(s, dst, off, len);
+    return (typeof n === "number") ? n : -1;
+});
+#else
+static int isaac_fs_lazy_pread_avail(void) { return 0; }
+static int isaac_fs_lazy_pread_js(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
+    (void)src; (void)dst; (void)off; (void)len; return -1;
+}
+#endif
+static uint32_t fs_window_min(void) {
+    static uint32_t v;
+    if (!v) {
+        const char *s = getenv("ISAAC_FS_WINDOW_MIN");
+        unsigned long mib = (s && *s) ? strtoul(s, NULL, 10) : 32ul;
+        v = mib ? (uint32_t)(mib << 20) : 0xFFFFFFFFu;   /* 0 = never window */
+    }
+    return v;
+}
+/* Copy [pos, pos+want) of a windowed entry into dst; returns the bytes copied.
+ * Two windows, because the mount loop alternates between the entry table at
+ * the END of an archive and each entry's data near its start: one window
+ * thrashed (4.7 GB of host reads for 1.5 GB of archives); the second one
+ * keeps the table resident while the data window streams. */
+static uint32_t fs_window_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t *dst) {
+    uint32_t done = 0;
+    while (done < want) {
+        uint64_t p = pos + done;
+        unsigned k, hit = 2u;
+        if (p >= e->size) break;
+        for (k = 0; k < 2u; ++k)
+            if (e->win[k] && p >= e->win_off[k] && p < (uint64_t)e->win_off[k] + e->win_len[k]) { hit = k; break; }
+        if (hit == 2u) {
+            uint64_t start = p & ~(uint64_t)(FS_WIN - 1u);
+            uint32_t len = (uint32_t)((e->size - start) < FS_WIN ? (e->size - start) : FS_WIN);
+            int n;
+            k = e->win[0] ? (e->win[1] ? (unsigned)(e->win_last ^ 1u) : 1u) : 0u;   /* an empty slot, else the older one */
+            if (!e->win[k]) e->win[k] = (uint8_t *)malloc(FS_WIN);
+            if (!e->win[k]) break;
+            n = isaac_fs_lazy_pread_js(e->src ? e->src : e->key, e->win[k], (uint32_t)start, len);
+            if (n <= 0) {
+                isaac_log("[isaac][fs] windowed read of '%s' at %llu (%u bytes) FAILED (%d)",
+                          e->src ? e->src : e->key, (unsigned long long)start, len, n);
+                e->win_len[k] = 0;
+                break;
+            }
+            e->win_off[k] = (uint32_t)start; e->win_len[k] = (uint32_t)n;
+            if (p >= (uint64_t)e->win_off[k] + e->win_len[k]) break;
+            hit = k;
+        }
+        e->win_last = (uint8_t)hit;
+        {
+            uint32_t o = (uint32_t)(p - e->win_off[hit]);
+            uint32_t chunk = e->win_len[hit] - o;
+            if (chunk > want - done) chunk = want - done;
+            memcpy(dst + done, e->win[hit] + o, chunk);
+            done += chunk;
+        }
+    }
+    return done;
+}
+static void fs_window_drop(fs_entry *e) {
+    unsigned k;
+    for (k = 0; k < 2u; ++k) {
+        if (e->win[k]) { free(e->win[k]); e->win[k] = NULL; }
+        e->win_off[k] = e->win_len[k] = 0;
+    }
+    e->win_last = 0; e->windowed = 0;
+}
+uint32_t isaac_fs_lazy_windowed(void) { return g_lazy_windowed; }
 
 static int fs_materialise(fs_entry *e) {
     if (!e || !e->lazy) return 1;
+    if (e->size >= fs_window_min() && isaac_fs_lazy_pread_avail()) {
+        e->lazy = 0; e->windowed = 1;
+        ++g_lazy_windowed;
+        isaac_log("[isaac][fs] '%s' (%u bytes) is served through a %u KB window, never loaded whole",
+                  e->src ? e->src : e->key, e->size, FS_WIN >> 10);
+        return 1;
+    }
     e->lazy = 0;
     if (!e->size) return 1;
     uint8_t *buf = (uint8_t *)malloc(e->size);
@@ -310,6 +412,7 @@ int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
     }
     if (e->data) free(e->data);
     if (e->src) { free(e->src); e->src = NULL; }
+    fs_window_drop(e);
     e->lazy = 0;
     e->data = buf;
     e->size = len;
@@ -328,6 +431,7 @@ int isaac_fs_seed_lazy(const char *path, uint32_t len) {
     fs_entry *e = fs_new(key, 0);
     if (!e || e->is_dir) return 0;
     if (e->data) { free(e->data); e->data = NULL; }
+    fs_window_drop(e);
     if (e->src) free(e->src);
     e->src = strdup(path);
     if (!e->src) return 0;
@@ -665,7 +769,8 @@ void imp_api_ms_win_crt_stdio__fread(CpuState *restrict cpu) {
         uint64_t avail = (pos < e->size) ? e->size - pos : 0;
         got = (uint32_t)(avail < want ? avail : want);
         if (got) {
-            memcpy(isaac_g(dst), e->data + (size_t)pos, got);
+            if (e->windowed) got = fs_window_read(e, pos, got, (uint8_t *)isaac_g(dst));
+            else memcpy(isaac_g(dst), e->data + (size_t)pos, got);
             g_file_pos[fi] = pos + got;
         }
     }
@@ -694,6 +799,11 @@ void imp_api_ms_win_crt_stdio__fwrite(CpuState *restrict cpu) {
     uint32_t tok = isaac_r32(fp + 0x10u);
     uint32_t fi = fs_tok_to_idx(tok);
     uint32_t got = 0;
+    if (fi != 0xFFFFFFFFu && g_file_w[fi] && fs_file_entry(fi)->windowed) {
+        isaac_log("[isaac][fs] fwrite to the windowed file '%s': refused (archives are read-only here)",
+                  fs_file_entry(fi)->key);
+        fi = 0xFFFFFFFFu;
+    }
     if (fi != 0xFFFFFFFFu && g_file_w[fi]) {
         fs_entry *e = fs_file_entry(fi);
         uint64_t pos = g_file_pos[fi], end = pos + want;
@@ -719,7 +829,12 @@ void imp_api_ms_win_crt_stdio__fgetc(CpuState *restrict cpu) {
     if (fi != 0xFFFFFFFFu) {
         fs_entry *e = fs_file_entry(fi);
         if (g_file_pos[fi] < e->size) {
-            c = e->data[(size_t)g_file_pos[fi]];
+            if (e->windowed) {
+                uint8_t b = 0;
+                c = fs_window_read(e, g_file_pos[fi], 1u, &b) == 1u ? (int)b : -1;
+            } else {
+                c = e->data[(size_t)g_file_pos[fi]];
+            }
             ++g_file_pos[fi];
         }
     }
@@ -733,6 +848,7 @@ void imp_api_ms_win_crt_stdio__fputc(CpuState *restrict cpu) {
     if (fi == 0xFFFFFFFFu || !g_file_w[fi]) { cpu->EAX = 0xFFFFFFFFu; return; }
     fs_entry *e = fs_file_entry(fi);
     uint64_t pos = g_file_pos[fi];
+    if (e->windowed) { cpu->EAX = 0xFFFFFFFFu; return; }   /* archives are read-only here */
     if (pos + 1 > e->cap) {
         uint64_t ncap = pos + 4096u;
         uint8_t *nd = realloc(e->data, (size_t)ncap);

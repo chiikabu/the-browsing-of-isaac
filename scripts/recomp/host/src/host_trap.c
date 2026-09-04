@@ -359,6 +359,7 @@ void isaac_stub_report(void) {
     { extern void isaac_gl_census_report(void); isaac_gl_census_report(); }
     { extern void isaac_dispatch_report(void); isaac_dispatch_report(); }
     { extern void isaac_audio_report(void); isaac_audio_report(); }
+    { extern void isaac_threads_report(void); isaac_threads_report(); }
 #ifdef ISAAC_WEB
     { extern void isaac_audio_web_report(void); isaac_audio_web_report(); }
 #endif
@@ -423,6 +424,17 @@ int isaac_indirect_call(uint32_t target, CpuState *restrict cpu) {
                     calls, emscripten_get_now() / 1000.0, imp->dll, imp->symbol);
     }
 
+    /* a sliced thread job crossing the host boundary for anything but the
+     * critical-section pair has made progress (round 24) */
+    {
+        extern int isaac_threads_slicing(void);
+        extern void isaac_threads_progress(void);
+        if (isaac_threads_slicing() && imp->symbol[0] != 'E' && imp->symbol[0] != 'L')
+            isaac_threads_progress();
+        else if (isaac_threads_slicing() &&
+                 strcmp(imp->symbol, "EnterCriticalSection") && strcmp(imp->symbol, "LeaveCriticalSection"))
+            isaac_threads_progress();
+    }
     uint32_t ret = isaac_retaddr(cpu);
     int dbg = (ret >= 0x00a6c000u && ret <= 0x00a6fac0u) ||
               (imp->dll[0]=='d' && imp->symbol[0]=='D');

@@ -37,6 +37,7 @@
 #include "shim_decls.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define HDR_BYTES   8u          /* {size, flags} */
@@ -312,6 +313,30 @@ void imp_kernel32__VirtualAlloc(CpuState *restrict cpu) {
          * committed, so this is a no-op that must still succeed. */
         cpu->EAX = (type & MEM_COMMIT) ? addr : 0;
         return;
+    }
+    /* Round 24f: a reserve-only request above ISAAC_RESERVE_MAX_MIB (default
+     * 128) fails. The engine reserves address space for its Lua arena with a
+     * ladder (1 GiB, then 512 MB, ...); on Windows that costs nothing until
+     * committed, here the arena is always committed, so the reservation is
+     * real memory -- and its guest lua_Alloc is replaced by the host
+     * allocator anyway (host_lua.c), so the range is never used. With the
+     * 768 MiB arena the 512 MB step succeeded and left too little for the
+     * sound catalogue (269 MB of PCM, preloaded at boot). The 192 MiB arena
+     * had refused both steps implicitly; 128 MiB is that behaviour, stated. */
+    if ((type & MEM_RESERVE) && !(type & MEM_COMMIT)) {
+        static uint32_t cap;
+        if (!cap) {
+            const char *e = getenv("ISAAC_RESERVE_MAX_MIB");
+            unsigned long mib = (e && *e) ? strtoul(e, NULL, 10) : 128ul;
+            cap = mib ? (uint32_t)(mib << 20) : 0xFFFFFFFFu;
+        }
+        if (size > cap) {
+            isaac_log("[isaac][heap] VirtualAlloc(MEM_RESERVE %u MiB) refused: above ISAAC_RESERVE_MAX_MIB "
+                      "(%u MiB); the arena is always committed and the guest's Lua allocator is not used",
+                      size >> 20, cap >> 20);
+            cpu->EAX = 0;
+            return;
+        }
     }
     uint32_t p = guest_malloc(size);
     if (p) memset(isaac_g(p), 0, size);   /* VirtualAlloc zeroes; malloc does not */

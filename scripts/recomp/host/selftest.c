@@ -130,7 +130,9 @@ int main(int argc, char **argv) {
      * GetProcAddress) exports the game resolves at runtime (RtlVerifyVersionInfo,
      * wgl*, gl*, xinput, steam ctx, ...). The exact total is a canary that
      * moves only when gen_shims.py's DYNAMIC_EXPORTS changes. */
-    check(isaac_import_count == 723, "622 IAT + 101 dynamic imports linked");
+    /* 106 since round 22 (the five ALC_SOFT_system_events / reopen / pause /
+     * resume entry points the mixer asks alcGetProcAddress for). */
+    check(isaac_import_count == 728, "622 IAT + 106 dynamic imports linked");
 
     /* 3. tokens are unique and round-trip */
     unsigned round = 0, uniq = 1;
@@ -806,9 +808,13 @@ int main(int argc, char **argv) {
 
     /* Adopted threads (boot round 12): _beginthreadex through the engine's
      * trampoline 0x00a7f130 must leave the thread struct's done flag set, or
-     * ~Thread() calls std::terminate() at shutdown. */
+     * ~Thread() calls std::terminate() at shutdown. Round 24 runs adopted
+     * jobs as per-frame slices and sets the flag when the loop returns (or
+     * at the join, isaac_threads_join); the at-adoption contract tested here
+     * is the slices-off one, so slices are switched off for this process. */
     {
         uint32_t block = ISAAC_STACK_TOP_VA - 0x3600, tobj = ISAAC_STACK_TOP_VA - 0x3700;
+        setenv("ISAAC_THREADS", "0", 1);
         isaac_w32(block + 0, 0x00a5a760u); isaac_w32(block + 4, 0); isaac_w32(block + 8, tobj);
         *(uint8_t *)isaac_g(tobj + 0x20) = 0;
         memset(&cpu, 0, sizeof cpu);

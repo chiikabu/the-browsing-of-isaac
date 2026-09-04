@@ -548,6 +548,23 @@ static int frame_cap(void) {
     return g_max_frames;
 }
 uint32_t isaac_frames_presented(void) { return g_frames_presented; }
+#ifdef ISAAC_WEB
+/* ISAAC_YIELD=1: the web build yields to the event loop per frame and paces
+ * itself on the wall clock -- interactive mode (round 25). */
+int isaac_web_yield_enabled(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("ISAAC_YIELD");
+        v = (e && *e && *e != '0') ? 1 : 0;
+        if (v) {
+            extern void isaac_time_set_mode(int mode);
+            isaac_time_set_mode(1);
+            isaac_log("[isaac][web] interactive: yielding to the event loop every frame, wall-clock time");
+        }
+    }
+    return v;
+}
+#endif
 /* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
 void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
 #ifdef ISAAC_WEB
@@ -560,6 +577,8 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     /* The engine mixes on a thread this port does not have; one iteration
      * of it per presented frame is what feeds OpenAL (round 16b). */
     { extern void isaac_audio_pump(const CpuState *cpu); isaac_audio_pump(cpu); }
+    /* every adopted thread job gets one slice per frame (round 24) */
+    { extern void isaac_threads_slice(CpuState *restrict cpu); isaac_threads_slice(cpu); }
     /* every frame for the first 10 (with the frame's wall time), then every
      * 60th: the per-frame cost of the lifted code is a number the log must
      * carry (boot round 12: the loop ran at well under 0.1 fps, invisible
@@ -569,6 +588,14 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
                   g_frames_presented, last_ms > 0.0 ? now - last_ms : 0.0);
     last_ms = now;
     cpu->EAX = 1;
+#ifdef ISAAC_WEB
+    /* Round 25: hand the frame to the browser. emscripten_sleep(0) is a JSPI
+     * suspension -- the whole wasm stack is parked, the page's event loop
+     * runs (input events are delivered, the canvas is composited), and the
+     * stack resumes on the next macrotask. Off unless ISAAC_YIELD=1, so the
+     * headless runner keeps its as-fast-as-possible behaviour. */
+    if (isaac_web_yield_enabled()) emscripten_sleep(0);
+#endif
 }
 /* ---- message queue (round 14a) ------------------------------------------ */
 /* Events arrive from the page (Module.isaacInputPoll(frame, out): four int32s

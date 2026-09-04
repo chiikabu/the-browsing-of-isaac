@@ -13,6 +13,7 @@ const logEl = document.getElementById('log');
 window.isaacLog = [];
 window.isaacFrames = [];
 window.isaacDone = null;
+window.isaacFrame = 0;     // the host's frame counter, live (round 25: a driver paces key events on it)
 const KEEP_FRAMES = 6;
 function log(line) {
   window.isaacLog.push(String(line));
@@ -61,6 +62,24 @@ cfg.isaacLazyRead = (src, dst, len) => {
     return 0;
   }
 };
+// Round 24e: positional reads. A lazy file of ISAAC_FS_WINDOW_MIN MiB or
+// more (default 32) is never fetched whole: the RAM-FS keeps two 1 MB
+// windows per file and refills them through this call, which the runner
+// serves as a byte slice (?off=&len=, base64 like every sync fetch here).
+// That is what lets the DLC archives (afterbirth.a 145 MB, afterbirthp.a
+// 604 MB, repentance.a 385 MB) mount inside a wasm32 heap.
+let preads = 0, preadBytes = 0;
+cfg.isaacLazyPread = (src, dst, off, len) => {
+  try {
+    const bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);
+    m.HEAPU8.set(bytes, dst);
+    preads += 1; preadBytes += bytes.length;
+    return bytes.length;
+  } catch (e) {
+    log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${e.message}`);
+    return -1;
+  }
+};
 let presented = 0;
 const keepEvery = Number(params.get('keep') || '0');      // also keep every Nth frame
 const frameBudget = Number(params.get('frames') || '5');
@@ -68,8 +87,14 @@ const frameBudget = Number(params.get('frames') || '5');
 // spends a 2 MB glReadPixels on a frame nobody keeps (round 17): the sampled
 // ones, and the tail that ends up in isaacFrames anyway.
 let wantedFrame = 0;                                      // the host's frame number for the next present
+// An interactive page (ISAAC_YIELD=1, round 25) reads back only explicitly
+// sampled frames: the 2 MB glReadPixels per present exists for the headless
+// runner's PNGs, and nothing collects the tail from a served page.
+const interactive = params.get('ISAAC_YIELD') === '1';
 cfg.isaacWantsFrame = (n) => {
-  const want = (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
+  window.isaacFrame = n;
+  const want = interactive ? (keepEvery ? n % keepEvery === 0 : false)
+    : (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
   if (want) wantedFrame = n;
   return want;
 };
@@ -87,8 +112,9 @@ cfg.isaacPresent = (ptr, w, h) => {
 };
 
 // ---- scripted input ---------------------------------------------------------
-// The page's main thread is inside main() for the whole run, so no browser
-// event can reach the game; input is a timeline keyed by presented frame:
+// Without ISAAC_YIELD=1 the page's main thread is inside main() for the whole
+// run, so no browser event can reach the game; input is then a timeline keyed
+// by presented frame (with ISAAC_YIELD=1 the live queue below is served first):
 //   ?input=130:Enter,160:Enter,200:Down,230:Enter,300:mouse:480:270,301:click,400:w:30
 // A key entry presses at its frame and releases `hold` frames later (default 2). The host's
 // PeekMessageW asks Module.isaacInputPoll(frame, out) for the events due at
@@ -128,7 +154,52 @@ for (const item of (params.get('input') || '').split(',').map((t) => t.trim()).f
 }
 timeline.sort((a, b) => a.frame - b.frame);
 let inputsDelivered = 0;
+// Round 25: live input. With ISAAC_YIELD=1 the module yields to the event loop
+// every frame, so DOM events reach the page while the game runs; they queue
+// here and are delivered ahead of the scripted timeline. Keys map through the
+// same table by event.code (KeyA -> a, ArrowUp -> up, Enter, Space, ...).
+const live = [];
+const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
+  ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
+  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt' };
+function keyName(ev) {
+  const c = ev.code || '';
+  if (CODE_TO_KEY[c]) return CODE_TO_KEY[c];
+  if (/^Key[A-Z]$/.test(c)) return c[3].toLowerCase();
+  if (/^Digit[0-9]$/.test(c)) return c[5];
+  if (/^F([1-4])$/.test(c)) return c.toLowerCase();
+  return null;
+}
+const canvasEl = document.getElementById('canvas');
+function onKey(ev, down) {
+  const k = keyName(ev);
+  if (!k || !KEYS[k]) return;
+  if (ev.repeat) { ev.preventDefault(); return; }
+  const [vk, sc, ext] = KEYS[k];
+  live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);
+  ev.preventDefault();
+}
+window.addEventListener('keydown', (ev) => onKey(ev, true));
+window.addEventListener('keyup', (ev) => onKey(ev, false));
+canvasEl.addEventListener('mousemove', (ev) => {
+  const r = canvasEl.getBoundingClientRect();
+  const x = Math.round((ev.clientX - r.left) * canvasEl.width / r.width);
+  const y = Math.round((ev.clientY - r.top) * canvasEl.height / r.height);
+  // coalesce: the newest position replaces a still-queued move
+  if (live.length && live[live.length - 1][0] === 2) live[live.length - 1] = [2, x, y, 0];
+  else live.push([2, x, y, 0]);
+});
+canvasEl.addEventListener('mousedown', (ev) => { live.push([3, ev.button === 2 ? 1 : 0, 1, 0]); ev.preventDefault(); });
+canvasEl.addEventListener('mouseup', (ev) => { live.push([3, ev.button === 2 ? 1 : 0, 0, 0]); ev.preventDefault(); });
+canvasEl.addEventListener('contextmenu', (ev) => ev.preventDefault());
+canvasEl.tabIndex = 0;
+canvasEl.focus();
 cfg.isaacInputPoll = (frame, out) => {
+  if (live.length) {
+    m.HEAP32.set(live.shift(), out >> 2);
+    inputsDelivered += 1;
+    return 1;
+  }
   if (!timeline.length || timeline[0].frame > frame) return 0;
   const { ev } = timeline.shift();
   m.HEAP32.set(ev, out >> 2);
@@ -145,10 +216,10 @@ try {
   throw e;
 }
 
-function stageOk(name, fn) {
+async function stageOk(name, fn) {
   log(`=== ${name} ===`);
   try {
-    return fn();
+    return await fn();
   } catch (e) {
     log(`  TRAP in ${name}: ${e.message}`);
     try { if (typeof m._isaac_dump_va_ring === 'function') m._isaac_dump_va_ring(); } catch (e2) { /* best effort */ }
@@ -169,20 +240,25 @@ try {
   const blob = fetchSync('/isaac.segs.bin');
   const p = m._malloc(blob.length);
   m.HEAPU8.set(blob, p);
-  const nseg = stageOk('place memory image', () => m._isaac_place_image(p, blob.length));
+  const nseg = await stageOk('place memory image', () => m._isaac_place_image(p, blob.length));
   log(`  isaac.segs.bin ${blob.length} bytes -> ${nseg} segments`);
   m._free(p);
   if (nseg === null || nseg < 0) throw new Error('image placement failed');
 
   // --- layout + guard
-  const layoutBad = stageOk('layout', () => m._isaac_layout_check());
+  const layoutBad = await stageOk('layout', () => m._isaac_layout_check());
   m._isaac_guard_arm();
   log(`  guard armed (layout ${layoutBad ? 'FAIL' : 'OK'})`);
 
   // --- seed the packed archives eagerly, the tree lazily
-  const LAZY_ARCHIVES = new Set(['resources/packed/music.a', 'resources/packed/videos.a']);
+  // music/videos since round 15d; the DLC set since round 24e (windowed --
+  // see cfg.isaacLazyPread). The language packs are deliberately absent: a
+  // mounted pack would shadow English assets (the mount loop overwrites an
+  // equal-hash entry).
+  const LAZY_ARCHIVES = new Set(['resources/packed/music.a', 'resources/packed/videos.a',
+    'resources/packed/afterbirth.a', 'resources/packed/afterbirthp.a', 'resources/packed/repentance.a']);
   const index = JSON.parse(new TextDecoder().decode(fetchSync('/instance_index.json')));
-  stageOk('seed packed archives', () => {
+  await stageOk('seed packed archives', () => {
     let n = 0;
     for (const name of ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a']) {
       const rel = `resources/packed/${name}`;
@@ -197,7 +273,7 @@ try {
     }
     return n;
   });
-  stageOk('register instance tree lazily', () => {
+  await stageOk('register instance tree lazily', () => {
     let files = 0, bytes = 0;
     for (const { p: rel, s: size } of index) {
       // packed/ is seeded eagerly above -- except the two archives the game
@@ -213,7 +289,7 @@ try {
     return files;
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there
-  stageOk('lua scripts into MEMFS', () => {
+  await stageOk('lua scripts into MEMFS', () => {
     let n = 0;
     for (const { p: rel } of index) {
       if (!rel.startsWith('resources/scripts/')) continue;
@@ -227,10 +303,16 @@ try {
   });
 
   // --- boot + main
-  done.bootRc = stageOk('host boot (IAT + TEB + TLS + _initterm)', () => m._isaac_run_boot(1));
+  done.bootRc = await stageOk('host boot (IAT + TEB + TLS + _initterm)', () => m._isaac_run_boot(1));
   log(`  isaac_boot_init -> ${done.bootRc}`);
   if (done.bootRc === null) throw new Error('boot trapped');
-  done.mainRc = stageOk('main @ 0x00931050', () => m._isaac_run_main());
+  // Under JSPI (round 25) _isaac_run_main returns a promise that settles when
+  // main returns; without it the call is synchronous. Both are awaited here.
+  done.mainRc = await stageOk('main @ 0x00931050', () => {
+    const r = m._isaac_run_main();
+    log(`  _isaac_run_main returned a ${r && typeof r.then === 'function' ? 'promise (JSPI)' : 'value (synchronous)'}`);
+    return r;
+  });
   log(`  isaac_boot_call_main -> ${done.mainRc}`);
   try { m._isaac_stub_report(); } catch (e) { log(`  stub report failed: ${e.message}`); }
   try { m._isaac_heap_report(); } catch (e) { /* best effort */ }

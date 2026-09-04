@@ -439,6 +439,21 @@ void imp_kernel32__QueryPerformanceFrequency(CpuState *restrict cpu) {
     }
 }
 
+#ifdef ISAAC_WEB
+/* Interactive mode (round 25): the game's pacing Sleep becomes a real
+ * wall-clock wait -- a JSPI suspension, so the run proceeds in real time and
+ * the page's event loop runs meanwhile. Never from a thread slice: a sliced
+ * job's Sleep would park the whole frame loop for the job's delay, three
+ * times per frame (the slice yields instead, in the shim below). Capped at
+ * 50 ms so a long guest sleep cannot freeze the page. */
+static void sleep_yield_web(uint32_t ms) {
+    extern int isaac_web_yield_enabled(void), isaac_threads_slicing(void);
+    if (ms && isaac_web_yield_enabled() && !isaac_threads_slicing())
+        emscripten_sleep(ms > 50u ? 50u : ms);
+}
+#else
+#define sleep_yield_web(ms) ((void)(ms))
+#endif
 /* Sleep in a browser cannot block. The one honest thing is to advance the
  * deterministic clock by the requested amount and return. */
 void isaac_threads_run_pending(CpuState *restrict cpu);   /* host_shims_module.c */
@@ -448,6 +463,9 @@ void imp_kernel32__Sleep(CpuState *restrict cpu) {
     if (g_time_mode == ISAAC_TIME_DETERMINISTIC)
         g_qpc_ticks += (uint64_t)ms * (ISAAC_QPF_HZ / 1000ull);
     cpu->EAX = 0;
+    sleep_yield_web(ms);                     /* interactive pacing (round 25) */
+    /* a sliced thread job sleeping is a thread job done for this frame (round 24) */
+    { extern void isaac_threads_yield(void); isaac_threads_yield(); }
 }
 
 void imp_kernel32__GetCurrentThreadId(CpuState *restrict cpu) { cpu->EAX = 1; }

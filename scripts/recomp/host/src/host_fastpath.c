@@ -159,3 +159,21 @@ void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c) {
     if (++hits[i] > 8u) return;
     isaac_log("[isaac][probe] sub_%08x #%u: %08x %08x %08x", tag, hits[i], a, b, c);
 }
+/* A probe value that is a guest C string (round 24d: the sound path an ogg
+ * stream is asked to open). Same first-8-per-tag budget as isaac_probe_hit;
+ * a null or non-guest pointer prints as such instead of faulting. */
+void isaac_probe_str(uint32_t tag, const char *label, uint32_t p) {
+    static uint32_t tags[16];
+    static unsigned hits[16], n;
+    unsigned i = 0;
+    char buf[96];
+    for (; i < n; ++i) if (tags[i] == tag) break;
+    if (i == n) { if (n >= 16u) return; tags[n] = tag; hits[n] = 0u; n++; }
+    if (++hits[i] > 64u) return;    /* 64: the resource resolver is hit ~10 times during boot alone */
+    if (!p) { isaac_log("[isaac][probe] sub_%08x %s: (null)", tag, label); return; }
+    if (!isaac_is_guest_va(p)) { isaac_log("[isaac][probe] sub_%08x %s: 0x%08x (not a guest address)", tag, label, p); return; }
+    { unsigned k = 0; const char *s = (const char *)isaac_g(p);
+      while (k < sizeof buf - 1u && isaac_is_guest_va(p + k) && s[k]) { buf[k] = s[k]; ++k; }
+      buf[k] = 0; }
+    isaac_log("[isaac][probe] sub_%08x %s: 0x%08x \"%s\"", tag, label, p, buf);
+}

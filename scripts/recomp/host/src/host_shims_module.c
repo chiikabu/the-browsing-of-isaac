@@ -362,6 +362,7 @@ void imp_kernel32__ResetEvent(CpuState *restrict cpu) {
 }
 
 void isaac_threads_run_pending(CpuState *restrict cpu);   /* below: cooperative threads */
+void isaac_threads_yield(void);                            /* below: per-frame slices (round 24) */
 #define WAIT_OBJECT_0  0x00000000u
 #define WAIT_TIMEOUT   0x00000102u
 #define WAIT_FAILED    0xFFFFFFFFu
@@ -378,12 +379,21 @@ void imp_kernel32__WaitForSingleObject(CpuState *restrict cpu) {
     isaac_threads_run_pending(cpu);          /* a yield point (ISAAC_RUN_THREADS) */
     kobject *o = obj_of(h);
     if (!o) { cpu->EAX = WAIT_FAILED; return; }
+    if (o->type == OBJ_THREAD) {
+        extern int isaac_threads_join(uint32_t h, CpuState *restrict cpu);
+        isaac_threads_join(h, cpu);          /* round 24f: a wait on a thread is a join */
+    }
     if (o->signaled) {
         if (!o->manual_reset) o->signaled = 0;   /* auto-reset consumes it */
         cpu->EAX = WAIT_OBJECT_0;
         return;
     }
     if (ms == 0) { cpu->EAX = WAIT_TIMEOUT; return; }
+    /* A sliced job that would block here yields; its next slice re-enters
+     * from the top and tests the object again (round 24d: yielding before
+     * the signalled test made a queue that waits on its own event never
+     * pop -- the event stayed set and every slice yielded on it). */
+    isaac_threads_yield();
     isaac_log("[isaac][k32] WaitForSingleObject(0x%08x, %s) on an unsignalled "
               "event from 0x%08x. This build is single-threaded, so nothing "
               "can ever signal it -- this would hang the tab forever.",
@@ -455,25 +465,92 @@ void imp_kernel32__SetThreadPriority(CpuState *restrict cpu) {
     cpu->EAX = 1;
 }
 
-/* Cooperative threads (boot round 12). Every spawn goes through the engine's
- * trampoline 0x00a7f130 with a 12-byte block {fn, arg, thread-struct}: it
- * calls fn(arg) ONCE, then marks the struct done (+0x1c/+0x20) and frees the
- * block. So a "thread" here is a run-to-completion job unless fn itself
- * loops. With ISAAC_RUN_THREADS=1 the pending jobs are run inline, in spawn
- * order, at the main thread's next yield point (Sleep, WaitForSingleObject,
- * MsgWaitForMultipleObjects) on a guest stack below the caller's frame --
- * the same sub-call shape host_shims_crt.c uses for _initterm entries.
- * Off by default: a job that spins forever (an audio mixer loop) would hang
- * the boot; the spawn log names the job so the choice is per boot. */
+/* Guest threads as per-frame slices (round 24; the round-12 inline runner is
+ * kept behind ISAAC_RUN_THREADS=1 for comparison).
+ *
+ * Every spawn goes through the engine's trampoline 0x00a7f130 with a 12-byte
+ * block {fn, arg, thread-struct}: it calls fn(arg) once, then marks the struct
+ * done (+0x1c/+0x20) and frees the block. All three jobs the game spawns are
+ * loops that never return -- the audio device watcher (0x00a7da80), a 100 ms
+ * poller (0x00a220c0) and the async job queue (0x00a9e950) that pops work off
+ * a ring and runs it, which is where sound loads go. Run inline they hang the
+ * boot; not run, everything queued behind them starves.
+ *
+ * So each adopted job gets one slice per presented frame: it is entered from
+ * the top on a scratch guest stack under a setjmp, and it yields (longjmp
+ * back here, abandoning the slice's frames) where a real thread would block:
+ * Sleep, WaitForSingleObject, and an EnterCriticalSection that re-acquires
+ * the same lock with no other host-boundary call in between -- the idle lap
+ * of a queue loop. Next frame it is entered from the top again, re-reads its
+ * own state and carries on. A job whose loop condition fails returns
+ * normally through the trampoline and is retired.
+ *
+ * ISAAC_THREADS=0 turns slicing off (the old behaviour: jobs adopted, marked
+ * done, never run). */
+#include <setjmp.h>
 #define THR_MAX 16
-static struct { uint32_t start, arglist, fn, arg, handle; int ran; } g_thr[THR_MAX];
+static struct {
+    uint32_t start, arglist, fn, arg, handle;
+    uint32_t entry, entry_arg, tobj;      /* what a slice enters, and the Thread struct to mark done */
+    int ran, retired;
+    unsigned slices, yields;
+} g_thr[THR_MAX];
 static unsigned g_thr_n;
-static int g_thr_running;
-static int thr_mode(void) {
+static int g_thr_running;                 /* the round-12 inline runner */
+static jmp_buf g_slice_jmp;
+static int g_slicing;
+static unsigned g_slice_cur;
+static uint32_t g_slice_cs_last;
+static unsigned g_slice_cs_repeat;
+static unsigned g_slice_frames;
+
+static int thr_mode(void) {               /* 1 = the inline runner (ISAAC_RUN_THREADS=1) */
     static int v = -1;
     if (v < 0) { const char *e = getenv("ISAAC_RUN_THREADS"); v = (e && *e && *e != '0'); }
     return v;
 }
+static int slice_mode(void) {             /* 1 = slices (default), 0 = ISAAC_THREADS=0 */
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("ISAAC_THREADS");
+        v = !(e && *e && *e == '0');
+        if (thr_mode()) v = 0;            /* the inline runner and slices are exclusive */
+    }
+    return v;
+}
+
+int isaac_threads_slicing(void) { return g_slicing; }
+
+/* Abandon the current slice. Only meaningful inside one; elsewhere a no-op,
+ * so the yield sites need no guard of their own. */
+void isaac_threads_yield(void) {
+    if (g_slicing) {
+        ++g_thr[g_slice_cur].yields;
+        longjmp(g_slice_jmp, 1);
+    }
+}
+
+/* Any host-boundary call other than the critical-section pair counts as
+ * progress: it breaks the "same lock twice, nothing between" idle pattern. */
+void isaac_threads_progress(void) {
+    if (g_slicing) { g_slice_cs_last = 0u; g_slice_cs_repeat = 0u; }
+}
+
+/* EnterCriticalSection reports every acquire here. The idle lap of a queue
+ * loop is: lock, see nothing queued, unlock, lock again. Two consecutive
+ * acquires of one lock with no progress between them is that lap. */
+void isaac_threads_note_cs(uint32_t cs) {
+    if (!g_slicing) return;
+    if (cs == g_slice_cs_last) {
+        if (++g_slice_cs_repeat >= 2u) isaac_threads_yield();
+    } else {
+        g_slice_cs_last = cs;
+        g_slice_cs_repeat = 0u;
+    }
+}
+
+/* The round-12 inline runner: run every pending job to completion at a yield
+ * point. Kept for ISAAC_RUN_THREADS=1; off otherwise. */
 void isaac_threads_run_pending(CpuState *restrict cpu) {
     if (!thr_mode() || g_thr_running) return;
     g_thr_running = 1;
@@ -492,6 +569,109 @@ void isaac_threads_run_pending(CpuState *restrict cpu) {
     g_thr_running = 0;
 }
 
+/* One slice of job i: enter its loop function on a scratch stack under a
+ * setjmp; it either yields (longjmp back here) or returns (retired). */
+static void slice_job(unsigned i, CpuState *restrict cpu) {
+    extern void isaac_guest_jmp_save(void *dst);
+    extern void isaac_guest_jmp_restore(const void *src);
+    extern uint32_t recomp_jmp_pending;
+    extern uint32_t g_reentry_eip;
+    extern struct CpuState *recomp_last_cpu;
+    {
+        jmp_buf guest_saved;
+        isaac_guest_jmp_save(guest_saved);
+        /* Enter the LOOP function with its long-lived object, not the
+         * trampoline: the engine's job wrapper 0x00a5a760 reads {obj, fn,
+         * arg} out of a 12-byte block and frees it before calling fn(arg),
+         * so a second entry through it finds fn == 0 (round 24b: "indirect
+         * call to 0x00000000 from 0x00a5a787"). The loop function's argument
+         * is the manager object itself, which lives for the whole run. */
+        CpuState sub = *cpu;
+        sub.ESP = (cpu->ESP - 0x4000u) & ~0xFu;
+        sub.ECX = g_thr[i].entry_arg;                         /* the theora worker reads its object from ecx */
+        sub.ESP -= 4; isaac_w32(sub.ESP, g_thr[i].entry_arg); /* cdecl / stdcall(LPVOID) parameter */
+        sub.ESP -= 4; isaac_w32(sub.ESP, 0);                  /* return address */
+        g_slicing = 1;
+        g_slice_cur = i;
+        g_slice_cs_last = 0u;
+        g_slice_cs_repeat = 0u;
+        if (g_thr[i].slices == 0u)
+            isaac_log("[isaac][thr] job #%u 0x%08x(0x%08x) runs as one slice per frame "
+                      "(yields at Sleep / Wait / an idle lock lap)", i, g_thr[i].entry, g_thr[i].entry_arg);
+        ++g_thr[i].slices;
+        if (setjmp(g_slice_jmp) == 0) {
+            isaac_guest_call(g_thr[i].entry, &sub);
+            g_thr[i].retired = 1;
+            /* what the trampoline would have done after fn returned: the
+             * Thread struct's done flag, which its destructor tests */
+            if (g_thr[i].tobj && isaac_is_guest_va(g_thr[i].tobj + 0x20u))
+                *(uint8_t *)isaac_g(g_thr[i].tobj + 0x20u) = 1;
+            isaac_log("[isaac][thr] job #%u returned after %u slice(s): retired (eax=0x%08x)",
+                      i, g_thr[i].slices, sub.EAX);
+        }
+        /* yielded or returned: the slice's frames are gone, so is any state
+         * they left behind in the runtime */
+        g_slicing = 0;
+        recomp_jmp_pending = 0u;
+        g_reentry_eip = 0u;
+        recomp_last_cpu = (struct CpuState *)cpu;
+        isaac_guest_jmp_restore(guest_saved);
+    }
+}
+
+/* One slice of every live job. Called once per presented frame by the
+ * SwapBuffers shim; never re-entered (a job cannot present a frame). */
+void isaac_threads_slice(CpuState *restrict cpu) {
+    if (!slice_mode() || g_slicing || !cpu) return;
+    ++g_slice_frames;
+    for (unsigned i = 0; i < g_thr_n; ++i) {
+        if (g_thr[i].retired) continue;
+        slice_job(i, cpu);
+    }
+}
+
+/* Round 24f: a wait on a thread HANDLE is a join. The game stops a thread
+ * by setting its stop bit and waiting on the handle, and its Thread
+ * destructor then tests the done flag [obj+0x20] and calls std::terminate
+ * if the thread is still joinable (0x00a5a700 -> 0x00a7f1e0). The handle
+ * was signalled at creation, so the wait returned at once with the job
+ * never having seen its stop bit -- an abort at every shutdown once the
+ * jobs were sliced. Now the join runs the job's slices until its loop
+ * returns; a loop that ignores its stop bit is reported and the done flag
+ * is forced so the destructor does not terminate the process. */
+int isaac_threads_join(uint32_t h, CpuState *restrict cpu) {
+    unsigned i, n, cap;
+    if (!slice_mode() || g_slicing || !cpu) return 0;
+    for (i = 0; i < g_thr_n; ++i) if (g_thr[i].handle == h) break;
+    if (i == g_thr_n || g_thr[i].retired) return 0;
+    {
+        const char *e = getenv("ISAAC_JOIN_SLICES");
+        cap = (e && *e) ? (unsigned)strtoul(e, NULL, 10) : 4096u;
+    }
+    for (n = 0; n < cap && !g_thr[i].retired; ++n) slice_job(i, cpu);
+    if (g_thr[i].retired) {
+        isaac_log("[isaac][thr] join of job #%u 0x%08x(0x%08x): returned after %u slice(s)",
+                  i, g_thr[i].entry, g_thr[i].entry_arg, n);
+    } else {
+        isaac_log("[isaac][thr] join of job #%u 0x%08x(0x%08x): still looping after %u slice(s) "
+                  "-- its stop bit was not honoured; done flag forced",
+                  i, g_thr[i].entry, g_thr[i].entry_arg, n);
+        g_thr[i].retired = 1;
+        if (g_thr[i].tobj && isaac_is_guest_va(g_thr[i].tobj + 0x20u))
+            *(uint8_t *)isaac_g(g_thr[i].tobj + 0x20u) = 1;
+    }
+    return 1;
+}
+
+void isaac_threads_report(void) {
+    if (!g_thr_n) return;
+    isaac_log("[isaac][thr] %u job(s) adopted, %u frame(s) sliced:", g_thr_n, g_slice_frames);
+    for (unsigned i = 0; i < g_thr_n; ++i)
+        isaac_log("[isaac][thr]   #%u 0x%08x(0x%08x): %u slice(s), %u yield(s)%s",
+                  i, g_thr[i].fn, g_thr[i].arg, g_thr[i].slices, g_thr[i].yields,
+                  g_thr[i].retired ? ", retired" : "");
+}
+
 void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     uint32_t start = isaac_arg(cpu, 2), arglist = isaac_arg(cpu, 3),
              thrdaddr = isaac_arg(cpu, 5);
@@ -506,35 +686,77 @@ void imp_api_ms_win_crt_runtime___beginthreadex(CpuState *restrict cpu) {
     if (fn == 0x00a5a760u && isaac_is_guest_va(arg + 11u)) { fn2 = isaac_r32(arg + 4u); arg2 = isaac_r32(arg + 8u); }
     isaac_log("[isaac][thr] _beginthreadex(fn=0x%08x, arg=0x%08x -> job 0x%08x(0x%08x) -> 0x%08x(0x%08x)) -> handle "
               "0x%08x (adopted; %s)", start, arglist, fn, arg, fn2, arg2, h,
-              thr_mode() ? "runs inline at the next yield point" : "does not run: ISAAC_RUN_THREADS unset");
-    /* The engine's Thread wrapper tests the thread struct's done flag
-     * (+0x20, set by the trampoline 0x00a7f130 when fn returns) in its
-     * destructor: still-running -> std::terminate() (boot round 12: the first
-     * clean shutdown died there, after "Isaac has shut down successfully").
-     * A thread that never runs is, for the program, a thread that ran and
-     * exited at once: mark it done at adoption. With ISAAC_RUN_THREADS the
-     * trampoline sets it itself when the job finishes. */
-    if (!thr_mode() && start == 0x00a7f130u && isaac_is_guest_va(arglist + 11u)) {
-        uint32_t tobj = isaac_r32(arglist + 8u);
-        if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
-    }
-    /* The audio mixer's job never returns (round 16b): it is a
-     * while-not-stopped loop around two virtual calls. Do not adopt it as a
-     * runnable job -- host_audio.c pumps one iteration per frame instead. */
+              slice_mode() ? "one slice per frame" :
+              thr_mode() ? "runs inline at the next yield point" : "does not run: ISAAC_THREADS=0");
+    /* The audio device watcher's object is also what the ALC_SOFT event is
+     * delivered to (round 22): register it whether or not it is sliced. */
     if (fn2 == 0x00a7da80u && arg2) {
         extern void isaac_audio_pump_register(uint32_t this_va);
         isaac_audio_pump_register(arg2);
-        if (isaac_is_guest_va(arglist + 11u)) {
-            uint32_t tobj = isaac_r32(arglist + 8u);
-            if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
-        }
-        cpu->EAX = h;
-        return;
+    }
+    /* The engine's Thread wrapper tests the thread struct's done flag
+     * (+0x20, set by the trampoline 0x00a7f130 when fn returns) in its
+     * destructor: still-running -> std::terminate() (boot round 12). A thread
+     * that never runs is, for the program, a thread that ran and exited at
+     * once: mark it done at adoption when nothing will run it. Sliced jobs
+     * run the trampoline themselves and it sets the flag when they retire. */
+    if (!slice_mode() && !thr_mode() && start == 0x00a7f130u && isaac_is_guest_va(arglist + 11u)) {
+        uint32_t tobj = isaac_r32(arglist + 8u);
+        if (tobj && isaac_is_guest_va(tobj + 0x20u)) *(uint8_t *)isaac_g(tobj + 0x20u) = 1;
     }
     if (g_thr_n < THR_MAX) {
         g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = arglist;
         g_thr[g_thr_n].fn = fn; g_thr[g_thr_n].arg = arg; g_thr[g_thr_n].handle = h;
-        g_thr[g_thr_n].ran = 0; ++g_thr_n;
+        g_thr[g_thr_n].entry = fn2 ? fn2 : fn;
+        g_thr[g_thr_n].entry_arg = fn2 ? arg2 : arg;
+        g_thr[g_thr_n].tobj = (start == 0x00a7f130u && isaac_is_guest_va(arglist + 11u)) ? isaac_r32(arglist + 8u) : 0u;
+        g_thr[g_thr_n].ran = 0; g_thr[g_thr_n].retired = 0;
+        g_thr[g_thr_n].slices = 0; g_thr[g_thr_n].yields = 0;
+        ++g_thr_n;
+    }
+    cpu->EAX = h;
+}
+
+/* ---- critical sections ---------------------------------------------------
+ * Single-threaded, so the section itself is inert: nothing can contend it.
+ * They were STUB rows (65.9 M stub-record updates in a ten-minute run);
+ * real bodies are cheaper, and Enter is where a sliced job's idle lap is
+ * detected. The 24-byte Win32 CRITICAL_SECTION is zeroed on init; the game's
+ * own Mutex keeps its "locked" byte just past it and never reads ours. */
+void imp_kernel32__InitializeCriticalSection(CpuState *restrict cpu) {
+    uint32_t cs = isaac_arg(cpu, 0);
+    if (cs && isaac_is_guest_va(cs + 23u)) memset(isaac_g(cs), 0, 24);
+    cpu->EAX = 0;
+}
+void imp_kernel32__EnterCriticalSection(CpuState *restrict cpu) {
+    isaac_threads_note_cs(isaac_arg(cpu, 0));
+    cpu->EAX = 0;
+}
+void imp_kernel32__LeaveCriticalSection(CpuState *restrict cpu) { cpu->EAX = 0; }
+void imp_kernel32__TryEnterCriticalSection(CpuState *restrict cpu) { cpu->EAX = 1; }
+void imp_kernel32__DeleteCriticalSection(CpuState *restrict cpu) { cpu->EAX = 0; }
+
+/* HANDLE CreateThread(sec, stack, start, param, flags, &id) -- stdcall, 24.
+ * The one caller is the theoraplayer worker (FUN_00a8b570 spawns
+ * FUN_00aab120 with its worker object), which decodes cutscene video. It was
+ * an inert stub: a NULL handle, no thread, no video. It is adopted here like
+ * a _beginthreadex job -- entered directly with its parameter, one slice per
+ * frame (round 24c). */
+void imp_kernel32__CreateThread(CpuState *restrict cpu) {
+    uint32_t start = isaac_arg(cpu, 2), param = isaac_arg(cpu, 3), idp = isaac_arg(cpu, 5);
+    uint32_t h = obj_alloc(OBJ_THREAD);
+    if (!h) { cpu->EAX = 0; return; }
+    obj_of(h)->signaled = 1;
+    if (idp && isaac_is_guest_va(idp + 3u)) isaac_w32(idp, 0x1789u + g_thr_n);
+    isaac_log("[isaac][thr] CreateThread(start=0x%08x, param=0x%08x) -> handle 0x%08x (adopted; %s)",
+              start, param, h, slice_mode() ? "one slice per frame" : "does not run: ISAAC_THREADS=0");
+    if (g_thr_n < THR_MAX) {
+        g_thr[g_thr_n].start = start; g_thr[g_thr_n].arglist = param;
+        g_thr[g_thr_n].fn = start; g_thr[g_thr_n].arg = param; g_thr[g_thr_n].handle = h;
+        g_thr[g_thr_n].entry = start; g_thr[g_thr_n].entry_arg = param; g_thr[g_thr_n].tobj = 0u;
+        g_thr[g_thr_n].ran = 0; g_thr[g_thr_n].retired = 0;
+        g_thr[g_thr_n].slices = 0; g_thr[g_thr_n].yields = 0;
+        ++g_thr_n;
     }
     cpu->EAX = h;
 }

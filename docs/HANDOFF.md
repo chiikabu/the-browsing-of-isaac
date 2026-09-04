@@ -47,36 +47,51 @@ REQUIRE emsdk on PATH:
   own `CellSpace::insert: x1 > x2` assertion and once in an entity-trail
   ring-buffer loop at `0x00942c0e` whose capacity field is zero
   (§21.32). That is the next unit of work. See front B below.
+- **Audio runs end to end, in node and in the browser** (§21.39,
+  2026-09-04): with the DLC archives mounted, the `resources/` root back
+  and the sound-source open un-patched, a 240-s debug-profile node run
+  uploads **92 PCM buffers (5.7 MB, 33.8 s of audio), plays 17,
+  queues/unqueues 85/61 music stream buffers**, peaks at 354 MiB of guest
+  heap and exits clean after 3,540 frames; the fast browser module under
+  headless Chromium uploads **329 buffers (42 MB, 385 s of audio), plays
+  102**, WebAudio context running, **1,501 frames in 67.6 s wall**. The
+  boot spends ~65 s (debug profile) mounting 1.2 GB of archives through
+  the windowed reader before the first real frame.
+- The browser build is **interactive** (§21.39 round 25): JSPI, live
+  keyboard/mouse, 41 fps overall / 49-59 in play under headless Chromium.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
-## What changed this round (the flow, not the port)
+## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
 
-The 2026-08-31 ABI-101 unit was found **stranded**: the cpp carried a
-hand-applied `/* MUTANT */` (inverted 0x74f090 verdict, built and on disk),
-the JSON was re-indented (74k-line diff), frontier/port log not updated,
-slice suite 93-red on literal `abiVersion, 100` pins. Every one of those is
-now mechanically caught or impossible:
+The port was silent for three reasons, none of them audio code, all of
+them ours (§21.39):
 
-- `scripts/decomp/lib/consistency.mjs` — shared checks (status.mjs, gate
-  stage 0, toolkit test): ABI agreement header/model/JSON, cpp size pins,
-  JSON layout drift + canonical form, stranded mutants, literal ABI pins,
-  frontier freshness, uncommitted unit files.
-- `scripts/decomp/slice-json.mjs check|fmt|sync` — the only writer of
-  `decomp/game-update-slice.json`. `sync` found the spec had drifted from the
-  model layout for many versions (139 lanes missing, 255 stale offsets, 9
-  events missing) and back-filled it.
-- `scripts/decomp/mutate.mjs --file F --from A --to B -- <cmd>` — crash-safe
-  mutation checks (stash + journal + tag + sha256 restore). Hand-edited
-  mutants are banned in AGENTS.md.
-- `verify-unit.mjs` restaged: 1 s preflight, slice build once + abi.json
-  check, then all gates in parallel (wall ≈ the differential).
-- `pequery.py fieldrefs DISP [FUNC]` — exact `[reg+disp]` object-field
-  census (r/w/rw/addr + base register), whole-.text or per function.
-- `brief.mjs` prints live-bridge lane delivery — which exposed that the
-  shipped bridge delivers **0 of 6** `opaque0092f1c0*` lanes: the entire
-  92f1c0 try_pure ladder (ABI v86→v101) is dormant in the live tick.
-- All 15 family suites pin ABI symbolically (`HEADER_ABI_VERSION` parsed
-  from the `.h`); 700+ literals swept.
+1. **The sounds were not in the instance.** Every Repentance sample and
+   the title theme live in `afterbirth.a` / `afterbirthp.a` /
+   `repentance.a` (1.2 GB), never seeded. They are in
+   `.scratch/game-instance/resources/packed/` now, registered lazily and
+   served through 1 MB windows (`host_shims_fs.c`, `isaacLazyPread` in
+   both drivers) -- never loaded whole.
+2. **The archive index was unreachable.** Its keys are `resources/<path>`
+   and the project's own `0x009ab970` patch had removed the `resources/`
+   mount root. The round-10 override is back (`lift_patches.py PATCHES`).
+3. **The open itself was patched out.** `0x00a2b5c2` ("branch forced" in
+   §19.5) skips the open of every sound source after construction. Undone
+   by a block-level lift patch (`BLOCK_PATCHES`, plus `LIFT-PATCH REENTRY`
+   markers mkdispatch honours).
+
+Around it: guest thread jobs run as per-frame slices with a join on
+thread-handle waits (host_shims_module.c); the guest heap is 768 MiB (the
+catalogue is 269 MB of PCM) and the host base moved to `0x34000000`
+(isaac_host.h, build flags, `gen_shims.py` reads the shim base from the
+header); observe-only probes and string probes; `RaiseException`
+0x406D1388 swallowed; the browser build is interactive under JSPI
+(round 25, `run_web.mjs interactive=1`).
+
+New pins: `tests/recomp-threads.test.js` (6), `tests/recomp-archives.test.js`
+(6), `tests/recomp-memory.test.js` (2), `tests/recomp-jspi.test.js` (5);
+selftest 196 checks (two stale pins fixed: the import canary is 728, the
+adopted-thread contract runs with slices off).
 
 ## Try it yourself
 
@@ -84,19 +99,23 @@ now mechanically caught or impossible:
 node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 serve=1 port=8099 fast=1     "input=420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150" keep=200
 ```
 
+Interactive (round 25; the module yields to the event loop every frame and
+takes real keyboard/mouse input):
+
+```
+node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 interactive=1 port=8099 fast=1
+```
+
 `serve=1` holds the local server open and prints the URL instead of driving a
 headless browser; `fast=1` serves the speed-profile module (`build_boot.py
 --web --fast`), which is the one that renders gameplay at ~50 fps. It loads
 ~300 MB of assets before the first frame.
 
-**It is not interactive yet, and that is structural.** The guest's frame loop
-runs inside `main()` and never returns to the JS event loop, so no browser
-event can be delivered while the game runs and the canvas may not repaint
-until the run ends. Input comes from the scripted `input=` timeline in the
-query string (frame:key[:hold]). Making it playable means moving the module
-into a Worker and feeding real key events through a SharedArrayBuffer the
-game thread can read without the page yielding -- that is the next piece of
-work on the visual front.
+**Boot cost in the browser:** the DLC archives (1.2 GB) are fetched as 1 MB
+byte slices while the engine verifies every entry at mount, so the first
+frame takes a while; the node driver does the same from disk. Shrinking that
+(skipping the per-entry checksum pass, or repacking only the entries the
+game uses) is optimisation work, not correctness.
 
 ## What the port does NOT do yet (front B)
 
@@ -111,27 +130,33 @@ is started:
   and `output/recomp/web-gameplay/frame_1500.png` shows a Basement room
   with Isaac, the HUD, the minimap and two enemies. The old 1-fps figure
   was the debug module.
-- **No audio yet, but the host side is built** (§21.33). host_audio.c is a
-  real OpenAL object model with wall-clock timing, host_audio_web.c is a
-  WebAudio backend for the browser profile, and the frame present pumps
-  the engine's mixer thread, which never returns and so cannot be run
-  cooperatively. What is missing is upstream of all of it: the game's
-  sound objects never get an AL source. `SoundEffect::Play` (`0x00a7cab0`)
-  runs and queues, but `0x00a9fb80` -- which binds the source and calls
-  `alBufferData` -- is dispatched **zero** times, so `Play` skips its own
-  `alSourcePlay`. Reading is fine: the game pulls the whole 25 MB of
-  `sfx.a` (26,387 reads). The gap is whoever should call `0x00a9fa00`
-  through a vtable (§21.34).
-- **No video.** `CreateThread` is an inert stub, so the theoraplayer
-  worker never starts and cutscenes never decode.
+- ~~No audio yet.~~ **Audio plays, in node and in the browser** (§21.39):
+  samples decode, bind and play; the title music streams. Headless
+  Chromium, fast module, the HANDOFF timeline: **329 PCM uploads (42 MB,
+  385 s of audio), 102 plays, 308/76 stream buffers queued/unqueued,
+  WebAudio context running, 1,501 frames in 67.6 s wall** including the
+  1.2 GB archive mount over `?off=&len=` byte slices, `main` returned 0.
+  Node (debug profile, 240 s): 92-99 uploads, 17-23 plays, peak guest heap
+  354 MiB.
+- **Video is unverified.** `CreateThread` is real now and the theoraplayer
+  worker runs as a per-frame slice (it names itself and executes its job),
+  but no cutscene has been watched to the end.
+- **The start-room ping-pong (open, floor-dependent).** In some floors
+  the player bounces between the start room and a neighbour once per game
+  frame for ~35 frames right after the run starts, before any movement
+  key (seen in node and in the browser, with and without thread slices;
+  other floors are fine). Replay a floor with `ISAAC_EPOCH=<unix seconds>`
+  (pins the run RNG seed) and read the room-transition path from there.
 - **Gameplay depth is untested.** The scripted input is a timeline keyed
   to presented frames, not a player: combat, damage, item pickup, floor
   descent, bosses and save/load have never been exercised. A run so far
   walks between two or three rooms.
 - **Online is stubbed** (Steam, EOS), by choice.
-- **The instance is missing DLC and language archives**
-  (`afterbirth.a`, `afterbirthp.a`, `repentance_*.a`), which is why the
-  log still carries "Failed to open archive file" lines for those.
+- ~~The instance is missing DLC archives.~~ They are mounted (lazy,
+  windowed). The **language packs stay unmounted on purpose**: the mount
+  loop overwrites an equal-hash entry, so a mounted pack would shadow
+  English assets; the log's "Failed to open archive file 'packed/*.a'"
+  lines are those.
 - ~~No shipping build has been measured.~~ **It has, and it is 20x faster**
   (§21.37): the same 1,380-frame gameplay scenario runs in **26 s with
   `--fast` against 525 s with the default profile**, i.e. **53 fps** with

@@ -113,7 +113,7 @@ test('PROBE_PATCHES: every probe delegates once and leaves the guest untouched',
 test('the probe helpers exist where lifted code can reach them', () => {
   const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
   const rt = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
-  for (const fn of ['isaac_probe_on', 'isaac_probe_hit']) {
+  for (const fn of ['isaac_probe_on', 'isaac_probe_hit', 'isaac_probe_str']) {
     assert.match(fast, new RegExp(`^[a-z0-9_ ]*\\b${fn}\\(`, 'm'), `${fn}: defined in host_fastpath.c`);
     assert.ok(rt.includes(`${fn}(`), `${fn}: declared in recomp_rt.h`);
   }

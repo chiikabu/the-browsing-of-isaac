@@ -203,7 +203,7 @@ SYMBOL_OVERRIDE = {
     "FindClose@kernel32.dll": "PROVIDED",
     "MoveFileExA@kernel32.dll": "PROVIDED",
     # kernel32 pieces that are genuinely inert in a single-threaded wasm build
-    "InitializeCriticalSection@kernel32.dll": "STUB",
+    "InitializeCriticalSection@kernel32.dll": "REAL",
     "InitializeCriticalSectionAndSpinCount@kernel32.dll": "REAL",
     # Window icon via a register-held call (0x00949b03): census 0 sites, so
     # the verdict would stay NEVER_CALLED although host_shims_win.c provides it.
@@ -230,10 +230,10 @@ SYMBOL_OVERRIDE = {
     "SwapBuffers@gdi32.dll": "PROVIDED",          # counts presented frames (ISAAC_MAX_FRAMES cap, per-60 stamps)
     "GetRawInputDeviceList@user32.dll": "PROVIDED",   # must write *count = 0
     "lua_getstack@lua5.3.3r.dll": "PROVIDED",     # real Lua 5.3.3 binding
-    "EnterCriticalSection@kernel32.dll": "STUB",
-    "LeaveCriticalSection@kernel32.dll": "STUB",
-    "DeleteCriticalSection@kernel32.dll": "STUB",
-    "TryEnterCriticalSection@kernel32.dll": "STUB",
+    "EnterCriticalSection@kernel32.dll": "REAL",
+    "LeaveCriticalSection@kernel32.dll": "REAL",
+    "DeleteCriticalSection@kernel32.dll": "REAL",
+    "TryEnterCriticalSection@kernel32.dll": "REAL",
     "SetThreadExecutionState@kernel32.dll": "STUB",
     "SetThreadPriority@kernel32.dll": "STUB",
     "OutputDebugStringA@kernel32.dll": "STUB",
@@ -247,7 +247,7 @@ SYMBOL_OVERRIDE = {
     "LockFileEx@kernel32.dll": "STUB",
     "UnlockFileEx@kernel32.dll": "STUB",
     # the one real thread in the binary: theoraplayer's video worker
-    "CreateThread@kernel32.dll": "STUB",
+    "CreateThread@kernel32.dll": "REAL",       # round 24c: the theoraplayer worker, sliced per frame
     "TerminateThread@kernel32.dll": "STUB",
     # user32 bits GLFW does not own and emscripten cannot answer
     "MessageBoxA@user32.dll": "REAL",
@@ -662,6 +662,20 @@ def measure_stack_discipline(pe, slot_vas, ranges, thunks):
     return stats
 
 
+def _shim_base() -> int:
+    """ISAAC_SHIM_BASE from isaac_host.h: the tokens baked into the generated
+    table must be the arena the host layer resolves (round 24f moved it from
+    0x0f000000 to 0x33000000 when the guest heap grew to 768 MiB)."""
+    hdr = (Path(__file__).resolve().parent / "include" / "isaac_host.h").read_text(encoding="utf-8")
+    m = re.search(r"#define ISAAC_SHIM_BASE\s+(0x[0-9a-fA-F]+)u", hdr)
+    if not m:
+        raise SystemExit("gen_shims: ISAAC_SHIM_BASE not found in isaac_host.h")
+    return int(m.group(1), 16)
+
+
+SHIM_BASE = _shim_base()
+
+
 def main():
     pe = PE()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -745,7 +759,7 @@ def main():
                 "medium"),
             "pushCountConsistent": agree[0] if agree else None,
             "cleanupConsistent": agree[1] if agree else None,
-            "shimVa": 0x0F000000 + i * 16,
+            "shimVa": SHIM_BASE + i * 16,
             "cident": c_ident(dll, sym),
         })
 
@@ -974,7 +988,7 @@ def main():
         idx = len(rows) + k
         dynamic_rows.append({
             "index": idx, "dll": dll, "symbol": sym,
-            "iatSlotVa": 0, "shimVa": 0x0F000000 + idx * 16,
+            "iatSlotVa": 0, "shimVa": SHIM_BASE + idx * 16,
             "argBytes": purge, "isStdcall": is_std,
             "argBytesSource": "curated-signature",
             "callSites": 0, "verdict": "PROVIDED",

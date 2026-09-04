@@ -231,7 +231,7 @@ __attribute__((weak)) void imp_msvcp140____Xlength_error_std__YAXPBD_Z(CpuState 
 __attribute__((weak)) void imp_kernel32__DeleteCriticalSection(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[44];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_lua5_3_3r__luaL_checklstring(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -276,7 +276,7 @@ __attribute__((weak)) void imp_api_ms_win_crt_math___libm_sse2_cos_precise(CpuSt
 __attribute__((weak)) void imp_kernel32__LeaveCriticalSection(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[53];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_api_ms_win_crt_math__roundf(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -356,12 +356,12 @@ __attribute__((weak)) void imp_api_ms_win_crt_heap__realloc(CpuState *restrict c
 __attribute__((weak)) void imp_kernel32__EnterCriticalSection(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[69];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__InitializeCriticalSection(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[70];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_user32__AdjustWindowRectEx(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -2156,7 +2156,7 @@ __attribute__((weak)) void imp_kernel32__CreateEventW(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_kernel32__CreateThread(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[429];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__DeleteFileA(CpuState *restrict cpu) {
     static const isaac_import *self;
@@ -2341,7 +2341,7 @@ __attribute__((weak)) void imp_kernel32__TlsAlloc(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_kernel32__TryEnterCriticalSection(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[466];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_kernel32__UnlockFileEx(CpuState *restrict cpu) {
     static const isaac_import *self;

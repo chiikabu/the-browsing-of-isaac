@@ -34,22 +34,217 @@ MARKER = "/* LIFT-PATCH"
 # RECOMP_VA(<va>u) marker: mkdispatch.py / patch_reentry.py scan the lifted C
 # for those markers to build the dispatch table.
 PATCHES: dict[int, tuple[str, str]] = {
-    # (empty since boot round 11)
-    #
     # Round 10 restored 0x009ab970's pristine prologue here so a "resources/"
-    # mount root was created. Round 11 REVERTED that (the entry is gone and
-    # the lifted body is the canonical `xor eax, eax; ret` again): the
-    # instance is a ResourceExtractor dump with the archives' contents at the
-    # install ROOT, and KAGE's resolver (0x00a16c60) tries the archive index
-    # before a root's loose map, so a "resources/" root made the stale small
-    # archives (config.a = Afterbirth+ players.xml) shadow the extracted
-    # Repentance+ files. With only the "" root, relative keys miss the
-    # archive index (keyed "resources/...") and resolve through the root
-    # scan -- the behaviour the emulator-era instance was built for. The
-    # boot harness now seeds that whole tree (boot_integration.mjs). Keep the
-    # mechanism: the other 18 hand patches (recomp-architecture.md §19.5)
-    # remain candidates.
+    # mount root was created. Round 11 REVERTED that: the instance is a
+    # ResourceExtractor dump with the archives' contents at the install
+    # ROOT, and KAGE's resolver (0x00a16c60) tries the archive index before a
+    # root's loose map, so a "resources/" root made the stale small archives
+    # (config.a = Afterbirth+ players.xml) shadow the extracted Repentance+
+    # files. With only the "" root, relative keys miss the archive index
+    # (keyed "resources/...") and resolve through the root scan.
+    #
+    # Round 24e brings it BACK, because that same miss is why the port was
+    # silent: the sound effects and the music exist only inside the archives
+    # (the dump has no sfx/ or music/ tree), and the archive index is keyed
+    # "resources/<path>" -- with no "resources/" root nothing ever hits it.
+    # The shadowing that round 11 saw is gone with it: the instance now
+    # mounts the whole archive set (afterbirth.a, afterbirthp.a,
+    # repentance.a; boot_integration.mjs LAZY_ARCHIVES), and the mount loop
+    # (0x00a179c0) overwrites an equal-hash entry, so the last-mounted
+    # archive -- repentance.a -- wins, exactly as it does in the real game.
+    0x009ab970: (
+        "restore `push ebp; mov ebp, esp` (pristine 55 8b ec; project patch 33 c0 c3 = "
+        "xor eax,eax; ret) so the resources/ mount root is created and scanned",
+        """void sub_009ab970(CpuState *restrict s) {
+  /* LIFT-PATCH 0x009ab970: the canonical exe carries an emulator-era hand patch
+     that turned this function's prologue into `xor eax, eax; ret`; the pristine
+     bytes (tools/isaac-ng.unpacked.exe.pre-coinit) are `push ebp; mov ebp, esp`
+     and the rest of the body is lifted as sub_009ab973 (Ghidra's orphaned
+     FUN_009ab973). Emulate the two lost instructions and fall into the body,
+     which ends with the function's own `mov esp, ebp; pop ebp; ret`. */
+  RECOMP_VA(0x9ab970u);
+  {
+    uint32_t ESP = s->ESP;
+    ESP = (uint32_t)(ESP - ((uint32_t)0x4u));
+    MEMW32(ESP, s->EBP);
+    s->ESP = ESP;
+    s->EBP = ESP;
+  }
+  sub_009ab973(s);
 }
+""",
+    ),
+}
+
+# --- block-level overrides ---------------------------------------------
+# A PATCHES entry replaces a whole lifted function. Some of the project's
+# hand patches (recomp-architecture.md §19.5) sit in the MIDDLE of a function
+# whose body is far too big to re-express by hand; these rewrite one block.
+# Each entry: (marker, old text, new text). `marker` names the entry for the
+# log and the idempotence check (the new text must contain "LIFT-PATCH
+# <marker>"); the old text is matched with either line ending.
+#
+# Round 24e: 0x00a2b5c2, the "branch forced" patch in the sound manager's
+# create-source function (0x00a2b1e0, mixer vtable slot +0x24). Pristine bytes
+# 80 7d 14 00 74 19 = `cmp byte [ebp+0x14], 0; je 0xa2b5e1`; the patch wrote
+# e9 17 01 00 00 = `jmp 0xa2b6de` over the first five and left the je's rel8
+# (0x19) as an orphan byte. The skipped code is the open of every sound
+# source right after its construction (vt+0x20 preload probe, then
+# vt+0x1c Open(path), "Failed to open %s \"%s\"" on failure) -- the reason
+# the WAV loader and the ogg opener were never called in rounds 16-24.
+# Ghidra saw the orphaned tail as its own function starting at the orphan
+# byte (FUN_00a2b5c7: `sbb` swallowing `mov ecx, [ebp+0x10]; test ecx, ecx`),
+# so the fix is three edits: the branch becomes a tail jump into that
+# function, its first block is re-decoded from 0xa2b5c8, and both targets
+# get a case in its re-entry switch.
+BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    ("0x00a2b5c2",
+     """  RECOMP_VA(0xa2b5c2u);
+L_00a2b5c2: ;
+  goto L_00a2b6de;
+""",
+     """  RECOMP_VA(0xa2b5c2u);
+L_00a2b5c2: ;
+  /* LIFT-PATCH 0x00a2b5c2: pristine `cmp byte [ebp+0x14], 0; je 0xa2b5e1`
+     (80 7d 14 00 74 19). The project's emulator-era patch forced `jmp 0xa2b6de`
+     here, skipping the open of every sound source after its construction.
+     Both successors live in sub_00a2b5c7 (Ghidra split the tail off as its own
+     function), so this is a tail jump through that function's re-entry switch. */
+  u24d00_4 = (uint32_t)MEMR8((uint32_t)(EBP + ((uint32_t)0x14u)));
+  ZF = (uint8_t)(u24d00_4 == ((uint32_t)0x0u));
+  CF = ((uint8_t)0x0u);
+  OF = ((uint8_t)0x0u);
+  SF = ((uint8_t)0x0u);
+  PF = (uint8_t)(ZF ? 0x1u : 0x0u);
+  s->EBP = EBP;
+  s->ESP = ESP;
+  s->FS_OFFSET = FS_OFFSET;
+  s->EAX = EAX;
+  s->EBX = EBX;
+  s->ESI = ESI;
+  s->EDI = EDI;
+  s->ECX = ECX;
+  s->CF = CF;
+  s->OF = OF;
+  s->SF = SF;
+  s->ZF = ZF;
+  s->PF = PF;
+  recomp_jmp_target = ZF ? 0xa2b5e1u : 0xa2b5c8u; recomp_jmp_pending = 1u; return;
+"""),
+    ("0x00a2b5c8",
+     """  RECOMP_VA(0xa2b5c7u);
+  u3400_4 = (uint32_t)(EBX + ((uint32_t)0xc985104du));
+  u24700_4 = (uint32_t)CF;
+  u5280_4 = MEMR32(u3400_4);
+  CF = (uint8_t)(u5280_4 < ECX);
+  u5280_4 = MEMR32(u3400_4);
+  OF = (uint8_t)recomp_sborrow32(u5280_4, ECX);
+  u5280_4 = MEMR32(u3400_4);
+  u24900_4 = (uint32_t)(u5280_4 - ECX);
+  u24980_1 = (uint8_t)(u24900_4 < u24700_4);
+  CF = (uint8_t)((CF) | (u24980_1));
+  u24a80_1 = (uint8_t)recomp_sborrow32(u24900_4, u24700_4);
+  OF = (uint8_t)((OF) ^ (u24a80_1));
+  u5280_4 = (uint32_t)(u24900_4 - u24700_4);
+  MEMW32(u3400_4, u5280_4);
+  u5280_4 = MEMR32(u3400_4);
+  SF = (uint8_t)(((int32_t)u5280_4) < ((int32_t)((uint32_t)0x0u)));
+  u5280_4 = MEMR32(u3400_4);
+  ZF = (uint8_t)(u5280_4 == ((uint32_t)0x0u));
+  u5280_4 = MEMR32(u3400_4);
+  u24d00_4 = (uint32_t)(u5280_4 & ((uint32_t)0xffu));
+  u24d80_1 = (uint8_t)recomp_popcount32(u24d00_4);
+  u24e00_1 = (uint8_t)(u24d80_1 & ((uint8_t)0x1u));
+  PF = (uint8_t)(u24e00_1 == ((uint8_t)0x0u));
+  RECOMP_VA(0xa2b5cdu);
+""",
+     """  RECOMP_VA(0xa2b5c7u);
+  /* LIFT-PATCH 0x00a2b5c8: Ghidra started this orphaned tail one byte early
+     (0x19 is the rel8 of the pristine `je` at 0xa2b5c6) and decoded an `sbb`
+     that swallowed `mov ecx, [ebp+0x10]; test ecx, ecx`. Re-decoded from
+     0xa2b5c8, which sub_00a2b1e0's restored branch enters. */
+L_00a2b5c8: ;
+  RECOMP_VA(0xa2b5c8u);
+  u3300_4 = (uint32_t)(EBP + ((uint32_t)0x10u));
+  ECX = MEMR32(u3300_4);
+  RECOMP_VA(0xa2b5cbu);
+  CF = ((uint8_t)0x0u);
+  OF = ((uint8_t)0x0u);
+  u57480_4 = (uint32_t)(ECX & ECX);
+  SF = (uint8_t)(((int32_t)u57480_4) < ((int32_t)((uint32_t)0x0u)));
+  ZF = (uint8_t)(u57480_4 == ((uint32_t)0x0u));
+  u24d00_4 = (uint32_t)(u57480_4 & ((uint32_t)0xffu));
+  u24d80_1 = (uint8_t)recomp_popcount32(u24d00_4);
+  u24e00_1 = (uint8_t)(u24d80_1 & ((uint8_t)0x1u));
+  PF = (uint8_t)(u24e00_1 == ((uint8_t)0x0u));
+  RECOMP_VA(0xa2b5cdu);
+"""),
+    ("0x00a2b5c7-reentry",
+     """    switch (_rva) {
+    case 0x00a2b5ddu: goto L_00a2b5dd;
+""",
+     """    switch (_rva) {
+    case 0x00a2b5c8u: goto L_00a2b5c8;   /* LIFT-PATCH 0x00a2b5c7-reentry */
+    case 0x00a2b5e1u: goto L_00a2b5e1;
+    case 0x00a2b5ddu: goto L_00a2b5dd;
+"""),
+    # The dispatcher's index holds function entries and CALL continuations
+    # only (mkdispatch.py, call_cont.txt); a block another function jumps
+    # INTO must be declared, or the tail jump above dies as "resolves to
+    # neither a host shim nor a lifted function" (round 24e, first run).
+    # mkdispatch.py treats a RECOMP_VA line carrying this marker as a
+    # re-entry block. These two apply on top of the block above, so a fresh
+    # lift and an already-patched tree end up identical.
+    ("REENTRY 0x00a2b5c8",
+     """  RECOMP_VA(0xa2b5c8u);
+""",
+     """  RECOMP_VA(0xa2b5c8u); /* LIFT-PATCH REENTRY 0x00a2b5c8 */
+"""),
+    ("REENTRY 0x00a2b5e1",
+     """  RECOMP_VA(0xa2b5e1u);
+""",
+     """  RECOMP_VA(0xa2b5e1u); /* LIFT-PATCH REENTRY 0x00a2b5e1 */
+"""),
+]
+
+
+def apply_block_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Apply BLOCK_PATCHES (idempotent: the marker in the new text). Returns the
+    TUs modified. A missing old text with no marker present is fatal -- a
+    re-lift that changed the block must be re-read, not silently skipped."""
+    touched: list[Path] = []
+    tus = sorted(lift_dir.glob("lifted_*.c"))
+    for marker, old, new in BLOCK_PATCHES:
+        tag = "LIFT-PATCH %s" % marker
+        if tag not in new:
+            raise SystemExit("block patch %s: new text lacks its marker" % marker)
+        hit = None
+        for tu in tus:
+            text = tu.read_text(encoding="utf-8")
+            if tag in text:
+                hit = (tu, None)
+                break
+            crlf = "\r\n" in text
+            old_t = old.replace("\n", "\r\n") if crlf else old
+            if old_t in text:
+                hit = (tu, (text, old_t, new.replace("\n", "\r\n") if crlf else new))
+                break
+        if hit is None:
+            raise SystemExit("block patch %s: old text not found in any TU of %s" % (marker, lift_dir))
+        tu, todo = hit
+        if todo is None:
+            print("block-patch %s: already applied in %s" % (marker, tu.name))
+            continue
+        text, old_t, new_t = todo
+        if text.count(old_t) != 1:
+            raise SystemExit("block patch %s: old text occurs %d times in %s" % (marker, text.count(old_t), tu.name))
+        if check_only:
+            touched.append(tu)
+            continue
+        tu.write_text(text.replace(old_t, new_t, 1), encoding="utf-8", newline="")
+        print("block-patch %s: applied in %s" % (marker, tu.name))
+        touched.append(tu)
+    return touched
 # --- baked host-import stack purges to correct ---------------------------
 # The lifter bakes each direct host-import call's stack purge INTO THE CALLER
 # at lift time, read from the shim table: `imp_X(s); s->EIP = MEMR32(s->ESP);
@@ -211,6 +406,40 @@ PROBE_PATCHES: dict[int, str] = {
   RECOMP_VA(0xa7b6a0u);
   if (isaac_probe_on()) isaac_probe_hit(0xa7b6a0u, s->ECX, MEMR32(s->ESP + 4u), 0u);
   sub_00a7b6a0__lifted(s);
+}
+""",
+    # Round 24d: the ogg stream's slot +0x0c, Queue(path, flag) -- the one
+    # call the sound path makes after creating a stream. It resolves the path,
+    # opens it in the archive (disk fallback), probes it with stb_vorbis and
+    # pushes the decoder on the stream's ring; the watch says the probe is
+    # never reached, so one of the two lookups hands back nothing.
+    0x00a7c760: """void sub_00a7c760(CpuState *restrict s) {
+  RECOMP_VA(0xa7c760u);
+  if (isaac_probe_on()) {
+    isaac_probe_hit(0xa7c760u, s->ECX, MEMR32(s->ESP + 4u), MEMR32(s->ESP + 8u));
+    isaac_probe_str(0xa7c760u, "queue path", MEMR32(s->ESP + 4u));
+  }
+  sub_00a7c760__lifted(s);
+  if (isaac_probe_on()) isaac_probe_hit(0xa7c761u, s->EAX & 0xffu, 0u, 0u);   /* its bool result */
+}
+""",
+    # the path resolver the stream asks first (this = the global at 0xc379e0)
+    0x00a17180: """void sub_00a17180(CpuState *restrict s) {
+  RECOMP_VA(0xa17180u);
+  int on = isaac_probe_on();
+  if (on) isaac_probe_str(0xa17180u, "resolve in", MEMR32(s->ESP + 4u));
+  sub_00a17180__lifted(s);
+  if (on) isaac_probe_str(0xa17181u, "resolve out", s->EAX);
+}
+""",
+    # the archive open (this = the global at 0xc37a10): out-pointer gets the stream
+    0x00a17f40: """void sub_00a17f40(CpuState *restrict s) {
+  RECOMP_VA(0xa17f40u);
+  int on = isaac_probe_on();
+  uint32_t out = MEMR32(s->ESP + 8u);
+  if (on) isaac_probe_str(0xa17f40u, "archive open", MEMR32(s->ESP + 4u));
+  sub_00a17f40__lifted(s);
+  if (on) isaac_probe_hit(0xa17f41u, s->EAX, out, out ? MEMR32(out) : 0xffffffffu);
 }
 """,
 }

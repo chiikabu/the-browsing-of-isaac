@@ -57,6 +57,19 @@ INPUT_DIR = REPO_ROOT / "tools"      # private input root (gitignored), like the
 SRC_DIR = INPUT_DIR / "lua-5.3.3"
 TARBALL = INPUT_DIR / "lua-5.3.3.tar.gz"
 BUILD = OUT_DIR / "lua"
+# Round 25: the JSPI web profile links with -sSUPPORT_LONGJMP=wasm (Wasm-EH
+# setjmp/longjmp: no invoke_* JS trampolines on the stack, which a JSPI
+# suspension cannot cross), and an archive compiled the emscripten way cannot
+# be mixed into that link. lua_pcall is a setjmp, so Lua gets its own build.
+BUILD_WASM_SJLJ = OUT_DIR / "lua-wasmsjlj"
+
+
+def build_dir(sjlj):
+    return BUILD_WASM_SJLJ if sjlj == "wasm" else BUILD
+
+
+def sjlj_cflags(sjlj):
+    return ["-sSUPPORT_LONGJMP=wasm"] if sjlj == "wasm" else []
 
 # The core + libraries, minus lua.c and luac.c which are the standalone
 # interpreter and compiler front ends.
@@ -105,6 +118,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true",
                     help="compile (requires the source to be present already)")
+    ap.add_argument("--sjlj", choices=("emscripten", "wasm"), default="emscripten",
+                    help="setjmp/longjmp implementation: 'emscripten' (default, output in lua/) "
+                         "or 'wasm' (Wasm EH, no invoke_* JS frames; what the JSPI web profile "
+                         "links, output in lua-wasmsjlj/)")
     args = ap.parse_args()
 
     emcc = find_emcc()
@@ -150,7 +167,8 @@ def main():
         return 2
 
     csrc = SRC_DIR / "src"
-    BUILD.mkdir(parents=True, exist_ok=True)
+    build = build_dir(args.sjlj)
+    build.mkdir(parents=True, exist_ok=True)
     objs, errors = [], 0
     for name in CORE:
         f = csrc / (name + ".c")
@@ -158,8 +176,8 @@ def main():
             print("missing source: %s" % f)
             errors += 1
             continue
-        obj = BUILD / (name + ".o")
-        cmd = [emcc, "-c"] + CFLAGS
+        obj = build / (name + ".o")
+        cmd = [emcc, "-c"] + CFLAGS + sjlj_cflags(args.sjlj)
         for d, _ in DEFINES:
             cmd += ["-D" + d]
         cmd += [str(f), "-o", str(obj)]
@@ -177,7 +195,7 @@ def main():
         print("\n%d source files failed" % errors)
         return 1
 
-    lib = BUILD / "liblua.a"
+    lib = build / "liblua.a"
     ar = str(Path(emcc).with_name("emar.exe"))
     if not Path(ar).exists():
         ar = str(Path(emcc).with_name("emar"))

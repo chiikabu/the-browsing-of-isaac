@@ -33,6 +33,16 @@ OUT_HOST = REPO_ROOT / "output" / "recomp" / "host"
 BOOT_OUT = OUT_LIFT / "boot"
 LUA_SRC = REPO_ROOT / "tools" / "lua-5.3.3" / "src"
 LUA_LIB = OUT_HOST / "lua" / "liblua.a"
+# Round 25: the web profile links with JSPI, and a JSPI suspension cannot cross
+# a JavaScript frame. The default setjmp/longjmp implementation puts invoke_*
+# JS trampolines around every call made by a function that uses setjmp
+# (isaac_guest_call_inner in dispatch_tbl.c, luaD_rawrunprotected in Lua), so
+# the web profile compiles every setjmp/longjmp user with the Wasm-EH
+# implementation (-sSUPPORT_LONGJMP=wasm) and links a Lua built the same way.
+# The lifted TUs never call setjmp/longjmp themselves (the guest's _setjmp3 /
+# longjmp are host shims), so their objects stay shared with the node profiles.
+LUA_LIB_WASM_SJLJ = OUT_HOST / "lua-wasmsjlj" / "liblua.a"
+SJLJ_CFLAGS: list = []
 
 # Prior boot export set (link_prof.sh) plus the 2026-08-31 RAM-FS seed hook.
 # boot_integration.mjs is the only JS caller; grep m._isaac_* there before
@@ -110,9 +120,14 @@ LDFLAGS = [
     # growing a wasm memory reallocates and copies the whole heap -- with
     # the old value a 200-s play run managed 900 frames instead of 7,980
     # (round 15e). Override with --initial-memory.
-    "-sINITIAL_MEMORY=805306368",
+    # Round 24f: the guest heap is 768 MiB and the host base moved to
+    # 0x34000000 (isaac_host.h), so the initial memory has to clear that plus
+    # the host's own needs: 1088 MiB. MAXIMUM_MEMORY lifts the 2 GiB growth
+    # ceiling wasm32 gets by default.
+    "-sINITIAL_MEMORY=1140850688",
+    "-sMAXIMUM_MEMORY=4294967296",
     "-sALLOW_MEMORY_GROWTH=1",
-    "-sGLOBAL_BASE=268435456",
+    "-sGLOBAL_BASE=872415232",
     "-sSTACK_SIZE=1048576",
     "-sASSERTIONS=1",
     "-sENVIRONMENT=node",
@@ -183,7 +198,7 @@ def main():
                          "boot-fast/, wasm-opt link. Faults become raw wasm traps; measure with it, "
                          "debug with the default profile.")
     args = ap.parse_args()
-    global BOOT_OUT, LIFT_CFLAGS, LDFLAGS, HOST_CFLAGS
+    global BOOT_OUT, LIFT_CFLAGS, LDFLAGS, HOST_CFLAGS, LUA_LIB, SJLJ_CFLAGS
     lift_obj_suffix = ".o"
     host_obj_suffix = ".o"
     if args.initial_memory:
@@ -198,6 +213,19 @@ def main():
         LDFLAGS = [f for f in LDFLAGS
                    if f not in ("-sENVIRONMENT=node", "-sNODERAWFS=1",
                                 "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32")]
+        # Round 25: JSPI. The frame present suspends the wasm stack once per
+        # frame (emscripten_sleep(0)) so the page's event loop runs; the exports
+        # that may be on the stack at that moment return promises. JSPI_EXPORTS
+        # names WASM exports (isaac_run_main, not the JS-side _isaac_run_main).
+        # A suspension cannot cross a JS frame, so setjmp/longjmp must be the
+        # Wasm-EH implementation rather than the invoke_* trampolines -- in the
+        # host TUs, in dispatch_tbl.c (compiled below with the lifted flags) and
+        # in Lua (its own archive, built by lua_build.py --sjlj wasm).
+        SJLJ_CFLAGS = ["-sSUPPORT_LONGJMP=wasm"]
+        HOST_CFLAGS = HOST_CFLAGS + SJLJ_CFLAGS
+        LUA_LIB = LUA_LIB_WASM_SJLJ
+        LDFLAGS += ["-sJSPI", "-sJSPI_EXPORTS=isaac_run_main,isaac_run_boot",
+                    "-sJSPI_IMPORTS=emscripten_sleep", "-sSUPPORT_LONGJMP=wasm"]
         LDFLAGS += ["-sENVIRONMENT=web", "-sFORCE_FILESYSTEM=1",
                     "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32,FS,ENV",
                     "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",
@@ -222,6 +250,11 @@ def main():
     if not any(lift_dir.glob("lifted_*.c")):
         print("no lifted_*.c in %s" % lift_dir)
         return 2
+    if args.web and not LUA_LIB.exists():
+        # the wasm-sjlj Lua is a half-minute build from the same source tree
+        print("lua  : building %s (setjmp/longjmp as Wasm EH, round 25)" % LUA_LIB)
+        r = run(py_cmd(str(HOST / "lua_build.py"), "--build", "--sjlj", "wasm"))
+        print("\n".join(((r.stdout or "") + (r.stderr or "")).splitlines()[-3:]))
     if not LUA_LIB.exists():
         print("liblua.a missing at %s -- run scripts/recomp/host/lua_build.py" % LUA_LIB)
         return 2
@@ -233,9 +266,10 @@ def main():
     # markers), and the touched TU's object is dropped so it recompiles.
     if not args.no_lift_patches:
         sys.path.insert(0, str(HERE))
-        from lift_patches import apply_lift_patches, apply_purge_patches, apply_wrap_patches  # noqa: E402
+        from lift_patches import (apply_lift_patches, apply_purge_patches,  # noqa: E402
+                                  apply_wrap_patches, apply_block_patches)
         patched = (set(apply_lift_patches(lift_dir)) | set(apply_purge_patches(lift_dir))
-                   | set(apply_wrap_patches(lift_dir)))
+                   | set(apply_wrap_patches(lift_dir)) | set(apply_block_patches(lift_dir)))
         print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)
@@ -315,9 +349,9 @@ def main():
             # boot_integration.c / recomp_rt.c / dispatch / stubs need the
             # lifter headers; keep host warning flags off generated stubs.
             flags = (HOST_CFLAGS if src.name in (
-                "boot_integration.c", "recomp_rt.c") else LIFT_CFLAGS) + inc_lift
+                "boot_integration.c", "recomp_rt.c") else LIFT_CFLAGS + SJLJ_CFLAGS) + inc_lift
             if src.name == "recomp_rt.c":
-                flags = LIFT_CFLAGS + inc_lift
+                flags = LIFT_CFLAGS + SJLJ_CFLAGS + inc_lift
         info = compile_one(emcc, src, obj, flags)
         if info["rc"] != 0:
             host_fail.append(info)

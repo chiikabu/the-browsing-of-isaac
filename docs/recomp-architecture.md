@@ -3596,6 +3596,242 @@ counters, the minimap, rocks, a door, and two enemies on screen. That is
 the browser target working end to end -- boot, asset load, menus, a
 started run, room generation, input, and gameplay rendering.
 
+### 21.39 Rounds 22-24: the audio thread jobs run, and the sound path is read to its end
+
+Three rounds on the one question left from 21.35: the game creates 64
+sources and 64 buffers, parses `sounds.xml`, reads all 25 MB of `sfx.a`
+at boot, and never submits a sample. Each round removed one candidate.
+
+**Round 22** implemented the OpenAL-SOFT extension the engine asks for
+(`ALC_SOFT_system_events`: `alcEventControlSOFT`, `alcEventCallbackSOFT`,
+plus the `alcReopenDeviceSOFT` / `alcDevicePauseSOFT` / `alcDeviceResumeSOFT`
+family the mixer probes through `alcGetProcAddress`). The device-change
+event is delivered to the registered callback with the mixer's user
+pointer. It changed nothing audible: the census still ends in
+`no audio data was ever submitted`.
+
+**Round 23** added observe-only probes (`PROBE_PATCHES` in
+`lift_patches.py`): a wrapper that stamps its VA, calls the lifted body
+exactly once and touches neither EIP nor ESP, logging under
+`ISAAC_PROBE=1`. They answer what the dispatch watch cannot -- a function
+whose callers reach it directly is never *dispatched*, so "dispatched 0
+times" is not "called 0 times". The catalogue reader `sub_00952df0` runs
+once; the WAV loader `sub_00a7b6a0` is never called by anyone.
+
+**Round 24: the guest's threads.** The engine spawns four thread jobs and
+this runtime ran none of them:
+
+| job | spawn | loop body |
+|---|---|---|
+| audio device watcher | `_beginthreadex` via trampoline 0x00a7f130 | `0x00a7da80(0x00c5aaa0)`: `while(!(flags&4)){ if(!step()) idle(); Sleep(5); }` |
+| 100 ms poller | same trampoline | `0x00a220c0(0x00c57b18)`: `PeekMessageA` + `Sleep(100)` |
+| theora worker | `CreateThread` | `0x00aab120`: names itself, then `worker->execute()` |
+| async job queue | same trampoline | `0x00a9e950(0x00c79a7c)`: lock, pop ring, run `fn(&job,arg)`, notify observers |
+
+The trampoline's job wrapper `0x00a5a760` reads `{obj, fn, arg}` out of a
+12-byte block and frees it before calling `fn(arg)`, so a job cannot be
+entered twice through it (round 24b found that as "indirect call to
+0x00000000 from 0x00a5a787"). Every loop above never returns and blocks
+in `Sleep`, `WaitForSingleObject` or an idle lap on a critical section.
+
+**Slices.** `isaac_threads_slice()` (host_shims_module.c) runs from
+`SwapBuffers`, once per presented frame: each adopted job is entered *at
+its loop function with its long-lived object* (ECX and the stack
+argument), on a scratch stack 16 KB below the frame's ESP, under a
+`setjmp`. The places a real thread would block are the yield points:
+
+- `Sleep` (host_shims_forward.c) yields after advancing the deterministic
+  clock;
+- `WaitForSingleObject` yields only when the object is not signalled --
+  round 24d moved the yield below the signalled test after seeing that a
+  queue waiting on its own still-set event yielded on every slice;
+- `EnterCriticalSection` reports every acquire to `isaac_threads_note_cs`;
+  the same lock acquired twice with no other host-boundary call in
+  between is the idle lap of a queue loop and yields. Any other shim call
+  is progress (`isaac_threads_progress()` from `isaac_indirect_call`).
+
+A yield is a `longjmp` back to the runner, which then restores the outer
+guest-call frame (`isaac_guest_jmp_save/restore` in mkdispatch.py;
+`isaac_guest_call` is nesting-safe now), clears `recomp_jmp_pending` and
+the re-entry EIP, and moves to the next job. A job that returns is
+retired and its Thread struct's done flag set. `ISAAC_THREADS=0` turns
+slicing off; `ISAAC_RUN_THREADS=1` is the old inline runner.
+
+For that to hold the critical-section family became real bodies
+(`Initialize`/`Enter`/`Leave`/`Delete`/`TryEnter`, `TryEnter` always
+succeeds: nothing can contend a section on one thread), `CreateThread`
+adopts its job like `_beginthreadex`, and `RaiseException(0x406D1388)` --
+the MSVC "SetThreadName" convention the theora worker raises first thing,
+meant to be swallowed by its own `__except` -- returns instead of being
+treated as an unwindable C++ throw.
+
+Census of a 150 s node run with slices on: 4 jobs adopted, 4,269 frames
+sliced, every job 4,269 slices and 4,269 yields; the device watcher's
+idle step (`0x00a9e720`, the mixer's active-list drainer) dispatched once
+per frame; no stall, no trap, `main` exits through `ISAAC_EXIT_AFTER`.
+The thread machinery works. It did not produce sound, because the sound
+path does not go through those threads at all -- see below.
+
+**The boundary that is left, audited.** Every import the game reaches is
+either a real host body or a recorded STUB verdict in `gen_shims.py`, and
+the stub report at the end of a run lists the first call of each stub
+with its caller. After round 24 the list is:
+
+| import | caller | why it does not matter |
+|---|---|---|
+| `SteamInternal_SteamAPI_Init` | 0x00a5f0f6 | returns "no Steam"; the game runs in its offline path (no achievements upload, no cloud) |
+| `EOS_Initialize` / `EOS_Platform_Create` / `EOS_Shutdown` / `EOS_Platform_Tick` | 0x00a5f8fe / 0x00a5fa11 / 0x00a5fa2d / 0x00a71745 | Epic Online Services; the platform handle is null and the per-frame tick is a no-op on it |
+| `SetThreadExecutionState` | 0x00a5f167 | display/sleep inhibition |
+| `timeGetDevCaps` / `timeBeginPeriod` | 0x00a5f174 / 0x00a5f180 | timer resolution; the runtime's clock is its own |
+| `TranslateMessage` | message pumps 0x00a5e690 / 0x00a6db02 / 0x00a81498 | keyboard-to-character translation of queued messages; input is delivered to the game's own key state directly |
+| `PeekMessageA` | 0x00a6daeb, the 100 ms poller thread | never a message; the poller sleeps |
+| `DragAcceptFiles` | 0x00a5d31c | file drag-and-drop onto the window |
+| `SendMessageA(WM_SETICON)` | 0x00949b3f | the window icon |
+
+None of these carries game state. The evidence that they do not matter is
+the 30-minute soak (142,680 frames, no stall) and the browser gameplay of
+21.38, both taken with every one of them stubbed.
+
+**Round 24e: why the port was silent -- three of our own doors.** With the
+threads out of the way, the sound path was read to its end, and none of
+it was audio code:
+
+1. **The sounds are not in the instance.** String probes on the ogg
+   stream's `Queue(path)` (0x00a7c760, the one call the music path makes
+   after creating a stream) showed the first two sounds the game asks for
+   are `music/Repentance/Genesis Retake Light Loop.ogg` and its Twisted
+   layer -- the title theme -- and that the call returns false before
+   reaching `stb_vorbis_open`. Hashing every catalogue path against the
+   archive tables (the key is `djb2` + FNV-1a over `resources/<path>`,
+   case-folded, `\` folded to `/`: 102 of the extracted tree's files match
+   `graphics.a` that way and none match without the prefix) showed
+   `music.a` holds 82 of the 179 tracks in `music.xml` and `sfx.a` 201 of
+   the 1,557 samples in `sounds.xml`. The rest -- every Repentance sound --
+   lives in `afterbirth.a` (145 MB), `afterbirthp.a` (604 MB) and
+   `repentance.a` (385 MB), which the instance never carried. The engine
+   had been logging `Failed to open archive file` for them all along.
+2. **The archive index was unreachable.** The project's own emulator-era
+   patch at `0x009ab970` (§19.5) stubs the function that creates the
+   `resources/` mount root; round 11 kept it that way so the small base
+   archives would not shadow the extracted tree. With only the `""` root,
+   every relative key misses the index (keyed `resources/...`) and resolves
+   through the loose files -- fine for gfx and xml, fatal for sounds that
+   exist nowhere else. The round-10 override is back (`lift_patches.py
+   PATCHES`), and the shadowing argument is gone with the full archive set
+   mounted: the mount loop (0x00a179c0) overwrites an equal-hash entry, so
+   the last archive mounted, `repentance.a`, wins, exactly as in the real
+   game. The language packs stay unlisted for the same reason (they would
+   win).
+3. **The open itself was patched out.** `0x00a2b5c2`, listed in §19.5 as
+   "branch forced", is inside the sound manager's create-source function:
+   pristine `cmp byte [ebp+0x14], 0; je 0xa2b5e1` became `jmp 0xa2b6de`,
+   which skips the block that opens every sound source right after its
+   construction (`vt+0x1c Open(path)`, `Failed to open %s "%s"` on
+   failure). That is why the WAV loader and the ogg opener were never
+   called by anyone. Ghidra had split the skipped tail off as its own
+   function starting on the orphaned byte (the pristine `je`'s rel8),
+   decoding an `sbb` that swallowed two real instructions. The fix is a
+   new block-level lift patch (`BLOCK_PATCHES`): the branch is restored as
+   a tail jump into that function's re-entry switch, its first block is
+   re-decoded from 0xa2b5c8, and both targets get a case.
+
+Mounting 1.2 GB of DLC archives inside a wasm32 heap needed one more
+piece: **windowed lazy files** (`host_shims_fs.c`, `boot_integration.mjs
+isaacLazyPread`). A lazy entry of 32 MiB or more is never loaded whole;
+`fread` serves it through two 1 MB windows refilled by positional reads
+of the host file (two, because the mount loop alternates between the
+entry table at the end of the archive and each entry's data: one window
+turned 1.5 GB of archives into 4.7 GB of host reads). The engine reads
+every archive front to back at mount -- a per-entry checksum -- so the
+boot now moves ~1.5 GB through those windows before the first frame.
+
+**Round 24f: what the open needed once it ran.** With the branch restored
+the first archive-set run reached the WAV loader (`sub_00a7b6a0`, the
+probe that had never fired) and stopped twice more, each one a runtime
+limit rather than a game defect:
+
+- **The re-entry index.** The restored branch is a tail jump to a block
+  of another function, and the dispatcher's VA index holds function
+  entries and CALL continuations only (`mkdispatch.py`, `call_cont.txt`);
+  the jump died as "resolves to neither a host shim nor a lifted function".
+  A RECOMP_VA line carrying `LIFT-PATCH REENTRY` is a re-entry block now;
+  the two targets are declared that way by the block patch itself.
+- **The guest heap.** The engine preloads its whole catalogue: 1,557
+  samples, 269 MB of PCM (198 in `sfx.a`, 213 in `afterbirth.a`, 1,146 in
+  `afterbirthp.a`). The 192 MiB arena ran out at 201 MB live and the last
+  199 loads failed for want of memory (`Failed to open sample`, every one
+  a file that hashes to an entry in `afterbirthp.a`). The arena is 768 MiB
+  now and everything above it moved up by 0x24000000: stack, TEB, module
+  and handle tokens, the shim arena (0x33000000) and the host base
+  (`-sGLOBAL_BASE=0x34000000`, INITIAL_MEMORY 1088 MiB, MAXIMUM_MEMORY
+  4 GiB). `gen_shims.py` reads the shim base from `isaac_host.h` instead
+  of baking `0x0f000000`, `recomp_rt.h`'s guest bound matches the host
+  base, and `tests/recomp-memory.test.js` pins the three spellings to one
+  number. The selftest caught the table: 196 checks. The bigger arena
+  exposed one more thing: the engine reserves address space for its Lua
+  arena with a ladder (1 GiB, then 512 MB), which costs nothing on Windows
+  until committed; here the arena is always committed, so the 512 MB step
+  that now succeeded was real memory, and the guest's Lua allocator is
+  replaced by the host's anyway. A reserve-only `VirtualAlloc` above
+  `ISAAC_RESERVE_MAX_MIB` (128) fails -- what the 192 MiB arena did
+  implicitly. And the move found every host-written guest scratch object
+  that had been placed by a raw address in the old TEB neighbourhood (the
+  fake Steam context and its vtable, the DI8 object, the GL/AL/env/vfprintf
+  scratch pages, the CRT `tm` buffers, the EXE module token): after the
+  move that range was inside the arena, and the first browser boot died on
+  a fake vtable slot the allocator had handed out. They are all
+  `ISAAC_TEB_VA`-relative now, and `tests/recomp-memory.test.js` refuses a
+  raw `0x0e0xxxxx` in host code.
+- **A replayable run.** The engine seeds its run RNG from the time of day,
+  so every run was a different floor, and a floor-dependent defect seen in
+  some runs -- the player bouncing between the start room and a neighbour
+  once per game frame for ~35 frames right after the run starts -- could
+  not be replayed. `ISAAC_EPOCH=<unix seconds>` pins `_time64` and
+  `GetSystemTimeAsFileTime` (host_shims_crt_time.c / host_shims_misc.c);
+  the deterministic frame clock is unchanged. That ping-pong is the open
+  gameplay item.
+- **The join.** With the thread jobs sliced, the game's shutdown aborted:
+  it stops a thread by setting its stop bit and waiting on the handle, and
+  `~Thread` (0x00a5a700) calls `std::terminate` if the thread is still
+  joinable (0x00a7f1e0 tests the done flag). The handle was signalled at
+  creation, so the wait returned at once. A wait on a thread handle is a
+  join now: `isaac_threads_join` slices that one job until its loop
+  returns (bounded by `ISAAC_JOIN_SLICES`, default 4,096; a loop that
+  ignores its stop bit is reported and the done flag forced).
+
+**Round 25: the browser build is interactive (JSPI).** The web module's
+frame loop never returned to the event loop, so no DOM event could reach
+the game while it ran. The speed profile now links with JSPI
+(`-sJSPI -sJSPI_EXPORTS=isaac_run_main,isaac_run_boot
+-sJSPI_IMPORTS=emscripten_sleep -sSUPPORT_LONGJMP=wasm`, the last one
+reaching `dispatch_tbl.c` and a second Lua archive built with it, because
+a JSPI suspension cannot cross the `invoke_*` trampolines the old setjmp
+lowering leaves behind); with `ISAAC_YIELD=1` (`run_web.mjs interactive=1`)
+`SwapBuffers` suspends the whole wasm stack for one macrotask per frame,
+`Sleep` suspends for its delay (capped at 50 ms, never inside a thread
+slice), and the clock is the wall clock. `boot_web.mjs` awaits the
+promise-returning entry and feeds live keyboard and mouse events.
+Measured in headless Chromium: yield off, 1,500 frames in 41.7 s (the
+JSPI link costs nothing: 36.6 s like-for-like against the pre-round
+module's 37.9 s); yield on, 1,469 frames in 39.3 s with all 18 live key
+events delivered and the menu-to-run progression identical to the
+scripted timeline, 49-59 fps during play, the page answering screenshots
+between frames. The module grew 7 KB. `tests/recomp-jspi.test.js` pins the
+flags and hooks.
+
+The browser gets the archive set the same way node does: `boot_web.mjs`
+registers the DLC archives lazily and refills the RAM-FS windows through
+`?off=&len=` byte slices of the runner's static server (a positional read,
+never the whole archive per window).
+
+**The result.** Node, debug profile, the HANDOFF timeline, 240 s: 92-99
+PCM uploads (5.7-7.2 MB, 34-52 s of audio), 17-23 `alSourcePlay`, 85/61
+music-stream buffers queued/unqueued, peak guest heap 354 MiB, clean exit.
+Headless Chromium, the fast module, same timeline: **329 uploads (42 MB,
+385 s of audio), 102 plays, 308/76 queued/unqueued, the WebAudio context
+running, 1,501 frames in 67.6 s wall** including the archive mount over
+HTTP, `main` returned 0. The port has sound.
+
 ## Appendix: reproduction
 
 ```bash

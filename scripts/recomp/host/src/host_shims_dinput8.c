@@ -33,8 +33,8 @@
 /* Fake IDirectInput8A object: guest scratch below ISAAC_GUEST_LIMIT_VA,
  * written by the host only. The game reads [obj] for the vtable pointer and
  * dispatches slots 0..4 through isaac_indirect_call (token VAs). */
-#define DI8_VTABLE_VA  0x0e00d100u
-#define DI8_OBJECT_VA  0x0e00d200u
+#define DI8_VTABLE_VA  (ISAAC_TEB_VA + 0xd100u)
+#define DI8_OBJECT_VA  (ISAAC_TEB_VA + 0xd200u)
 
 static int di8_ready = 0;
 

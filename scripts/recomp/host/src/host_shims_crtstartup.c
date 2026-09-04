@@ -348,8 +348,20 @@ void imp_vcruntime140___setjmp3(CpuState *restrict cpu) {
     for (unsigned i = 0; i < 6; ++i)
         isaac_w32(env + 0x28 + 4u * i, 0u);
     cpu->EAX = 0;                          /* first return */
-    isaac_log("[isaac][crt] _setjmp3(env=0x%08x frame=%u cont=0x%08x "
-              "caller=0x%08x)", env, frame, cont_eip, isaac_retaddr(cpu));
+    /* The game arms a setjmp twice per presented frame (0x00a96859 and
+     * 0x00a64bbb); logging every one was ~4,300 lines per minute of play
+     * (round 24d). The first 8 from each site are enough to see the
+     * pattern; the rest are counted into the stub report's silence. */
+    {
+        static uint32_t sites[8]; static unsigned n_per[8], nsites;
+        unsigned k;
+        for (k = 0; k < nsites; ++k) if (sites[k] == cont_eip) break;
+        if (k == nsites && nsites < 8u) { sites[nsites] = cont_eip; n_per[nsites] = 0u; ++nsites; }
+        if (k < 8u && ++n_per[k] <= 8u)
+            isaac_log("[isaac][crt] _setjmp3(env=0x%08x frame=%u cont=0x%08x caller=0x%08x)%s",
+                      env, frame, cont_eip, isaac_retaddr(cpu),
+                      n_per[k] == 8u ? " (further calls from this site silent)" : "");
+    }
 }
 
 /* ------------------------------------------------------------ longjmp ---- */

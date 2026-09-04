@@ -28,9 +28,9 @@
 
 /* Fake CSteamAPIContext: guest scratch below ISAAC_GUEST_LIMIT_VA, written
  * by the host only, like the DI8 object (0x0e00d100/0x0e00d200). */
-#define STEAM_OBJ_VA    0x0e00d500u
-#define STEAM_VTBL_VA   0x0e00d600u
-#define STEAM_ZERO8_VA  0x0e00d700u
+#define STEAM_OBJ_VA    (ISAAC_TEB_VA + 0xd500u)
+#define STEAM_VTBL_VA   (ISAAC_TEB_VA + 0xd600u)
+#define STEAM_ZERO8_VA  (ISAAC_TEB_VA + 0xd700u)
 
 static int steam_ready = 0;
 

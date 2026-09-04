@@ -39,7 +39,7 @@
 /* Guest-visible scratch for the AL string answers. 0x0e006000 holds the GL
  * version string; module tokens start at 0x0e010000. 0x0e006100..0x0e006180
  * sits between, below ISAAC_GUEST_LIMIT_VA, written by the host only. */
-#define AL_SCRATCH_VA 0x0e006100u
+#define AL_SCRATCH_VA (ISAAC_TEB_VA + 0x6100u)
 static uint32_t g_alc_device;
 
 /* A float argument arrives as its raw IEEE bits in a stack slot. */
@@ -95,13 +95,6 @@ void isaac_al_census(void) {
 static uint32_t al_next_token(void) {
     static uint32_t n = 0x7788c000u;
     return n += 0x10u;
-}
-
-static void al_write_tokens(uint32_t count, uint32_t out) {
-    for (uint32_t i = 0; i < count; ++i) {
-        if (isaac_is_guest_va(out + 4 * i))
-            isaac_w32(out + 4 * i, al_next_token());
-    }
 }
 
 /* ALCdevice *alcOpenDevice(const ALCchar *devicename) */

@@ -207,7 +207,7 @@ def main():
     # client copies after upload, which is not decidable from the static image.
     floor_bytes = largest["rgbaBytes"] if largest else 0
     ceiling_bytes = total_decoded
-    current = 0x0ff00000 - 0x00d00000
+    current = 0x30d00000 - 0x00d00000     # ISAAC_HEAP_VA..+ISAAC_HEAP_SIZE (768 MiB since round 24f)
 
     out = {
         "method": "static upper bound; NOT a measured runtime peak",
@@ -279,7 +279,7 @@ def main():
     print("  FLOOR   %s   largest single texture decode, must be contiguous"
           % mib(floor_bytes))
     print("  CEILING %s  every PNG resident as a client RGBA copy" % mib(ceiling_bytes))
-    print("  current %s  guest heap reservation (0x00d00000..0x0ff00000)"
+    print("  current %s  guest heap reservation (0x00d00000..0x30d00000)"
           % mib(current))
     print()
     if floor_bytes <= current <= ceiling_bytes:

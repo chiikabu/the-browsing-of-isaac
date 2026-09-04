@@ -188,8 +188,11 @@ void imp_kernel32__GetSystemTimeAsFileTime(CpuState *restrict cpu) {
         cpu->EAX = 0;
         return;
     }
+    extern int64_t isaac_epoch_override(void);        /* host_shims_crt_time.c: ISAAC_EPOCH */
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    int64_t ov = isaac_epoch_override();
+    if (ov >= 0) { ts.tv_sec = (time_t)ov; ts.tv_nsec = 0; }
+    else clock_gettime(CLOCK_REALTIME, &ts);
     uint64_t ft = ((uint64_t)ts.tv_sec + 11644473600ull) * 10000000ull
                 + (uint64_t)ts.tv_nsec / 100;
     isaac_w32(out, (uint32_t)ft);
@@ -310,7 +313,7 @@ void imp_kernel32__GlobalUnlock(CpuState *restrict cpu) {
 
 #define ENV_NAME_CAP 512u
 
-#define ENV_SCRATCH_VA    0x0e004080u
+#define ENV_SCRATCH_VA    (ISAAC_TEB_VA + 0x4080u)
 #define ENV_SCRATCH_CAP   4096u
 
 
@@ -553,7 +556,7 @@ void imp_api_ms_win_crt_stdio____stdio_common_vsprintf(CpuState *restrict cpu) {
 }
 
 
-#define VFPRINTF_SCRATCH_VA 0x0e004200u
+#define VFPRINTF_SCRATCH_VA (ISAAC_TEB_VA + 0x4200u)
 void imp_api_ms_win_crt_stdio____stdio_common_vfprintf(CpuState *restrict cpu) {
     /* int __stdio_common_vfprintf(__int64 opt, FILE *s, const char *fmt,
      * _locale_t loc, va_list ap) -- the game logs through this; forward the

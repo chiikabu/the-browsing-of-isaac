@@ -65,6 +65,7 @@ void isaac_audio_probe_bind(uint32_t self);
 /* observe-only probes (lift_patches.py PROBE_PATCHES) */
 int  isaac_probe_on(void);
 void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c);
+void isaac_probe_str(uint32_t tag, const char *label, uint32_t p);
 
 #ifndef RECOMP_TICK_MASK
 #define RECOMP_TICK_MASK 0xFFFFu
@@ -95,7 +96,7 @@ void recomp_stall_tick(void);
 void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
 /* Everything the guest may legitimately touch lives below the host base. */
 #ifndef RECOMP_GUEST_LIMIT
-#define RECOMP_GUEST_LIMIT 0x10000000u
+#define RECOMP_GUEST_LIMIT 0x34000000u   /* = ISAAC_HOST_BASE_VA (isaac_host.h), round 24f */
 #endif
 #define RECOMP_CHECK(a, n, w)                                            \
   do {                                                                   \

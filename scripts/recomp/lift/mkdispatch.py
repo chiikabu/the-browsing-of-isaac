@@ -87,7 +87,11 @@ def main():
                 if not mr:
                     continue
                 v = int(mr.group(1), 16)
-                if v in cont and v not in seen_b:
+                # A block a lift patch jumps INTO from another function is a
+                # re-entry point too (lift_patches.py BLOCK_PATCHES marks the
+                # RECOMP_VA line): round 24e restores a branch whose targets
+                # Ghidra had split off into their own function.
+                if (v in cont or "LIFT-PATCH REENTRY" in line) and v not in seen_b:
                     seen_b.add(v)
                     blocks.append((v, cur))
     blocks.sort()
@@ -319,7 +323,7 @@ void isaac_guest_longjmp(CpuState *restrict cpu) {
  * a parked jump is run here, in the host entry's frame, so a chain of guest
  * jumps of any length costs a bounded number of native frames. Lifted call
  * sites carry the same check after every call. */
-void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
+static void isaac_guest_call_inner(uint32_t va, CpuState *restrict cpu) {
   if (setjmp(g_guest_jmp) == 0) {
     if (isaac_lifted_dispatch(va, cpu)) { recomp_run_pending(cpu); return; }
     fprintf(stderr, "recomp: guest call to 0x%08x has no lifted function "
@@ -341,6 +345,22 @@ void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
   fprintf(stderr, "recomp: longjmp replay did not unwind in 2^20 frames "
                   "(EIP 0x%08x)\\n", cpu->EIP);
   abort();
+}
+
+/* Nesting (round 24): a frame pump or a thread slice calls the guest from
+ * inside main's own guest call, and the one static jmp_buf was overwritten by
+ * the inner setjmp -- a guest longjmp on the outer level would then have
+ * landed in a dead frame. Save it around every call. A slice that yields
+ * skips this restore, so the slice runner saves and restores it itself
+ * through the two accessors. */
+void isaac_guest_jmp_save(void *dst) { memcpy(dst, g_guest_jmp, sizeof(jmp_buf)); }
+void isaac_guest_jmp_restore(const void *src) { memcpy(g_guest_jmp, src, sizeof(jmp_buf)); }
+unsigned isaac_guest_jmp_size(void) { return (unsigned)sizeof(jmp_buf); }
+void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
+  jmp_buf saved;
+  memcpy(saved, g_guest_jmp, sizeof(jmp_buf));
+  isaac_guest_call_inner(va, cpu);
+  memcpy(g_guest_jmp, saved, sizeof(jmp_buf));
 }
 ''')
 

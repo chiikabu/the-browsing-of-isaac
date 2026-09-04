@@ -90,7 +90,7 @@ uint32_t isaac_qsort_compare_calls(void) { return g_qs_calls; }
 /* Guest-visible scratch for strings the CRT hands back by pointer. The
  * fake-TEB block owns 0x0e000000..0x0e005080 and the GL version string
  * sits at 0x0e006000; this page follows it. */
-#define GAPS_SCRATCH_VA 0x0e007000u
+#define GAPS_SCRATCH_VA (ISAAC_TEB_VA + 0x7000u)
 static uint32_t scratch_cstr(const char *s) {
     size_t n = strlen(s);
     if (n > 250) n = 250;
@@ -106,7 +106,7 @@ void imp_api_ms_win_crt_runtime__perror(CpuState *restrict cpu) {
     char msg[256];
     uint32_t p = isaac_arg(cpu, 0);
     isaac_guest_cstr(p, msg, sizeof msg, "perror");
-    isaac_log("[isaac][guest-log] perror: %s: (errno %d)", msg, (int)isaac_r32(0x0e004000u));
+    isaac_log("[isaac][guest-log] perror: %s: (errno %d)", msg, (int)isaac_r32((ISAAC_TEB_VA + 0x4000u)));
     cpu->EAX = 0;
 }
 /* __stdio_common_vsnprintf_s(opt64, buf, n, count, fmt, locale, ap): like
@@ -244,6 +244,24 @@ void imp_vcruntime140____std_type_info_name(CpuState *restrict cpu) {
 void imp_kernel32__RaiseException(CpuState *restrict cpu) {
     uint32_t code = isaac_arg(cpu, 0), nargs = isaac_arg(cpu, 2), args = isaac_arg(cpu, 3);
     uint32_t obj = 0, throwinfo = 0;
+    /* 0x406D1388 is MS_VC_EXCEPTION, the "SetThreadName" convention: the
+     * raiser wraps it in __try/__except(EXCEPTION_EXECUTE_HANDLER) so a
+     * debugger can read {0x1000, name, tid, 0} out of the args, and with no
+     * debugger the handler swallows it. Returning normally is that path
+     * (round 24d: the theora worker 0x00aab120 names itself first thing). */
+    if (code == 0x406D1388u) {
+        /* logged once per raise site: a sliced thread job re-enters from
+         * the top every frame and names itself again each time */
+        static uint32_t seen[8]; static unsigned nseen;
+        uint32_t ra = isaac_retaddr(cpu), name;
+        unsigned k;
+        for (k = 0; k < nseen; ++k) if (seen[k] == ra) return;
+        if (nseen < 8u) seen[nseen++] = ra;
+        name = (nargs >= 2u && isaac_is_guest_va(args + 7u)) ? isaac_r32(args + 4u) : 0u;
+        isaac_log("[isaac][thr] SetThreadName(\"%s\") from 0x%08x: swallowed (further raises from here silent)",
+                  name && isaac_is_guest_va(name) ? (const char *)isaac_g(name) : "?", ra);
+        return;
+    }
     if (code == 0xE06D7363u && nargs >= 3u && isaac_is_guest_va(args + 11u)) {
         obj = isaac_r32(args + 4u); throwinfo = isaac_r32(args + 8u);
     }
@@ -295,7 +313,7 @@ void imp_kernel32__TerminateProcess(CpuState *restrict cpu) {
     cpu->EAX = 1;
 }
 void imp_kernel32__OpenProcess(CpuState *restrict cpu) {
-    cpu->EAX = 0x0e010040u;                       /* the current process, as a token */
+    cpu->EAX = (ISAAC_MODULE_BASE + 0x40u);                       /* the current process, as a token */
 }
 void imp_kernel32__GetStartupInfoW(CpuState *restrict cpu) {
     uint32_t si = isaac_arg(cpu, 0);
