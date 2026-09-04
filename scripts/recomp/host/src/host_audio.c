@@ -459,6 +459,38 @@ void isaac_audio_pump(const CpuState *cpu) {
     if (!isaac_is_guest_va(vt + 0x40u)) return;
     uint32_t step = isaac_r32(vt + 0x20u), idle = isaac_r32(vt + 0x3cu);
     if (!step) return;
+    if (g_pump_iters == 0u)
+        isaac_log("[isaac][audio] mixer vtable 0x%08x: step=vt[0x20]=0x%08x idle=vt[0x3c]=0x%08x, "
+                  "flags byte 0x%02x, drain gate [this+0x60]=%u, pending list 0x%08x..0x%08x",
+                  vt, step, idle, *(const uint8_t *)isaac_g(g_pump_this + 4u),
+                  isaac_is_guest_va(g_pump_this + 0x60u) ? *(const uint8_t *)isaac_g(g_pump_this + 0x60u) : 0xFFu,
+                  isaac_is_guest_va(g_pump_this + 0x20u) ? isaac_r32(g_pump_this + 0x1cu) : 0u,
+                  isaac_is_guest_va(g_pump_this + 0x24u) ? isaac_r32(g_pump_this + 0x20u) : 0u);
+    if (g_pump_iters && (g_pump_iters % 600u) == 0u)
+        isaac_log("[isaac][audio] pump %u: gate=%u pending=%u sounds",
+                  g_pump_iters,
+                  isaac_is_guest_va(g_pump_this + 0x60u) ? *(const uint8_t *)isaac_g(g_pump_this + 0x60u) : 0xFFu,
+                  (isaac_r32(g_pump_this + 0x20u) - isaac_r32(g_pump_this + 0x1cu)) / 4u);
+    /* ISAAC_AUDIO_DEVICE_EVENT=1: set the byte the OpenAL-SOFT
+     * device-changed callback would set. The engine's audio thread handler
+     * (FUN_00a9e720) does all of its work inside `if (this[0x60])`, and the
+     * only thing that ever sets that byte is the ALC_SOFT_system_events
+     * callback (FUN_00a9e890, "OpenAL-SOFT device has changed") -- which this
+     * port never delivers, because alcIsExtensionPresent says no and
+     * alcGetProcAddress returns null. This is the probe for whether that is
+     * what keeps the queued sounds from being bound to a source. */
+    {
+        static int forced = -1;
+        if (forced < 0) {
+            const char *e = getenv("ISAAC_AUDIO_DEVICE_EVENT");
+            forced = (e && *e && *e != '0') ? 1 : 0;
+        }
+        if (forced == 1 && isaac_is_guest_va(g_pump_this + 0x60u)) {
+            *(uint8_t *)isaac_g(g_pump_this + 0x60u) = 1u;
+            forced = 2;
+            isaac_log("[isaac][audio] forced the device-changed flag at 0x%08x", g_pump_this + 0x60u);
+        }
+    }
     uint32_t eax = 0;
     ++g_pump_iters;
     pump_call(cpu, step, g_pump_this, &eax);

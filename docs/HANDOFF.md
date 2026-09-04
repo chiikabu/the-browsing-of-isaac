@@ -94,9 +94,12 @@ is started:
   WebAudio backend for the browser profile, and the frame present pumps
   the engine's mixer thread, which never returns and so cannot be run
   cooperatively. What is missing is upstream of all of it: the game's
-  sound objects hold no decoded PCM, so `FUN_00a9fb80` never reaches its
-  `alBufferData`. It does open `sounds.xml` and `sfx.a` (303 times), so
-  the gap is the decode between archive entry and PCM.
+  sound objects never get an AL source. `SoundEffect::Play` (`0x00a7cab0`)
+  runs and queues, but `0x00a9fb80` -- which binds the source and calls
+  `alBufferData` -- is dispatched **zero** times, so `Play` skips its own
+  `alSourcePlay`. Reading is fine: the game pulls the whole 25 MB of
+  `sfx.a` (26,387 reads). The gap is whoever should call `0x00a9fa00`
+  through a vtable (§21.34).
 - **No video.** `CreateThread` is an inert stub, so the theoraplayer
   worker never starts and cutscenes never decode.
 - **Gameplay depth is untested.** The scripted input is a timeline keyed

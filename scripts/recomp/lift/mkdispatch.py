@@ -201,6 +201,8 @@ static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
 static uint32_t *g_dcount;
 static uint32_t g_dcalls, g_dblocks, g_dmisses;
 static int g_hb_every = -1;   /* ISAAC_HEARTBEAT */
+static int g_watch_n = -1;    /* ISAAC_DISPATCH_WATCH */
+static uint32_t g_watch_va[8], g_watch_hits[8];
 /* ISAAC_DISPATCH_TIME=1 (round 14j): wall time INSIDE each dispatched entry,
  * inclusive of everything it calls (a nested dispatch is charged to both), and
  * the time spent in this function around the calls -- the dispatcher's own
@@ -226,6 +228,23 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
     if (g_hb_every > 0)
       fprintf(stderr, "[isaac][hb] heartbeat every %d dispatches\\n", g_hb_every);
   }
+  /* ISAAC_DISPATCH_WATCH=<hex va>[,<hex va>...]: say the first time each of
+   * those functions is dispatched, and count them. Round 16 needed to know
+   * whether the game's sound-play path (0x00a9fb80) is reached at all, which
+   * neither the hottest-16 census nor the heartbeat can answer. */
+  if (g_watch_n < 0) {
+    g_watch_n = 0;
+    const char *w = getenv("ISAAC_DISPATCH_WATCH");
+    while (w && *w && g_watch_n < 8) {
+      g_watch_va[g_watch_n++] = (uint32_t)strtoul(w, (char **)&w, 16);
+      while (*w == ',' || *w == ' ') ++w;
+    }
+    if (g_watch_n) fprintf(stderr, "[isaac][watch] watching %d dispatch target(s)\\n", g_watch_n);
+  }
+  for (int wi = 0; wi < g_watch_n; ++wi)
+    if (g_watch_va[wi] == va && !g_watch_hits[wi]++)
+      fprintf(stderr, "[isaac][watch] sub_%08x dispatched for the first time (after %u dispatches)\\n",
+              va, g_dcalls);
   if (g_hb_every > 0 && (g_dcalls % (uint32_t)g_hb_every) == 0u)
     fprintf(stderr, "[isaac][hb] %u dispatches, %.1f s, now sub_%08x\\n",
             g_dcalls, emscripten_get_now() / 1000.0, va);
@@ -263,6 +282,8 @@ void isaac_dispatch_report(void) {
     fprintf(stderr, "[isaac][dispatch]   %10u x sub_%08x\\n", g_dcount[best], g_dva[best]);
     g_dcount[best] = 0;
   }
+  for (int wi = 0; wi < g_watch_n; ++wi)
+    fprintf(stderr, "[isaac][watch] sub_%08x dispatched %u time(s)\\n", g_watch_va[wi], g_watch_hits[wi]);
   if (!g_dtime) return;
   fprintf(stderr, "[isaac][dispatch] time inside dispatched entries %.1f ms (inclusive; nested dispatches "
                   "count twice), dispatcher bookkeeping %.1f ms; slowest entries:\\n", g_dtotal, g_dself);

@@ -3415,6 +3415,55 @@ user's real `options.ini` into the instance makes the boot abort after
 shader init, so the port reads that file but cannot yet satisfy something
 in it; the run stays on defaults for now.
 
+### 21.34 Round 16c: following the sound from the archive to the source
+
+The host pipeline is built (21.33), so everything here is about the guest.
+Four measurements, each with a tool that stays.
+
+**The archive layer is healthy.** `ISAAC_FS_READ_TRACE=<substring>` logs
+every `fread` of the matching files with offset, requested and returned
+length. On `sfx.a` the game reads the 7-byte magic, the header, the table
+of contents at the end of the 25 MB file, and then sequential 1 KB payload
+chunks -- **26,387 reads totalling 25,333,050 bytes, which is the whole
+file**. Every sample is fetched. Nothing is failing between the RAM-FS and
+the decoder.
+
+**The play path is reached, and stops one step short.**
+`ISAAC_DISPATCH_WATCH=<hex va>[,...]` says the first time each of up to
+eight functions is dispatched and counts them, which neither the
+hottest-16 census nor the heartbeat can do. Over a full menus-to-gameplay
+run:
+
+| function | role | dispatches |
+| --- | --- | --- |
+| `0x00a7cab0` | `SoundEffect::Play` | 5 |
+| `0x00a9fb80` | bind a source, `alBufferData`, `alSourcePlay` | **0** |
+| `0x00aa0640` | the streaming variant | 0 |
+
+`Play` queues the sound on the manager's pending list and then plays it
+only `if (this[0xd] != 0)` -- `this[0xd]` being the AL source id that
+`0x00a9fb80` assigns. Nothing assigns it, so nothing plays. The pump
+census confirms the queue is real and never drains: `pending=1 sounds`
+for thousands of frames.
+
+**The mixer thread is not the mixer.** Its handler `FUN_00a9e720` does
+all of its work inside `if (this[0x60])`, and the only writer of that byte
+is `FUN_00a9e890`, the ALC_SOFT_system_events callback that logs
+"OpenAL-SOFT device has changed". So that thread watches for device
+changes; OpenAL itself is the mixer. The round-16b pump is therefore
+correct but not the missing piece, and it stays because the loop does have
+to run.
+
+**Forcing the flag does not help** (`ISAAC_AUDIO_DEVICE_EVENT=1`, kept as
+a documented negative): setting the byte the callback would set makes the
+handler take its drain path and the run ends immediately afterwards. So
+the drain is a device-change rebuild, not the ordinary route to a source.
+
+What is left is the ordinary route: something calls `0x00a9fa00`
+(`vt[0x3c]` then `0x00a9fb80`) through a vtable, and in this port it never
+happens. That call site is the whole remaining gap between a game that
+loads every sound and a game that can be heard.
+
 ## Appendix: reproduction
 
 ```bash
