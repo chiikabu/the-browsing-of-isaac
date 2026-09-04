@@ -3832,6 +3832,216 @@ Headless Chromium, the fast module, same timeline: **329 uploads (42 MB,
 running, 1,501 frames in 67.6 s wall** including the archive mount over
 HTTP, `main` returned 0. The port has sound.
 
+### 21.40 Round 26: the boot pays for the archives only once
+
+**The mount's checksum pass.** With the DLC set the engine's mount loop
+(0x00a179c0) read every entry of every archive -- 1.5 GB through the
+RAM-FS windows -- before the first frame, folding a checksum per entry
+(`h = rotr1(h) + u32` from 0xababeb98 over 0x200-byte chunks) and
+comparing it with the entry's stored value. That was ~65 s of a
+debug-profile boot, and in the browser every one of those bytes came over
+HTTP as 1 MB slices. The archives are verified offline now
+(`scripts/recomp/assets`), so the lifted mount skips the pass: a block
+patch at 0x00a17cee (`lift_patches.py BLOCK_PATCHES`) asks the host once
+per entry (`isaac_archive_verify_on()`, host_shims_fs.c) and, unless
+`ISAAC_ARCHIVE_VERIFY=1`, leaves `esp` and `edi` as the hash-table insert
+at 0x00a17dc1 expects them and jumps there. Entries are still read -- and
+still decoded through the engine's own reader -- when the game opens them.
+Measured on the same pinned floor (debug profile): the second frame at
+**2.9 s instead of 65 s**; the audio census is identical (93 uploads, 17
+plays); the run's whole archive traffic is 827 MB through 831 window
+refills instead of 1.5 GB before the first frame.
+
+**A scripted way into the video path.** Nothing in the input timeline
+reaches the Theora endings (cutscenes.xml `<videopart>`, decoded by the
+theoraplayer worker that runs as a per-frame slice since round 24).
+`ISAAC_CUTSCENE=<frame>:<id>` makes the frame present call
+`Manager::ShowCutscene(id, 1, 0)` (0x00958e60, thiscall on the Manager at
+[0x00c7169c]) at that presented frame -- the same call the game makes when
+a run ends; id 3 (Epilogue) is anm2, then `001_Epilogue.ogv`, then the
+credits.
+
+**Less log.** The DirectInput-region shim ENTER/EXIT trace in
+`isaac_indirect_call` was unconditional; with the device poller sliced every
+frame that was two `PeekMessageA` lines per frame, thousands per run. It is
+`ISAAC_DSP_TRACE=1` now, like `_setjmp3`'s per-site cap (8) from round 24.
+
+**The interactive page, state-driven.** With the boot this fast the
+frame-keyed input timeline of `run_web.mjs` lands on whatever screen is up
+in interactive (wall-clock) mode -- one run parked on the main menu, the
+next on the beta notice. `scripts/recomp/web/drive_interactive.mjs` presses
+Enter (held 120 ms: the game samples keys once per frame, and a tap inside
+one tick lands between two samples -- forty taps on the beta notice, none
+seen) until the game's own log says a run started, then walks. Measured:
+first frame 1.45 s after load, a run after 9 Enters, walking changes the
+picture, 243 PCM uploads (103 s of audio), 22 plays, the WebAudio context
+running (resumed on the first key press, the autoplay policy's user
+activation), `main` returned 0. The screenshot after walking is a Basement
+room with the HUD and the minimap -- and the floor banner reads
+`#BASEMENT_NAME I`: with the `resources/` root back the string table is
+read from its `afterbirthp.a` entry (it used to come from the loose file)
+and the lookups miss. Open; probes on the `.sta` parser and its stream
+open are in the next build.
+
+**The first video, and twelve intrinsics.** `ISAAC_CUTSCENE=300:3` opened
+`001_Epilogue.ogv` from `videos.a` ("16 precached frames") and stopped
+twice in our runtime: first on `0x00ae4820`, libtheora's `emms; ret`
+reached only through its cpu-dispatch table (a hand-written body in
+missing_fns.c), then on `pmaddubsw` -- one of twelve SSE wide intrinsics
+the tree declares that had stayed aborting stubs (`pmaddubsw`, `pshufb`,
+`paddsw`, `pmulhuw`, `pmulld`, `pabsd`, `pmovsxwd`, `pmovzxwd`, `psraw`,
+`divps`, `maxps`, `minps`; the AVX2 ones stay stubs, no AVX2 is reported).
+They are in `recomp_rt.c` now, alias-safe like `pshuflw`, and each is a
+case in the single-instruction oracle (`wideops.py`, 200 random vectors
+against Unicorn): all pass. The oracle needed two repairs to run at all
+(`recomp_rt.c` had grown an unconditional `emscripten.h` and references to
+the dispatch table and the stub report) and one rule: on a lane where both
+engines produce a NaN the payloads may differ -- with two SNaN inputs the
+SDM and this machine's own SSE quiet the first operand, Unicorn's softfloat
+quiets the second -- so those lanes compare NaN-to-NaN; numeric lanes stay
+byte-exact. With both in place the Epilogue plays through: the video is
+created, decoded by the theoraplayer worker slice (4,338 slices in the
+run), uploaded frame by frame (`glTexSubImage2D`), logs `finished
+playing` and is destroyed, the credits follow and the game comes back to
+the title menu -- 4,320 frames to the exit budget, no trap. **The port
+plays video.**
+
+**The archives, opened.** `scripts/recomp/assets/archive.py` reads and
+writes the engine's `ARCH000` container exactly as the engine does
+(reversed from the mount loop 0x00a179c0, the entry stream 0x00a68a50 /
+0x00a68c50 / 0x00a68cf0 / 0x00a69510 and the v2 keystream 0x00aa93e0 /
+0x00aa9580 / 0x00aa94a0 / 0x00a89d70): three container versions -- v0
+(graphics, sfx, music, videos): per-dword XOR with `(h2 ^ 0xf9524287) | 1`
+through an xorshift 8/9/23 stream and a byte permutation keyed by the low
+nibble; v1 (animations, config, fonts, rooms): MSB-first 8..12-bit LZW with
+the table persisting across pieces; v2 (every DLC and language pack):
+`u32 len|final<<31` pieces of raw deflate through one persistent tinfl
+state with a 0x400 window, where a non-final 0x400-byte piece is stored
+bytes XORed with an ISAAC keystream seeded by PCG32 from `h2`. The table's
+fifth field is the checksum the mount folds over the *decoded* bytes in
+0x200 chunks through one buffer zeroed once per entry (a final partial
+dword carries the previous chunk's stale bytes). Proof: **27,236 of 27,236
+entries across all 22 archives recompute to the stored value**, and an
+unchanged repack is byte-identical for every archive. `tests/recomp-assets.test.js`
+pins the hashes against a real table entry, the checksum with its
+stale-tail quirk, and a pack/verify/extract/repack round trip for v0 and v2.
+
+What the census found: `repentance.a` (385 MB) is never named by this exe
+and shares no key with anything the game opens -- the Repentance content of
+this build lives in `afterbirthp.a`; the drivers no longer register it.
+48.8 MiB of base-archive entries are shadowed by later mounts. The loose
+extracted tree (252 MB, 11,198 files) is read **zero** times at run time
+(only `scripts/*.lua` through the cwd); it can leave the bundle. Language
+packs (89 MB) stay unmounted on purpose.
+
+**Size, without a pixel changed.** Lossless PNG (oxipng level 4, every
+reduction off, all chunks kept, and every output verified with Pillow:
+IHDR, mode, size, samples, palette, tRNS, gamma identical): 12,757 PNGs,
+169,251,008 → 106,687,721 bytes. Music re-encoded at Vorbis q3 with its
+comments kept (no loop tags exist; Isaac loops whole files): 426,082,525 →
+158,424,937 bytes. The ten archives the exe mounts: **1,069,689,641 →
+750,186,557 bytes (−29.9 %)**; with the never-mounted `repentance.a` out
+of the bundle that is 48.4 % less than today. The optimised set was
+validated in-engine with `ISAAC_ARCHIVE_VERIFY=1` (the engine really
+checksums) on a pinned floor: 0 checksum failures, 0 sample/stream
+failures, audio census intact, clean exit. Sound effects were measured
+only: 1,557 samples, 265.6 MiB of PCM as preloaded; OGG q3 would be
+27.7 MiB but turns them into play-time streams, so nothing was applied
+there.
+
+**The ping-pong was a square root.** With replayable floors the
+start-room ping-pong and the CellSpace grind could be chased on one seed.
+The lifter emits `recomp_wr64(dst, recomp_fsqrt_f64(recomp_rd64(src)))`
+for `sqrtsd` -- the operand's bit pattern in, the result's bits out, like
+every other f32/f64 helper -- but `recomp_rt.h` declared that helper
+`double(double)`. The bits arrived as a value: the pattern of 98800.0 is
+a 4.7e18, its root a 2.2e9, and that, written back as a bit pattern, is a
+denormal -- every positive root came back 0. The game's `sqrtf` wrapper
+(0x00435a50) answered 0 for every vector length, every door within its
+25 px radius "touched" at once, and entity positions went inf/NaN, which
+is where the `x1 > x2` cell bounds came from too. The helper takes and
+returns bits now (`tests/recomp-fsqrt.test.js`, mutation-checked against
+the old text), and `sqrtsd`/`sqrtss` are oracle cases (the old helper
+failed `sqrtsd` 200/200 with truncated-integer results). Verified on the
+lifted code, not just the helper: the door-touch check `FUN_007f01c0`
+(the only animation-0 caller of `Game::StartRoomTransition` 0x006fd7c0)
+compares `sqrtf(dist to cell centre + 18 px outward)` with 25 px; with
+the zero root the first open door in slot order fired every frame -- a
+314 px "touch" on epoch 1700000000 (`door0 ... dist0=314.33`, slot 0
+fired), 538 px on 1700000001 while a door 58 px away was ignored. After
+the fix the same three epochs do zero transitions and zero asserts before
+any movement key; the in-situ test (`ISAAC_ROOM_TEST=1`: the lifted
+sqrtf and door loop on a scratch frame with the player moved host-side)
+reads `sub_00435a50(98800.0) = 314.3247`, does not fire from the room
+centre and fires at a door. `ISAAC_ROOM_PROBE=1` prints the door-check
+inputs at every engine log line. Two harness notes from the chase:
+`ISAAC_EXIT_AFTER` never fires in the fast profile (`RECOMP_VA` is
+`((void)0)` there; use `ISAAC_MAX_FRAMES`), and the `[dsp] ENTER/EXIT`
+trace for the poller's `PeekMessageA` (200k lines a run) is now behind
+`ISAAC_DSP_TRACE=1`.
+
+**Replayable floors.** `ISAAC_EPOCH=<unix seconds>` pins `_time64` and
+`GetSystemTimeAsFileTime`, the sources of the run RNG seed; two runs with
+the same epoch log the same `SpawnRNG seed` lines.
+
+### 21.41 The string table, and 813 functions that started in the wrong place
+
+**Symptom.** Every `#KEY` the HUD asks the string table for came back raw
+(`[RoomConfig] load stage 1: #BASEMENT_NAME`), in every run ever logged
+(77 logs), with the table read from `afterbirthp.a` or from the loose
+file.
+
+**The chase, in order, because each step corrected the previous one.**
+A block probe at the loader (`0x00a26f20`, after the read) printed a
+buffer whose first dword was the entry-stream vtable and whose tail was
+correct XML, which read as an allocator overlap. `ISAAC_HEAP_TRACE=1`
+(new: every guest `malloc`/`free`/`calloc`/`realloc`/`VirtualAlloc` with
+its result and the guest return address) showed the stream at
+`0x01b8f958+4` and the buffer at `0x01b939c4`, disjoint -- the probe had
+read `[ebp-0x10190]`, a spilled stream pointer, instead of the buffer's
+`[ebp-0x10090]` (a typo, now corrected in the applied text). A second
+probe at the parser's return read the parser's error slot (`[0xc7de4c]`,
+a static message pointer: "expected <", "unexpected end of data", ...)
+as NULL and the cursor at buffer+size: the parse succeeds. A wrapper
+probe on `StringTable::GetString` (`0x00a26af0`: category, language,
+key, result) answered `StringTable::InvalidLanguage` for language 0 --
+the loader's language map was empty. A wrapper on the XML child finder
+(`0x00413c70`) showed the loader never asked for "stringtable" at all.
+
+**Cause.** Ghidra splits the loader at the parse-error branch: the
+success path is its own function, `FUN_00a27038`, entered by a tail jump
+(`jz 0xa27038`), and that function's body ALSO owns the loader's shared
+epilogue block at `0x00a2701b` (the `mov al,1; jmp 0xa2701b` at its end
+goes there). The lifter emits a goto-shaped function's blocks in address
+order, so `sub_00a27038` began with the epilogue: restore FS:0, pop, cookie
+check, `ret` -- it returned at once with EAX still 0, the loader "failed"
+with no error, the map stayed empty. The PROBE wrapper's "result" line
+had reinforced the wrong reading: a wrapper prints EAX when the lifted
+body returns to it, which for a tail jump is BEFORE the jump runs
+(`recomp_run_pending` is the caller's).
+
+**Census.** `scan_entry`: of 23,252 lifted functions, 819 begin (first
+`RECOMP_VA`) below their entry; 6 are dispatch-loop shapes (`pc_ =
+start`, immune since round 15c), 813 are goto shapes: 778 thunks in the
+CRT region (`0x00af1270`-style `jmp` thunks whose targets Ghidra folded
+in, where the skipped instructions are the thunk's own) and 35 game
+functions, among them `sub_0073e5ae` (the room loader's neighbourhood),
+`sub_00751e74`, the `sub_00776374..7764eb` group, `sub_009d16d8/2640/2bf7`
+and `sub_00a2b5c7` (the sound-source open patched in round 24).
+
+**Fix, twice.** `lift.py` now emits `goto L_<entry>;` as the first
+statement of a goto-shaped function whose lowest block is not the entry
+(and asks for the entry label). For the already-lifted tree,
+`lift_patches.py apply_entry_first` (run by `build_boot.py` with the
+other passes, or alone with `--entry-first [--check]`) inserts the same
+goto after the re-entry guard and the `L_<entry>: ;` label after the
+entry's trace line, marked `LIFT-PATCH entry-first`, idempotent; 813
+functions in 11 TUs, no re-lift. `tests/recomp-entry-first.test.js` runs
+the pass on a synthetic CRLF tree (goto, label, dispatch-loop and
+hand-written bodies untouched, idempotent, `--check`), pins the emitter
+text, and scans the lifted tree when present. Result: `GetString("Items",
+0, "THE_SAD_ONION_NAME")` -> "The Sad Onion"; 0 lookups fail in the boot.
+
 ## Appendix: reproduction
 
 ```bash

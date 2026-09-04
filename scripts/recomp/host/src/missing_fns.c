@@ -49,6 +49,17 @@ void sub_00aa9350(CpuState *restrict s) {
 }
 
 /* ---------------------------------------------------------------------- *
+ * 0x00ae4820 -- libtheora's oc_restore_fpu for its MMX build: `emms; ret`
+ * (3 bytes, then int3 padding). Reached only through the decoder's
+ * cpu-dispatch table (`call eax` at 0x00add7af with eax = the table slot),
+ * so function recovery never defined it and the first video (round 26,
+ * ISAAC_CUTSCENE=300:3 -> 001_Epilogue.ogv) trapped on it 16 frames in.
+ * There is no MMX state to clear here; the `ret` pops the return address. */
+void sub_00ae4820(CpuState *restrict s) {
+    rc_ret(s);
+}
+
+/* ---------------------------------------------------------------------- *
  * 0x00aefe80 -- int64 in {edx:ecx} -> double in xmm0.
  *
  *     cmp  dword ptr [0xc7162c], 6        ; SSE4.1 feature gate (BSS, 0)

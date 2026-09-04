@@ -3,7 +3,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#else
+/* The single-instruction oracle (scripts/recomp/oracle/wideops.py) builds
+ * this file with a native compiler; the wall clock and the forced exit
+ * exist there only so it links (round 26). */
+#include <time.h>
+static double emscripten_get_now(void) { return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC; }
+static void emscripten_force_exit(int status) { exit(status); }
+#endif
 #include "recomp_state.h"
 #include "recomp_rt.h"
 
@@ -48,7 +57,7 @@ void recomp_trace_ebx_va(uint32_t va, uint32_t ebx, uint32_t esp, uint32_t ebp) 
 }
 
 
-double recomp_fsqrt_f64(double a) { return sqrt(a); }
+uint64_t recomp_fsqrt_f64(uint64_t a) { return recomp_f642bits(sqrt(recomp_bits2f64(a))); }
 uint32_t recomp_fsqrt_f32(uint32_t a) { return recomp_f322bits(sqrtf(recomp_bits2f32(a))); }
 uint32_t recomp_fceil_f32(uint32_t a) { return recomp_f322bits(ceilf(recomp_bits2f32(a))); }
 uint64_t recomp_fceil_f64(uint64_t a) { return recomp_f642bits(ceil(recomp_bits2f64(a))); }
@@ -363,6 +372,114 @@ void recomp_otherw_pshufhw(CpuState *s, uint8_t *out, unsigned outsz,
   for (int i = 0; i < 4; ++i)           /* high qword: 4 shuffled words */
     memcpy(out + 8 + 2 * i, src + 8 + 2 * ((imm >> (2 * i)) & 3u), 2);
 }
+
+/* Round 26: the twelve SSE wide intrinsics the tree declares and the port
+ * had left as aborting stubs. The first video (theora, SSSE3 paths) died
+ * on pmaddubsw. Two-operand forms: a0 = old destination, a1 = source; the
+ * one-source ops (pabsd, pmovsxwd, pmovzxwd) still receive a0 and ignore
+ * it. All alias-safe: inputs are copied out before `out` is written.
+ * Each one is in the wideops oracle (scripts/recomp/oracle/wideops.py). */
+static int16_t rc_sat16w(int32_t v) { return (int16_t)(v > 32767 ? 32767 : (v < -32768 ? -32768 : v)); }
+#define RC_WIDE2(name)                                                      \
+  void recomp_otherw_##name(CpuState *s, uint8_t *out, unsigned outsz,        \
+                            const uint8_t *a0, unsigned a0sz,                 \
+                            const uint8_t *a1, unsigned a1sz) {               \
+    uint8_t x[16], y[16]; (void)s;                                            \
+    rc_widecheck(#name, outsz, 16u); rc_widecheck(#name, a0sz, 16u);          \
+    /* the source may be narrower (pmovsx/zx m64, a psraw imm8): zero-fill */ \
+    if (a1sz != 16u && a1sz != 8u && a1sz != 4u && a1sz != 1u)                \
+      rc_widecheck(#name, a1sz, 16u);                                         \
+    memcpy(x, a0, 16); memset(y, 0, 16); memcpy(y, a1, a1sz);                 \
+    rc_body_##name(out, x, y);                                                \
+  }
+static void rc_body_pmaddubsw(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 8; ++i) {
+    int32_t v = (int32_t)x[2 * i] * (int8_t)y[2 * i] + (int32_t)x[2 * i + 1] * (int8_t)y[2 * i + 1];
+    int16_t r = rc_sat16w(v); memcpy(out + 2 * i, &r, 2);
+  }
+}
+static void rc_body_pshufb(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 16; ++i) out[i] = (y[i] & 0x80u) ? 0u : x[y[i] & 0x0fu];
+}
+static void rc_body_paddsw(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 8; ++i) {
+    int16_t a, b; memcpy(&a, x + 2 * i, 2); memcpy(&b, y + 2 * i, 2);
+    int16_t r = rc_sat16w((int32_t)a + (int32_t)b); memcpy(out + 2 * i, &r, 2);
+  }
+}
+static void rc_body_pmulhuw(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 8; ++i) {
+    uint16_t a, b; memcpy(&a, x + 2 * i, 2); memcpy(&b, y + 2 * i, 2);
+    uint16_t r = (uint16_t)(((uint32_t)a * (uint32_t)b) >> 16); memcpy(out + 2 * i, &r, 2);
+  }
+}
+static void rc_body_pmulld(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 4; ++i) {
+    uint32_t a, b; memcpy(&a, x + 4 * i, 4); memcpy(&b, y + 4 * i, 4);
+    uint32_t r = a * b; memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_pabsd(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  (void)x;
+  for (int i = 0; i < 4; ++i) {
+    int32_t a; memcpy(&a, y + 4 * i, 4);
+    uint32_t r = a < 0 ? (uint32_t)0u - (uint32_t)a : (uint32_t)a;   /* INT_MIN stays 0x80000000 */
+    memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_pmovsxwd(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  (void)x;
+  for (int i = 0; i < 4; ++i) {
+    int16_t a; memcpy(&a, y + 2 * i, 2);
+    int32_t r = (int32_t)a; memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_pmovzxwd(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  (void)x;
+  for (int i = 0; i < 4; ++i) {
+    uint16_t a; memcpy(&a, y + 2 * i, 2);
+    uint32_t r = (uint32_t)a; memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_psraw(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  uint64_t cnt; memcpy(&cnt, y, 8);         /* the count is the source's low qword */
+  unsigned sh = cnt > 15u ? 15u : (unsigned)cnt;
+  for (int i = 0; i < 8; ++i) {
+    int16_t a; memcpy(&a, x + 2 * i, 2);
+    int16_t r = (int16_t)(a >> sh); memcpy(out + 2 * i, &r, 2);
+  }
+}
+static void rc_body_divps(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 4; ++i) {
+    float a, b; memcpy(&a, x + 4 * i, 4); memcpy(&b, y + 4 * i, 4);
+    float r = a / b; memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_maxps(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 4; ++i) {              /* SSE: the second operand wins on NaN and on equal (incl. -0/+0) */
+    float a, b; memcpy(&a, x + 4 * i, 4); memcpy(&b, y + 4 * i, 4);
+    float r = (a > b) ? a : b; memcpy(out + 4 * i, &r, 4);
+  }
+}
+static void rc_body_minps(uint8_t *out, const uint8_t *x, const uint8_t *y) {
+  for (int i = 0; i < 4; ++i) {
+    float a, b; memcpy(&a, x + 4 * i, 4); memcpy(&b, y + 4 * i, 4);
+    float r = (a < b) ? a : b; memcpy(out + 4 * i, &r, 4);
+  }
+}
+RC_WIDE2(pmaddubsw)
+RC_WIDE2(pshufb)
+RC_WIDE2(paddsw)
+RC_WIDE2(pmulhuw)
+RC_WIDE2(pmulld)
+RC_WIDE2(pabsd)
+RC_WIDE2(pmovsxwd)
+RC_WIDE2(pmovzxwd)
+RC_WIDE2(psraw)
+RC_WIDE2(divps)
+RC_WIDE2(maxps)
+RC_WIDE2(minps)
+#undef RC_WIDE2
 
 uint32_t recomp_other_swi(CpuState *s, uint32_t n) {
   (void)s;

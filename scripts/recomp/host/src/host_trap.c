@@ -436,8 +436,13 @@ int isaac_indirect_call(uint32_t target, CpuState *restrict cpu) {
             isaac_threads_progress();
     }
     uint32_t ret = isaac_retaddr(cpu);
-    int dbg = (ret >= 0x00a6c000u && ret <= 0x00a6fac0u) ||
-              (imp->dll[0]=='d' && imp->symbol[0]=='D');
+    /* The DirectInput-region ENTER/EXIT trace was unconditional; with the
+     * device poller running as a per-frame slice (round 24) that is two
+     * PeekMessageA lines per frame, thousands per run. ISAAC_DSP_TRACE=1. */
+    static int dsp_on = -1;
+    if (dsp_on < 0) { const char *e = getenv("ISAAC_DSP_TRACE"); dsp_on = (e && *e && *e != '0') ? 1 : 0; }
+    int dbg = dsp_on && ((ret >= 0x00a6c000u && ret <= 0x00a6fac0u) ||
+                         (imp->dll[0]=='d' && imp->symbol[0]=='D'));
     if (dbg) {
         fprintf(stderr, "[dsp] ENTER %s!%s eax=%08x ebx=%08x ecx=%08x edx=%08x "
                         "esi=%08x edi=%08x esp=%08x ret=%08x\n",

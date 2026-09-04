@@ -58,7 +58,18 @@ REQUIRE emsdk on PATH:
   boot spends ~65 s (debug profile) mounting 1.2 GB of archives through
   the windowed reader before the first real frame.
 - The browser build is **interactive** (§21.39 round 25): JSPI, live
-  keyboard/mouse, 41 fps overall / 49-59 in play under headless Chromium.
+  keyboard/mouse, 41 fps overall / 49-59 in play under headless Chromium;
+  `drive_interactive.mjs` reaches a run with held Enters and walks (§21.40).
+- **Round 26**: the mount no longer checksums every archive entry
+  (`ISAAC_ARCHIVE_VERIFY=1` restores it): the debug boot's second frame at
+  2.9 s instead of 65 s, the browser's 1,500 frames in 48.7 s instead of
+  67.6. **Video plays** (`ISAAC_CUTSCENE`, the Epilogue's `.ogv` decoded,
+  shown and finished; twelve SSE intrinsics implemented and oracle-checked).
+  The archive toolchain (`scripts/recomp/assets/`) reverses all three
+  container versions with a 27,236/27,236 checksum proof; lossless PNG and
+  Vorbis q3 music shrink the mounted set 1,070 → 750 MB, validated in-engine.
+  Open: the floor banner shows raw string-table keys (`#BASEMENT_NAME`) now
+  that the table comes from `afterbirthp.a` -- its parser returns 0.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -106,6 +117,14 @@ takes real keyboard/mouse input):
 node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 interactive=1 port=8099 fast=1
 ```
 
+To drive that page with real key presses under Playwright (state-driven:
+Enter, held, until the game's own log says a run started, then walk; exit 0
+only if the picture changed and `main` returned 0):
+
+```
+node scripts/recomp/web/drive_interactive.mjs "http://127.0.0.1:8099/boot_web.html?frames=1500&ISAAC_YIELD=1" output/recomp/web-drive
+```
+
 `serve=1` holds the local server open and prints the URL instead of driving a
 headless browser; `fast=1` serves the speed-profile module (`build_boot.py
 --web --fast`), which is the one that renders gameplay at ~50 fps. It loads
@@ -138,15 +157,34 @@ is started:
   1.2 GB archive mount over `?off=&len=` byte slices, `main` returned 0.
   Node (debug profile, 240 s): 92-99 uploads, 17-23 plays, peak guest heap
   354 MiB.
-- **Video is unverified.** `CreateThread` is real now and the theoraplayer
-  worker runs as a per-frame slice (it names itself and executes its job),
-  but no cutscene has been watched to the end.
-- **The start-room ping-pong (open, floor-dependent).** In some floors
-  the player bounces between the start room and a neighbour once per game
-  frame for ~35 frames right after the run starts, before any movement
-  key (seen in node and in the browser, with and without thread slices;
-  other floors are fine). Replay a floor with `ISAAC_EPOCH=<unix seconds>`
-  (pins the run RNG seed) and read the room-transition path from there.
+- ~~Video is unverified.~~ **Video plays** (§21.40): `ISAAC_CUTSCENE=300:3`
+  makes the frame present call `Manager::ShowCutscene(3)` (the Epilogue:
+  anm2, then `001_Epilogue.ogv`, then the credits); the clip is decoded by
+  the theoraplayer worker slice, uploaded frame by frame, logs `finished
+  playing`, and the game returns to the title menu. It needed libtheora's
+  `emms; ret` (a hand-written body) and twelve SSE intrinsics that had been
+  aborting stubs, each now oracle-checked against Unicorn.
+- ~~The start-room ping-pong (open, floor-dependent).~~ **Resolved
+  (2026-09-04, §21.40): it was our square root.** `recomp_fsqrt_f64` was
+  declared `double(double)` while the lifter passes bit patterns, so the
+  game's `sqrtf` wrapper (0x00435a50) returned 0 for every vector length
+  and the door-touch check fired for the first open door in slot order
+  every frame; the `CellSpace::insert: x1 > x2` grind and the
+  `Invalid entity position: inf/-nan` asserts were the same zero. With the
+  bits-typed helper, epochs 1700000000/1/2 do **zero** transitions and
+  zero asserts before any movement key (the "one transition" the old
+  timeline expected was the defect stopping early). Replay a floor with
+  `ISAAC_EPOCH=<unix seconds>`; `ISAAC_ROOM_PROBE=1` dumps the door-check
+  inputs at every engine log line, `ISAAC_ROOM_TEST=1` runs the lifted
+  door check in situ (far player must not fire, near player must).
+- ~~The string table shows raw keys.~~ **Resolved (§21.41): 813 lifted
+  functions started at their lowest block instead of their entry** (Ghidra
+  bodies that absorbed a lower block; the string-table loader's second
+  half returned through the loader's own epilogue). `lift.py` emits
+  `goto L_<entry>` first now; `lift_patches.py --entry-first` gives the
+  existing tree the same goto at build time; the HUD reads "The Sad
+  Onion" instead of `#THE_SAD_ONION_NAME`. Any lifter change that
+  reorders blocks must keep `tests/recomp-entry-first.test.js` green.
 - **Gameplay depth is untested.** The scripted input is a timeline keyed
   to presented frames, not a player: combat, damage, item pickup, floor
   descent, bosses and save/load have never been exercised. A run so far
@@ -368,6 +406,15 @@ is non-empty (empty `mods/` skips it). GL goes through epoxy `.data` slots
 `docs/recomp-architecture.md §19`, `docs/recomp-boot.md §10`.
 
 **Debugging tools (use these before adding a printf):**
+- `ISAAC_EPOCH=<unix seconds>` — pins the run RNG seed: the same floor,
+  every run (§21.40). `ISAAC_HEAP_TRACE=1` — every guest heap call with
+  its result and the guest return address (§21.41). `ISAAC_ROOM_PROBE=1`
+  — the door-touch inputs at every engine log line.
+- `python scripts/recomp/lift/lift_patches.py --dir output/recomp/lift/gu
+  --entry-first --check` — exit 1 if any goto-shaped lifted function would
+  start below its entry (§21.41; `build_boot.py` applies the fix itself).
+- A PROBE wrapper's "result" line is EAX when the lifted body returns to
+  the wrapper — for a tail jump that is before the jump runs (§21.41).
 - `ISAAC_FS_TRACE=1` — logs every FS probe the shim answers, and how.
 - `ISAAC_DUMP32=0xc379e8:4,0xc37b14:2` — prints guest dwords after `main`
   traps. Guest memory is identity-mapped into the wasm heap and the harness

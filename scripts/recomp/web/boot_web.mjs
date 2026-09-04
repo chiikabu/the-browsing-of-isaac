@@ -179,7 +179,15 @@ function onKey(ev, down) {
   live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);
   ev.preventDefault();
 }
-window.addEventListener('keydown', (ev) => onKey(ev, true));
+// Autoplay policy: an AudioContext created before the first user gesture
+// starts suspended, and resume() is honoured once the page has a user
+// activation. The first key press (or click) is that activation; resume
+// right there so the title music is not waiting for the next play call.
+const resumeAudio = () => {
+  try { const A = m.isaacAudio; if (A && A.ctx && A.ctx.state === 'suspended') A.ctx.resume(); } catch (e) { /* audio never traps the page */ }
+};
+window.addEventListener('keydown', (ev) => { resumeAudio(); onKey(ev, true); });
+window.addEventListener('pointerdown', resumeAudio);
 window.addEventListener('keyup', (ev) => onKey(ev, false));
 canvasEl.addEventListener('mousemove', (ev) => {
   const r = canvasEl.getBoundingClientRect();
@@ -255,8 +263,9 @@ try {
   // see cfg.isaacLazyPread). The language packs are deliberately absent: a
   // mounted pack would shadow English assets (the mount loop overwrites an
   // equal-hash entry).
+  // (repentance.a is not listed: this exe never names it -- round 26)
   const LAZY_ARCHIVES = new Set(['resources/packed/music.a', 'resources/packed/videos.a',
-    'resources/packed/afterbirth.a', 'resources/packed/afterbirthp.a', 'resources/packed/repentance.a']);
+    'resources/packed/afterbirth.a', 'resources/packed/afterbirthp.a']);
   const index = JSON.parse(new TextDecoder().decode(fetchSync('/instance_index.json')));
   await stageOk('seed packed archives', () => {
     let n = 0;

@@ -293,7 +293,14 @@ static inline uint64_t recomp_f642bits(double d) { uint64_t b; memcpy(&b, &d, 8)
 RECOMP_DEF_FLT(f32, float, uint32_t, recomp_bits2f32, recomp_f322bits)
 RECOMP_DEF_FLT(f64, double, uint64_t, recomp_bits2f64, recomp_f642bits)
 
-double recomp_fsqrt_f64(double);           /* provided by recomp_rt.c */
+/* Both take and return the operand's BIT PATTERN, like every other f32/f64
+ * helper: the lifter emits recomp_wr64(dst, recomp_fsqrt_f64(recomp_rd64(src))).
+ * Round 26: the f64 one was declared double(double), so the bits arrived as a
+ * value and every positive root came back a denormal -- the game's sqrtf
+ * wrapper (0x00435a50) answered 0 for every vector length, every door within
+ * 25 px "touched", and positions went inf/NaN (the start-room ping-pong and
+ * the CellSpace grind). */
+uint64_t recomp_fsqrt_f64(uint64_t);       /* provided by recomp_rt.c */
 uint32_t recomp_fsqrt_f32(uint32_t);
 uint32_t recomp_fceil_f32(uint32_t);
 uint64_t recomp_fceil_f64(uint64_t);

@@ -94,6 +94,20 @@ static int selftest_lazy_reader(const char *src, uint8_t *dst, uint32_t len) {
     for (uint32_t i = 0; i < len; i++) dst[i] = (uint8_t)"LAZY!!"[i % 6];
     return 1;
 }
+/* Round 24e/26: a positional reader for a windowed lazy file. The bytes are a
+ * function of the absolute offset, so a read served from the wrong window
+ * or the wrong place in it is visible. */
+#define WIN_FILE_SIZE 3000000u
+static unsigned g_pread_calls;
+static uint8_t win_byte(uint32_t off) { return (uint8_t)(off * 7u + 3u); }
+static int selftest_preader(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
+    (void)src;
+    ++g_pread_calls;
+    if (off >= WIN_FILE_SIZE) return 0;
+    if (len > WIN_FILE_SIZE - off) len = WIN_FILE_SIZE - off;
+    for (uint32_t i = 0; i < len; i++) dst[i] = win_byte(off + i);
+    return (int)len;
+}
 
 
 int main(int argc, char **argv) {
@@ -1426,6 +1440,68 @@ int main(int argc, char **argv) {
             check(strcmp(g_lazy_src, "data/Lazy.bin") == 0,
                   "the reader receives the seed path verbatim (case kept), not the normalised key");
             isaac_fs_set_lazy_reader(NULL);
+
+            /* Round 24e/26: a windowed lazy file. 3 MB served through a C
+             * positional reader in 1 MB windows: a read across the first
+             * window edge and one across the file's short last window must be
+             * byte-exact (the string table is the last entry of a 604 MB
+             * archive), and the entry must never be loaded whole. */
+            {
+                extern void isaac_fs_set_lazy_preader(int (*fn)(const char *, uint8_t *, uint32_t, uint32_t));
+                extern void isaac_fs_set_window_min(uint32_t bytes);
+                extern uint32_t isaac_fs_lazy_windowed(void);
+                uint32_t big = ISAAC_HEAP_VA + 0x100000u;      /* 300 KB of guest scratch */
+                isaac_fs_set_lazy_preader(selftest_preader);
+                isaac_fs_set_window_min(1u);
+                check(isaac_fs_seed_lazy("data/Win.bin", WIN_FILE_SIZE) == 1, "a 3 MB lazy entry registers by size");
+                uint32_t wbefore = isaac_fs_lazy_windowed(), pbefore = g_pread_calls;
+                const char *wp = "data/Win.bin";
+                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(pbuf + i) = (uint8_t)wp[i]; if (!wp[i]) break; }
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, pbuf);
+                isaac_w32(cpu.ESP + 8, mbuf);
+                imp_api_ms_win_crt_stdio__fopen(&cpu);
+                uint32_t wh = cpu.EAX;
+                check(wh != 0 && g_pread_calls == pbefore, "opening it fetches nothing: bytes come on the first read");
+                static const struct { uint32_t off, len; const char *what; } reads[] = {
+                    { 1047000u, 4000u, "a read across the first 1 MB window edge is byte-exact" },
+                    { WIN_FILE_SIZE - 300000u, 300000u, "a read across the short last window is byte-exact" },
+                    { 5u, 3u, "a small read far back lands in a re-fetched window, byte-exact" },
+                };
+                for (unsigned r = 0; r < sizeof reads / sizeof reads[0]; ++r) {
+                    memset(&cpu, 0, sizeof cpu);
+                    cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                    isaac_w32(cpu.ESP, 0xDEADBEEF);
+                    isaac_w32(cpu.ESP + 4, wh);
+                    isaac_w32(cpu.ESP + 8, reads[r].off);
+                    isaac_w32(cpu.ESP + 12, 0);                       /* SEEK_SET */
+                    imp_api_ms_win_crt_stdio__fseek(&cpu);
+                    memset(&cpu, 0, sizeof cpu);
+                    cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                    isaac_w32(cpu.ESP, 0xDEADBEEF);
+                    isaac_w32(cpu.ESP + 4, big);
+                    isaac_w32(cpu.ESP + 8, 1);
+                    isaac_w32(cpu.ESP + 12, reads[r].len);
+                    isaac_w32(cpu.ESP + 16, wh);
+                    imp_api_ms_win_crt_stdio__fread(&cpu);
+                    int exact = (cpu.EAX == reads[r].len);
+                    for (uint32_t i = 0; exact && i < reads[r].len; ++i)
+                        if (*(uint8_t *)isaac_g(big + i) != win_byte(reads[r].off + i)) exact = 0;
+                    check(exact, reads[r].what);
+                }
+                check(g_pread_calls - pbefore >= 3u && g_pread_calls - pbefore <= 6u,
+                      "the three reads cost a handful of window refills, not one host read per fread");
+                check(isaac_fs_lazy_windowed() == wbefore + 1, "the entry was served windowed, never loaded whole");
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, wh);
+                imp_api_ms_win_crt_stdio__fclose(&cpu);
+                isaac_fs_set_lazy_preader(NULL);
+                isaac_fs_set_window_min(0u);
+            }
             #undef FS_ATTR
         }
 

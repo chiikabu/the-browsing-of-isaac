@@ -318,12 +318,184 @@ void imp_opengl32__glGetStringi(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }
 
+/* ---- ISAAC_ROOM_PROBE=1: observe-only dump of the door-touch inputs ------
+ * The start-room ping-pong (HANDOFF front B) is a type-0 room transition
+ * that the door-touch check at 0x007f01c0 starts without any movement key.
+ * That check reads: RoomTransition (Game+0x1b83c, must be idle), every
+ * player's position (Entity+0x33c/0x340), the current room (Game+0x18300:
+ * width at +0xc, the eight door slots at +0x724) and each door's grid index
+ * (+0x24), state (+0xc, open == 2), flags (+0x3a0) and target room (+0x394);
+ * trigger point = grid cell centre + 18 px outward, radius 25 px. This dump
+ * prints exactly those at every engine log line (OutputDebugStringA) and
+ * once per game frame for the first ISAAC_ROOM_PROBE_FRAMES (default 80)
+ * frames of a run. Host-side reads only; nothing in the guest changes. */
+#include <stdlib.h>
+#include <math.h>
+static uint32_t probe_u32(uint32_t va) {
+    return (isaac_is_guest_va(va) && isaac_is_guest_va(va + 3u)) ? isaac_r32(va) : 0u;
+}
+static float probe_f32(uint32_t va) {
+    uint32_t u = probe_u32(va); float f; memcpy(&f, &u, 4); return f;
+}
+void isaac_room_probe(const char *why) {
+    static int on = -1;
+    static uint32_t max_frames, last_frame = 0xffffffffu;
+    if (on < 0) {
+        const char *e = getenv("ISAAC_ROOM_PROBE");
+        const char *m = getenv("ISAAC_ROOM_PROBE_FRAMES");
+        on = (e && *e) ? 1 : 0;
+        max_frames = (m && *m) ? (uint32_t)strtoul(m, NULL, 10) : 80u;
+    }
+    if (!on) return;
+    uint32_t game = probe_u32(0x00c71678u);
+    if (!isaac_is_guest_va(game)) return;
+    uint32_t frame = probe_u32(game + 0x264f8u);
+    if (why[0] == 'f') {                       /* per-frame: only while the counter is small */
+        if (frame == last_frame || frame >= max_frames) return;
+        last_frame = frame;
+    }
+    uint32_t room = probe_u32(game + 0x18300u);
+    uint32_t rt = game + 0x1b83cu;
+    fprintf(stderr, "[probe:%s] frame=%u roomidx=%d dim=%d slot18318=%d f1831c=%d f18328=%d f18308=%d "
+                    "rt.state=%u rt+4=%u rt.dir=%d rt.target=%d rt.dim=%d rt.anim=%d rt+141=%u\n",
+            why, frame, (int)probe_u32(game + 0x18304u), (int)probe_u32(game + 0x1830cu),
+            (int)probe_u32(game + 0x18318u), (int)probe_u32(game + 0x1831cu),
+            (int)probe_u32(game + 0x18328u), (int)probe_u32(game + 0x18308u),
+            probe_u32(rt), probe_u32(rt + 4u), (int)probe_u32(rt + 0x10u), (int)probe_u32(rt + 0x14u),
+            (int)probe_u32(rt + 0x18u), (int)probe_u32(rt + 0x1cu),
+            (unsigned)(isaac_is_guest_va(rt + 0x141u) ? isaac_r8(rt + 0x141u) : 0));
+    int w = 0;
+    if (isaac_is_guest_va(room)) {
+        w = (int)probe_u32(room + 0xcu);
+        fprintf(stderr, "[probe:%s]   room=%08x type=%d w=%d h=%d bx=%.1f by=%.1f\n", why, room,
+                (int)probe_u32(room + 8u), w, (int)probe_u32(room + 0x10u),
+                probe_f32(room + 0x1cu), probe_f32(room + 0x20u));
+    }
+    uint32_t pb = probe_u32(game + 0x1baa8u), pe = probe_u32(game + 0x1baacu);
+    float p0x = 0.f, p0y = 0.f;
+    for (uint32_t i = 0; pb && pe > pb && i < (pe - pb) / 4u && i < 8u; ++i) {
+        uint32_t p = probe_u32(pb + 4u * i);
+        if (!isaac_is_guest_va(p)) continue;
+        if (i == 0) { p0x = probe_f32(p + 0x33cu); p0y = probe_f32(p + 0x340u); }
+        fprintf(stderr, "[probe:%s]   player%u=%08x pos=(%.3f, %.3f) vel=(%.3f, %.3f) e2c=%08x ptype=%d hdir=%d\n",
+                why, i, p, probe_f32(p + 0x33cu), probe_f32(p + 0x340u),
+                probe_f32(p + 0x360u), probe_f32(p + 0x364u), probe_u32(p + 0x2cu),
+                (int)probe_u32(p + 0x13c0u), (int)probe_u32(p + 0x1624u));
+    }
+    static const float offx[4] = { -18.f, 0.f, 18.f, 0.f }, offy[4] = { 0.f, -18.f, 0.f, 18.f };
+    for (uint32_t slot = 0; isaac_is_guest_va(room) && slot < 8u; ++slot) {
+        uint32_t d = probe_u32(room + 0x724u + 4u * slot);
+        if (!isaac_is_guest_va(d)) continue;
+        int gi = (int)probe_u32(d + 0x24u);
+        float tx = 0.f, ty = 0.f, dist = -1.f;
+        if (w > 0) {
+            tx = (float)(gi % w) * 40.f + 40.f + offx[slot & 3u];
+            ty = (float)(gi / w) * 40.f + 120.f + offy[slot & 3u];
+            dist = sqrtf((tx - p0x) * (tx - p0x) + (ty - p0y) * (ty - p0y));
+        }
+        fprintf(stderr, "[probe:%s]   door%u=%08x type=%d state=%d gi=%d target=%d flags=%02x f160=%d point=(%.1f, %.1f) dist0=%.2f\n",
+                why, slot, d, (int)probe_u32(d + 8u), (int)probe_u32(d + 0xcu), gi,
+                (int)probe_u32(d + 0x394u), (unsigned)(isaac_is_guest_va(d + 0x3a0u) ? isaac_r8(d + 0x3a0u) : 0),
+                (int)probe_u32(d + 0x160u), tx, ty, dist);
+    }
+}
+
+/* ISAAC_ROOM_TEST=1: behavioural test of the LIFTED door-touch check
+ * (sub_007f01c0) in situ, diagnostic only. At the "Lua mem usage" line of
+ * frame 0 -- the last engine log line before the game's own call, doors set
+ * up, transition idle -- it (1) calls the lifted sqrtf (0x00435a50) with
+ * 98800.0 in xmm0, (2) moves the player host-side to the room centre and
+ * calls the door check on a scratch frame ("far": must NOT fire on real
+ * x86), (3) if that did not fire, moves the player onto the first open
+ * door's trigger point and calls again ("near": must fire), then restores
+ * the position. A fire is read back from Game+0x18318 (reset to -1 before
+ * each call) and the RoomTransition fields. */
+extern void isaac_guest_call(uint32_t va, CpuState *restrict cpu);
+static int room_test_call(CpuState *cpu, uint32_t game, uint32_t room, uint32_t p,
+                          float x, float y, const char *tag) {
+    uint32_t xb, yb; memcpy(&xb, &x, 4); memcpy(&yb, &y, 4);
+    isaac_w32(p + 0x33cu, xb); isaac_w32(p + 0x340u, yb);
+    isaac_w32(game + 0x18318u, 0xffffffffu);
+    CpuState sub = *cpu;
+    sub.ECX = room;
+    sub.ESP = (cpu->ESP - 0x1000u) & ~0xFu;
+    sub.ESP -= 4; isaac_w32(sub.ESP, 0u);            /* return address */
+    isaac_guest_call(0x007f01c0u, &sub);
+    int slot = (int)probe_u32(game + 0x18318u);
+    uint32_t rt = game + 0x1b83cu;
+    fprintf(stderr, "[roomtest:%s] player=(%.1f, %.1f) -> slot18318=%d rt.state=%u rt.dir=%d rt.target=%d rt.anim=%d\n",
+            tag, x, y, slot, probe_u32(rt), (int)probe_u32(rt + 0x10u), (int)probe_u32(rt + 0x14u),
+            (int)probe_u32(rt + 0x1cu));
+    return slot;
+}
+void isaac_room_test(CpuState *cpu, const char *line) {
+    static int on = -1, done = 0;
+    static uint32_t test_frame;
+    if (on < 0) {
+        const char *e = getenv("ISAAC_ROOM_TEST");
+        const char *f = getenv("ISAAC_ROOM_TEST_FRAME");
+        on = (e && *e) ? 1 : 0;
+        test_frame = (f && *f) ? (uint32_t)strtoul(f, NULL, 10) : 5u;
+    }
+    if (!on || done || line[0] != 'f') return;     /* per-frame hook only */
+    uint32_t game = probe_u32(0x00c71678u);
+    if (!isaac_is_guest_va(game)) return;
+    if (probe_u32(game + 0x264f8u) != test_frame) return;
+    uint32_t room = probe_u32(game + 0x18300u);
+    if (!isaac_is_guest_va(room)) return;
+    int w = (int)probe_u32(room + 0xcu), h = (int)probe_u32(room + 0x10u);
+    if (w <= 0 || h <= 0 || probe_u32(game + 0x1b83cu) != 0u) return;
+    uint32_t p = probe_u32(probe_u32(game + 0x1baa8u));
+    if (!isaac_is_guest_va(p)) return;
+    static const float offx[4] = { -18.f, 0.f, 18.f, 0.f }, offy[4] = { 0.f, -18.f, 0.f, 18.f };
+    /* the first real door (type 8, a target room); forced open for the test */
+    int slot = -1; float tx = 0.f, ty = 0.f; uint32_t door = 0, ostate = 0;
+    for (uint32_t s = 0; s < 8u && slot < 0; ++s) {
+        uint32_t d = probe_u32(room + 0x724u + 4u * s);
+        if (!isaac_is_guest_va(d) || probe_u32(d + 8u) != 8u) continue;
+        int gi = (int)probe_u32(d + 0x24u);
+        tx = (float)(gi % w) * 40.f + 40.f + offx[s & 3u];
+        ty = (float)(gi / w) * 40.f + 120.f + offy[s & 3u];
+        slot = (int)s; door = d; ostate = probe_u32(d + 0xcu);
+    }
+    if (slot < 0) return;
+    done = 1;
+    isaac_w32(door + 0xcu, 2u);                      /* open */
+    float ox = probe_f32(p + 0x33cu), oy = probe_f32(p + 0x340u);
+    uint32_t oslot = probe_u32(game + 0x18318u);
+    /* (1) the lifted sqrtf, register convention: xmm0 in, xmm0 out */
+    {
+        CpuState sub = *cpu;
+        float in = 98800.0f; uint32_t ib; memcpy(&ib, &in, 4);
+        memset(sub.ZMM0, 0, sizeof sub.ZMM0); memcpy(sub.ZMM0, &ib, 4);
+        sub.ESP = (cpu->ESP - 0x1000u) & ~0xFu;
+        sub.ESP -= 4; isaac_w32(sub.ESP, 0u);
+        isaac_guest_call(0x00435a50u, &sub);
+        float out; memcpy(&out, sub.ZMM0, 4);
+        fprintf(stderr, "[roomtest:sqrt] lifted sub_00435a50(%.1f) = %.4f (host sqrtf %.4f)\n", in, out, sqrtf(in));
+    }
+    float cx = (float)((w - 1) / 2) * 40.f + 40.f, cy = (float)((h - 1) / 2) * 40.f + 120.f;
+    fprintf(stderr, "[roomtest] frame=%u room=%08x w=%d h=%d door slot=%d (%08x, state %u -> 2, target %d) point=(%.1f, %.1f) player was (%.1f, %.1f)\n",
+            probe_u32(game + 0x264f8u), room, w, h, slot, door, ostate, (int)probe_u32(door + 0x394u),
+            tx, ty, ox, oy);
+    int r = room_test_call(cpu, game, room, p, cx, cy, "far");
+    if (r < 0 && probe_u32(game + 0x1b83cu) == 0u)
+        room_test_call(cpu, game, room, p, tx, ty, "near");
+    /* restore */
+    isaac_w32(door + 0xcu, ostate);
+    { uint32_t xb, yb; memcpy(&xb, &ox, 4); memcpy(&yb, &oy, 4);
+      isaac_w32(p + 0x33cu, xb); isaac_w32(p + 0x340u, yb); }
+    if (probe_u32(game + 0x1b83cu) == 0u) isaac_w32(game + 0x18318u, oslot);
+}
+
 #ifndef ISAAC_WEB   /* the fake, headless GL; host_gl_webgl.c is the web build's */
 /* void glClear(GLbitfield mask) -- cdecl. Called once at 0x00a6b9e1 with
  * 0x4000 (GL_COLOR_BUFFER_BIT); the return value is discarded. */
 void imp_opengl32__glClear(CpuState *restrict cpu) {
     gl_census("glClear", isaac_arg(cpu, 0), 0, 0, 0);
     (void)isaac_arg(cpu, 0);
+    isaac_room_probe("frame");          /* ISAAC_ROOM_PROBE: once per game frame (dedup inside) */
+    isaac_room_test(cpu, "frame");      /* ISAAC_ROOM_TEST: the in-situ door-loop test, once */
     cpu->EAX = 0;
 }
 
@@ -786,5 +958,7 @@ void imp_kernel32__OutputDebugStringA(CpuState *restrict cpu) {
     }
     buf[n] = 0;
     fprintf(stderr, "[odsa] %s\n", buf);
+    isaac_room_probe("log");            /* ISAAC_ROOM_PROBE: the door-touch inputs at this line */
+    { extern void isaac_room_test(CpuState *cpu, const char *line); isaac_room_test(cpu, buf); }
     cpu->EAX = 0;
 }

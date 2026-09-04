@@ -264,14 +264,26 @@ static int isaac_fs_lazy_pread_js(const char *src, uint8_t *dst, uint32_t off, u
     (void)src; (void)dst; (void)off; (void)len; return -1;
 }
 #endif
+static uint32_t g_window_min_override;            /* selftest: bytes, 0 = env/default */
+void isaac_fs_set_window_min(uint32_t bytes) { g_window_min_override = bytes; }
 static uint32_t fs_window_min(void) {
     static uint32_t v;
+    if (g_window_min_override) return g_window_min_override;
     if (!v) {
         const char *s = getenv("ISAAC_FS_WINDOW_MIN");
         unsigned long mib = (s && *s) ? strtoul(s, NULL, 10) : 32ul;
         v = mib ? (uint32_t)(mib << 20) : 0xFFFFFFFFu;   /* 0 = never window */
     }
     return v;
+}
+/* A C positional reader (the selftest installs one; the drivers answer
+ * through Module.isaacLazyPread instead). */
+typedef int (*isaac_fs_lazy_preader)(const char *src, uint8_t *dst, uint32_t off, uint32_t len);
+static isaac_fs_lazy_preader g_lazy_preader;
+void isaac_fs_set_lazy_preader(isaac_fs_lazy_preader fn) { g_lazy_preader = fn; }
+static int fs_pread_avail(void) { return g_lazy_preader ? 1 : isaac_fs_lazy_pread_avail(); }
+static int fs_pread(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
+    return g_lazy_preader ? g_lazy_preader(src, dst, off, len) : isaac_fs_lazy_pread_js(src, dst, off, len);
 }
 /* Copy [pos, pos+want) of a windowed entry into dst; returns the bytes copied.
  * Two windows, because the mount loop alternates between the entry table at
@@ -293,7 +305,7 @@ static uint32_t fs_window_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t
             k = e->win[0] ? (e->win[1] ? (unsigned)(e->win_last ^ 1u) : 1u) : 0u;   /* an empty slot, else the older one */
             if (!e->win[k]) e->win[k] = (uint8_t *)malloc(FS_WIN);
             if (!e->win[k]) break;
-            n = isaac_fs_lazy_pread_js(e->src ? e->src : e->key, e->win[k], (uint32_t)start, len);
+            n = fs_pread(e->src ? e->src : e->key, e->win[k], (uint32_t)start, len);
             if (n <= 0) {
                 isaac_log("[isaac][fs] windowed read of '%s' at %llu (%u bytes) FAILED (%d)",
                           e->src ? e->src : e->key, (unsigned long long)start, len, n);
@@ -325,9 +337,25 @@ static void fs_window_drop(fs_entry *e) {
 }
 uint32_t isaac_fs_lazy_windowed(void) { return g_lazy_windowed; }
 
+/* Round 26: the engine verifies every archive entry at mount (a checksum
+ * over the whole payload, 1.5 GB with the DLC set). The archives are
+ * verified offline, so the lifted mount skips that pass (lift_patches.py
+ * BLOCK_PATCHES 0x00a17cee) unless ISAAC_ARCHIVE_VERIFY=1. Called once per
+ * entry, so the answer is cached. */
+int isaac_archive_verify_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("ISAAC_ARCHIVE_VERIFY");
+        v = (e && *e && *e != '0') ? 1 : 0;
+        isaac_log(v ? "[isaac][fs] ISAAC_ARCHIVE_VERIFY=1: the mount reads and checksums every archive entry"
+                    : "[isaac][fs] archive mount trusts the entry tables (ISAAC_ARCHIVE_VERIFY=1 to checksum every entry)");
+    }
+    return v;
+}
+
 static int fs_materialise(fs_entry *e) {
     if (!e || !e->lazy) return 1;
-    if (e->size >= fs_window_min() && isaac_fs_lazy_pread_avail()) {
+    if (e->size >= fs_window_min() && fs_pread_avail()) {
         e->lazy = 0; e->windowed = 1;
         ++g_lazy_windowed;
         isaac_log("[isaac][fs] '%s' (%u bytes) is served through a %u KB window, never loaded whole",

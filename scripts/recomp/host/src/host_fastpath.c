@@ -156,7 +156,7 @@ void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c) {
     unsigned i = 0;
     for (; i < n; ++i) if (tags[i] == tag) break;
     if (i == n) { if (n >= 16u) return; tags[n] = tag; hits[n] = 0u; n++; }
-    if (++hits[i] > 8u) return;
+    if (++hits[i] > 64u) return;    /* 64, like isaac_probe_str: the boot alone opens dozens of streams */
     isaac_log("[isaac][probe] sub_%08x #%u: %08x %08x %08x", tag, hits[i], a, b, c);
 }
 /* A probe value that is a guest C string (round 24d: the sound path an ogg

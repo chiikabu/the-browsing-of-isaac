@@ -26,9 +26,12 @@ test('the DLC archives are lazy and the language packs are not registered', () =
   const m = drv.match(/const LAZY_ARCHIVES = \[([^\]]*)\]/);
   assert.ok(m, 'LAZY_ARCHIVES exists');
   const names = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  for (const n of ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a', 'repentance.a']) {
+  for (const n of ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a']) {
     assert.ok(names.includes(n), `${n} is registered lazily`);
   }
+  // round 26: this exe never names repentance.a (whole-.text census) and none
+  // of its keys is shared with anything the game opens -- dead weight
+  assert.ok(!names.includes('repentance.a'), 'repentance.a is not registered');
   for (const n of names) {
     assert.ok(!/_(de|es|fr|jp|kr|ru|zh)\.a$/.test(n), `${n}: a language pack would shadow English assets`);
   }
@@ -40,9 +43,10 @@ test('the browser driver mounts the same archive set through byte-slice reads', 
   const web = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
   assert.ok(web.includes('cfg.isaacLazyPread = (src, dst, off, len) => {'), 'the page offers positional reads');
   assert.ok(web.includes('fetchSync(`/instance/${src}?off=${off}&len=${len}`)'), 'a positional read is a byte slice of the served file');
-  for (const n of ['afterbirth.a', 'afterbirthp.a', 'repentance.a']) {
+  for (const n of ['afterbirth.a', 'afterbirthp.a']) {
     assert.ok(web.includes(`'resources/packed/${n}'`), `${n} is registered lazily in the browser too`);
   }
+  assert.ok(!web.includes("'resources/packed/repentance.a'"), 'the browser does not register the never-mounted repentance.a either');
   const runner = readFileSync(join(root, 'scripts', 'recomp', 'web', 'run_web.mjs'), 'utf8');
   assert.ok(/const n = readSync\(fd, buf, 0, len, off\);/.test(runner), 'the runner reads the slice positionally, never the whole archive');
 });
@@ -51,7 +55,7 @@ test('a big lazy file is served through two windows and is never loaded whole', 
   const fs = readFileSync(join(host, 'host_shims_fs.c'), 'utf8');
   assert.ok(fs.includes('#define FS_WIN (1u << 20)'), 'one window is 1 MB');
   assert.ok(fs.includes('uint8_t *win[2];'), 'two windows per entry (the mount loop alternates table and data)');
-  assert.ok(/if \(e->size >= fs_window_min\(\) && isaac_fs_lazy_pread_avail\(\)\) \{\s*e->lazy = 0; e->windowed = 1;/.test(fs),
+  assert.ok(/if \(e->size >= fs_window_min\(\) && fs_pread_avail\(\)\) \{\s*e->lazy = 0; e->windowed = 1;/.test(fs),
     'materialise turns a large lazy entry into a windowed one when the driver can pread');
   assert.ok(fs.includes('if (e->windowed) got = fs_window_read(e, pos, got, (uint8_t *)isaac_g(dst));'),
     'fread reads through the window');
@@ -86,6 +90,21 @@ test('the forced branch over the sound open is undone at the block level', () =>
   const mk = readFileSync(join(lift, 'mkdispatch.py'), 'utf8');
   assert.ok(mk.includes('if (v in cont or "LIFT-PATCH REENTRY" in line) and v not in seen_b:'),
     'mkdispatch treats a marked RECOMP_VA line as a re-entry block');
+});
+
+test('the mount skips its per-entry checksum pass unless ISAAC_ARCHIVE_VERIFY=1', () => {
+  // round 26: with the DLC set the pass read 1.5 GB through the RAM-FS
+  // windows before the first frame (and every byte of it over HTTP in the
+  // browser). The archives are verified offline instead.
+  const lp = readFileSync(join(lift, 'lift_patches.py'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH 0x00a17cee'), 'the block patch exists');
+  assert.ok(lp.includes('if (!isaac_archive_verify_on()) {'), 'it asks the host once per entry');
+  assert.ok(lp.includes('ESP = (uint32_t)(ESP + ((uint32_t)0xcu));') && lp.includes('EDI = MEMR32((uint32_t)(EBP + ((uint32_t)0xfffff194u)));'),
+    'the skip leaves esp (the memset purge) and edi (the entry record) as 0x00a17dc1 expects');
+  assert.ok(lp.includes('goto L_00a17dc1;'), 'and lands on the hash-table insert');
+  const fs = readFileSync(join(host, 'host_shims_fs.c'), 'utf8');
+  assert.ok(fs.includes('int isaac_archive_verify_on(void) {') && fs.includes('getenv("ISAAC_ARCHIVE_VERIFY")'),
+    'the host switch exists and is env-controlled');
 });
 
 test('the archive key form is the one the tables were built with', () => {

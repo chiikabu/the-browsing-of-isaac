@@ -256,14 +256,35 @@ uint32_t isaac_guest_realloc(uint32_t p, uint32_t n) {
     return q;
 }
 
+/* ISAAC_HEAP_TRACE=1: one line per guest heap call -- op, argument, result
+ * and the guest return address (the dword at ESP inside a shim), capped by
+ * ISAAC_HEAP_TRACE_MAX (default 300000). Observe-only; the tool that found
+ * the string-table buffer landing on a live stream object (round 26). */
+static void heap_trace(const char *op, uint32_t a, uint32_t r, const CpuState *cpu) {
+    static int on = -1;
+    static unsigned long left;
+    if (on < 0) {
+        const char *e = getenv("ISAAC_HEAP_TRACE");
+        on = (e && *e && *e != '0') ? 1 : 0;
+        e = getenv("ISAAC_HEAP_TRACE_MAX");
+        left = (e && *e) ? strtoul(e, NULL, 10) : 300000ul;
+    }
+    if (!on || !left) return;
+    if (!--left) isaac_log("[isaac][heap-trace] cap reached (ISAAC_HEAP_TRACE_MAX)");
+    isaac_log("[isaac][heap-trace] %s(0x%x) -> 0x%08x ret 0x%08x", op, a, r,
+              cpu ? isaac_r32(cpu->ESP) : 0u);
+}
+
 /* ------------------------------------------------------------- CRT heap -- */
 /* cdecl: the caller cleans, so none of these adjust ESP beyond the return. */
 
 void imp_api_ms_win_crt_heap__malloc(CpuState *restrict cpu) {
     cpu->EAX = guest_malloc(isaac_arg(cpu, 0));
+    heap_trace("malloc", isaac_arg(cpu, 0), cpu->EAX, cpu);
 }
 
 void imp_api_ms_win_crt_heap__free(CpuState *restrict cpu) {
+    heap_trace("free", isaac_arg(cpu, 0), 0, cpu);
     guest_free(isaac_arg(cpu, 0));
     cpu->EAX = 0;
 }
@@ -274,6 +295,7 @@ void imp_api_ms_win_crt_heap__calloc(CpuState *restrict cpu) {
     uint32_t p = guest_malloc((uint32_t)n);
     if (p) memset(isaac_g(p), 0, (size_t)n);
     cpu->EAX = p;
+    heap_trace("calloc", (uint32_t)n, p, cpu);
 }
 
 void imp_api_ms_win_crt_heap__realloc(CpuState *restrict cpu) {
@@ -288,6 +310,7 @@ void imp_api_ms_win_crt_heap__realloc(CpuState *restrict cpu) {
         guest_free(p);
     }
     cpu->EAX = q;
+    heap_trace("realloc", n, q, cpu);
 }
 
 /* -------------------------------------------------------- Virtual* ------- */
@@ -341,11 +364,12 @@ void imp_kernel32__VirtualAlloc(CpuState *restrict cpu) {
     uint32_t p = guest_malloc(size);
     if (p) memset(isaac_g(p), 0, size);   /* VirtualAlloc zeroes; malloc does not */
     cpu->EAX = p;
+    heap_trace("VirtualAlloc", size, p, cpu);
 }
 
 void imp_kernel32__VirtualFree(CpuState *restrict cpu) {
     uint32_t addr = isaac_arg(cpu, 0), type = isaac_arg(cpu, 2);
-    if (type & MEM_RELEASE) guest_free(addr);
+    if (type & MEM_RELEASE) { heap_trace("VirtualFree", addr, 0, cpu); guest_free(addr); }
     cpu->EAX = 1;
 }
 

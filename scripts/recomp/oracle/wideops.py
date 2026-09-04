@@ -57,10 +57,56 @@ RET = "c3"
 # only ever exercise the saturating branch.
 # --------------------------------------------------------------------------
 
+def nan_equal(got, want, lanes):
+    """Lane-wise equality for float32 lanes where a NaN in both counts as
+    equal (payload/sign may differ: SDM-vs-Unicorn NaN selection)."""
+    width = 16 // lanes
+    for i in range(lanes):
+        g, w = got[i * width:(i + 1) * width], want[i * width:(i + 1) * width]
+        if g == w:
+            continue
+        gi, wi = int.from_bytes(g, "little"), int.from_bytes(w, "little")
+        def is_nan(v):
+            return (v & 0x7f800000) == 0x7f800000 and (v & 0x007fffff) != 0
+        if not (is_nan(gi) and is_nan(wi)):
+            return False
+    return True
+
+
 CASES = [
     # --- wide CALLOTHER: operands passed by pointer (new) ---
     dict(name="pshuflw", code="f20f70c1", imm=True, op="CALLOTHER pshuflw"),
     dict(name="pshufhw", code="f30f70c1", imm=True, op="CALLOTHER pshufhw"),
+    # --- round 26: the SSE intrinsics the video decoder reached (recomp_rt.c) ---
+    dict(name="pmaddubsw", code="660f3804c1", op="CALLOTHER pmaddubsw"),
+    dict(name="pshufb", code="660f3800c1", op="CALLOTHER pshufb"),
+    dict(name="paddsw", code="660fedc1", op="CALLOTHER paddsw"),
+    dict(name="pmulhuw", code="660fe4c1", op="CALLOTHER pmulhuw"),
+    dict(name="pmulld", code="660f3840c1", op="CALLOTHER pmulld"),
+    dict(name="pabsd", code="660f381ec1", op="CALLOTHER pabsd"),
+    dict(name="pmovsxwd", code="660f3823c1", op="CALLOTHER pmovsxwd"),
+    dict(name="pmovzxwd", code="660f3833c1", op="CALLOTHER pmovzxwd"),
+    dict(name="psraw", code="660fe1c1", count_bias=True, op="CALLOTHER psraw"),
+    # nan_lanes: a lane where BOTH engines produce a NaN counts as equal. With
+    # two SNaN inputs the SDM (and this machine's own SSE, through the native
+    # harness build) quiet the FIRST source operand; Unicorn's softfloat
+    # quiets the second. Numeric lanes stay byte-exact.
+    dict(name="divps", code="0f5ec1", op="CALLOTHER divps", nan_lanes=4),
+    dict(name="maxps", code="0f5fc1", op="CALLOTHER maxps", nan_lanes=4),
+    dict(name="minps", code="0f5dc1", op="CALLOTHER minps", nan_lanes=4),
+    # --- round 26 (the start-room ping-pong): scalar square roots. sqrtsd
+    # lowers to recomp_fsqrt_f64(recomp_rd64(...)) -- the operand's BIT
+    # PATTERN in and out, like every other f64 helper -- but recomp_rt.h
+    # declared it double(double), so the bits arrived as a value, and every
+    # positive operand came back 0.0 (98800.0 -> 0.0): the game's sqrtf
+    # wrapper 0x00435a50 returned 0 for every vector length, the 25 px door
+    # radius matched every open door, and entity positions went inf/NaN.
+    # pos_f64: a non-negative finite low qword in xmm1, so the lane is
+    # numeric and must be byte-exact (nan_equal is float32-only).
+    dict(name="sqrtsd", code="f20f51c1", pos_f64=True,
+         op="FLOAT_SQRT f64 via recomp_fsqrt_f64 (bit pattern in/out)"),
+    dict(name="sqrtss", code="f30f51c1", nan_lanes=4,
+         op="control: FLOAT_SQRT f32 via recomp_fsqrt_f32"),
     # --- wide-count shifts: INT_SRIGHT / INT_RIGHT / INT_LEFT ---
     dict(name="psrad", code="660fe2c1", count_bias=True,
          op="INT_SRIGHT, wide count"),
@@ -130,6 +176,12 @@ uint8_t *recomp_mem_base;
 void isaac_dump_regs(const struct CpuState *s, const char *tag) {
   (void)s; (void)tag;
 }
+/* Round 26: the runtime's stall dump / exit path reference the dispatch
+ * table and the host's stub report; the harness has no dispatch table and
+ * nothing to report. */
+const uint32_t g_dva[1] = { 0u };
+const uint32_t g_ndispatch = 0u;
+void isaac_stub_report(void) {}
 
 %(protos)s
 
@@ -190,8 +242,15 @@ def build(cases, tmp):
     if cc is None:
         raise RuntimeError("no native C compiler (cc/gcc) on PATH")
     lib = os.path.join(tmp, "wideops.dll" if os.name == "nt" else "wideops.so")
+    # WIDEOPS_RT_DIR=<dir>: take recomp_rt.h / recomp_rt.c from there instead
+    # of the tree (an A/B of a runtime fix without touching the tree; round 26
+    # used it to prove the recomp_fsqrt_f64 prototype fix before landing it).
+    rt_dir = os.environ.get("WIDEOPS_RT_DIR") or LIFT
+    rt_c = os.path.join(rt_dir, "recomp_rt.c")
+    if not os.path.exists(rt_c):
+        rt_c = os.path.join(LIFT, "recomp_rt.c")
     cmd = [cc, "-O1", "-shared", "-fPIC", "-DRECOMP_MEM_IDENTITY=0",
-           "-I", tmp, "-I", LIFT, path, os.path.join(LIFT, "recomp_rt.c"),
+           "-I", tmp, "-I", rt_dir, "-I", LIFT, path, rt_c,
            "-lm", "-o", lib]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -228,6 +287,12 @@ def vectors(case, rng, n):
             # low qword is the shift count: cover 0..71 and the saturating tail
             cnt = rng.choice([rng.randrange(0, 72), rng.getrandbits(64)])
             b = (cnt.to_bytes(8, "little")
+                 + bytes(rng.getrandbits(8) for _ in range(8)))
+        elif case.get("pos_f64"):
+            # low qword is a non-negative finite double (sign clear, exponent
+            # below 0x7ff): sqrt of it is numeric, so the lane is byte-exact
+            v = rng.getrandbits(64) & 0x7FEFFFFFFFFFFFFF
+            b = (v.to_bytes(8, "little")
                  + bytes(rng.getrandbits(8) for _ in range(8)))
         else:
             b = bytes(rng.getrandbits(8) for _ in range(16))
@@ -282,7 +347,7 @@ def main():
                             ctypes.POINTER(ctypes.c_uint32))[0] = ESP
                 lib.wo_call(idx, buf)
                 got = ctypes.string_at(ctypes.byref(st, zoff[0]), 16)
-                if got == want:
+                if got == want or (case.get("nan_lanes") and nan_equal(got, want, case["nan_lanes"])):
                     rec["pass"] += 1
                 else:
                     rec["fail"] += 1

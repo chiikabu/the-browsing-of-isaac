@@ -105,7 +105,11 @@ const BOOT_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'roo
 // equal-hash entry, so a mounted pack would shadow English assets with its
 // own. The engine asks for them and logs "Failed to open archive file",
 // which is what an install without them does too.
-const LAZY_ARCHIVES = ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a', 'repentance.a'];
+// repentance.a is NOT here: this exe never names it (whole-.text census,
+// round 26) and none of its keys is shared with anything the game opens --
+// the Repentance content is in afterbirthp.a for this build. 385 MB of
+// dead weight, left on disk and unregistered.
+const LAZY_ARCHIVES = ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a'];
 function seedFile(relPath, bytes) {
   const pathBytes = Buffer.from(relPath + '\0', 'utf8');
   const pp = m._malloc(pathBytes.length);

@@ -117,6 +117,18 @@ test('run_web.mjs: interactive=1 implies serve and puts ISAAC_YIELD=1 on the pag
   assert.ok(page.includes("for (const [k, v] of params) if (k.startsWith('ISAAC_')) cfg.ENV[k] = v;"), 'the page forwards ISAAC_* params to ENV');
 });
 
+test('the interactive driver is state-driven: Enter until the game logs a run, then walk', () => {
+  // in interactive mode the game paces on the wall clock, so a frame-keyed
+  // timeline lands on whatever screen is up (round 26: it parked on the
+  // main menu once the boot got fast)
+  const drv = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_interactive.mjs'), 'utf8');
+  assert.ok(drv.includes("const startRe = /Room 1\\.2\\(Start Room\\)|Starting room transition/;"), 'the run-started marker is the game\'s own log');
+  assert.ok(drv.includes("await page.keyboard.down('Enter'); await sleep(120); await page.keyboard.up('Enter');"),
+    'real key events through Playwright, held across frames (a tap lands between two per-frame samples)');
+  assert.ok(drv.includes("summary.shotsDiffer = !a.equals(b);"), 'walking must change the picture');
+  assert.ok(/process\.exit\(ok \? 0 : 1\)/.test(drv), 'the exit code is the verdict');
+});
+
 test('boot_web.mjs: every stage is awaited (the run entries return promises under JSPI), live input first', () => {
   const page = readFileSync(join(web, 'boot_web.mjs'), 'utf8');
   assert.ok(/async function stageOk\(name, fn\) \{\s*log\(`=== \$\{name\} ===`\);\s*try \{\s*return await fn\(\);/.test(page),
@@ -129,7 +141,7 @@ test('boot_web.mjs: every stage is awaited (the run entries return promises unde
   const poll = page.slice(page.indexOf('cfg.isaacInputPoll = (frame, out) => {'));
   assert.ok(poll.indexOf('if (live.length) {') > 0 && poll.indexOf('if (live.length) {') < poll.indexOf('timeline[0].frame > frame'),
     'the live queue is drained before the timeline');
-  for (const s of ["window.addEventListener('keydown', (ev) => onKey(ev, true));", "window.addEventListener('keyup', (ev) => onKey(ev, false));",
+  for (const s of ["window.addEventListener('keydown', (ev) => { resumeAudio(); onKey(ev, true); });", "window.addEventListener('keyup', (ev) => onKey(ev, false));",
                    "canvasEl.addEventListener('mousemove'", "canvasEl.addEventListener('mousedown'", "canvasEl.addEventListener('mouseup'",
                    'if (ev.repeat) { ev.preventDefault(); return; }', 'live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);'])
     assert.ok(page.includes(s), `live input: ${s}`);

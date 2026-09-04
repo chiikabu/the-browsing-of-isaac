@@ -579,6 +579,32 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     { extern void isaac_audio_pump(const CpuState *cpu); isaac_audio_pump(cpu); }
     /* every adopted thread job gets one slice per frame (round 24) */
     { extern void isaac_threads_slice(CpuState *restrict cpu); isaac_threads_slice(cpu); }
+    /* ISAAC_CUTSCENE=<frame>:<id> (round 26): at that presented frame, call
+     * Manager::ShowCutscene(id, cleanup=1, 0) (0x00958e60, thiscall on the
+     * Manager at [0x00c7169c]) on a scratch frame. Nothing in the scripted
+     * input reaches the Theora video path (the endings, cutscenes.xml
+     * <videopart>), so this is how a run exercises it. */
+    {
+        static int parsed = -1;
+        static uint32_t at_frame, id;
+        if (parsed < 0) {
+            const char *e = getenv("ISAAC_CUTSCENE");
+            unsigned f = 0, i = 0;
+            parsed = (e && *e && sscanf(e, "%u:%u", &f, &i) == 2) ? 1 : 0;
+            at_frame = f; id = i;
+        }
+        if (parsed == 1 && g_frames_presented == at_frame) {
+            CpuState sub = *cpu;
+            sub.ECX = isaac_r32(0x00c7169cu);
+            sub.ESP = (cpu->ESP - 0x1000u) & ~0xFu;
+            sub.ESP -= 4; isaac_w32(sub.ESP, 0u);     /* third argument */
+            sub.ESP -= 4; isaac_w32(sub.ESP, 1u);     /* shouldCleanup */
+            sub.ESP -= 4; isaac_w32(sub.ESP, id);     /* cutsceneID */
+            sub.ESP -= 4; isaac_w32(sub.ESP, 0u);     /* return address */
+            isaac_log("[isaac][video] ISAAC_CUTSCENE: Manager::ShowCutscene(%u) at presented frame %u", id, at_frame);
+            isaac_guest_call(0x00958e60u, &sub);
+        }
+    }
     /* every frame for the first 10 (with the frame's wall time), then every
      * 60th: the per-frame cost of the lifted code is a number the log must
      * carry (boot round 12: the loop ran at well under 0.1 fps, invisible

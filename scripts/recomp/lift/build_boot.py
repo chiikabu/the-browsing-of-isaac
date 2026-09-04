@@ -267,9 +267,10 @@ def main():
     if not args.no_lift_patches:
         sys.path.insert(0, str(HERE))
         from lift_patches import (apply_lift_patches, apply_purge_patches,  # noqa: E402
-                                  apply_wrap_patches, apply_block_patches)
+                                  apply_wrap_patches, apply_block_patches, apply_entry_first)
         patched = (set(apply_lift_patches(lift_dir)) | set(apply_purge_patches(lift_dir))
-                   | set(apply_wrap_patches(lift_dir)) | set(apply_block_patches(lift_dir)))
+                   | set(apply_wrap_patches(lift_dir)) | set(apply_block_patches(lift_dir))
+                   | set(apply_entry_first(lift_dir)))
         print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)

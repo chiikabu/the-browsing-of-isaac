@@ -76,7 +76,10 @@ test('lifted SSE instructions match Unicorn one instruction at a time', (t) => {
   }
 
   // The lowerings this file exists to pin, named so a deletion is visible.
-  for (const name of ['pshuflw', 'pshufhw', 'psrad', 'pslld', 'psllq', 'pandn']) {
+  for (const name of ['pshuflw', 'pshufhw', 'psrad', 'pslld', 'psllq', 'pandn',
+                      // round 26: the twelve SSE intrinsics the video decoder reached (recomp_rt.c)
+                      'pmaddubsw', 'pshufb', 'paddsw', 'pmulhuw', 'pmulld', 'pabsd',
+                      'pmovsxwd', 'pmovzxwd', 'psraw', 'divps', 'maxps', 'minps']) {
     assert.ok(byName.has(name), `case ${name} disappeared from the harness`);
   }
   // Controls: if these ever go missing the run proves much less.

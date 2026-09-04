@@ -1003,6 +1003,17 @@ class FuncEmitter:
         self.roots = probe.roots
         self.need_labels = set(probe.labels)
         self.need_sublabels = set(probe.sublabels)
+        # Round 26: a body may hold blocks BELOW its entry -- Ghidra absorbs a
+        # shared tail, or the target of a jump, into the function that reaches
+        # it. Blocks are emitted in address order, so the goto-shaped function
+        # used to fall into its lowest block first: the string-table loader's
+        # second half (0x00a27038) ran the loader's own epilogue at 0x00a2701b
+        # and returned 0 for every '#KEY' (819 functions in the tree, 778 of
+        # them thunks in the CRT region). The dispatch-loop shape is immune
+        # (`pc_ = start`); the goto shape now jumps to the entry block first.
+        self.entry_goto = bool(addrs) and addrs[0] != self.start and not self.opts.get("dispatch")
+        if self.entry_goto:
+            self.need_labels.add(self.start)
         self.uniques = OrderedDict()
         self.bigs = OrderedDict()
         self.bigroots = OrderedDict()
@@ -1162,6 +1173,8 @@ class FuncEmitter:
             out.append("  } }")
         else:
             out.append("  (void)0;")
+            if getattr(self, "entry_goto", False):
+                out.append("  goto L_%08x;   /* the entry block is not the lowest address */" % self.start)
             out.extend(body)
         out.append("}")
         return "\n".join(out)

@@ -205,6 +205,101 @@ L_00a2b5c8: ;
 """,
      """  RECOMP_VA(0xa2b5e1u); /* LIFT-PATCH REENTRY 0x00a2b5e1 */
 """),
+    # Round 26: the archive mount (0x00a179c0) verifies every entry at mount
+    # -- it reads each entry's whole payload through the entry stream in
+    # 0x200-byte chunks and folds a checksum (0x00a17cee..0x00a17d8b) before
+    # inserting the entry into the hash table at 0x00a17dc1. With the DLC set
+    # that is 1.5 GB through the RAM-FS windows before the first frame (~65 s
+    # in the debug profile, and every byte of it over HTTP in the browser).
+    # The archives are verified offline (scripts/recomp/assets), so the
+    # runtime skips the pass unless ISAAC_ARCHIVE_VERIFY=1: the skip does
+    # what the skipped instructions would have left behind for 0x00a17dc1 --
+    # the memset's cdecl purge (`add esp, 0xc` at 0x00a17cf4) and
+    # `mov edi, [ebp-0xe6c]` (0x00a17d91, the entry record).
+    # Round 26 diagnostic (ISAAC_PROBE=1 only): the .sta loader (0x00a26f20)
+    # reads the whole stream into a NUL-terminated buffer, then parses it.
+    # With the resources/ root back the table comes from afterbirthp.a and the
+    # parse returns 0 although the offline decoder yields the loose file
+    # byte-for-byte. Print the buffer's head and tail right after the
+    # terminator is written (0x00a26fac), buffer at [ebp-0x10090], size in esi.
+    ("0x00a26fb0-probe",
+     """  RECOMP_VA(0xa26fb0u);
+  uba00_4 = MEMR32(EDI);
+""",
+     """  RECOMP_VA(0xa26fb0u);
+  { /* LIFT-PATCH 0x00a26fb0-probe */
+    extern int isaac_probe_on(void);
+    extern void isaac_probe_str(uint32_t tag, const char *label, uint32_t p);
+    extern void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c);
+    if (isaac_probe_on()) {
+      uint32_t b_ = MEMR32((uint32_t)(EBP + ((uint32_t)0xfffefe70u)));
+      isaac_probe_hit(0xa26fb0u, b_, ESI, MEMR32(b_));
+      isaac_probe_str(0xa26fb0u, "sta buffer head", b_);
+      isaac_probe_str(0xa26fb1u, "sta buffer tail", (uint32_t)(b_ + ESI - 48u));
+    } }
+  uba00_4 = MEMR32(EDI);
+"""),
+    # ... and the stream object itself (edi): its address, vtable and read
+    # position, to see whether it overlaps the buffer.
+    # After the .sta parse: the parser's error message (a static string in
+    # [0xc7de4c], NULL when the parse succeeded) and the cursor it stopped at
+    # (the callee-cleaned argument slot, still intact below ESP), as an offset
+    # into the buffer (esi) with the 64 bytes before it.
+    ("0x00a26fe0-probe",
+     """L_00a26fe0: ;
+  RECOMP_VA(0xa26fe0u);
+  EAX = MEMR32(0xc7de4cu);
+""",
+     """L_00a26fe0: ;
+  RECOMP_VA(0xa26fe0u);
+  EAX = MEMR32(0xc7de4cu);
+  { /* LIFT-PATCH 0x00a26fe0-probe */
+    extern int isaac_probe_on(void);
+    extern void isaac_probe_str(uint32_t tag, const char *label, uint32_t p);
+    extern void isaac_probe_hit(uint32_t tag, uint32_t a, uint32_t b, uint32_t c);
+    if (isaac_probe_on()) {
+      uint32_t cur_ = MEMR32((uint32_t)(ESP - 4u));
+      isaac_probe_hit(0xa26fe0u, EAX, cur_, (uint32_t)(cur_ - ESI));
+      if (EAX) isaac_probe_str(0xa26fe0u, "sta parse error", EAX);
+      isaac_probe_str(0xa26fe1u, "sta cursor-64", cur_ > ESI + 64u ? cur_ - 64u : ESI);
+    } }
+"""),
+    # The 0x00a26fb0 probe read [ebp-0x10190] (a typo for the buffer's slot
+    # [ebp-0x10090]) and showed a spilled stream pointer as "the buffer";
+    # this corrects the slot in the applied text.
+    ("0x00a26fb0-probe-fix",
+     """      uint32_t b_ = MEMR32((uint32_t)(EBP + ((uint32_t)0xfffefe70u)));
+""",
+     """      uint32_t b_ = MEMR32((uint32_t)(EBP + ((uint32_t)0xfffeff70u)));   /* LIFT-PATCH 0x00a26fb0-probe-fix: [ebp-0x10090] */
+"""),
+    ("0x00a26fb0-probe2",
+     """      isaac_probe_str(0xa26fb1u, "sta buffer tail", (uint32_t)(b_ + ESI - 48u));
+""",
+     """      isaac_probe_str(0xa26fb1u, "sta buffer tail", (uint32_t)(b_ + ESI - 48u));
+      isaac_probe_hit(0xa26fb2u, EDI, MEMR32(EDI), MEMR32((uint32_t)(EDI + 0x18u)));   /* LIFT-PATCH 0x00a26fb0-probe2: stream, vtable, pos */
+      { uint32_t q_; for (q_ = 0u; q_ < 48u; q_ += 12u)
+          isaac_probe_hit(0xa26fb3u, MEMR32(b_ + q_), MEMR32(b_ + q_ + 4u), MEMR32(b_ + q_ + 8u));
+        for (q_ = 0u; q_ < 48u; q_ += 12u)
+          isaac_probe_hit(0xa26fb4u, MEMR32(EDI + q_), MEMR32(EDI + q_ + 4u), MEMR32(EDI + q_ + 8u)); }
+"""),
+    ("0x00a17cee",
+     """L_00a17cee: ;
+  RECOMP_VA(0xa17ceeu);
+  u3400_4 = (uint32_t)(EBP + ((uint32_t)0xfffff1c8u));
+""",
+     """L_00a17cee: ;
+  RECOMP_VA(0xa17ceeu);
+  /* LIFT-PATCH 0x00a17cee: skip the mount's per-entry checksum pass unless
+     ISAAC_ARCHIVE_VERIFY=1 (host_shims_fs.c). Leaves esp and edi as
+     0x00a17dc1 expects them. */
+  { extern int isaac_archive_verify_on(void);
+    if (!isaac_archive_verify_on()) {
+      ESP = (uint32_t)(ESP + ((uint32_t)0xcu));
+      EDI = MEMR32((uint32_t)(EBP + ((uint32_t)0xfffff194u)));
+      goto L_00a17dc1;
+    } }
+  u3400_4 = (uint32_t)(EBP + ((uint32_t)0xfffff1c8u));
+"""),
 ]
 
 
@@ -432,6 +527,57 @@ PROBE_PATCHES: dict[int, str] = {
   if (on) isaac_probe_str(0xa17181u, "resolve out", s->EAX);
 }
 """,
+    # Round 26: the string table. With the resources/ root back the game reads
+    # stringtable.sta out of afterbirthp.a instead of the loose file, and the
+    # HUD then shows raw keys (#BASEMENT_NAME). The .sta parser and the
+    # by-path stream open it uses, with their results.
+    0x00a26f20: """void sub_00a26f20(CpuState *restrict s) {
+  RECOMP_VA(0xa26f20u);
+  int on = isaac_probe_on();
+  if (on) isaac_probe_str(0xa26f20u, "sta parse", MEMR32(s->ESP + 4u));
+  sub_00a26f20__lifted(s);
+  if (on) isaac_probe_hit(0xa26f21u, s->EAX & 0xffu, 0u, 0u);   /* parse result */
+}
+""",
+    # StringTable::GetString(category, language, key, &error): the lookup
+    # behind every '#KEY' in the HUD. Prints its inputs, the options language
+    # (Manager+0x4a920) and the string it returns (or its
+    # "StringTable::Invalid..." reason).
+    0x00a26af0: """void sub_00a26af0(CpuState *restrict s) {
+  RECOMP_VA(0xa26af0u);
+  int on = isaac_probe_on();
+  uint32_t cat_ = MEMR32(s->ESP + 4u), lang_ = MEMR32(s->ESP + 8u), key_ = MEMR32(s->ESP + 12u);
+  if (on) {
+    uint32_t mgr_ = MEMR32(0x00c7169cu);
+    isaac_probe_str(0xa26af0u, "lookup category", cat_);
+    isaac_probe_str(0xa26af1u, "lookup key", key_);
+    isaac_probe_hit(0xa26af0u, lang_, mgr_ ? MEMR32(mgr_ + 0x4a920u) : 0xffffffffu, s->ECX);
+    isaac_probe_hit(0xa26af3u, MEMR32(s->ECX + 4u), MEMR32(s->ECX + 8u), MEMR32(s->ECX + 0xcu));   /* langmap head, size, categories */
+  }
+  sub_00a26af0__lifted(s);
+  if (on) isaac_probe_str(0xa26af2u, "lookup result", s->EAX);
+}
+""",
+    # XmlNode::FirstChild(name) (thiscall: ecx = node, [esp+4] = name): the
+    # string-table loader walks "stringtable" / "languages" / "language" /
+    # "category" / "key" with it. Prints the name, the node and the answer.
+    0x00413c70: """void sub_00413c70(CpuState *restrict s) {
+  RECOMP_VA(0x413c70u);
+  int on = isaac_probe_on();
+  uint32_t node_ = s->ECX, name_ = MEMR32(s->ESP + 4u);
+  if (on) isaac_probe_str(0x413c70u, "find child", name_);
+  sub_00413c70__lifted(s);
+  if (on) isaac_probe_hit(0x413c70u, node_, name_, s->EAX);
+}
+""",
+    0x00a178d0: """void sub_00a178d0(CpuState *restrict s) {
+  RECOMP_VA(0xa178d0u);
+  int on = isaac_probe_on();
+  if (on) isaac_probe_str(0xa178d0u, "stream open", MEMR32(s->ESP + 4u));
+  sub_00a178d0__lifted(s);
+  if (on) isaac_probe_hit(0xa178d1u, s->EAX, s->EAX ? MEMR32(s->EAX) : 0u, s->EAX ? MEMR32(s->EAX + 0x10u) : 0u);   /* stream, vtable, +0x10 */
+}
+""",
     # the archive open (this = the global at 0xc37a10): out-pointer gets the stream
     0x00a17f40: """void sub_00a17f40(CpuState *restrict s) {
   RECOMP_VA(0xa17f40u);
@@ -510,6 +656,93 @@ def apply_purge_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
     return sorted(touched)
 
 
+# ---- entry-first (round 26) ------------------------------------------------
+# A lifted function whose Ghidra body absorbed a block BELOW its entry (a
+# shared epilogue, the target of a jump) was emitted in address order, so the
+# goto-shaped C function fell into that lower block first. The string-table
+# loader's second half, sub_00a27038, ran the loader's epilogue at 0x00a2701b
+# and returned 0 for every '#KEY' -- the HUD's raw "#BASEMENT_NAME". lift.py
+# now emits `goto L_<entry>;` itself; this pass gives the already-lifted tree
+# the same goto without a re-lift. Dispatch-loop functions (`pc_ = entry`)
+# are immune and skipped.
+ENTRY_FIRST_MARK = "LIFT-PATCH entry-first"
+_RE_ENTRY_FN = re.compile(r"^void sub_([0-9a-f]{8})(?:__lifted)?\(CpuState \*restrict s\) \{$", re.M)
+_RE_ENTRY_RV = re.compile(r"RECOMP_VA\(0x([0-9a-f]+)u\);")
+
+
+def entry_first_text(text: str) -> tuple[str, int, int]:
+    """Return (new_text, fixed_now, below_entry): every goto-shaped function
+    whose first block is not its entry gets `goto L_<entry>;` as its first
+    statement (and the label, if no jump targeted the entry before)."""
+    out: list[str] = []
+    pos = 0
+    fixed = 0
+    below = 0
+    anchor = "\n  (void)0;\n"
+    for m in _RE_ENTRY_FN.finditer(text):
+        entry = int(m.group(1), 16)
+        end = text.find("\n}\n", m.end())
+        if end < 0:
+            break
+        span = text[m.end():end]
+        if "  uint32_t pc_ = " in span:          # dispatch-loop shape
+            continue
+        a = span.find(anchor)
+        if a < 0:                                 # hand-written body
+            continue
+        rv = _RE_ENTRY_RV.search(span, a)
+        if not rv or int(rv.group(1), 16) == entry:
+            continue
+        below += 1
+        if ENTRY_FIRST_MARK in span:
+            continue
+        entry_line = "\n  RECOMP_VA(0x%xu);\n" % entry
+        e = span.find(entry_line, a)
+        if e < 0:
+            raise SystemExit("entry-first: sub_%08x has no RECOMP_VA line for its entry" % entry)
+        label = "L_%08x: ;" % entry
+        new_span = span
+        if ("\n" + label + "\n") not in span:
+            at = e + len(entry_line)              # the lifter's order: trace line, then label
+            new_span = new_span[:at] + label + "\n" + new_span[at:]
+        new_span = new_span.replace(
+            anchor,
+            anchor + "  goto L_%08x;   /* %s: the entry block is not the lowest address */\n" % (entry, ENTRY_FIRST_MARK),
+            1)
+        out.append(text[pos:m.end()])
+        out.append(new_span)
+        pos = end
+        fixed += 1
+    out.append(text[pos:])
+    return "".join(out), fixed, below
+
+
+def apply_entry_first(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Run entry_first_text over every TU. Returns the TUs modified (their
+    objects are dropped so the build recompiles them)."""
+    touched: list[Path] = []
+    total_fixed = total_below = 0
+    for tu in sorted(lift_dir.glob("lifted_*.c")):
+        text = tu.read_text(encoding="utf-8")
+        new_text, fixed, below = entry_first_text(text)
+        total_fixed += fixed
+        total_below += below
+        if not fixed:
+            continue
+        if check_only:
+            print("entry-first: %d function(s) NOT fixed in %s" % (fixed, tu.name))
+            touched.append(tu)
+            continue
+        tu.write_text(new_text, encoding="utf-8")
+        obj = tu.with_suffix(".o")
+        if obj.exists():
+            obj.unlink()
+        touched.append(tu)
+        print("entry-first: %d function(s) fixed in %s; %s dropped for recompile" % (fixed, tu.name, obj.name))
+    print("entry-first: %d goto-shaped function(s) start below their entry, %d fixed now" % (total_below, total_fixed))
+    return touched
+
+
 def find_function(text: str, name: str) -> tuple[int, int] | None:
     """Return (start, end) of `void <name>(CpuState *restrict s) { ... }` at
     column 0, matching the closing brace at column 0 (the lifter's layout)."""
@@ -565,7 +798,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dir", type=Path, required=True, help="lift output dir (lifted_*.c)")
     ap.add_argument("--check", action="store_true", help="report only; exit 1 if any patch is missing")
+    ap.add_argument("--entry-first", action="store_true",
+                    help="run only the entry-first pass (every goto-shaped function starts at its entry block)")
     args = ap.parse_args()
+    if args.entry_first:
+        touched = apply_entry_first(args.dir, check_only=args.check)
+        if args.check:
+            return 1 if touched else 0
+        return 0
     touched = apply_lift_patches(args.dir, check_only=args.check)
     touched += apply_purge_patches(args.dir, check_only=args.check)
     if args.check:
