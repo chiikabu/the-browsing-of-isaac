@@ -80,6 +80,15 @@ void isaac_web_get_integerv(uint32_t pname, uint32_t out) {
 EM_JS(void, isaac_present_js, (const uint8_t *px, int w, int h), {
     if (typeof Module.isaacPresent === "function") Module.isaacPresent(px, w, h);
 });
+/* The canvas already shows every frame; the readback exists only so the
+ * runner can keep PNGs. Reading a 960x540 frame back is 2 MB through
+ * glReadPixels, which stalls the GL pipeline, so ask the page first and skip
+ * the whole thing for the frames it does not want (round 17). A page that
+ * defines no hook keeps the old behaviour and gets every frame. */
+EM_JS(int, isaac_wants_frame_js, (unsigned n), {
+    if (typeof Module.isaacWantsFrame !== "function") return 1;
+    try { return Module.isaacWantsFrame(n) ? 1 : 0; } catch (e) { return 1; }
+});
 static uint8_t *g_present_buf;
 static uint32_t g_present_cap;
 void isaac_web_present(void) {
@@ -91,6 +100,7 @@ void isaac_web_present(void) {
         if (g_gl_errors <= 20)
             isaac_log("[isaac][gl] GL error 0x%x pending at present #%u", err, g_present_count);
     }
+    if (!isaac_wants_frame_js(g_present_count)) return;   /* no PNG wanted: no readback */
     int w = 0, h = 0;
     emscripten_webgl_get_drawing_buffer_size(emscripten_webgl_get_current_context(), &w, &h);
     if (w <= 0 || h <= 0) return;

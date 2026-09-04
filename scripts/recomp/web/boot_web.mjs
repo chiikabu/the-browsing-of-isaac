@@ -63,9 +63,22 @@ cfg.isaacLazyRead = (src, dst, len) => {
 };
 let presented = 0;
 const keepEvery = Number(params.get('keep') || '0');      // also keep every Nth frame
+const frameBudget = Number(params.get('frames') || '5');
+// Which frames are worth reading back off the GPU. The host asks before it
+// spends a 2 MB glReadPixels on a frame nobody keeps (round 17): the sampled
+// ones, and the tail that ends up in isaacFrames anyway.
+let wantedFrame = 0;                                      // the host's frame number for the next present
+cfg.isaacWantsFrame = (n) => {
+  const want = (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
+  if (want) wantedFrame = n;
+  return want;
+};
 cfg.isaacPresent = (ptr, w, h) => {
   presented += 1;
-  const frame = { n: presented, w, h, rgba: m.HEAPU8.slice(ptr, ptr + w * h * 4) };
+  // number the frame by the HOST's counter, not by how many were captured:
+  // the readback is skipped for frames nobody keeps (round 17), so the two
+  // no longer march together and the sampling below depends on the real one.
+  const frame = { n: wantedFrame || presented, w, h, rgba: m.HEAPU8.slice(ptr, ptr + w * h * 4) };
   window.isaacFrames.push(frame);
   // the last KEEP_FRAMES always survive; sampled frames are pinned
   const pinned = window.isaacFrames.filter((f) => keepEvery && f.n % keepEvery === 0);

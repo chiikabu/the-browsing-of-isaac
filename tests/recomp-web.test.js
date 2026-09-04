@@ -98,3 +98,21 @@ test('scripted input: the page and the node driver agree on the key table, the h
   assert.ok(/msgq_pop_into\(msg\)\) \{ cpu->EAX = 1; return; \}[\s\S]{0,200}frame_cap\(\)/.test(win),
     'PeekMessageW drains the queue before the frame cap posts WM_QUIT');
 });
+
+// Round 17: the canvas already shows every frame, so the framebuffer readback
+// exists only to hand PNGs to the runner. Reading a 960x540 frame back is 2 MB
+// through glReadPixels and it stalls the GL pipeline, so the host asks the page
+// which frames it actually wants and skips the rest. Measured over 300 frames:
+// 52.3 s with every frame read back, 46.6 s with 13 of them.
+test('the web backend asks before reading a frame back, and the page answers', () => {
+  const gl = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_gl_webgl.c'), 'utf8');
+  assert.ok(gl.includes('EM_JS(int, isaac_wants_frame_js, (unsigned n)'), 'the host has the question');
+  assert.ok(gl.includes('if (typeof Module.isaacWantsFrame !== "function") return 1;'),
+    'a page without the hook still gets every frame');
+  assert.ok(gl.includes('if (!isaac_wants_frame_js(g_present_count)) return;'),
+    'the readback is skipped before glReadPixels, not after');
+  const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(page.includes('cfg.isaacWantsFrame = (n) => {'), 'the page answers');
+  assert.ok(page.includes('const frame = { n: wantedFrame || presented, w, h,'),
+    'kept frames carry the host frame number, which no longer tracks the capture count');
+});
