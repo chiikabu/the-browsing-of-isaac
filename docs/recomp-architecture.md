@@ -3541,6 +3541,34 @@ computation that produces those bounds, which is entity-position float
 work -- a conversion defect there would produce exactly this: an
 assertion when the bounds invert, and a very long loop when they do not.
 
+### 21.37 Round 20: the port plays at 53 fps -- the grind was the debug build
+
+Profiling gameplay with the fixed tick (`ISAAC_PROFILE=1`) gives a clean
+picture at last: **9.0 billion lifted instructions in 447 s, 21.1 MIPS**,
+and two functions are 42% of it -- `0x00adb9c0` (23.1%) and `0x00a68cf0`
+(19.0%), the archive stream reader and the decompressor underneath it
+(zlib is in the image; its error strings are there). Asset loading is what
+the game spends its time on.
+
+Then the number that reframes everything. The same 1,380-frame scenario,
+same input, same progress (one room transition each):
+
+| profile | wall | frames/s |
+| --- | --- | --- |
+| `--fast` (`RECOMP_MEM_CHECK=0`) | **26 s** | **53** |
+| default (bounds checks + VA trace) | 525 s | 2.6 |
+
+**Twenty times.** Every "grind", "stall" and "hang" measured in gameplay
+so far has been the debug instrumentation: a bounds check and a VA-trace
+store on every guest memory access and every instruction. The port itself
+plays at 53 fps with room transitions and enemies on screen.
+
+That does not retract the defects found through those stalls -- the
+`CellSpace::insert` assertion is real, and the path-hash fastpath (21.36)
+is a real saving in both profiles -- but it does change what "slow" means
+here. Measure with `--fast`; debug with the default, and read its wall
+times as roughly 20x inflated.
+
 ## Appendix: reproduction
 
 ```bash

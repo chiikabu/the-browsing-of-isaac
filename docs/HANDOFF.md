@@ -110,9 +110,13 @@ is started:
 - **The instance is missing DLC and language archives**
   (`afterbirth.a`, `afterbirthp.a`, `repentance_*.a`), which is why the
   log still carries "Failed to open archive file" lines for those.
-- **No shipping build has been measured.** Every number in this document
-  is the debug profile (`RECOMP_MEM_CHECK=1`: bounds checks, the VA ring,
-  the stall tick). `build_boot.py --fast` is the profile that drops them.
+- ~~No shipping build has been measured.~~ **It has, and it is 20x faster**
+  (§21.37): the same 1,380-frame gameplay scenario runs in **26 s with
+  `--fast` against 525 s with the default profile**, i.e. **53 fps** with
+  room transitions and enemies. Every gameplay "grind" and "stall"
+  measured before this was the debug instrumentation -- a bounds check and
+  a VA-trace store per guest access. Measure with `--fast`; debug with the
+  default and read its wall times as roughly 20x inflated.
 
 ## Two work fronts
 
