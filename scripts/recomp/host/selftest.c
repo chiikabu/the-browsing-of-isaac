@@ -596,6 +596,117 @@ int main(int argc, char **argv) {
               "premultiply maps R,G,B through the alpha table and keeps alpha");
     }
 
+    /* Host fastpath, round 27 (recomp-architecture.md 21.42): the ISAAC
+     * keystream core and its consumer, ArchivedFile::read's window
+     * arithmetic and the engine Mutex predicates. The boot's
+     * ISAAC_FASTPATH_VERIFY=1 compares each against its lifted body on the
+     * game's own data; these pin the host code by itself. */
+    {
+        extern int isaac_fast_guest_range(uint32_t, uint32_t);
+        extern int isaac_fast_isaac(uint32_t, uint32_t *);
+        extern int isaac_fast_keystream_ok(uint32_t, uint32_t, uint32_t);
+        extern void isaac_fast_keystream_xor(uint32_t, uint32_t, uint32_t);
+        extern int isaac_fast_read_plan(uint32_t, uint32_t, uint32_t, uint32_t *);
+        extern void isaac_fast_read_window(uint32_t, uint32_t, uint32_t);
+        extern int isaac_fast_mutex_init(uint32_t), isaac_fast_mutex_free(uint32_t), isaac_fast_mutex_std(uint32_t);
+        extern void isaac_fast_mutex_take(uint32_t), isaac_fast_mutex_drop(uint32_t);
+        check(isaac_fast_guest_range(0x1000u, 0x10u) && !isaac_fast_guest_range(ISAAC_GUEST_LIMIT_VA - 8u, 0x10u)
+              && !isaac_fast_guest_range(0xfffffff0u, 0x20u),
+              "fast guest_range: inside the guest, straddling the limit, wrapping around");
+        /* isaac(): Jenkins' own two-half-loop formulation (rand.c, RANDSIZL
+         * 8) on a host copy of the context is the reference for the merged
+         * single loop the engine compiled (mm[(i + 128) & 255] as the second
+         * pointer). Same layout: r at +4, mm at +0x404, a/b/c at +0x804. */
+        uint32_t ctx = ISAAC_STACK_TOP_VA - 0x40000u, ctx2 = ISAAC_STACK_TOP_VA - 0x3f000u;
+        for (uint32_t i = 0; i < 256u; i++) {
+            isaac_w32(ctx + 4u + 4u * i, 0u);
+            isaac_w32(ctx + 0x404u + 4u * i, i * 0x9e3779b9u + 1u);
+        }
+        isaac_w32(ctx, 77u); isaac_w32(ctx + 0x804u, 0x12345678u);
+        isaac_w32(ctx + 0x808u, 0x9abcdef0u); isaac_w32(ctx + 0x80cu, 3u);
+        uint32_t ref[0x204], ax = 0u;
+        memcpy(ref, isaac_g(ctx), 0x810u);
+        {
+            uint32_t *mm = ref + 0x101, *r = ref + 1, *m, *m2, *mend, x, y;
+            uint32_t a = ref[0x201], b = ref[0x202] + (++ref[0x203]);
+#define IND(mm, x) (*(uint32_t *)((uint8_t *)(mm) + ((x) & (255u << 2))))
+#define RNGSTEP(mix) { x = *m; ax = a ^ (mix); a = ax + *(m2++); *(m++) = y = IND(mm, x) + a + b; *(r++) = b = IND(mm, y >> 8) + x; }
+            for (m = mm, mend = m2 = mm + 128; m < mend; ) { RNGSTEP(a << 13) RNGSTEP(a >> 6) RNGSTEP(a << 2) RNGSTEP(a >> 16) }
+            for (m2 = mm; m2 < mend; ) { RNGSTEP(a << 13) RNGSTEP(a >> 6) RNGSTEP(a << 2) RNGSTEP(a >> 16) }
+#undef RNGSTEP
+#undef IND
+            ref[0x202] = b; ref[0x201] = a;
+        }
+        uint32_t edx = 0u;
+        check(isaac_fast_isaac(ctx, &edx) == 1, "isaac(): a guest context is accepted");
+        check(memcmp(ref, isaac_g(ctx), 0x810u) == 0, "isaac(): r[], mm[], a, b and c match Jenkins' two-half-loop reference");
+        check(isaac_r32(ctx + 0x80cu) == 4u && isaac_r32(ctx) == 77u, "isaac(): c is incremented once; the consumer's index word is untouched");
+        check(edx == ax, "isaac(): EDX is the last iteration's a after its xor step, as the lifted loop leaves it");
+        check(isaac_fast_isaac(ISAAC_GUEST_LIMIT_VA - 0x100u, &edx) == 0, "isaac(): a context past the guest limit is refused untouched");
+        /* the consumer: r[254], r[255], then the refill, then r[0] of the new block */
+        uint32_t holder = ISAAC_STACK_TOP_VA - 0x3e000u, buf = ISAAC_STACK_TOP_VA - 0x3df00u;
+        isaac_w32(holder, ctx);
+        isaac_w32(ctx, 254u);
+        memcpy(isaac_g(ctx2), isaac_g(ctx), 0x810u);
+        uint32_t r254 = isaac_r32(ctx + 4u + 4u * 254u), r255 = isaac_r32(ctx + 4u + 4u * 255u);
+        isaac_fast_isaac(ctx2, NULL);                        /* what the refill inside the XOR will produce */
+        uint32_t r0next = isaac_r32(ctx2 + 4u);
+        for (uint32_t i = 0; i < 12u; i++) *(uint8_t *)isaac_g(buf + i) = (uint8_t)(0x40u + i);
+        check(isaac_fast_keystream_ok(holder, buf, 12u), "keystream: a guest holder, context and buffer are accepted");
+        isaac_fast_keystream_xor(holder, buf, 12u);
+        int ks_ok = 1;
+        for (uint32_t i = 0; i < 12u; i++) {
+            uint32_t w = i < 4u ? r254 : i < 8u ? r255 : r0next;
+            if (*(uint8_t *)isaac_g(buf + i) != (uint8_t)((0x40u + i) ^ (w >> (8u * (i & 3u))))) ks_ok = 0;
+        }
+        check(ks_ok, "keystream: each byte XORs r[idx], least significant byte first, across the refill");
+        check(isaac_r32(ctx) == 1u, "keystream: taking r[255] refills at once and the index restarts at 0");
+        check(memcmp(isaac_g(ctx + 4u), isaac_g(ctx2 + 4u), 0x80cu) == 0, "keystream: the refilled block is isaac() of the old one, c included");
+        isaac_w32(ctx, 0x100u);
+        check(!isaac_fast_keystream_ok(holder, buf, 12u), "keystream: an index past r[] is left to the lifted body");
+        isaac_w32(ctx, 5u);
+        isaac_fast_keystream_xor(holder, buf, 0u);
+        check(isaac_r32(ctx) == 5u && isaac_fast_keystream_ok(holder, buf, 0u), "keystream: a zero-length XOR consumes nothing");
+        /* ArchivedFile::read: window at +0x81c, pos +0xc1c, fill +0xc20, eof +0xc28, stream position +0x18 */
+        uint32_t af = ISAAC_STACK_TOP_VA - 0x3d000u, dst = ISAAC_STACK_TOP_VA - 0x3c000u, take = 0xdeadu;
+        memset(isaac_g(af), 0, 0xc2cu);
+        for (uint32_t i = 0; i < 0x400u; i++) *(uint8_t *)isaac_g(af + 0x81cu + i) = (uint8_t)(i * 3u);
+        isaac_w32(af + 0x18u, 0x1000u); isaac_w32(af + 0xc1cu, 0x100u); isaac_w32(af + 0xc20u, 0x400u);
+        check(isaac_fast_read_plan(af, dst, 0x10u, &take) && take == 0x10u, "read: a request inside the window is taken whole");
+        isaac_fast_read_window(af, dst, take);
+        check(memcmp(isaac_g(dst), isaac_g(af + 0x81cu + 0x100u), 0x10u) == 0 && isaac_r32(af + 0xc1cu) == 0x110u && isaac_r32(af + 0x18u) == 0x1010u,
+              "read: the window bytes at pos are copied; pos and the stream position advance by the byte count");
+        check(!isaac_fast_read_plan(af, dst, 0x2f1u, &take), "read: one byte past the fill with no eof is a refill, left to the lifted body");
+        check(isaac_fast_read_plan(af, dst, 0x2f0u, &take) && take == 0x2f0u, "read: a request that exactly drains the window needs no refill");
+        *(uint8_t *)isaac_g(af + 0xc28u) = 1u;
+        check(isaac_fast_read_plan(af, dst, 0x400u, &take) && take == 0x2f0u, "read: at eof a larger request is cut to what the window holds");
+        isaac_w32(af + 0xc1cu, 0x500u);                      /* pos past fill: nothing available */
+        check(isaac_fast_read_plan(af, dst, 4u, &take) && take == 0u, "read: pos past fill at eof serves zero bytes");
+        *(uint8_t *)isaac_g(af + 0xc28u) = 0u;
+        check(!isaac_fast_read_plan(af, dst, 4u, &take), "read: pos past fill without eof is a refill");
+        check(isaac_fast_read_plan(af, dst, 0u, &take) && take == 0u, "read: a zero-byte request is served without a refill");
+        /* the engine Mutex: {vtable, flags, cs*}, the locked byte past the 24-byte section */
+        uint32_t mtx = ISAAC_STACK_TOP_VA - 0x3bf00u, vt = ISAAC_STACK_TOP_VA - 0x3be00u, cs = ISAAC_STACK_TOP_VA - 0x3bd00u;
+        memset(isaac_g(cs), 0, 0x1cu);
+        isaac_w32(mtx, vt); *(uint8_t *)isaac_g(mtx + 4u) = 1u; isaac_w32(mtx + 8u, cs);
+        isaac_w32(vt + 0xcu, 0x00a157f0u); isaac_w32(vt + 0x10u, 0x00a159a0u);
+        check(isaac_fast_mutex_init(mtx) && isaac_fast_mutex_free(mtx) && isaac_fast_mutex_std(mtx),
+              "mutex: initialised, free, and the engine's own Lock/Unlock in its vtable");
+        isaac_fast_mutex_take(mtx);
+        check(isaac_r8(cs + 0x18u) == 1u && !isaac_fast_mutex_free(mtx) && !isaac_fast_mutex_std(mtx) && isaac_fast_mutex_init(mtx),
+              "mutex: take sets the locked byte past the CRITICAL_SECTION; a held mutex is not free");
+        isaac_fast_mutex_drop(mtx);
+        check(isaac_r8(cs + 0x18u) == 0u && isaac_fast_mutex_free(mtx), "mutex: drop clears the byte");
+        isaac_w32(vt + 0x10u, 0x00a15730u);
+        check(isaac_fast_mutex_free(mtx) && !isaac_fast_mutex_std(mtx), "mutex: another Unlock in the vtable is not the standard pair");
+        isaac_w32(vt + 0x10u, 0x00a159a0u);
+        *(uint8_t *)isaac_g(mtx + 4u) = 0u;
+        check(!isaac_fast_mutex_init(mtx) && !isaac_fast_mutex_free(mtx) && !isaac_fast_mutex_std(mtx),
+              "mutex: flag bit 0 clear (not initialised) is left to the lifted body");
+        *(uint8_t *)isaac_g(mtx + 4u) = 1u; isaac_w32(mtx + 8u, 0u);
+        check(!isaac_fast_mutex_init(mtx), "mutex: a NULL section pointer is refused");
+    }
+
     /* Input (round 14a): scripted events become Win32 messages for GLFW's
      * pump, with the lParam layout its WndProc decodes. */
     {

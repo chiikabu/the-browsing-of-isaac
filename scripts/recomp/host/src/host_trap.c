@@ -358,6 +358,7 @@ void isaac_stub_report(void) {
     { extern void recomp_profile_report(void); recomp_profile_report(); }
     { extern void isaac_gl_census_report(void); isaac_gl_census_report(); }
     { extern void isaac_dispatch_report(void); isaac_dispatch_report(); }
+    { extern void isaac_fastpath_report(void); isaac_fastpath_report(); }
     { extern void isaac_audio_report(void); isaac_audio_report(); }
     { extern void isaac_threads_report(void); isaac_threads_report(); }
 #ifdef ISAAC_WEB

@@ -48,9 +48,10 @@ test('WRAP_PATCHES: every wrapper keeps the lifted body, consults the mode, and 
     assert.ok(body.includes(`${name}__lifted(s)`), `${name}: lifted body reachable (ISAAC_FASTPATH=0)`);
     assert.ok(body.includes('isaac_fastpath_mode()'), `${name}: consults the fastpath mode`);
     assert.ok(body.includes('isaac_fastpath_mismatch('), `${name}: verify path reports mismatches`);
-    // the host path must end with the callee's ret: pop EIP, ESP += 4
-    const ret = /s->EIP = MEMR32\(s->ESP\);\s*\n\s*s->ESP \+= 4u;\s*\n}\s*$/;
-    assert.match(body, ret, `${name}: host path ends with the ret emulation (pop EIP, ESP += 4)`);
+    // the host path must end with the callee's ret: pop EIP, ESP += 4 (+ the
+    // callee's own purge for a `ret N`, spelled `4u + Nu`)
+    const ret = /s->EIP = MEMR32\(s->ESP\);\s*\n\s*s->ESP \+= 4u(?: \+ \d+u)?;\s*\n}\s*$/;
+    assert.match(body, ret, `${name}: host path ends with the ret emulation (pop EIP, ESP += 4 [+ purge])`);
     // the lifted fallback returns without touching the stack (the lifted
     // body performs its own ret)
     for (const m of body.matchAll(/__lifted\(s\);\s*(return;)?/g)) {
@@ -77,18 +78,92 @@ test('WRAP_PATCHES target lifted functions (when the lift output is present)', (
   }
 });
 
+// the body of a host function: from its definition line (not a declaration or
+// a call -- the round-27 functions call one another) to the closing brace
+function hostBody(src, fn) {
+  const m = src.match(new RegExp(`^[a-z0-9_ *]*\\b${fn}\\([^)]*\\) \\{`, 'm'));
+  assert.ok(m, `${fn} defined in host_fastpath.c`);
+  return src.slice(m.index, src.indexOf('\n}\n', m.index));
+}
+
 test('host_fastpath.c: bounds-checked guest access and the verify counter', () => {
   const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
-  for (const fn of ['isaac_fast_unfilter', 'isaac_fast_adler32', 'isaac_fast_premultiply']) {
-    const a = fast.indexOf(`${fn}(`);
-    assert.ok(a > 0, `${fn} defined`);
-    const bodyEnd = fast.indexOf('\n}\n', a);
-    const body = fast.slice(a, bodyEnd);
-    assert.ok(body.includes('isaac_is_guest_va('), `${fn}: checks its guest range before touching memory`);
+  for (const fn of ['isaac_fast_unfilter', 'isaac_fast_adler32', 'isaac_fast_premultiply', 'isaac_fast_pathhash']) {
+    assert.ok(hostBody(fast, fn).includes('isaac_is_guest_va('), `${fn}: checks its guest range before touching memory`);
   }
+  // round 27: the deciding predicates check the ranges; the workers they gate
+  // (keystream_xor, read_window, mutex_take/drop) run only behind them
+  for (const fn of ['isaac_fast_guest_range', 'isaac_fast_isaac', 'isaac_fast_keystream_ok', 'isaac_fast_read_plan',
+                    'isaac_fast_mutex_std']) {
+    assert.match(hostBody(fast, fn), /isaac_is_guest_va\(|isaac_fast_guest_range\(/,
+      `${fn}: checks its guest range before touching memory`);
+  }
+  assert.ok(hostBody(fast, 'isaac_fast_guest_range').includes('va + len >= va'),
+    'guest_range: a range that wraps around the address space is rejected');
   assert.ok(fast.includes('uint32_t isaac_fastpath_mismatches(void)'), 'mismatch counter exported');
   assert.ok(/getenv\("ISAAC_FASTPATH"\)/.test(fast) && /getenv\("ISAAC_FASTPATH_VERIFY"\)/.test(fast),
     'mode switches documented in the env');
+});
+
+// Round 27: the leaves of the fast profile's dispatch census (recomp-
+// architecture.md 21.42). Two rules on top of the round-12 contract: the host
+// path's purge equals the callee's `ret N` (a wrong purge is the one-slot
+// stack drift again), and a verify path runs the trampoline after the lifted
+// body, because these bodies end in tail jumps -- the ISAAC core's jump-table
+// cases, AddRef's jump into Unlock -- that are only parked when the body
+// returns, so a compare without it would read the state mid-function.
+const ROUND27 = {
+  '0x00aa94a0': { purge: 0, host: 'isaac_fast_isaac' },            // ISAAC core: thiscall, no args
+  '0x00a89d70': { purge: 8, host: 'isaac_fast_keystream_xor' },    // keystream XOR: thiscall (buf, len)
+  '0x00a69510': { purge: 12, host: 'isaac_fast_read_window' },     // ArchivedFile::read: thiscall (buf, size, count)
+  '0x00a157f0': { purge: 4, host: 'isaac_fast_mutex_take' },       // Mutex::Lock(timeout)
+  '0x00a159a0': { purge: 0, host: 'isaac_fast_mutex_drop' },       // Mutex::Unlock
+  '0x0040c690': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle AddRef
+  '0x0040c6b0': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle TryAddRef
+  '0x0040c630': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle Release
+  '0x00a12240': { purge: 0, host: 'isaac_fast_mutex_take' },       // owner check: cdecl(holder)
+};
+
+test('round 27 wrappers: present, purge = ret N, verify runs the trampoline, host work behind the decision', () => {
+  const patches = new Map(wrapPatches().map((p) => [p.va, p.body]));
+  for (const [va, { purge, host }] of Object.entries(ROUND27)) {
+    const body = patches.get(va);
+    assert.ok(body, `${va}: wrapped`);
+    const tail = purge ? `s->ESP += 4u + ${purge}u;` : 's->ESP += 4u;';
+    assert.ok(body.trimEnd().endsWith(`${tail}\n}`), `${va}: the host path pops the return address and ${purge} bytes of arguments`);
+    assert.match(body, /__lifted\(s\);\s*\n\s*if \(recomp_jmp_pending\) recomp_run_pending\(s\);/,
+      `${va}: the verify path runs the parked tail jump before comparing`);
+    assert.equal((body.match(/isaac_fastpath_mode\(\)/g) || []).length, 1, `${va}: the mode is read once`);
+    // the exit census (isaac_fastpath_report): every lifted fallback and every
+    // completed verify compare is counted, so "0 mismatches" comes with the
+    // number of calls that were actually compared
+    const short = va.slice(2).replace(/^0+/, '');
+    for (const m of body.matchAll(/__lifted\(s\); return; \}/g)) {
+      const line = body.slice(body.lastIndexOf('\n', m.index), m.index);
+      assert.ok(line.includes(`isaac_fastpath_count(0x${short}u, 1);`), `${va}: each lifted fallback is counted`);
+    }
+    assert.match(body, new RegExp(`recomp_run_pending\\(s\\);[^\\n]*\\n\\s*isaac_fastpath_count\\(0x${short}u, 2\\);`),
+      `${va}: a completed verify compare is counted`);
+    // the host worker runs only after the mode test: never before the wrapper
+    // has decided against the lifted body
+    const decide = body.indexOf('__lifted(s); return; }');
+    const work = body.indexOf(`${host}(`);
+    assert.ok(decide > 0 && work > decide, `${va}: ${host} runs only after the lifted-body decision`);
+  }
+});
+
+test('round 27: the lock-based wrappers take a mutex only through the standard-pair predicate', () => {
+  const patches = new Map(wrapPatches().map((p) => [p.va, p.body]));
+  for (const va of ['0x0040c690', '0x0040c6b0', '0x0040c630', '0x00a12240']) {
+    const body = patches.get(va);
+    assert.ok(body.includes('isaac_fast_mutex_std('), `${va}: checks the embedded mutex's vtable is the engine's Lock/Unlock pair`);
+    // every take is matched by a drop on the host path
+    assert.equal((body.match(/isaac_fast_mutex_take\(/g) || []).length, (body.match(/isaac_fast_mutex_drop\(/g) || []).length,
+      `${va}: lock and unlock in equal number`);
+  }
+  const lock = patches.get('0x00a157f0');
+  assert.ok(lock.includes('timeout != 0xffffffffu') && lock.includes('isaac_fast_mutex_free('),
+    'Lock: only the uncontended INFINITE wait is taken on the host');
 });
 
 // Round 23: observe-only probes. The dispatch watch can only see functions

@@ -476,6 +476,263 @@ WRAP_PATCHES: dict[int, str] = {
   s->ESP += 4u;
 }
 """,
+    # ---- round 27: the leaves of the fast profile's dispatch census -------
+    # (recomp-architecture.md 21.42). Two rules on top of the round-12 contract,
+    # pinned by tests/recomp-fastpath.test.js: the host path's purge equals the
+    # callee's `ret N`, and a verify path runs the trampoline after the lifted
+    # body, because these bodies end in tail jumps (the ISAAC core's jump-table
+    # cases, AddRef's jump into Unlock) that are only parked when the body
+    # returns. Every wrapper decides host-or-lifted BEFORE any side effect.
+    #
+    # Bob Jenkins' isaac() -- the v2 archive keystream refill: thiscall, ecx =
+    # the 0x810-byte context, no arguments, plain ret; ebx/esi/edi saved and
+    # restored, ecx untouched (its caller relies on that). Its per-iteration
+    # `switch (i & 3)` is a jump table, so each of its 256 iterations was one
+    # dispatch: 71 M of the 93 M dispatches of a 3,000-frame run.
+    0x00aa94a0: """void sub_00aa94a0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00aa94a0: host ISAAC keystream refill (host_fastpath.c) */
+  RECOMP_VA(0xaa94a0u);
+  uint32_t ctx = s->ECX, edx = 0u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_guest_range(ctx, 0x810u)) { isaac_fastpath_count(0xaa94a0u, 1); sub_00aa94a0__lifted(s); return; }
+  if (mode == 2) {
+    uint8_t *snap = (uint8_t *)malloc(0x810u), *host = (uint8_t *)malloc(0x810u);
+    if (snap) memcpy(snap, RECOMP_PTR(ctx), 0x810u);
+    isaac_fast_isaac(ctx, &edx);
+    if (host) memcpy(host, RECOMP_PTR(ctx), 0x810u);
+    if (snap) memcpy(RECOMP_PTR(ctx), snap, 0x810u);
+    sub_00aa94a0__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);     /* the jump-table cases are parked tail jumps */
+    isaac_fastpath_count(0xaa94a0u, 2);
+    if (host && !isaac_fast_verify_equal(host, ctx, 0x810u)) isaac_fastpath_mismatch("isaac", ctx, MEMR32(ctx + 0x804u));
+    if (s->EAX != MEMR32(ctx + 0x808u) || s->EDX != edx) isaac_fastpath_mismatch("isaac regs", s->EAX, s->EDX);
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_isaac(ctx, &edx);
+  s->EAX = MEMR32(ctx + 0x808u);   /* the loop's last b, as the lifted body leaves it */
+  s->EDX = edx;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # The keystream consumer above it: thiscall, [ecx] -> the context, stack =
+    # (buf, len); ret 8. XORs len bytes with the r[] words and calls isaac()
+    # when r[255] is taken. Its byte loop runs over every stored piece of the
+    # DLC archives (a 3,000-frame run decodes ~280 MB of PCM through it).
+    0x00a89d70: """void sub_00a89d70(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a89d70: host archive keystream XOR (host_fastpath.c) */
+  RECOMP_VA(0xa89d70u);
+  uint32_t self = s->ECX, buf = MEMR32(s->ESP + 4u), len = MEMR32(s->ESP + 8u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_keystream_ok(self, buf, len)) { isaac_fastpath_count(0xa89d70u, 1); sub_00a89d70__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t ctx = MEMR32(self);
+    uint8_t *snap = (uint8_t *)malloc(len + 0x810u), *host = (uint8_t *)malloc(len + 0x810u);
+    if (snap) { memcpy(snap, RECOMP_PTR(buf), len); memcpy(snap + len, RECOMP_PTR(ctx), 0x810u); }
+    isaac_fast_keystream_xor(self, buf, len);
+    if (host) { memcpy(host, RECOMP_PTR(buf), len); memcpy(host + len, RECOMP_PTR(ctx), 0x810u); }
+    if (snap) { memcpy(RECOMP_PTR(buf), snap, len); memcpy(RECOMP_PTR(ctx), snap + len, 0x810u); }
+    sub_00a89d70__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa89d70u, 2);
+    if (host && (!isaac_fast_verify_equal(host, buf, len) || !isaac_fast_verify_equal(host + len, ctx, 0x810u)))
+      isaac_fastpath_mismatch("keystream", len, MEMR32(ctx));
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_keystream_xor(self, buf, len);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 8u;
+}
+""",
+    # ArchivedFile::read: thiscall, stack = (buf, size, count); ret 0xc; bytes
+    # read in eax. The host serves the window (no refill needed, or eof); a
+    # request that needs the refill 0x00a68cf0 runs the lifted body whole.
+    0x00a69510: """void sub_00a69510(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a69510: host ArchivedFile::read window copy (host_fastpath.c) */
+  RECOMP_VA(0xa69510u);
+  uint32_t self = s->ECX, buf = MEMR32(s->ESP + 4u), n = MEMR32(s->ESP + 8u) * MEMR32(s->ESP + 12u), take = 0u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_read_plan(self, buf, n, &take)) { isaac_fastpath_count(0xa69510u, 1); sub_00a69510__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t pos = MEMR32(self + 0xc1cu), spos = MEMR32(self + 0x18u), esp0 = s->ESP;
+    uint8_t *host = (uint8_t *)malloc(take ? take : 1u);
+    if (host && take) memcpy(host, RECOMP_PTR(self + 0x81cu + pos), take);   /* what the host copy delivers */
+    sub_00a69510__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa69510u, 2);
+    if (s->EAX != take || MEMR32(self + 0xc1cu) != pos + take || MEMR32(self + 0x18u) != spos + take ||
+        s->ESP != esp0 + 16u || (host && take && !isaac_fast_verify_equal(host, buf, take)))
+      isaac_fastpath_mismatch("archive_read", s->EAX, take);
+    free(host);
+    return;
+  }
+  isaac_fast_read_window(self, buf, take);
+  s->EAX = take;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 12u;
+}
+""",
+    # Mutex::Lock(timeout): thiscall, ecx = the mutex, stack = (timeout); ret 4;
+    # eax = 1. Host: the uncontended INFINITE wait only (EnterCriticalSection's
+    # report to the thread slicer, then the locked byte); a set byte or a
+    # finite timeout is the lifted body's (Sleep spin / QPC deadline).
+    0x00a157f0: """void sub_00a157f0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a157f0: host Mutex::Lock, uncontended INFINITE (host_fastpath.c) */
+  RECOMP_VA(0xa157f0u);
+  uint32_t self = s->ECX, timeout = MEMR32(s->ESP + 4u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || timeout != 0xffffffffu || !isaac_fast_mutex_free(self)) { isaac_fastpath_count(0xa157f0u, 1); sub_00a157f0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t cs = MEMR32(self + 8u), esp0 = s->ESP;
+    sub_00a157f0__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa157f0u, 2);
+    if (s->EAX != 1u || MEMR8(cs + 0x18u) != 1u || s->ESP != esp0 + 8u) isaac_fastpath_mismatch("mutex_lock", s->EAX, s->ESP - esp0);
+    return;
+  }
+  isaac_fast_mutex_take(self);
+  s->EAX = 1u;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 4u;
+}
+""",
+    # Mutex::Unlock: thiscall, no arguments, plain ret; the locked byte cleared,
+    # then LeaveCriticalSection (eax = 0 here).
+    0x00a159a0: """void sub_00a159a0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a159a0: host Mutex::Unlock (host_fastpath.c) */
+  RECOMP_VA(0xa159a0u);
+  uint32_t self = s->ECX;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_mutex_init(self)) { isaac_fastpath_count(0xa159a0u, 1); sub_00a159a0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t cs = MEMR32(self + 8u), esp0 = s->ESP;
+    sub_00a159a0__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa159a0u, 2);
+    if (s->EAX != 0u || MEMR8(cs + 0x18u) != 0u || s->ESP != esp0 + 4u) isaac_fastpath_mismatch("mutex_unlock", s->EAX, s->ESP - esp0);
+    return;
+  }
+  isaac_fast_mutex_drop(self);
+  s->EAX = 0u;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # The refcount handle {vtable, u16 count at +4, an embedded Mutex at +8,
+    # owner at +0x14} and its three helpers, each dispatched through a vtable
+    # and each locking through the mutex's own vtable (+0xc Lock, +0x10
+    # Unlock): AddRef (lock, ++count, tail-jump into Unlock), TryAddRef (lock,
+    # unlock, then vt+8 -- which is AddRef -- when the count is nonzero: six
+    # dispatches per acquire) and Release (lock, --count, unlock; the count
+    # reaching zero disposes through two virtuals and stays lifted). All
+    # thiscall, no arguments, plain ret.
+    0x0040c690: """void sub_0040c690(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x0040c690: host handle AddRef (host_fastpath.c) */
+  RECOMP_VA(0x40c690u);
+  uint32_t self = s->ECX, mtx = self + 8u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_guest_range(self, 0x18u) || !isaac_fast_mutex_std(mtx)) { isaac_fastpath_count(0x40c690u, 1); sub_0040c690__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t cs = MEMR32(mtx + 8u), esp0 = s->ESP, want = (MEMR16(self + 4u) + 1u) & 0xffffu;
+    sub_0040c690__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);     /* the tail jump into Unlock */
+    isaac_fastpath_count(0x40c690u, 2);
+    if (MEMR16(self + 4u) != want || MEMR8(cs + 0x18u) != 0u || s->EAX != 0u || s->ESP != esp0 + 4u)
+      isaac_fastpath_mismatch("addref", MEMR16(self + 4u), want);
+    return;
+  }
+  isaac_fast_mutex_take(mtx);
+  MEMW16(self + 4u, (uint16_t)(MEMR16(self + 4u) + 1u));
+  isaac_fast_mutex_drop(mtx);
+  s->EAX = 0u;   /* Unlock's LeaveCriticalSection result, returned through the tail jump */
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    0x0040c6b0: """void sub_0040c6b0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x0040c6b0: host handle TryAddRef (host_fastpath.c) */
+  RECOMP_VA(0x40c6b0u);
+  uint32_t self = s->ECX, mtx = self + 8u, count = 0u, vt = 0u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_guest_range(self, 0x18u) || !isaac_fast_mutex_std(mtx)) { isaac_fastpath_count(0x40c6b0u, 1); sub_0040c6b0__lifted(s); return; }
+  count = MEMR16(self + 4u);
+  vt = MEMR32(self);
+  if (count != 0u && (!isaac_fast_guest_range(vt, 0xcu) || MEMR32(vt + 8u) != 0x0040c690u)) { isaac_fastpath_count(0x40c6b0u, 1); sub_0040c6b0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t cs = MEMR32(mtx + 8u), esp0 = s->ESP, want = count ? (count + 1u) & 0xffffu : 0u;
+    sub_0040c6b0__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0x40c6b0u, 2);
+    if (MEMR16(self + 4u) != want || MEMR8(cs + 0x18u) != 0u || s->EAX != (count ? 1u : 0u) || s->ESP != esp0 + 4u)
+      isaac_fastpath_mismatch("tryaddref", MEMR16(self + 4u), s->EAX);
+    return;
+  }
+  isaac_fast_mutex_take(mtx);
+  isaac_fast_mutex_drop(mtx);
+  if (count) {                                         /* vt+8 == AddRef: its own lock, increment, unlock */
+    isaac_fast_mutex_take(mtx);
+    MEMW16(self + 4u, (uint16_t)(MEMR16(self + 4u) + 1u));
+    isaac_fast_mutex_drop(mtx);
+  }
+  s->EAX = count ? 1u : 0u;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    0x0040c630: """void sub_0040c630(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x0040c630: host handle Release, count not reaching zero (host_fastpath.c) */
+  RECOMP_VA(0x40c630u);
+  uint32_t self = s->ECX, mtx = self + 8u, count = 0u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_guest_range(self, 0x18u) || !isaac_fast_mutex_std(mtx) || MEMR16(self + 4u) == 1u) { isaac_fastpath_count(0x40c630u, 1); sub_0040c630__lifted(s); return; }
+  count = MEMR16(self + 4u);
+  if (mode == 2) {
+    uint32_t cs = MEMR32(mtx + 8u), esp0 = s->ESP, want = count ? count - 1u : 0u;
+    sub_0040c630__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0x40c630u, 2);
+    if (MEMR16(self + 4u) != want || MEMR8(cs + 0x18u) != 0u || s->EAX != 1u || s->ESP != esp0 + 4u)
+      isaac_fastpath_mismatch("release", MEMR16(self + 4u), want);
+    return;
+  }
+  isaac_fast_mutex_take(mtx);
+  if (count) MEMW16(self + 4u, (uint16_t)(count - 1u));
+  isaac_fast_mutex_drop(mtx);
+  s->EAX = 1u;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # The owner check over a handle holder {ptr, handle*}: cdecl (holder on the
+    # stack), plain ret. Locks the handle's mutex, reads the count, unlocks,
+    # and calls 0x00a121b0 on the pointer when the count is exactly 1 -- that
+    # case, and a NULL handle's early return, are the lifted body's.
+    0x00a12240: """void sub_00a12240(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a12240: host handle owner check (host_fastpath.c) */
+  RECOMP_VA(0xa12240u);
+  uint32_t holder = MEMR32(s->ESP + 4u), obj = 0u;
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_guest_range(holder, 8u)) { isaac_fastpath_count(0xa12240u, 1); sub_00a12240__lifted(s); return; }
+  obj = MEMR32(holder + 4u);
+  if (obj == 0u || !isaac_fast_guest_range(obj, 0x18u) || !isaac_fast_mutex_std(obj + 8u) || MEMR16(obj + 4u) == 1u) { isaac_fastpath_count(0xa12240u, 1); sub_00a12240__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t cs = MEMR32(obj + 0x10u), esp0 = s->ESP, count = MEMR16(obj + 4u);
+    sub_00a12240__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa12240u, 2);
+    if (MEMR16(obj + 4u) != count || MEMR8(cs + 0x18u) != 0u || s->EAX != 0u || s->ESP != esp0 + 4u)
+      isaac_fastpath_mismatch("ownercheck", obj, count);
+    return;
+  }
+  isaac_fast_mutex_take(obj + 8u);
+  isaac_fast_mutex_drop(obj + 8u);
+  s->EAX = 0u;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
 }
 
 
@@ -591,10 +848,22 @@ PROBE_PATCHES: dict[int, str] = {
 }
 
 
+def _drop_objects(tu: Path) -> None:
+    """A TU whose text changed must be recompiled in every profile."""
+    obj = tu.with_suffix(".o")
+    if obj.exists():
+        obj.unlink()
+    for fast in tu.parent.glob(tu.stem + ".fast.o"):
+        fast.unlink()
+
+
 def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
     """Install the fastpath wrappers: rename `void sub_X(` to `void sub_X__lifted(`
     (definition only; call sites keep calling sub_X = the wrapper) and append
-    the wrapper after the lifted body. Idempotent via the __lifted name."""
+    the wrapper after the lifted body. Idempotent via the __lifted name; a
+    wrapper whose text changed since it was installed is replaced in place
+    (round 27: before that, an edited WRAP_PATCHES entry silently kept the
+    stale wrapper in the tree)."""
     touched: list[Path] = []
     tus = sorted(lift_dir.glob("lifted_*.c"))
     for va, body in list(WRAP_PATCHES.items()) + list(PROBE_PATCHES.items()):
@@ -602,7 +871,16 @@ def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
         for tu in tus:
             text = tu.read_text(encoding="utf-8")
             if ("void %s__lifted(CpuState *restrict s) {" % name) in text:
-                break                                   # already wrapped
+                cur = find_function(text, name)         # already wrapped: is the wrapper current?
+                if cur is None:
+                    raise SystemExit("wrap-patch %s: lifted body renamed but no wrapper found in %s" % (name, tu.name))
+                if text[cur[0]:cur[1]] != body:
+                    if not check_only:
+                        tu.write_text(text[:cur[0]] + body + text[cur[1]:], encoding="utf-8")
+                        _drop_objects(tu)
+                        print("wrap-patch %s: wrapper text changed, replaced in %s" % (name, tu.name))
+                    touched.append(tu)
+                break
             span = find_function(text, name)
             if span is None:
                 continue

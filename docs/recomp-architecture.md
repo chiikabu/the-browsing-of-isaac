@@ -4042,6 +4042,214 @@ hand-written bodies untouched, idempotent, `--check`), pins the emitter
 text, and scans the lifted tree when present. Result: `GetString("Items",
 0, "THE_SAD_ONION_NAME")` -> "The Sad Onion"; 0 lookups fail in the boot.
 
+### 21.42 Round 27: the dispatch census's leaves -- it was ISAAC, not memcpy
+
+**The census, and a wrong name.** The fast profile has no instruction tick,
+so its only profile is the dispatch census (`ISAAC_PROFILE=1
+ISAAC_DISPATCH_TIME=1`): how often each lifted entry is reached through the
+dispatcher, and the wall time inside it. On the HANDOFF timeline (epoch
+1700000000, `ISAAC_MAX_FRAMES=3000`) it counted **92.8 M dispatches**, and
+71.0 M of them were four entries with the same count, 17,754,432 each:
+`sub_00aa94ce / db / e8 / f7`. The round brief read them as the jump-table
+tail cases of the CRT memcpy. They are not. `memcpy` is a vcruntime140
+import (`0x00af05df` is its thunk; the shim serves it), and the function
+whose body ends in `and eax,3; jmp [0xaa956c+eax*4]` is `0x00aa94a0` --
+Bob Jenkins' `isaac()`:
+
+```
+c++; b += c
+for i in 0..255:
+    x = mm[i]
+    a ^= {a<<13, a>>6, a<<2, a>>16}[i & 3]        <- the jump table
+    a += mm[(i+128) & 255]
+    mm[i] = y = mm[(x>>2) & 255] + a + b
+    r[i] = b = mm[(y>>10) & 255] + x
+```
+
+on a context laid out `{index, r[256], mm[256], a, b, c}` (0x810 bytes). It
+is the refill of the v2 archive keystream (21.40), called from the consumer
+`0x00a89d70` every 256 words -- once per stored 1 KB piece. Each `switch`
+case is its own lifted fragment, so every iteration whose case differs from
+the running fragment's is a `recomp_jump_indirect` through the dispatcher:
+256 dispatches per call, 277,413 calls in 3,000 frames, 284 MB of keystream.
+That volume is the sound catalogue: the PCM it preloads from `afterbirthp.a`
+is stored, not deflated, so every byte of it goes through the XOR loop and
+every kilobyte through `isaac()`.
+
+**Nine exact host versions** (`host_fastpath.c`, installed by
+`lift_patches.py WRAP_PATCHES`; `ISAAC_FASTPATH=0` lifted,
+`ISAAC_FASTPATH_VERIFY=1` both and compare, default host):
+
+| VA | function | host path | left to the lifted body |
+|---|---|---|---|
+| `0x00aa94a0` | `isaac()` | the 256-step mix on the guest context; a, b kept in locals (no mm/r index can alias them), stored at the end; EAX/EDX handed back as the loop leaves them | a context outside the guest |
+| `0x00a89d70` | keystream XOR (thiscall; buf, len) | byte loop, word r[idx] every fourth byte, refill on r[255] | an index past r[] (never seen) |
+| `0x00a69510` | `ArchivedFile::read` (thiscall; buf, size, count; `ret 0xc`) | the copy out of the 0x400-byte window at +0x81c, pos/fill/eof at +0xc1c/+0xc20/+0xc28, stream position +0x18; also the eof-cut read | any read that needs the refill `0x00a68cf0` (LZW / deflate / keystream state) |
+| `0x00a157f0` | `Mutex::Lock(timeout)` (`ret 4`) | INFINITE and uncontended: `EnterCriticalSection`'s report to the thread slicer (`isaac_threads_note_cs`, which may yield exactly where the lifted Enter would), then the locked byte at cs+0x18, EAX = 1 | a set byte (the Sleep(1000) spin), a finite timeout (QPC deadline), an uninitialised mutex (the fatal) |
+| `0x00a159a0` | `Mutex::Unlock` | the byte cleared; Leave is a no-op here; EAX = 0 | uninitialised |
+| `0x0040c690` | handle `AddRef` | lock, `++count` (u16 at +4), unlock; EAX = 0 as the tail jump into Unlock returns | a mutex whose vtable is not the engine's Lock/Unlock pair |
+| `0x0040c6b0` | handle `TryAddRef` | lock, unlock, then `vt+8` -- checked to be AddRef -- inline; EAX = count != 0 | any other `vt+8` |
+| `0x0040c630` | handle `Release` | lock, `--count`, unlock, EAX = 1 | a count of exactly 1 (the dispose path: two virtuals and a tail jump) |
+| `0x00a12240` | owner check (cdecl; holder) | lock, read the count, unlock | a NULL handle, a count of 1 (calls `0x00a121b0`) |
+
+The handle helpers explain the Mutex counts: each `TryAddRef` was six
+dispatches (itself, Lock, Unlock, AddRef through `vt+8`, its Lock and its
+Unlock) and every one of the 1,235,942 AddRefs came from a TryAddRef. The
+mutex is embedded at handle+8 (`lea ecx,[esi+8]`), reached through its own
+vtable (+0xc Lock, +0x10 Unlock), so the host path first checks that those
+slots are the engine's pair; anything else runs the lifted body.
+
+Three rules beyond the round-12 contract, all pinned by
+`tests/recomp-fastpath.test.js`:
+
+- **the decision comes before any side effect.** A wrapper reads what it
+  needs (the count, the locked byte, the window fill, the vtable slots) and
+  either runs the host path to its `ret` or the lifted body from its first
+  instruction -- never half of each. Nothing can change between the peek and
+  the lifted body's own test: the runtime is single-threaded, and a yield
+  inside Enter abandons the slice, wrapper and all.
+- **the purge equals the callee's `ret N`** (`s->ESP += 4u + 12u` for the
+  read, `+ 8u` for the XOR, `+ 4u` for Lock): a wrong one is the one-slot
+  drift of round 11 again.
+- **a verify path runs the trampoline** (`if (recomp_jmp_pending)
+  recomp_run_pending(s)`) after the lifted body, because these bodies end in
+  parked tail jumps -- `isaac()`'s cases, AddRef's jump into Unlock -- and a
+  compare without it reads the state mid-function (the same trap 21.41 met
+  in the PROBE wrappers).
+
+Verify mode compares the whole 0x810-byte context for `isaac()`, buffer
+plus context for the XOR, the delivered bytes and the three fields for the
+read, and count / locked byte / EAX / ESP for the mutex family; each wrapper
+counts its lifted fallbacks and completed compares and the stub report
+prints them (`[isaac][fastpath] ---- mode ...`), so "0 mismatches" is
+stated over a number. The selftest pins the host code on its own: Jenkins'
+two-half-loop formulation of `isaac()` (rand.c, `rngstep` over m/m2) is the
+reference for the merged single loop the engine compiled, the XOR is
+checked across a refill boundary (r[254], r[255], refill, r[0]), the
+read's window arithmetic through its seven cases, and the mutex predicates;
+seven mutants (shift 13->12, the second-pointer offset, the `y>>10` index,
+the refill threshold, the eof clause, the Unlock slot, the byte's offset)
+are killed through `mutate.mjs`. The installer also refreshes a wrapper
+whose text changed since it was installed -- before this round an edited
+`WRAP_PATCHES` entry silently kept the stale wrapper in the tree (it found
+one: the round-26 probe on `0x00a26af0`).
+
+**Measured** (fast node profile, the HANDOFF timeline, 3,000 frames;
+another session's boot run held one core throughout):
+
+| | before | after |
+|---|---|---|
+| dispatches | 92,553,339 | **11,251,305** (-88 %) |
+| `sub_00aa94ce/db/e8/f7` | 4 x 17,745,088 | 0 |
+| `sub_00a157f0` Lock / `sub_00a159a0` Unlock | 5,074,905 / 5,071,905 | 537,878 / 534,878 |
+| `sub_0040c690` AddRef | 1,235,942 | 0 (inside TryAddRef) |
+| boot to frame 3 (the catalogue preload) | 4,371 ms | **3,207 ms** |
+| steady-state gameplay, median per 60 frames | 30 ms | 31 ms |
+| verify (`ISAAC_FASTPATH_VERIFY=1`) | | **0 mismatches**, Basement reached, `main` returned 0 |
+
+The verify census of that run (`ISAAC_FASTPATH_VERIFY=1`: every wrapper
+computes the host result, restores, runs the lifted body and compares):
+
+| wrapper | calls compared | ran the lifted body instead (why) |
+|---|---|---|
+| `Mutex::Lock` / `Unlock` | 5,071,906 / 5,071,906 | 0 (no contended lock, no finite timeout in the whole run) |
+| `AddRef` / `TryAddRef` | 1,235,942 / 1,235,942 | 0 |
+| `Release` | 1,037,894 | 16,551 (the count reaching zero: the dispose path) |
+| owner check | 1,027,248 | 10,645 (a count of 1, or a NULL handle) |
+| `isaac()` | 277,278 | 0 |
+| keystream XOR | 262,684 | 0 |
+| `ArchivedFile::read` | 948,597 | 10,749 (reads that need a refill: the bulk PCM copies, which loop refill-and-copy inside the lifted body) |
+
+**16,169,397 calls compared, 0 mismatches**, over a run that reaches the
+Basement, presents 3,000 frames and returns 0 from `main`.
+
+**Wall time, A/B on one module.** The fair comparison is the same build
+with `ISAAC_FASTPATH=0` (wrapper plus lifted body) against the default,
+three alternating pairs, medians; module time is the `ISAAC_LOG_TIME`
+stamp, so it excludes node's start-up and the 50 MB module's compile:
+
+| phase | lifted | host | |
+|---|---|---|---|
+| boot to frame 3 (the catalogue preload) | 4,615 ms | **2,913 ms** | -37 % |
+| the menu windows (frames 420-780, the scripted Enters) | 1,892 ms | 1,503 ms | -21 % |
+| steady gameplay, median per 60 frames | 30 ms | 27 ms | -10 % (0.50 -> 0.45 ms a frame) |
+| the floor-load window (frames 900-960) | 2,953 ms | 3,666 ms | **+24 %** |
+| play phase, frame 3 to 3,000 | 6,273 ms | 6,503 ms | +4 % (478 -> 461 frames/s) |
+| whole module run | 10,979 ms | **9,597 ms** | -12.6 % |
+| process wall, start to exit (three runs) | 26.9 / 26.8 / 27.9 s | 25.8 / 25.5 / 26.3 s | -1.2 s |
+
+Every phase is faster except one, and that one is consistent: the window
+in which the run starts -- the Basement is generated, its first room and
+the entities' graphics are loaded -- takes 0.7 s longer in host mode in all
+three pairs (2,460-3,326 ms against 3,403-4,067 ms, the ranges do not
+overlap). No wrapper is on that path in any measurable way (the reads it
+makes are the same in both modes, and the census above says which ones the
+host serves). What differs is *when* the window starts: 1.7 s earlier in
+host mode, and V8 tiers the lifted functions up on background threads --
+the giant room loader and the 42,671-instruction spawn factory
+(`0x005d4380`, 2.9 s inclusive in that window) get their TurboFan code at
+some wall-clock time after they first run. The test is the same pair with
+tier-up off (`ISAAC_V8_FLAGS=--no-wasm-tier-up`, Liftoff code only, no
+background compile, no on-stack replacement), one pair:
+
+| Liftoff only | lifted | host |
+|---|---|---|
+| boot to frame 3 | 4,558 ms | 3,079 ms |
+| the floor-load window | 3,398 ms | **3,110 ms** |
+| play phase | 6,491 ms (462 fps) | **5,758 ms (520 fps)** |
+| whole module run | 11,137 ms | **8,938 ms** (-20 %) |
+
+With the compiler out of the picture the host mode wins the window too, so
+the +0.7 s is the pipeline's timing, not the code's: the earlier the floor
+load starts, the more of it runs before its functions are optimised. (One
+pair, so a note rather than a claim: on this 3,000-frame budget the host
+run without tier-up, 8,938 ms, also beat the host run with it, 9,597 ms,
+the shape of round 15a's withdrawn observation, now on a working
+measurement. The right test is the equal-wall-budget one of 21.29.)
+
+The inclusive times from the profiled runs (`ISAAC_DISPATCH_TIME=1`
+stamps every dispatch, so both columns carry the same inflation):
+
+| entry | dispatches before -> after | inclusive ms before -> after |
+|---|---|---|
+| `sub_00931050` (the main loop) | 1 | 29,953 -> 12,503 |
+| `sub_00a69510` `ArchivedFile::read` | 1,183,671 -> 1,054,318 | 16,783 -> 1,582 |
+| `sub_00a7b6a0` WAV loader | (direct) | 15,221 -> 1,292 |
+| `sub_00a64a50` `Image::LoadPNG` | (direct) | 2,783 -> 1,415 |
+| `sub_00aa94ce/db/e8/f7` (`isaac()` cases) | 4 x 17,754,432 -> 0 | 4 x ~1,390 -> 0 |
+| `sub_0040c6b0` TryAddRef | 1,235,942 -> 1,235,942 | 1,637 -> 128 |
+| `sub_0040c630` Release | 1,054,445 -> 1,054,445 | 606 -> 110 |
+| `sub_00a12240` owner check | 1,037,893 -> 1,037,893 | 595 -> 106 |
+| `sub_00a157f0` Lock / `sub_00a159a0` Unlock | 5,074,928 / 5,071,928 -> 537,889 / 534,889 | 446 / 413 -> below the report's cut |
+| `sub_0040c690` AddRef | 1,235,942 -> 0 | 412 -> 0 |
+| all dispatched entries | 92,827,063 -> 11,369,333 | 88,887 -> 29,387 |
+
+(The read counts differ between runs because the music stream is fed on
+the wall clock: a slower run streams more.)
+
+**The browser.** The same lifted objects link into the fast browser module
+(`build_boot.py --web --fast`, the host TUs rebuilt as `.web.o`); under
+headless Chromium (`run_web.mjs output/recomp/web-r27 3000 fast=1 ...`)
+the 3,000-frame timeline reaches the Basement, presents all 3,000 frames,
+returns 0 from `main` with 0 assertions, the WebAudio context running (310
+PCM uploads, 16 plays), 14.14 M dispatches (the wall clock runs longer
+there, so the music stream is read more) and the same fastpath census
+shape, 0 mismatches. 77.4 s of runner wall, 13.4 s of it the 1.2 GB
+archive fetch before frame 3, so ~50 frames/s in play -- the SwiftShader
+software-GL bound of 21.39 (49-59 fps), which guest-side savings do not
+move; the browser gains what node gains in the boot and the menus.
+
+**What stays hot, and why it is not a wrapper.** `sub_0040c200`
+(`guard_check_icall`, 568 k) is a bare `ret` reached through
+`call [__guard_check_icall_fptr]`: the dispatch is the caller's indirect
+call, and a wrapper cannot remove it. The WAV loader `sub_00a7b6a0`'s 15 s
+of inclusive time was the read chain under it (the keystream and the
+window copies), not its own code. `sub_00a129a0` / `sub_00a128f0` are the
+renderer's shader and texture binding (GL calls), `sub_00a52820` is the
+`fread` wrapper, and `Image::LoadPNG` (`sub_00a64a50`) is libpng's inflate
+in lifted code -- a host `inflate_fast` on zlib's exact state layout is the
+next exact leaf if it ever matters.
+
 ### 21.43 Round 28: the shipping bundle
 
 **The question.** The instance the port boots from is a 1,937,711,471-byte
@@ -4302,140 +4510,6 @@ count per room and slot), then the lowest slot.
 treasure rooms the explorer has not reached with coins to spare), the
 trapdoor and floor descent, bosses, save/load. The explorer knows nothing
 about the trapdoor's position; those are the next census targets.
-
-### 21.42 Round 27: the dispatch census's leaves -- it was ISAAC, not memcpy
-
-**The census, and a wrong name.** The fast profile has no instruction tick,
-so its only profile is the dispatch census (`ISAAC_PROFILE=1
-ISAAC_DISPATCH_TIME=1`): how often each lifted entry is reached through the
-dispatcher, and the wall time inside it. On the HANDOFF timeline (epoch
-1700000000, `ISAAC_MAX_FRAMES=3000`) it counted **92.8 M dispatches**, and
-71.0 M of them were four entries with the same count, 17,754,432 each:
-`sub_00aa94ce / db / e8 / f7`. The round brief read them as the jump-table
-tail cases of the CRT memcpy. They are not. `memcpy` is a vcruntime140
-import (`0x00af05df` is its thunk; the shim serves it), and the function
-whose body ends in `and eax,3; jmp [0xaa956c+eax*4]` is `0x00aa94a0` --
-Bob Jenkins' `isaac()`:
-
-```
-c++; b += c
-for i in 0..255:
-    x = mm[i]
-    a ^= {a<<13, a>>6, a<<2, a>>16}[i & 3]        <- the jump table
-    a += mm[(i+128) & 255]
-    mm[i] = y = mm[(x>>2) & 255] + a + b
-    r[i] = b = mm[(y>>10) & 255] + x
-```
-
-on a context laid out `{index, r[256], mm[256], a, b, c}` (0x810 bytes). It
-is the refill of the v2 archive keystream (21.40), called from the consumer
-`0x00a89d70` every 256 words -- once per stored 1 KB piece. Each `switch`
-case is its own lifted fragment, so every iteration whose case differs from
-the running fragment's is a `recomp_jump_indirect` through the dispatcher:
-256 dispatches per call, 277,413 calls in 3,000 frames, 284 MB of keystream.
-That volume is the sound catalogue: the PCM it preloads from `afterbirthp.a`
-is stored, not deflated, so every byte of it goes through the XOR loop and
-every kilobyte through `isaac()`.
-
-**Nine exact host versions** (`host_fastpath.c`, installed by
-`lift_patches.py WRAP_PATCHES`; `ISAAC_FASTPATH=0` lifted,
-`ISAAC_FASTPATH_VERIFY=1` both and compare, default host):
-
-| VA | function | host path | left to the lifted body |
-|---|---|---|---|
-| `0x00aa94a0` | `isaac()` | the 256-step mix on the guest context; a, b kept in locals (no mm/r index can alias them), stored at the end; EAX/EDX handed back as the loop leaves them | a context outside the guest |
-| `0x00a89d70` | keystream XOR (thiscall; buf, len) | byte loop, word r[idx] every fourth byte, refill on r[255] | an index past r[] (never seen) |
-| `0x00a69510` | `ArchivedFile::read` (thiscall; buf, size, count; `ret 0xc`) | the copy out of the 0x400-byte window at +0x81c, pos/fill/eof at +0xc1c/+0xc20/+0xc28, stream position +0x18; also the eof-cut read | any read that needs the refill `0x00a68cf0` (LZW / deflate / keystream state) |
-| `0x00a157f0` | `Mutex::Lock(timeout)` (`ret 4`) | INFINITE and uncontended: `EnterCriticalSection`'s report to the thread slicer (`isaac_threads_note_cs`, which may yield exactly where the lifted Enter would), then the locked byte at cs+0x18, EAX = 1 | a set byte (the Sleep(1000) spin), a finite timeout (QPC deadline), an uninitialised mutex (the fatal) |
-| `0x00a159a0` | `Mutex::Unlock` | the byte cleared; Leave is a no-op here; EAX = 0 | uninitialised |
-| `0x0040c690` | handle `AddRef` | lock, `++count` (u16 at +4), unlock; EAX = 0 as the tail jump into Unlock returns | a mutex whose vtable is not the engine's Lock/Unlock pair |
-| `0x0040c6b0` | handle `TryAddRef` | lock, unlock, then `vt+8` -- checked to be AddRef -- inline; EAX = count != 0 | any other `vt+8` |
-| `0x0040c630` | handle `Release` | lock, `--count`, unlock, EAX = 1 | a count of exactly 1 (the dispose path: two virtuals and a tail jump) |
-| `0x00a12240` | owner check (cdecl; holder) | lock, read the count, unlock | a NULL handle, a count of 1 (calls `0x00a121b0`) |
-
-The handle helpers explain the Mutex counts: each `TryAddRef` was six
-dispatches (itself, Lock, Unlock, AddRef through `vt+8`, its Lock and its
-Unlock) and every one of the 1,235,942 AddRefs came from a TryAddRef. The
-mutex is embedded at handle+8 (`lea ecx,[esi+8]`), reached through its own
-vtable (+0xc Lock, +0x10 Unlock), so the host path first checks that those
-slots are the engine's pair; anything else runs the lifted body.
-
-Three rules beyond the round-12 contract, all pinned by
-`tests/recomp-fastpath.test.js`:
-
-- **the decision comes before any side effect.** A wrapper reads what it
-  needs (the count, the locked byte, the window fill, the vtable slots) and
-  either runs the host path to its `ret` or the lifted body from its first
-  instruction -- never half of each. Nothing can change between the peek and
-  the lifted body's own test: the runtime is single-threaded, and a yield
-  inside Enter abandons the slice, wrapper and all.
-- **the purge equals the callee's `ret N`** (`s->ESP += 4u + 12u` for the
-  read, `+ 8u` for the XOR, `+ 4u` for Lock): a wrong one is the one-slot
-  drift of round 11 again.
-- **a verify path runs the trampoline** (`if (recomp_jmp_pending)
-  recomp_run_pending(s)`) after the lifted body, because these bodies end in
-  parked tail jumps -- `isaac()`'s cases, AddRef's jump into Unlock -- and a
-  compare without it reads the state mid-function (the same trap 21.41 met
-  in the PROBE wrappers).
-
-Verify mode compares the whole 0x810-byte context for `isaac()`, buffer
-plus context for the XOR, the delivered bytes and the three fields for the
-read, and count / locked byte / EAX / ESP for the mutex family; each wrapper
-counts its lifted fallbacks and completed compares and the stub report
-prints them (`[isaac][fastpath] ---- mode ...`), so "0 mismatches" is
-stated over a number. The selftest pins the host code on its own: Jenkins'
-two-half-loop formulation of `isaac()` (rand.c, `rngstep` over m/m2) is the
-reference for the merged single loop the engine compiled, the XOR is
-checked across a refill boundary (r[254], r[255], refill, r[0]), the
-read's window arithmetic through its seven cases, and the mutex predicates;
-seven mutants (shift 13->12, the second-pointer offset, the `y>>10` index,
-the refill threshold, the eof clause, the Unlock slot, the byte's offset)
-are killed through `mutate.mjs`. The installer also refreshes a wrapper
-whose text changed since it was installed -- before this round an edited
-`WRAP_PATCHES` entry silently kept the stale wrapper in the tree (it found
-one: the round-26 probe on `0x00a26af0`).
-
-**Measured** (fast node profile, the HANDOFF timeline, 3,000 frames;
-another session's boot run held one core throughout):
-
-| | before | after |
-|---|---|---|
-| dispatches | 92,553,339 | **11,251,305** (-88 %) |
-| `sub_00aa94ce/db/e8/f7` | 4 x 17,745,088 | 0 |
-| `sub_00a157f0` Lock / `sub_00a159a0` Unlock | 5,074,905 / 5,071,905 | 537,878 / 534,878 |
-| `sub_0040c690` AddRef | 1,235,942 | 0 (inside TryAddRef) |
-| boot to frame 3 (the catalogue preload) | 4,371 ms | **3,207 ms** |
-| steady-state gameplay, median per 60 frames | 30 ms | 31 ms |
-| verify (`ISAAC_FASTPATH_VERIFY=1`) | | **0 mismatches**, Basement reached, `main` returned 0 |
-
-The verify census of that run (`ISAAC_FASTPATH_VERIFY=1`: every wrapper
-computes the host result, restores, runs the lifted body and compares):
-
-| wrapper | calls compared | ran the lifted body instead (why) |
-|---|---|---|
-| `Mutex::Lock` / `Unlock` | 5,071,906 / 5,071,906 | 0 (no contended lock, no finite timeout in the whole run) |
-| `AddRef` / `TryAddRef` | 1,235,942 / 1,235,942 | 0 |
-| `Release` | 1,037,894 | 16,551 (the count reaching zero: the dispose path) |
-| owner check | 1,027,248 | 10,645 (a count of 1, or a NULL handle) |
-| `isaac()` | 277,278 | 0 |
-| keystream XOR | 262,684 | 0 |
-| `ArchivedFile::read` | 948,597 | 10,749 (reads that need a refill: the bulk PCM copies, which loop refill-and-copy inside the lifted body) |
-
-**16,169,397 calls compared, 0 mismatches**, over a run that reaches the
-Basement, presents 3,000 frames and returns 0 from `main`.
-
-@@R27_AB@@
-
-**What stays hot, and why it is not a wrapper.** `sub_0040c200`
-(`guard_check_icall`, 568 k) is a bare `ret` reached through
-`call [__guard_check_icall_fptr]`: the dispatch is the caller's indirect
-call, and a wrapper cannot remove it. The WAV loader `sub_00a7b6a0`'s 15 s
-of inclusive time was the read chain under it (the keystream and the
-window copies), not its own code. `sub_00a129a0` / `sub_00a128f0` are the
-renderer's shader and texture binding (GL calls), `sub_00a52820` is the
-`fread` wrapper, and `Image::LoadPNG` (`sub_00a64a50`) is libpng's inflate
-in lifted code -- a host `inflate_fast` on zlib's exact state layout is the
-next exact leaf if it ever matters.
 
 ## Appendix: reproduction
 

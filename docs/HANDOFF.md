@@ -100,7 +100,13 @@ REQUIRE emsdk on PATH:
   on one module, A/B medians of three pairs: boot to frame 3 **4,615 ->
   2,913 ms**, steady gameplay 30 -> 27 ms per 60 frames, whole module run
   **10,979 -> 9,597 ms**; the floor-load window alone is 0.7 s slower
-  (§21.42 says what was tested). @@R27_HANDOFF_WEB@@
+  (§21.42 says what was tested: with V8 tier-up off the host wins every
+  phase, 11,137 -> 8,938 ms, so it is the compiler's timing). Browser
+  (`web-r27`, fast module, headless Chromium): 3,000 frames, Basement,
+  `main` 0, 0 asserts, WebAudio running, 77.4 s including the archive
+  fetch -- GL-bound at ~50 fps in play, as before. `node --test
+  tests/recomp-*.test.js` **122/122**; selftest **229/0** (seven mutants
+  killed through `mutate.mjs`).
 - **Everything together** (2026-09-04): the automated player on the fast
   profile with the round-27 fastpaths, booted from the shipping bundle
   (`ISAAC_INSTANCE_DIR=.scratch/game-bundle`), 20,000 frames: the same

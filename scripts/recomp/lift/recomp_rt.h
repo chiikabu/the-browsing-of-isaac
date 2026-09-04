@@ -60,6 +60,19 @@ uint32_t isaac_fast_pathhash(uint32_t str_va);
 void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va);
 int  isaac_fast_verify_equal(const void *snapshot, uint32_t va, uint32_t len);
 void isaac_fastpath_mismatch(const char *what, uint32_t a, uint32_t b);
+void isaac_fastpath_count(uint32_t va, int kind);        /* round 27 exit census: 1 = lifted, 2 = verified */
+/* round 27 (host_fastpath.c): the archive keystream, ArchivedFile::read, the engine Mutex */
+int  isaac_fast_guest_range(uint32_t va, uint32_t len);
+int  isaac_fast_isaac(uint32_t ctx_va, uint32_t *edx_out);
+int  isaac_fast_keystream_ok(uint32_t self_va, uint32_t buf_va, uint32_t len);
+void isaac_fast_keystream_xor(uint32_t self_va, uint32_t buf_va, uint32_t len);
+int  isaac_fast_read_plan(uint32_t self, uint32_t buf, uint32_t n, uint32_t *take);
+void isaac_fast_read_window(uint32_t self, uint32_t buf, uint32_t take);
+int  isaac_fast_mutex_init(uint32_t mutex);
+int  isaac_fast_mutex_free(uint32_t mutex);
+int  isaac_fast_mutex_std(uint32_t mutex);
+void isaac_fast_mutex_take(uint32_t mutex);
+void isaac_fast_mutex_drop(uint32_t mutex);
 /* round 16d audio probe (host_audio.c; lift_patches.py WRAP_PATCHES) */
 void isaac_audio_probe_bind(uint32_t self);
 /* observe-only probes (lift_patches.py PROBE_PATCHES) */
