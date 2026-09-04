@@ -669,6 +669,21 @@ void imp_api_ms_win_crt_stdio__fread(CpuState *restrict cpu) {
             g_file_pos[fi] = pos + got;
         }
     }
+    /* ISAAC_FS_READ_TRACE=<substring>: log the reads of the files whose key
+     * contains it, with offset and length. The open trace alone cannot tell a
+     * file that is merely opened from one whose payload is actually pulled --
+     * round 16 needed to know which of those the game does to sfx.a. */
+    {
+        static const char *pat = (const char *)1;
+        if (pat == (const char *)1) pat = getenv("ISAAC_FS_READ_TRACE");
+        if (pat && *pat && fi != 0xFFFFFFFFu) {
+            fs_entry *e = fs_file_entry(fi);
+            if (e && strstr(e->key, pat))
+                isaac_log("[isaac][fs] fread('%s') off=%llu want=%llu got=%u",
+                          e->key, (unsigned long long)(g_file_pos[fi] - got),
+                          (unsigned long long)want, got);
+        }
+    }
     cpu->EAX = sz ? got / sz : 0;
 }
 
