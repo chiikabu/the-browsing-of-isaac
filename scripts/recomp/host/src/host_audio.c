@@ -415,7 +415,14 @@ uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
     return take;
 }
 
-/* Round 16d: why the game never submits PCM. sub_00a9fb80 binds a free AL
+/* Round 16d probe, kept for re-use: it answered why the game submits no
+ * PCM and is not wired in by default, because a permanent WRAP_PATCHES entry
+ * would have to follow the fastpath-wrapper contract (mode check, owns the
+ * ret) that tests/recomp-fastpath.test.js pins, and this only observes. To
+ * re-enable, add a wrapper for 0x00a9fb80 that calls this and then
+ * sub_00a9fb80__lifted(s).
+ *
+ * Why the game never submits PCM. sub_00a9fb80 binds a free AL
  * source to a sound and uploads its buffer, but only when
  *
  *     vt[0x38](this) == 0 && this[10] != 0 && this[0xb] != 0

@@ -92,18 +92,6 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 # so the equivalence is measured on the game's own data, not assumed.
 # Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
 WRAP_PATCHES: dict[int, str] = {
-    # Round 16d, diagnostic: sub_00a9fb80 binds an AL source and uploads the
-    # sample, but only if vt[0x38](this) == 0 and the PCM pointer and length
-    # at this[10]/this[0xb] are both non-zero. The game reads every byte of
-    # sfx.a and still submits nothing, so this says which field is empty.
-    # The wrapper only observes: the lifted body still runs and owns the ret.
-    0x00a9fb80: """void sub_00a9fb80(CpuState *restrict s) {
-  /* LIFT-PATCH probe 0x00a9fb80: the audio bind gate (host_audio.c) */
-  RECOMP_VA(0xa9fb80u);
-  isaac_audio_probe_bind(s->ECX);
-  sub_00a9fb80__lifted(s);
-}
-""",
     # png_read_filter_row (SSE2 build): edx = png_row_info*, stack = (row,
     # prev_row, filter); caller cleans (plain ret). Touches rowbytes bytes at
     # row.
