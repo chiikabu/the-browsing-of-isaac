@@ -5764,3 +5764,76 @@ remove the stall but hand the engine a pixel one frame late -- a semantic
 deviation the port does not make silently; if it is ever tried it is
 opt-in. `bufferSubData` (2.6-3.2 %) is the client-array ring's uploads,
 already halved by round 48's identical-block reuse.
+
+### 21.65 Round 51: the page is the game, where the memory goes, and a leaf that was not worth it
+
+**The loading panel that never left.** Playing the dist showed the loading
+panel sitting over the game. `overlay.hidden = true` did run on the first
+frame; it changed nothing, because the page's own `#overlay { display: flex
+}` (and `#stages { display: grid }`) outrank the UA stylesheet's `[hidden]
+{ display: none }`. The bug had been there since the page was written -- the
+pane screenshots of rounds 46-49 show the panel over the game, read as "the
+game behind the loader" -- and a driver reading `window.isaacFrame` cannot
+see it. A global `[hidden] { display: none !important; }` gives the
+attribute its meaning back; the ship test pins the rule and the two display
+rules it has to outrank.
+
+**The page is the game.** On request the shipping page lost its chrome: no
+header, no description, no key hints, no Fullscreen button, no Saves button,
+no Play button. It starts on its own (`autoplay` is the default now;
+`?autoplay=0` keeps the Play button for a gesture before any audio -- the
+AudioContext resumes on the first key or click either way, boot_web.mjs's
+`resumeAudio`), the loader is one 3 px bar over black (the three fetch
+stages' bytes, the boot as the last per cent) with one word under it, and the
+canvas is the largest 16:9 box the viewport allows on black. A click anywhere
+gives the canvas the keyboard, and F toggles fullscreen. What was chrome is opt-in: `?stats=1` shows
+the round-46 status line in the top-left corner (the machine in its
+tooltip), `?saves=1` the saves button; the error panel stays. The Chromebook
+hand-off reads `play.html?stats=1`.
+
+**Where the renderer's memory goes.** Chrome's memory-infra dump of the r50
+build in play (`drive_perf.mjs memdump=1`): the renderer's private footprint
+is 1,466 MB at +25 s (1,645 at +7 s), of which the allocators the dump can
+name total 452 MB -- partition_alloc 218 (Blink's buffer partition 197),
+gpu mapped memory 115, malloc 90, shared memory 116 -- and V8 reports 5 MB.
+The rest is the wasm linear memory: `-sINITIAL_MEMORY` is 1,088 MiB,
+committed whole (1,088 + 452 = 1,540, the private figure), of which the
+working set holds what the game has touched. The guest heap report now
+prints that: `touched span 355.2 MiB (highest block end 0x1702d1b8)` against
+a 352 MiB peak -- the arena's high-water address, the pages that stay
+resident, is the peak plus fragmentation, not more. So the resident renderer
+(~1.1 GB working set) is the touched wasm memory plus Blink's buffers, the
+GPU process (~520 MB working set) is the textures, and V8's code is small.
+Nothing cheap moves those: the 64 MiB single allocations are the engine's
+texture decodes (freed after upload), the texture set is the game's, and
+the committed-but-untouched part costs nothing on ChromeOS. On the 4 GB
+target the budget is tight but not broken; the numbers to watch are the
+touched span (grows with what the game keeps) and the GPU process.
+
+**A leaf that was not worth it.** MSVC's `std::map<uint32_t, ...>::find`
+(sub_00a12280, 78 bytes) shows 1.0 % self in the 6x profile -- a thousand
+calls a frame. A host version -- the walk transcribed, every node checked to
+be in guest memory, a 64-level cap -- verified bit-exact over 124,622 calls
+(0 mismatches) and measured 0.8-1.2 % against the lifted 1.0-1.1 % in the
+interleaved profiles: no gain. The lifted leaf is a tight loop TurboFan
+compiles well, and a wrapper's mode check plus the walk's own checks cost
+what the leaf costs. Reverted; the lesson is that a fastpath needs work per
+call that dwarfs the wrapper, which a 78-byte leaf does not have. Retiring
+it found a gap: the patch pass had installed wrappers but never removed one,
+so the lifted TU kept the stale wrapper (calling a host function that was
+gone) and the module would not build; `apply_wrap_patches` now retires a
+wrapper whose entry is gone -- the body back under its own name, the wrapper
+and its forward declaration removed -- and the fastpath test pins it. The same
+pass retired a second stale stub, the round-16d bind probe at 0x00a9fb80,
+whose entry had been made opt-in long ago (an observer only; nothing changes). The two
+residue and codebook decoders (sub_00aa2580, sub_00aa44d0, 1.4 % together)
+are entangled with the packet reader and its stream reads; also not taken.
+
+Round numbers: selftest 372/0; the family 181/181; edges 22/22 on the final
+module (music through the host decoder); explorer census identical; the
+dist rebuilt with the game-only page and played in the pane. A new
+driver, `check_page.mjs`, opens the shipping page the way a player does (no
+query string, no gesture) and reports the first frame's time, whether the
+loader is gone and the chrome absent, the canvas box, the frame counter two
+seconds apart, the audio state, and a screenshot -- the check the pane
+could not run.

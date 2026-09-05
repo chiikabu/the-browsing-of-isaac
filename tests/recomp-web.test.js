@@ -228,3 +228,13 @@ test('round 49: the edge suite hides the tab for as long as asked and continues 
   const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
   assert.ok(play.includes('no animation frames (${nrDelta} timer tick(s) this second: occluded?)'), 'the shipping status line names the fallback');
 });
+
+test('round 51: the loading overlay really hides on the first frame, and the live status is an opt-in corner line', () => {
+  const html = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.html'), 'utf8');
+  assert.ok(html.includes('[hidden] { display: none !important; }'), 'the hidden attribute outranks #overlay/#stages display rules');
+  assert.ok(/#overlay \{[^}]*display: flex/.test(html) && /#stages \{[^}]*display: grid/.test(html), 'the rules it has to outrank are still there');
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(play.includes("if (f > 0 && !firstFrameSeen) { firstFrameSeen = true; overlay.hidden = true; canvas.focus(); }"), 'the first frame hides the overlay');
+  assert.ok(play.includes("const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;"), 'the corner line (?stats=1) carries the status during play, the machine in its tooltip');
+  assert.ok(!play.includes("$('fps').textContent = fps > 0 ?"), 'one writer for the header line');
+});

@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-50: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-51: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -155,7 +155,7 @@ REQUIRE emsdk on PATH:
   (30 files, 793,418,516 bytes raw, **744,521,328 bytes transfer** with the
   brotli/gzip siblings; `ship.py check` re-verifies), served by
   `node scripts/recomp/web/serve_dist.mjs .scratch/game-dist 8200`; the
-  page (`play.html`) shows a byte-accounted progress bar, a Play button
+  page (`play.html`) starts on its own -- one bar, then the game (`?stats=1` shows the fps line, `?saves=1` the saves button, `?autoplay=0` a Play button; F toggles fullscreen)
   that unlocks audio, fullscreen, key hints and a saves menu. Driven under
   headless Chromium: Play at 0.9 s, the run started, ~40 fps, main 0.
 - **Round 32: typed console text** (§21.47). `TranslateMessage` is real:
@@ -181,6 +181,20 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 51: the page is the game, the memory map, a leaf not worth it**
+  (§21.65). The loading panel had never hidden (`#overlay`'s own `display:
+  flex` outranked the `hidden` attribute; a global `[hidden] { display:
+  none !important }` fixes it). The shipping page is now the game alone:
+  autoplay by default, one bar over black, no header / hints / buttons;
+  `?stats=1` shows the fps line, `?saves=1` the saves button, `?autoplay=0`
+  a Play button. Memory-infra: renderer private 1.47 GB = 1,088 MiB of
+  committed wasm memory + ~450 MB of Blink/GPU-mapped/malloc; the guest
+  heap's touched span is 355 MiB (reported now) against a 352 MiB peak; the
+  GPU process holds the textures (~520 MB). A host `std::map::find` leaf
+  verified bit-exact (124,622 calls) but gained nothing (0.8-1.2 % vs
+  1.0-1.1 %): reverted, and the patch pass now retires a wrapper whose
+  entry is gone (the stale stub had broken the build). `check_page.mjs`
+  opens the shipping page as a player does and reports what is on screen.
 - **Round 50: the whole inverse_mdct on the host** (§21.64). sub_00aa38a0
   with its iter0 / s / ld654 helpers, transcribed from the decompile
   statement by statement (the helper register arguments from the

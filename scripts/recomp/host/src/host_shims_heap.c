@@ -67,6 +67,7 @@
  * (527 k mallocs, each walking every block before the first fit). */
 
 static uint32_t g_arena_lo, g_arena_hi;
+static uint32_t g_heap_top;   /* round 51: the highest block end ever handed out -- the arena pages the game has touched */
 static int g_inited;
 static uint32_t g_bin[NBINS];
 
@@ -165,6 +166,7 @@ static uint32_t guest_malloc(uint32_t n) {
     g_stat.live += need;
     g_stat.total_alloced += need;
     ++g_stat.allocs;
+    if (b + need > g_heap_top) g_heap_top = b + need;
     if (n > g_stat.largest_single) g_stat.largest_single = n;
     if (g_stat.live > g_stat.peak) {
         g_stat.peak = g_stat.live;
@@ -403,6 +405,8 @@ void isaac_heap_report(void) {
               (unsigned long long)g_stat.live);
     isaac_log("[isaac][heap]   largest single : %u bytes (%.1f MiB)",
               g_stat.largest_single, g_stat.largest_single / 1048576.0);
+    isaac_log("[isaac][heap]   touched span   : %.1f MiB (highest block end 0x%08x) -- the arena pages that stay resident",
+              g_heap_top > g_arena_lo ? (g_heap_top - g_arena_lo) / 1048576.0 : 0.0, g_heap_top);
     isaac_log("[isaac][heap]   allocs/frees   : %u / %u  (reallocs %u, failures %u)",
               g_stat.allocs, g_stat.frees, g_stat.reallocs, g_stat.failures);
     isaac_log("[isaac][heap]   total churn    : %llu bytes",

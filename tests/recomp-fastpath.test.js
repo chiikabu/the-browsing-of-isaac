@@ -231,3 +231,16 @@ test('round 50: the whole inverse_mdct has a host fastpath with the verify mode'
   assert.ok(fp.includes('buf2 = (float *)isaac_g(ab + (uint32_t)(to - (int32_t)((uint32_t)n2 * 4u)));'), 'the scratch is the guest temp region the original uses');
   assert.ok(fp.includes('imdct_ld654_loop(n >> 5, buffer, n2 - 1, A, n);'), 'the last stage');
 });
+
+test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
+  const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
+  assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');
+  assert.ok(heap.includes('touched span   : %.1f MiB (highest block end 0x%08x)'), 'and reported with the high-water figures');
+});
+
+test('round 51: a retired wrapper leaves the lifted TU clean (the body back under its own name, no stale wrapper)', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  assert.ok(lp.includes('live = set(WRAP_PATCHES) | set(PROBE_PATCHES)'), 'the live set of wrappers');
+  assert.ok(lp.includes('print("wrap-patch %s: retired, the lifted body is %s again in %s" % (name, name, tu.name))'), 'a retired wrapper is undone in the TU');
+  assert.ok(lp.includes('text = text.replace("void %s__lifted(CpuState *restrict s);\\n" % name, "", 1)'), 'its forward declaration goes too');
+});

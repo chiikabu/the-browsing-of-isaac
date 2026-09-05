@@ -962,6 +962,32 @@ def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
             print("wrap-patch %s: lifted body kept as %s__lifted, host wrapper installed in %s"
                   % (name, name, tu.name))
             break
+    # a retired wrapper (round 51): a TU still holding sub_X__lifted for an X
+    # no longer in WRAP_PATCHES / PROBE_PATCHES gets its lifted body back under
+    # its own name; the wrapper and its forward declaration go (the retired
+    # wrapper's host function went with it, and the TU would not compile)
+    live = set(WRAP_PATCHES) | set(PROBE_PATCHES)
+    for tu in tus:
+        text = tu.read_text(encoding="utf-8")
+        changed = False
+        for m in list(re.finditer(r"void (sub_([0-9a-f]{8}))__lifted\(CpuState \*restrict s\) \{", text)):
+            name, va = m.group(1), int(m.group(2), 16)
+            if va in live:
+                continue
+            span = find_function(text, name)
+            if span is None:
+                raise SystemExit("wrap-patch %s: retired, but its wrapper was not found in %s" % (name, tu.name))
+            text = text[:span[0]] + text[span[1]:]
+            text = text.replace("void %s__lifted(CpuState *restrict s);\n" % name, "", 1)
+            text = text.replace("void %s__lifted(CpuState *restrict s) {" % name,
+                                "void %s(CpuState *restrict s) {" % name, 1)
+            changed = True
+            print("wrap-patch %s: retired, the lifted body is %s again in %s" % (name, name, tu.name))
+        if changed:
+            touched.append(tu)
+            if not check_only:
+                tu.write_text(text, encoding="utf-8")
+                _drop_objects(tu)
     return touched
 
 

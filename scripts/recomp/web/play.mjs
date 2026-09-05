@@ -26,7 +26,7 @@ if (!params.has('ISAAC_YIELD')) {
   params.set('ISAAC_YIELD', '1');
   history.replaceState(null, '', `${location.pathname}?${params}${location.hash}`);
 }
-const AUTOPLAY = params.get('autoplay') === '1';
+const AUTOPLAY = params.get('autoplay') !== '0';   // the page starts on its own; autoplay=0 keeps the Play button (a gesture before any audio)
 const PERSIST = params.get('persist') !== '0';
 
 // the six archives boot_web.mjs seeds eagerly (its `seed packed archives`
@@ -36,6 +36,22 @@ const EAGER_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'ro
 const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';      // the pipeline's IndexedDB store (boot_web.mjs), same pin
 
 const canvas = $('canvas'), overlay = $('overlay'), playBtn = $('play'), statusEl = $('status'), streamingEl = $('streaming');
+// opt-in chrome (round 51): ?stats=1 shows the live status line, ?saves=1 the
+// saves button; the page is otherwise the game alone, and a click anywhere
+// gives the canvas the keyboard
+if (params.get('stats') === '1') $('fps').hidden = false;
+if (params.get('saves') === '1') $('saves-btn').hidden = false;
+document.addEventListener('pointerdown', () => { if (!$('saves').open) canvas.focus(); });
+// F toggles fullscreen on the stage (the keydown is the gesture requestFullscreen
+// needs); the key still reaches the game, which does not bind F by default
+const toggleFullscreen = () => {
+  const stage = $('stage');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else if (stage.requestFullscreen) stage.requestFullscreen().then(() => canvas.focus()).catch(() => {});
+};
+window.addEventListener('keydown', (ev) => {
+  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open) toggleFullscreen();
+});
 const mb = (n) => (n / 1048576).toFixed(1);
 const fmtBytes = (n) => n >= 1048576 ? `${mb(n)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`;
 
@@ -60,6 +76,11 @@ function render() {
         : s.total ? `${mb(s.done ? s.total : s.received)} / ${mb(s.total)} MB` : (s.received ? `${mb(s.received)} MB` : '');
       n.className = 'name' + (s.done ? ' done' : s.received ? ' active' : '');
     }
+    // the one bar: the bytes of the three fetch stages, the boot as the last per cent
+    let tot = 0, got = 0;
+    for (const name of ['module', 'image', 'archives']) { const s = stages[name]; if (s.total) { tot += s.total; got += s.done ? s.total : Math.min(s.received, s.total); } }
+    const pct = stages.boot.done ? 100 : tot ? Math.min(99, 100 * got / tot) : 0;
+    $('bar-fill').style.width = `${pct.toFixed(1)}%`;
   });
 }
 function setStatus(text) { statusEl.textContent = text; }
@@ -92,7 +113,7 @@ const stageFor = (rel) => rel === 'isaac.segs.bin' ? stages.image
   : rel.startsWith('instance/resources/packed/') || rel.startsWith('instance/resources/scripts/') ? stages.archives : null;
 render();
 if (location.protocol === 'file:') setStatus('this page needs a server (node scripts/recomp/web/serve_dist.mjs <dist>): the game reads its archives as byte slices');
-else setStatus(manifest ? `module ${mb(stages.module.total)} MB, image ${mb(stages.image.total)} MB, archives ${mb(stages.archives.total)} MB before the first frame` : 'no dist.json: sizes unknown');
+else setStatus(manifest ? 'loading\u2026' : 'no dist.json: sizes unknown');
 
 // ---- the hooks -----------------------------------------------------------------
 let streamed = 0, streamedRequests = 0;
@@ -148,7 +169,7 @@ hooks.instantiateWasm = (info, receive) => {
     })().catch(() => {});
     const { instance, module } = await WebAssembly.instantiateStreaming(res, info);
     st.done = true; render();
-    setStatus('module compiled');
+    setStatus('loading\u2026');
     receive(instance, module);
   })().catch((e) => showError('The module failed to load', e.message));
   return {};
@@ -161,8 +182,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     unlockAudio(m);
     playBtn.hidden = true;
     $('stages').hidden = true;
-    setStatus('starting the engine -- it reads its archives as 1 MB slices before the first frame (a few hundred MB the first time; the browser cache keeps them)');
-    streamingEl.hidden = false;
+    setStatus('starting\u2026');
     resolve();
     // Round 46: a frame-rate readout in the status line once the engine runs --
     // the host's frame counter sampled each second, the median of the last
@@ -188,7 +208,10 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
       recent.push(fps); if (recent.length > 10) recent.shift();
       const med = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
       if (first) { first = false; render(); }
-      setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}` + (document.hidden ? ' -- paused while hidden' : (nrDelta > 0 ? ` -- no animation frames (${nrDelta} timer tick(s) this second: occluded?)` : '')) + machine);
+      const note = document.hidden ? ' -- paused while hidden' : (nrDelta > 0 ? ` -- no animation frames (${nrDelta} timer tick(s) this second: occluded?)` : '');
+      const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;
+      setStatus(line + machine);                       // the overlay's line, until the first frame hides the overlay
+      const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;   // the header's, live during play
     }, 1000);
   };
   if (AUTOPLAY) { start(); return; }
@@ -244,11 +267,6 @@ window.addEventListener('error', (ev) => showError('A script error', ev.message)
 window.addEventListener('unhandledrejection', (ev) => showError('The pipeline failed', String(ev.reason && ev.reason.message || ev.reason)));
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
-$('fullscreen-btn').addEventListener('click', () => {
-  const stage = $('stage');
-  if (document.fullscreenElement) document.exitFullscreen();
-  else if (stage.requestFullscreen) stage.requestFullscreen().then(() => canvas.focus()).catch(() => {});
-});
 let lastFrame = 0, lastT = performance.now(), firstFrameSeen = false, finished = false;
 setInterval(() => {
   const f = window.isaacFrame || 0;
@@ -256,7 +274,7 @@ setInterval(() => {
   if (f > 0 && !firstFrameSeen) { firstFrameSeen = true; overlay.hidden = true; canvas.focus(); }
   if (firstFrameSeen) {
     const fps = (f - lastFrame) / ((now - lastT) / 1000);
-    $('fps').textContent = fps > 0 ? `${fps.toFixed(0)} fps` : '';
+    // (#fps is written by the status interval above: fps, median, frame, the hidden / no-animation-frames notes; the machine in its tooltip)
     lastFrame = f; lastT = now;
   } else if (!streamingEl.hidden) {
     streamingEl.textContent = `streamed ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
@@ -446,6 +464,6 @@ $('reset-saves').addEventListener('click', async () => {
 });
 
 // ---- go: the pipeline runs to the end of main; this import resolves when it does
-setStatus(`fetching the module (${mb(stages.module.total)} MB)`);
+setStatus('loading\u2026');
 stages.module.received = 0;
 import('./boot_web.mjs').catch((e) => showError('The pipeline failed', e.message));

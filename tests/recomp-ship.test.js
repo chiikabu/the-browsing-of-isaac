@@ -418,9 +418,11 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   const pipe = rd('scripts', 'recomp', 'web', 'boot_web.mjs');
   // the elements the pipeline needs (#canvas is where the host creates the WebGL2 context; #log is its text sink)
   for (const s of ['<canvas id="canvas" width="960" height="540"', '<pre id="log">', 'id="play"', 'id="overlay"', 'id="error"', '<dialog id="saves">',
-    'image-rendering: pixelated', 'aspect-ratio: 16 / 9', 'id="fullscreen-btn"', '<script type="module" src="./play.mjs"></script>'])
+    'image-rendering: pixelated', 'aspect-ratio: 16 / 9', 'id="bar-fill"', '<div id="fps" hidden></div>', 'id="saves-btn" type="button" hidden',
+    '<script type="module" src="./play.mjs"></script>'])
     assert.ok(html.includes(s), `play.html: ${s}`);
-  for (const k of ['Enter', 'W', 'A', 'S', 'D', 'E', 'Space', 'R', '`']) assert.ok(html.includes(`<kbd>${k}</kbd>`), `key hint ${k}`);
+  assert.ok(!html.includes('<header') && !html.includes('<footer') && !html.includes('fullscreen-btn'),
+    'round 51: the page is the game alone -- no header, no key hints, no fullscreen button; ?stats=1 and ?saves=1 opt in');
   // the hooks: set before the pipeline is imported, read by it
   assert.ok(page.includes('window.isaacPageHooks = hooks;'), 'the page publishes its hooks');
   assert.ok(page.indexOf('window.isaacPageHooks = hooks;') < page.indexOf("import('./boot_web.mjs')"), 'before importing the pipeline');
@@ -445,7 +447,13 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   for (const s of ['if (!A) A = Module.isaacAudio = {};', 'A.ctx = A.ctx || null;', 'A.buffers = A.buffers || new Map();',
     'A.sources = A.sources || new Map();', 'if (A.master) return true;', 'if (!A.ctx) {'])
     assert.ok(al.includes(s), `the AL shim adopts the shape the page creates: ${s}`);
-  assert.ok(page.includes("if (AUTOPLAY) { start(); return; }"), 'autoplay=1 skips the button (headless drivers)');
+  assert.ok(page.includes("if (AUTOPLAY) { start(); return; }"), 'autoplay skips the button');
+  assert.ok(page.includes("const AUTOPLAY = params.get('autoplay') !== '0';"), 'round 51: the page starts on its own; autoplay=0 keeps the Play button');
+  assert.ok(page.includes("if (params.get('stats') === '1') $('fps').hidden = false;") && page.includes("if (params.get('saves') === '1') $('saves-btn').hidden = false;"),
+    'the status line and the saves button are opt-in');
+  assert.ok(page.includes("$('bar-fill').style.width = `${pct.toFixed(1)}%`;"), 'one bar for the three fetch stages and the boot');
+  assert.ok(page.includes("if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open) toggleFullscreen();"), 'F toggles fullscreen');
+  assert.ok(page.includes("stage.requestFullscreen().then(() => canvas.focus())"), 'fullscreen keeps the keyboard on the canvas');
   // the progress accounting: module and image from dist.json, archives + scripts from the index, streamed while the module is compiled
   for (const s of ["stages.module.total = sizeOf('boot.wasm');", "stages.image.total = sizeOf('isaac.segs.bin');",
     "stages.archives.total = EAGER_ARCHIVES.reduce((s, n) => s + (indexSize.get(`resources/packed/${n}`) || 0), 0)",
@@ -510,7 +518,7 @@ test('round 45: the dist server re-reads dist.json when it changes, so a rebuilt
 
 test('round 46: the shipping page shows a frame-rate readout once the engine runs', () => {
   const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  assert.ok(page.includes("setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}`"), 'fps and the median of the last ten seconds in the status line');
+  assert.ok(page.includes("const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;"), 'fps and the median of the last ten seconds in the status line');
   assert.ok(page.includes('const f = window.isaacFrame || 0, t = performance.now();'), 'sampled from the host frame counter');
   assert.ok(page.includes("machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${renderer}`;"), 'the line names the machine: cores, memory, GPU renderer');
 });
