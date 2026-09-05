@@ -32,6 +32,8 @@
 #include <stdint.h>
 
 static uint32_t g_rb_hit, g_rb_miss, g_fbo_hit, g_fbo_miss, g_loc_hit, g_loc_miss, g_readpixels;
+static uint32_t g_rp_maxw, g_rp_maxh, g_rp_fmt, g_rp_x, g_rp_y;   /* the largest read the game asked for */
+static uint64_t g_rp_bytes;
 static uint32_t g_att_same, g_att_change, g_sto_same, g_sto_change, g_tex_forget, g_del_forget;
 
 /* ---- renderbuffers ------------------------------------------------------ */
@@ -296,13 +298,19 @@ void isaac_glc_loc_flush(uint32_t prog) {           /* a link or a delete: every
 }
 
 /* ---- census -------------------------------------------------------------- */
-void isaac_glc_count_readpixels(void) { ++g_readpixels; }
+void isaac_glc_count_readpixels(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp) {
+    ++g_readpixels;
+    g_rp_bytes += (uint64_t)w * h * bpp;
+    if ((uint64_t)w * h >= (uint64_t)g_rp_maxw * g_rp_maxh) { g_rp_maxw = w; g_rp_maxh = h; g_rp_fmt = fmt; g_rp_x = x; g_rp_y = y; }
+}
 void isaac_glc_report(void) {
     isaac_log("[isaac][gl] host cache: renderbuffer params %u answered / %u to GL, framebuffer status %u / %u "
               "(forgotten by %u attachment changes, %u storage changes, %u texture images, %u deletes; "
-              "%u same-attachment and %u same-storage calls kept it), locations %u / %u; glReadPixels by the game: %u",
+              "%u same-attachment and %u same-storage calls kept it), locations %u / %u; glReadPixels by the game: %u "
+              "(largest %ux%u at %u,%u format 0x%x; %llu bytes in all)",
               g_rb_hit, g_rb_miss, g_fbo_hit, g_fbo_miss, g_att_change, g_sto_change, g_tex_forget, g_del_forget,
-              g_att_same, g_sto_same, g_loc_hit, g_loc_miss, g_readpixels);
+              g_att_same, g_sto_same, g_loc_hit, g_loc_miss, g_readpixels,
+              g_rp_maxw, g_rp_maxh, g_rp_x, g_rp_y, g_rp_fmt, (unsigned long long)g_rp_bytes);
 }
 void isaac_glc_reset(void) {                        /* the selftest starts clean */
     memset(g_rb, 0, sizeof g_rb); g_rb_bound = 0;

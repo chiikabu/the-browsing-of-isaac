@@ -343,7 +343,7 @@ void isaac_glc_fbo_set_status(uint32_t target, uint32_t status);
 int  isaac_glc_loc_get(uint32_t prog, uint8_t kind, const char *name, int32_t *loc);
 void isaac_glc_loc_put(uint32_t prog, uint8_t kind, const char *name, int32_t loc);
 void isaac_glc_loc_flush(uint32_t prog);
-void isaac_glc_count_readpixels(void);
+void isaac_glc_count_readpixels(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp);
 void isaac_glc_report(void);
 void isaac_glc_reset(void);
 

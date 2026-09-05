@@ -223,6 +223,12 @@ const KEYS = {
   '4': [0x34, 0x05, 0], '5': [0x35, 0x06, 0], '6': [0x36, 0x07, 0], '7': [0x37, 0x08, 0], '8': [0x38, 0x09, 0],
   '9': [0x39, 0x0A, 0], f1: [0x70, 0x3B, 0], f2: [0x71, 0x3C, 0], f3: [0x72, 0x3D, 0], f4: [0x73, 0x3E, 0],
   grave: [0xC0, 0x29, 0],      // the debug console key (GLFW_KEY_GRAVE_ACCENT; the same row as explore.mjs)
+  // Round 47: the punctuation row, the same names and codes as explore.mjs -- a
+  // typed console command has dots (`goto s.boss.1010` lost its dots: the live
+  // keyboard path dropped every key the table did not name)
+  minus: [0xBD, 0x0C, 0], equals: [0xBB, 0x0D, 0], lbracket: [0xDB, 0x1A, 0],
+  rbracket: [0xDD, 0x1B, 0], backslash: [0xDC, 0x2B, 0], semicolon: [0xBA, 0x27, 0], quote: [0xDE, 0x28, 0],
+  comma: [0xBC, 0x33, 0], period: [0xBE, 0x34, 0], slash: [0xBF, 0x35, 0],
 };
 const timeline = [];
 for (const item of (params.get('input') || '').split(',').map((t) => t.trim()).filter(Boolean)) {
@@ -250,7 +256,9 @@ let inputsDelivered = 0;
 const live = [];
 const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
-  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave' };
+  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave',
+  Minus: 'minus', Equal: 'equals', BracketLeft: 'lbracket', BracketRight: 'rbracket', Backslash: 'backslash',
+  Semicolon: 'semicolon', Quote: 'quote', Comma: 'comma', Period: 'period', Slash: 'slash' };
 function keyName(ev) {
   const c = ev.code || '';
   if (CODE_TO_KEY[c]) return CODE_TO_KEY[c];

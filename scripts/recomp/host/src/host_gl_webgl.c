@@ -82,7 +82,7 @@ void isaac_glc_fbo_set_status(uint32_t target, uint32_t status);
 int  isaac_glc_loc_get(uint32_t prog, uint8_t kind, const char *name, int32_t *loc);
 void isaac_glc_loc_put(uint32_t prog, uint8_t kind, const char *name, int32_t loc);
 void isaac_glc_loc_flush(uint32_t prog);
-void isaac_glc_count_readpixels(void);
+void isaac_glc_count_readpixels(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp);
 void isaac_glc_report(void);
 
 static uint32_t g_gl_calls, g_gl_errors;
@@ -367,7 +367,7 @@ GLFN(glMultiDrawArraysIndirectEXT) { ENTER; RET0; }
 GLFN(glProgramUniform1ivEXT) { ENTER; RET0; }
 GLFN(glReadPixels) {
     ENTER;
-    isaac_glc_count_readpixels();
+    isaac_glc_count_readpixels(A(0), A(1), A(2), A(3), A(4), A(4) == 0x1908u ? 4u : A(4) == 0x1907u ? 3u : 1u);   /* GL_RGBA / GL_RGB */
     glReadPixels((GLint)A(0), (GLint)A(1), (GLsizei)A(2), (GLsizei)A(3), A(4), A(5), AP(6));
     RET0;
 }
