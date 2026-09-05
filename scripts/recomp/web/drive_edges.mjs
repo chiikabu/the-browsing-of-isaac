@@ -16,7 +16,20 @@
 //      the yield, the audio and the game react exactly as to a real hidden
 //      tab); the game must slow to its hidden tick, keep its audio context,
 //      and come back to full rate with no catch-up stall;
-//   3. music across it: the master-output RMS before, during and after.
+//   3. music across it: the master-output RMS before, during and after;
+//   4. save and continue (round 49): after the console put the run on stage 2,
+//      the page is reloaded in the same browser context (the IndexedDB save
+//      store persists), the run is continued through the menu, and the
+//      game's log must show the SAME run resuming: "RNG Start Seed: <seed>
+//      [Continue, n]" with the seed the run had before the reload, not
+//      "[New, n]" with a fresh one -- a continue logs no Level::Init (the
+//      floor is loaded, not generated) and the room line names
+//      type.variant, not the stage, so the seed is what the log offers
+//      (skipped without options=, which also gates the console);
+//   5. no animation frames (round 49): requestAnimationFrame is replaced by a
+//      no-op while the page stays visible (an occluded embedded view does
+//      this, document.hidden false and all); the game must tick on the
+//      yield's fallback timer instead of stalling, then resume at full rate.
 // Writes summary.json and prints one line per check; exit 0 when all pass.
 import { createRequire } from 'node:module';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
@@ -147,8 +160,47 @@ try {
   check(stalled <= 1, 'back in front: no catch-up stall', `${stalled} empty 250 ms sample(s) after the first two`);
   check(aBack && aBack.state === 'running' && (aBack.rms == null || aBack.rms > 0.002 || (a0 && a0.rms <= 0.002)),
         'back in front: music is audible again', aBack && `${aBack.state}, rms ${aBack.rms != null ? aBack.rms.toFixed(4) : 'n/a'} (before ${a0 && a0.rms != null ? a0.rms.toFixed(4) : 'n/a'})`);
+  // ---- 5. no animation frames while visible --------------------------------------
+  const noRaf0 = await page.evaluate(() => { window.__isaacRaf = window.requestAnimationFrame; window.requestAnimationFrame = () => 0; return window.isaacYieldNoRaf || 0; });
+  await sleep(1500);
+  const fpsNoRaf = await fpsOver(3000);
+  const noRaf1 = await page.evaluate(() => window.isaacYieldNoRaf || 0);
+  check(fpsNoRaf > 2 && fpsNoRaf < 8 && noRaf1 > noRaf0, 'no animation frames: the game ticks on the fallback timer instead of stalling', `${fpsNoRaf.toFixed(1)} fps; ${noRaf1 - noRaf0} timer tick(s)`);
+  await page.evaluate(() => { window.requestAnimationFrame = window.__isaacRaf; });
+  await sleep(1500);
+  const fpsRafBack = await fpsOver(2000);
+  check(fpsRafBack > 45, 'animation frames again: full rate resumes', `${fpsRafBack.toFixed(1)} fps`);
+
   const err = consoleLines.find((l) => /PAGEERROR|abort\(|RuntimeError/.test(l));
   check(!err, 'no page error or abort', err || '');
+
+  // ---- 4. save and continue -----------------------------------------------------
+  if (opt.options) {
+    const stageBefore = await logMatch(/Level::Init m_Stage (\d+)/);
+    const seedBefore = await logMatch(/RNG Start Seed: .*\[(Continue|New), \d+\]/);
+    const saves0 = await page.evaluate(() => (typeof window.isaacSaveStats === 'function' ? window.isaacSaveStats() : null));
+    await sleep(2000);                                            // let the run's autosave land
+    const saves1 = await page.evaluate(() => (typeof window.isaacSaveStats === 'function' ? window.isaacSaveStats() : null));
+    check(saves1 && saves1.persisted > 0, 'the run persisted save files', saves1 && `${saves1.persisted} persisted, ${saves1.pending} pending (was ${saves0 && saves0.persisted})`);
+    await page.reload();
+    for (;;) { const st = await state(); if (st.f > 0) break; if (now() > 900000) throw new Error('no first frame after the reload'); await sleep(250); }
+    const restored = await logMatch(/(\d+) saved file\(s\) restored from the store/);
+    check(!!restored && !/^\s*0 saved/.test(restored), 'the reload restored the saves', restored || 'no restore line');
+    let enters2 = 0;
+    for (;;) {
+      if (await logMatch(/Room \d+\.\d+\(|Starting room transition|Level::Init m_Stage/)) break;
+      if (enters2 >= 40 || now() > 900000) throw new Error(`no run after ${enters2} Enter(s) following the reload`);
+      await hold('Enter', 120); enters2 += 1; await sleep(1500);
+    }
+    await sleep(2000);
+    const seedAfter = await logMatch(/RNG Start Seed: .*\[(Continue|New), \d+\]/);
+    const sb = seedBefore && /RNG Start Seed: (.*?) \[/.exec(seedBefore), sa = seedAfter && /RNG Start Seed: (.*?) \[(Continue|New)/.exec(seedAfter);
+    const mb = stageBefore && /m_Stage (\d+)/.exec(stageBefore);
+    check(sb && sa && sa[2] === 'Continue' && sa[1] === sb[1], 'continue after the reload resumes the same run',
+      `seed ${sb && sb[1]} on stage ${mb && mb[1]} before; after ${enters2} Enter(s): ${seedAfter ? seedAfter.replace(/^.*RNG Start Seed: /, '') : 'no RNG Start Seed line'}`);
+    const fpsC = await fpsOver(2000);
+    check(fpsC > 30, 'the continued run plays at full rate', `${fpsC.toFixed(1)} fps`);
+  }
 } catch (e) {
   check(false, 'driver', e.message);
 }

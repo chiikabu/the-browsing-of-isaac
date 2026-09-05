@@ -29,6 +29,80 @@ static int fastpath_mode(void) {          /* 0 = lifted only, 1 = host, 2 = veri
 }
 int isaac_fastpath_mode(void) { return fastpath_mode(); }
 
+/* Round 49: stb_vorbis's imdct_step3_inner_r_loop (0x00aa3270), the inner
+ * butterfly of the inverse MDCT the engine runs for every 64 KB music chunk
+ * (two streams) and every sound effect it decodes. The 6x profile put the
+ * vorbis decode at about 5 % of a frame, this loop 1.2 %. The compiled
+ * function is MSVC's rendering of the public-domain source:
+ *
+ *   for (i = lim >> 2; i > 0; --i) {                 // e0 = e + d0, e2 = e0 + k_off
+ *     k00_20 = e0[-0] - e2[-0]; k01_21 = e0[-1] - e2[-1];
+ *     e0[-0] += e2[-0]; e0[-1] += e2[-1];
+ *     e2[-0] = k00_20 * A[0] - k01_21 * A[1];
+ *     e2[-1] = k01_21 * A[0] + k00_20 * A[1];
+ *     A += k1;                                         // three more pairs, then e0 -= 8, e2 -= 8
+ *   }
+ *
+ * Every operation is an IEEE single multiply, add or subtract in the same
+ * association as the x86 code (products first, then the sum or difference),
+ * so the results are bit-identical; ISAAC_FASTPATH_VERIFY=1 compares them
+ * against the lifted body on the game's own data. lim, e are the register
+ * arguments (ecx, edx), d0 / k_off / A / k1 the stack arguments. */
+void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,
+                             uint32_t a_va, uint32_t k1) {
+    int n = (int)lim >> 2;
+    float *e2 = (float *)isaac_g(e_va + (d0 + k_off) * 4u);   /* pfVar4: e2 = e + d0 + k_off */
+    float *e0 = e2 - (int)k_off - 2;                            /* pfVar3: e0[2] is the source's e0[-0] */
+    const float *A = (const float *)isaac_g(a_va);
+    for (; n > 0; --n) {
+        float k00, k01;
+        const float *A1, *A2, *A3;
+        k00 = e0[2] - e2[0];  k01 = e0[1] - e2[-1];
+        e0[2] = e2[0] + e0[2];  e0[1] = e0[1] + e2[-1];
+        e2[0]  = k00 * A[0] - k01 * A[1];
+        A1 = A + k1;
+        e2[-1] = k00 * A[1] + k01 * A[0];
+        k00 = e0[0] - e2[-2];  k01 = e0[-1] - e2[-3];
+        e0[0] = e0[0] + e2[-2];  e0[-1] = e0[-1] + e2[-3];
+        e2[-2] = k00 * A1[0] - k01 * A1[1];
+        A2 = A1 + k1;
+        e2[-3] = k00 * A1[1] + k01 * A1[0];
+        k00 = e0[-2] - e2[-4];  k01 = e0[-3] - e2[-5];
+        e0[-2] = e0[-2] + e2[-4];  e0[-3] = e0[-3] + e2[-5];
+        e2[-4] = k00 * A2[0] - k01 * A2[1];
+        A3 = A2 + k1;
+        e2[-5] = k00 * A2[1] + k01 * A2[0];
+        k00 = e0[-4] - e2[-6];  k01 = e0[-5] - e2[-7];
+        e0[-4] = e0[-4] + e2[-6];  e0[-5] = e0[-5] + e2[-7];
+        e2[-6] = k00 * A3[0] - k01 * A3[1];
+        e2[-7] = k00 * A3[1] + k01 * A3[0];
+        A = A3 + k1;
+        e0 -= 8; e2 -= 8;
+    }
+}
+/* the bytes the loop touches: [lo, lo + len) covering both runs (for the verify mode) */
+void isaac_fast_imdct_r_loop_range(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,
+                                   uint32_t *lo, uint32_t *len) {
+    int n = (int)lim >> 2;
+    uint32_t e2 = e_va + (d0 + k_off) * 4u, e0 = e2 - k_off * 4u - 8u;
+    uint32_t lo0 = e0 - (uint32_t)(8 * n - 3) * 4u, hi0 = e0 + 12u;
+    uint32_t lo2 = e2 - (uint32_t)(8 * n - 1) * 4u, hi2 = e2 + 4u;
+    *lo = lo0 < lo2 ? lo0 : lo2;
+    *len = (hi0 > hi2 ? hi0 : hi2) - *lo;
+}
+/* may the host loop run? no for an empty loop, or when either run or the
+ * twiddle reads fall outside guest memory (the lifted body then runs and
+ * traps the way the original would have) */
+int isaac_fast_imdct_r_loop_ok(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,
+                               uint32_t a_va, uint32_t k1, uint32_t *lo, uint32_t *len) {
+    int n = (int)lim >> 2;
+    if (n <= 0) return 0;
+    isaac_fast_imdct_r_loop_range(lim, e_va, d0, k_off, lo, len);
+    if (!*len || !isaac_is_guest_va(*lo) || !isaac_is_guest_va(*lo + *len - 1u)) return 0;
+    if (!isaac_is_guest_va(a_va) || !isaac_is_guest_va(a_va + ((uint32_t)(4 * n - 1) * k1 + 1u) * 4u)) return 0;
+    return 1;
+}
+
 /* png_read_filter_row: libpng 1.6's png_row_info at row_info_va
  *   +0 width, +4 rowbytes, +8 color_type, +9 bit_depth, +0xa channels,
  *   +0xb pixel_depth.  row/prev point at the first byte after the filter

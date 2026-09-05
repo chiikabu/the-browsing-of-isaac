@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-04, recomp rounds 26-44: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-49: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,13 +181,30 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 49: -O3 for the lifted TUs, the imdct butterfly on the host,
+  save + continue** (§21.63). The 38 lifted TUs compile at -O3 in the fast
+  profile: +0.38 % module, the same compile time, an identical explorer
+  census, 1.5 % less node wall time over 3,000 frames (every pair of three
+  alternating passes); the browser's 10x A/B cannot resolve changes under
+  about 10 % (the same build measured 28.0 and 37.3 fps in consecutive
+  passes) -- use the node clock or the 6x profile for those. stb_vorbis's
+  `imdct_step3_inner_r_loop` (0x00aa3270, scalar SSE, plain ret) runs on
+  the host, bit-exact: 36,056 calls verified, 0 mismatches; the 6x profile
+  is 18.9 ms a frame (21.0 in round 47). `drive_edges.mjs hidden_s=60` and,
+  with `options=`, a reload + continue that must resume the same run (the
+  `RNG Start Seed ... [Continue, n]` line with the pre-reload seed), and a
+  visible page whose `requestAnimationFrame` never fires (the desktop app's
+  occluded browser pane does this with `document.hidden` false; the yield
+  hung on it -- it now races a 250 ms timer, counted and named in the
+  status line): 22/22. Next: the whole inverse_mdct (sub_00aa38a0 with its iter0 / s / ld654
+  helpers), about 4 % of a frame.
 - **Round 45: the cold start** (§21.60). `profile_play.mjs phase=boot`:
   first frame at 4.5 s at the 4x throttle served locally (fetchSync 30 %,
   shader compiles 7 %, atob 6 %); the first visit is the download. The
   dist server re-reads `dist.json` on change (a stale manifest had made
   the module `no-cache`). Neither browser here reuses the HTTP cache
   across navigations, so the wasm code cache remains unverified.
-- **Rounds 47-48: edge cases and three more GL redundancies** (§21.60-61).
+- **Rounds 47-48: edge cases and three more GL redundancies** (§21.61-62).
   `drive_edges.mjs` (typed console, forged hidden tab, resume, music RMS):
   16/16; it found and fixed the page's missing punctuation keys. The
   engine's own `glReadPixels` is a 1x1 probe at (60, 227) every dozen

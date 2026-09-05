@@ -382,6 +382,38 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 # so the equivalence is measured on the game's own data, not assumed.
 # Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
 WRAP_PATCHES: dict[int, str] = {
+    # stb_vorbis imdct_step3_inner_r_loop (round 49): lim in ecx, e in edx,
+    # (d0, k_off, A, k1) on the stack, plain ret. Touches two runs of
+    # 8 * (lim >> 2) floats (host_fastpath.c has the exact range).
+    0x00aa3270: """void sub_00aa3270(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00aa3270: host imdct butterfly (host_fastpath.c) */
+  RECOMP_VA(0xaa3270u);
+  uint32_t lim = s->ECX, e = s->EDX, d0 = MEMR32(s->ESP + 4u), koff = MEMR32(s->ESP + 8u),
+           a = MEMR32(s->ESP + 12u), k1 = MEMR32(s->ESP + 16u);
+  int mode = isaac_fastpath_mode();
+  uint32_t lo = 0u, len = 0u;
+  if (mode == 0 || !isaac_fast_imdct_r_loop_ok(lim, e, d0, koff, a, k1, &lo, &len)) {
+    isaac_fastpath_count(0xaa3270u, 1); sub_00aa3270__lifted(s); return;
+  }
+  if (mode == 2) {
+    uint8_t *snap = (uint8_t *)malloc(len);
+    uint8_t *host = (uint8_t *)malloc(len);
+    if (!snap || !host) { free(snap); free(host); isaac_fastpath_count(0xaa3270u, 1); sub_00aa3270__lifted(s); return; }
+    memcpy(snap, RECOMP_PTR(lo), len);
+    isaac_fast_imdct_r_loop(lim, e, d0, koff, a, k1);
+    memcpy(host, RECOMP_PTR(lo), len);
+    memcpy(RECOMP_PTR(lo), snap, len);
+    sub_00aa3270__lifted(s);
+    if (!isaac_fast_verify_equal(host, lo, len)) isaac_fastpath_mismatch("imdct_r_loop", lim, len);
+    isaac_fastpath_count(0xaa3270u, 2);
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_imdct_r_loop(lim, e, d0, koff, a, k1);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
     # the engine's path hash: thiscall, string in ecx, hash in eax. The hot
     # leaf of resource lookup (round 18).
     0x00a159d0: """void sub_00a159d0(CpuState *restrict s) {

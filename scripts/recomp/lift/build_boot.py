@@ -237,7 +237,7 @@ def main():
         # gameplay, which is what makes a browser demo of more than a few
         # hundred frames practical at all.
         BOOT_OUT = OUT_LIFT / ("boot-web-fast" if args.web else "boot-fast")
-        LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=0"]
+        LIFT_CFLAGS = ["-O3", "-w", "-DRECOMP_MEM_CHECK=0"]
         lift_obj_suffix = ".fast.o"
         args.fast_link = False
 

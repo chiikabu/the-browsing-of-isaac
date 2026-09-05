@@ -5504,7 +5504,38 @@ The census: 3,000 headless frames skip 275,740 `glUseProgram`, 136,769 `glActive
 clears and the census; selftest 356/0; the browser play test
 passes.
 
-### 21.60 Round 47: the browser's edge cases, driven for real
+### 21.60 Round 45: the cold start, and what the browsers here will not say about the cache
+
+**The boot, profiled.** `profile_play.mjs phase=boot` samples from the
+navigation to the first presented frame. At the 4x throttle, served
+locally, the first frame comes at 4.5 s: `fetchSync` 30 % (the six eager
+archives and the scripts, 300 MB copied into the wasm heap through
+synchronous XHRs), `(program)` 9 %, `glGetProgramiv` + `glGetShaderiv`
+7.4 % (the shader compiles -- the driver's work, waited on synchronously),
+`atob` 6 % (text files come through the base64 detour of a synchronous
+XHR), `sub_00866960` 5 % (the engine's own init), the rest small. On a
+machine served over a network the first visit is the 745 MB download
+(§21.49) and nothing in this profile; the second visit, if the browser
+keeps the immutable slices, is this profile.
+
+**The caches, as far as this machine can see.** `drive_perf.mjs netlog=1`
+logs how the module and the image were served. Two findings. The dist
+server kept the hashes it read at start-up, so a dist rebuilt under a
+running server served the module `no-cache` under the page's fresh `?v=`
+(the ETag and the version did not match); it re-reads `dist.json` when
+its mtime changes now, and the module is immutable again. And neither
+browser available here -- Playwright's headless shell in a persistent
+profile, the app's embedded Chrome -- reused the HTTP cache across
+navigations even for `immutable` responses with matching validators
+(`transferSize` full on every reload, `fromDiskCache` false), which is
+why the wasm code cache of round 40 could never be seen to deserialise:
+the precondition it keys on was never met in these environments. The
+headers are the standard ones (`public, max-age=31536000, immutable`,
+`ETag`, `Vary: Accept-Encoding`, `Content-Encoding: br`); a stock Chrome
+on the target keeps them. That is the one thing in this stretch of work
+that only the target machine can confirm.
+
+### 21.61 Round 47: the browser's edge cases, driven for real
 
 **The driver (`scripts/recomp/web/drive_edges.mjs`).** Against the served
 page it seeds an `options.ini` with `EnableDebugConsole=1` into the
@@ -5537,7 +5568,7 @@ one a 1x1 RGBA read at (60, 227), 744 bytes in all -- a probe every dozen
 frames, and each a GPU pipeline drain (`readPixels` 3.3 % of a 6x-throttled
 frame). Round 48 logged the wasm stack under the first three reads: `imp_opengl32__glReadPixels` <- `sub_00a69760` <- `sub_00a69700` <- `sub_007b8cb0` <- `sub_00782af0` (one of the split giants: a game update routine going through the engine's graphics layer), and the position follows the player (221, 208 in the seeded run, 60, 227 in another) -- the engine samples the pixel under the player. The value is read synchronously and used, so the drain stays; it is documented, not removed.
 
-### 21.61 Round 48: three more redundancies in the GL stream
+### 21.62 Round 48: three more redundancies in the GL stream
 
 **The profile at 6x** (below the cap: 21.0 ms a frame, 6 % idle) put
 `bufferSubData` at 3.1 %, `enableVertexAttribArray` 0.5 %,
@@ -5563,33 +5594,106 @@ node census counts per frame 41 `glUniformMatrix4fv`, 30 `glUniform1i`, 21
 the index reuse and its generation check; selftest 356/0; the
 browser play test passes.
 
-### 21.60 Round 45: the cold start, and what the browsers here will not say about the cache
+### 21.63 Round 49: the lifted code at -O3, a bit-exact host imdct butterfly, and two more edge checks
 
-**The boot, profiled.** `profile_play.mjs phase=boot` samples from the
-navigation to the first presented frame. At the 4x throttle, served
-locally, the first frame comes at 4.5 s: `fetchSync` 30 % (the six eager
-archives and the scripts, 300 MB copied into the wasm heap through
-synchronous XHRs), `(program)` 9 %, `glGetProgramiv` + `glGetShaderiv`
-7.4 % (the shader compiles -- the driver's work, waited on synchronously),
-`atob` 6 % (text files come through the base64 detour of a synchronous
-XHR), `sub_00866960` 5 % (the engine's own init), the rest small. On a
-machine served over a network the first visit is the 745 MB download
-(§21.49) and nothing in this profile; the second visit, if the browser
-keeps the immutable slices, is this profile.
+Three things, each measured on its own clock.
 
-**The caches, as far as this machine can see.** `drive_perf.mjs netlog=1`
-logs how the module and the image were served. Two findings. The dist
-server kept the hashes it read at start-up, so a dist rebuilt under a
-running server served the module `no-cache` under the page's fresh `?v=`
-(the ETag and the version did not match); it re-reads `dist.json` when
-its mtime changes now, and the module is immutable again. And neither
-browser available here -- Playwright's headless shell in a persistent
-profile, the app's embedded Chrome -- reused the HTTP cache across
-navigations even for `immutable` responses with matching validators
-(`transferSize` full on every reload, `fromDiskCache` false), which is
-why the wasm code cache of round 40 could never be seen to deserialise:
-the precondition it keys on was never met in these environments. The
-headers are the standard ones (`public, max-age=31536000, immutable`,
-`ETag`, `Vary: Accept-Encoding`, `Content-Encoding: br`); a stock Chrome
-on the target keeps them. That is the one thing in this stretch of work
-that only the target machine can confirm.
+**The lifted TUs at -O3.** Round 44 tried -O3 at the link (wasm-opt) and
+found nothing; this round tries it where the code is generated, on the 38
+lifted TUs of the fast profile (`LIFT_CFLAGS` in `build_boot.py --fast`;
+the debug and node profile keeps -O2 with the memory checks). The module
+grows by 0.38 % (51,461,580 -> 51,656,632 bytes), the TUs compile in the
+same time (98.4 s at -O2, 100.9 s at -O3, 16 jobs), and the automated
+player's 2,000-frame census is byte-identical (the same md5 as round 43's).
+Speed: the node explorer over 3,000 frames, three alternating passes, -O2
+8841 / 8706 / 8537 ms against -O3 8673 / 8513 / 8509 ms -- 8695 -> 8565 ms
+on the mean, 1.5 % less, every pair in -O3's favour. The browser could not
+tell: the seeded 10x A/B gave r48 (-O2) 29.7, 33.1, 35.2 and 28.8 fps
+against 32.8, 33.8, 33.6, 37.5, 28.0 and 37.3 for the -O3 builds, and the
+same -O3 module measured 28.0 and 37.3 in consecutive passes. That
+protocol's noise floor on this machine is about 15 % between passes (the
+trimmed means move with the medians, so it is the whole run that shifts,
+not a few samples); a change under 10 % needs the node clock (deterministic
+content, no GPU) or the profiler's per-frame time. -O3 stays.
+
+**stb_vorbis's imdct butterfly, on the host.** The 6x profile of round 47
+charged 5.2 % of a frame to the vorbis decoder (sub_00aa38a0 2.2 %,
+sub_00aa3270 1.2 %, sub_00aa2580 0.7 %, sub_00aa44d0 0.6 %, sub_00aa3620
+0.5 %): the engine decodes two music streams and every sound effect
+in-engine, one mixer iteration per frame. sub_00aa3270 is
+`imdct_step3_inner_r_loop` -- the sibling iter0 loop's assert names the
+source file (`KAGE\Source\Core\External\ogg.cpp`, line 0x995), and the body
+is the public-domain butterfly, four per iteration, `A` advancing by `k1`
+after each. Its calling convention is fastcall-shaped (lim in ecx, e in edx,
+d0 / k_off / A / k1 on the stack, a plain `ret`), and the arithmetic is
+scalar SSE single precision throughout (the lifted body is
+`recomp_fsub_f32` / `recomp_fadd_f32` / `recomp_fmul_f32` only, no x87), so
+a host loop in the same association -- products first, then the sum or
+difference -- is bit-identical. `isaac_fast_imdct_r_loop` in
+host_fastpath.c is that loop; the WRAP_PATCHES wrapper for 0x00aa3270 gates
+it with `isaac_fast_imdct_r_loop_ok` (an empty loop, or either 8n-float run
+or the twiddle reads outside guest memory, goes to the lifted body, which
+traps the way the original would), and the verify mode snapshots the two
+runs, runs both, and compares: 36,056 calls over the 2,000-frame explorer
+run, 0 mismatches (the census line `sub_00aa3270: 0 lifted, 36056
+verified`). The selftest checks the loop against the source's own
+formulation on a pseudo-random buffer, the range the verify mode computes
+(both runs, 80 floats for lim 16), and the gate (361 checks). In the 6x
+profile of this build the frame is 18.9 ms (21.0 ms in round 47 -- round
+48's GL skips and this round together), sub_00aa3270 is gone from the top
+40, and the host loop is under the 0.5 % cut. What remains is inverse_mdct
+itself (sub_00aa38a0, still 2.3 %) with its other three helpers (iter0 at
+0x00aa30a0, the s loop at 0x00aa3430, ld654 at 0x00aa3620 at 0.6 %) and the
+residue and codebook decoders (sub_00aa2580 0.8 %, sub_00aa44d0 0.6 %): the
+next port is the whole inverse_mdct, one wrapper, its scratch on the host,
+the same verify mode -- about 4 % of a frame.
+
+Two build lessons the first attempt taught. The lifted TUs take their host
+declarations from `recomp_rt.h`, not `isaac_host.h` -- a wrapper calling
+`isaac_is_guest_va` (a static inline of the host header) failed the whole
+link with `call to undeclared function`, which clang 16+ treats as an error
+even under `-w`; the range checks moved into one host call, the way
+`isaac_fast_guest_range` already worked. And the fastpath test pins the
+wrapper's shape: after the lifted body a wrapper returns or compares, never
+anything else -- so the verify branch that could not allocate its snapshots
+returns at once.
+
+**The edge suite, two checks longer.** `drive_edges.mjs` takes `hidden_s=`
+(default 8): with 60 s the forged hidden tab ticks at 3.8 fps for the
+minute, the audio context stays running, full rate (59.9 fps) is back
+within two 250 ms samples and no catch-up stall follows. And with
+`options=` (the console) it now reloads the page after the console put the
+run on stage 2 and continues the run through the save menu: 17 files
+persisted before the reload, 9 restored by the store before `main`, four
+Enters to the run. What proves it is the same run is the seed: a continue
+logs `RNG Start Seed: <seed> [Continue, n]` where a fresh run logs
+`[New, n]`, and the seed must equal the one logged before the reload; the
+log offers nothing better, since a continue logs no `Level::Init` (the
+floor is loaded, not generated) and the room line names type.variant
+(`Room 1.2(Start Room)` on stage 1 and stage 2 alike), not the stage. 22/22
+on this build; the continued run plays at 59.2 fps.
+
+**A visible page with no animation frames.** The dist, opened in the
+desktop app's browser pane after this round's rebuild, sat at frame 4 with
+0 fps and no "paused while hidden" note. The pane's page read as visible --
+`document.hidden` false, `visibilityState` "visible", `hasFocus()` true --
+and yet `requestAnimationFrame` never called back (a probe waited 1.5 s for
+nothing): an occluded embedded view stops animation frames without
+flipping the visibility state, and the yield's rAF branch (round 37) waited
+on it forever. The JSPI suspension has no timeout of its own, so the whole
+engine hung on that promise. `isaac_yield_js` now races the animation frame
+against a 250 ms timer and cancels whichever loses: a page that gets no
+frames ticks at 4 fps like the hidden path, and a page that gets them pays
+one `setTimeout` / `clearTimeout` a frame. The fallback ticks are counted
+(`Module.isaacYieldNoRaf`, mirrored on `window`), the shipping status line
+names them ("no animation frames (n timer tick(s) this second: occluded?)"),
+and the edge suite's check 5 forges the condition -- `requestAnimationFrame`
+replaced by a no-op while the page stays visible -- and expects 2-8 fps on
+the timer with the counter rising, then full rate once the real function
+is back. The pane test itself: PLAY, and the status line counts frames
+again.
+
+Round numbers: explorer census identical to round 43's; dispatch census
+11,730,132 dispatches, cache 11,628,857 hits / 99,718 fills; selftest
+361/0; the family 176/176 (the imdct pin in recomp-fastpath, the edge pin
+in recomp-web); the dist rebuilt on this module and played at 4x.

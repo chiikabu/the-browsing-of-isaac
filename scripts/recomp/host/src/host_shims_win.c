@@ -646,7 +646,20 @@ EM_ASYNC_JS(void, isaac_yield_js, (void), {
     if (typeof document !== "undefined" && document.hidden) {
         await new Promise(function (resolve) { setTimeout(resolve, 250); });
     } else if (work < 15 && typeof requestAnimationFrame === "function") {
-        await new Promise(function (resolve) { requestAnimationFrame(function () { resolve(); }); });
+        /* round 49: a page can read as visible and still get no animation
+         * frames (an occluded embedded view; a tab throttled without
+         * document.hidden flipping) -- the frame then ticks on a 250 ms
+         * timer, like the hidden path, instead of never resuming */
+        await new Promise(function (resolve) {
+            var done = false;
+            var timer = setTimeout(function () {
+                if (done) return; done = true;
+                Module.isaacYieldNoRaf = (Module.isaacYieldNoRaf | 0) + 1;
+                if (typeof window !== "undefined") window.isaacYieldNoRaf = Module.isaacYieldNoRaf;
+                resolve();
+            }, 250);
+            requestAnimationFrame(function () { if (done) return; done = true; clearTimeout(timer); resolve(); });
+        });
     } else {
         if (!Module.isaacYieldChannel) {
             Module.isaacYieldChannel = new MessageChannel();

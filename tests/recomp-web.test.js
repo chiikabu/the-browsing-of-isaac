@@ -161,6 +161,9 @@ test('round 37: the web GL wrappers answer from the host cache, the present drai
   assert.ok(!/setTimeout\(resolve, 0\)|emscripten_sleep/.test(yieldBody), 'never a zero timer (the 4 ms clamp)');
   assert.ok(yieldBody.includes('if (typeof document !== "undefined" && document.hidden) {') && yieldBody.includes('setTimeout(resolve, 250)'),
     'a hidden document ticks on a slow timer instead of stalling on requestAnimationFrame');
+  assert.ok(yieldBody.includes('var timer = setTimeout(function () {') && yieldBody.includes('requestAnimationFrame(function () { if (done) return; done = true; clearTimeout(timer); resolve(); });'),
+    'round 49: the animation-frame wait races a 250 ms timer (a visible page can get no frames: an occluded embedded view)');
+  assert.ok(yieldBody.includes('Module.isaacYieldNoRaf = (Module.isaacYieldNoRaf | 0) + 1;'), 'the fallback ticks are counted');
   const bb = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'build_boot.py'), 'utf8');
   assert.ok(bb.includes('"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js"'), 'the yield import suspends the wasm stack');
 });
@@ -211,4 +214,17 @@ test('round 48: redundant attribute enables and uniform re-sends are skipped; a 
   assert.ok(/glu_forget\(prog\);[^\n]*\n\s*glLinkProgram\(prog\);/.test(gl) && gl.includes('glu_forget(A(0)); if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0));'),
     'a link resets the uniforms, a delete frees the name: both forget');
   assert.ok(gl.includes('attrib enables %u, uniforms %u'), 'the census');
+});
+
+test('round 49: the edge suite hides the tab for as long as asked and continues the same run after a reload', () => {
+  const drv = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_edges.mjs'), 'utf8');
+  assert.ok(drv.includes("const HIDDEN_S = Number(opt.hidden_s || '8');"), 'hidden_s= sets the hidden period');
+  assert.ok(drv.includes("'continue after the reload resumes the same run'"), 'the same-run check');
+  assert.ok(drv.includes('/RNG Start Seed: .*\\[(Continue|New), \\d+\\]/'), 'a continue is told from a new run by the seed line');
+  assert.ok(drv.includes("sa[2] === 'Continue' && sa[1] === sb[1]"), 'the seed must match the run before the reload');
+  assert.ok(drv.includes("'the continued run plays at full rate'"), 'and the continued run is measured');
+  assert.ok(drv.includes('window.requestAnimationFrame = () => 0;') && drv.includes("'no animation frames: the game ticks on the fallback timer instead of stalling'"),
+    'check 5 forges a visible page with no animation frames');
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(play.includes('no animation frames (${nrDelta} timer tick(s) this second: occluded?)'), 'the shipping status line names the fallback');
 });

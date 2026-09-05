@@ -1860,6 +1860,46 @@ int main(int argc, char **argv) {
                 check(cpu.EAX == 0u, "and mode 1 does not exist");
             }
 
+            /* Round 49: the imdct butterfly against the stb_vorbis formulation
+             * (pointer walk from e0/e2 downwards), bit-exact on a pseudo-random
+             * buffer, and the touched range as the verify mode computes it. */
+            {
+                uint32_t eb = ISAAC_HEAP_VA + 0x200000u, ab = ISAAC_HEAP_VA + 0x210000u;
+                float *e = (float *)isaac_g(eb), *A = (float *)isaac_g(ab);
+                float ref[128];
+                uint32_t seed = 0x1234567u;
+                for (unsigned i = 0; i < 128u; ++i) { seed = seed * 1664525u + 1013904223u; e[i] = (float)(int32_t)seed * 1e-9f; }
+                for (unsigned i = 0; i < 64u; ++i) { seed = seed * 1664525u + 1013904223u; A[i] = (float)(int32_t)seed * 1e-9f; }
+                memcpy(ref, e, sizeof ref);
+                {   /* the source: lim 16 -> 4 iterations, e0 = e + 71, e2 = e0 + 48, A stride k1 = 2 */
+                    float *e0 = ref + 71, *e2 = e0 + 48; const float *a = A; int i;
+                    for (i = 16 >> 2; i > 0; --i) {
+                        float k00_20, k01_21;
+                        k00_20 = e0[-0] - e2[-0]; k01_21 = e0[-1] - e2[-1]; e0[-0] += e2[-0]; e0[-1] += e2[-1];
+                        e2[-0] = k00_20 * a[0] - k01_21 * a[1]; e2[-1] = k01_21 * a[0] + k00_20 * a[1]; a += 2;
+                        k00_20 = e0[-2] - e2[-2]; k01_21 = e0[-3] - e2[-3]; e0[-2] += e2[-2]; e0[-3] += e2[-3];
+                        e2[-2] = k00_20 * a[0] - k01_21 * a[1]; e2[-3] = k01_21 * a[0] + k00_20 * a[1]; a += 2;
+                        k00_20 = e0[-4] - e2[-4]; k01_21 = e0[-5] - e2[-5]; e0[-4] += e2[-4]; e0[-5] += e2[-5];
+                        e2[-4] = k00_20 * a[0] - k01_21 * a[1]; e2[-5] = k01_21 * a[0] + k00_20 * a[1]; a += 2;
+                        k00_20 = e0[-6] - e2[-6]; k01_21 = e0[-7] - e2[-7]; e0[-6] += e2[-6]; e0[-7] += e2[-7];
+                        e2[-6] = k00_20 * a[0] - k01_21 * a[1]; e2[-7] = k01_21 * a[0] + k00_20 * a[1]; a += 2;
+                        e0 -= 8; e2 -= 8;
+                    }
+                }
+                isaac_fast_imdct_r_loop(16u, eb, 71u, 48u, ab, 2u);
+                check(memcmp(e, ref, sizeof ref) == 0, "fastpath: the imdct butterfly is bit-exact against the stb_vorbis formulation");
+                { uint32_t lo = 0, len = 0; isaac_fast_imdct_r_loop_range(16u, eb, 71u, 48u, &lo, &len);
+                  check(lo == eb + (71u - 31u) * 4u && lo + len == eb + (71u + 48u + 1u) * 4u,
+                        "fastpath: the verify range covers e0-31..e0 and e2-31..e2 (both runs of 32 floats)"); }
+                { uint32_t lo = 0, len = 0;
+                  check(isaac_fast_imdct_r_loop_ok(16u, eb, 71u, 48u, ab, 2u, &lo, &len) == 1 && len == 80u * 4u,
+                        "fastpath: the imdct gate admits the in-heap runs and reports their extent");
+                  check(isaac_fast_imdct_r_loop_ok(0u, eb, 71u, 48u, ab, 2u, &lo, &len) == 0,
+                        "fastpath: the imdct gate declines an empty loop (lim < 4)");
+                  check(isaac_fast_imdct_r_loop_ok(16u, 0xfffff000u, 71u, 48u, ab, 2u, &lo, &len) == 0,
+                        "fastpath: the imdct gate declines a run outside guest memory"); }
+            }
+
             /* Round 37: the host GL cache. Renderbuffer parameters come from
              * the storage call, a framebuffer's status is remembered until
              * something that can change its completeness happens, locations

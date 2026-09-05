@@ -209,3 +209,13 @@ test('round 38: the dispatcher has a direct-mapped cache in front of its index, 
     'the indirect call tries the cache before the shim check');
   assert.ok(trap.includes('__attribute__((weak)) int isaac_lifted_dispatch_cached('), 'a weak fallback keeps the host linking without the lifted module');
 });
+
+test('round 49: the imdct butterfly has a host fastpath with the verify mode', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH wrap 0x00aa3270: host imdct butterfly (host_fastpath.c)'), 'the wrapper for 0x00aa3270');
+  assert.ok(lp.includes('isaac_fast_imdct_r_loop(lim, e, d0, koff, a, k1);'), 'the host loop runs by default');
+  assert.ok(lp.includes('if (!isaac_fast_verify_equal(host, lo, len)) isaac_fastpath_mismatch("imdct_r_loop", lim, len);'), 'ISAAC_FASTPATH_VERIFY compares the touched range');
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  assert.ok(fp.includes('void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,'), 'the host implementation');
+  assert.ok(fp.includes('e2[-7] = k00 * A3[1] + k01 * A3[0];'), 'four butterflies per iteration in the source order');
+});

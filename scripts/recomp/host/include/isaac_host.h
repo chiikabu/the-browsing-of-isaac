@@ -346,6 +346,10 @@ void isaac_glc_loc_flush(uint32_t prog);
 void isaac_glc_count_readpixels(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp);
 void isaac_glc_report(void);
 void isaac_glc_reset(void);
+/* Round 49: stb_vorbis's imdct butterfly, bit-exact on guest memory (host_fastpath.c) */
+void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t a_va, uint32_t k1);
+void isaac_fast_imdct_r_loop_range(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t *lo, uint32_t *len);
+int  isaac_fast_imdct_r_loop_ok(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t a_va, uint32_t k1, uint32_t *lo, uint32_t *len);
 
 #ifdef __cplusplus
 }
