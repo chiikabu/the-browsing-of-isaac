@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-04, recomp rounds 26-43: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split)
+# Handoff — read this first (2026-09-04, recomp rounds 26-44: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
