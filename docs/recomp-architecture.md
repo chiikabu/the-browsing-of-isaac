@@ -4905,6 +4905,17 @@ same driver on a fake without WM_CHAR (three attempts per command, the
 failure reported, nothing recalled, closed at the end); and a leftover
 line cleared by DOWN, or by Backspaces when DOWN leaves it.
 
+**Census (fast node profile, epoch 1700000000, `ISAAC_DRIVE=explore
+ISAAC_CONSOLE_MODE=typed`, 4,000 frames).** `stage 2`: the console opens 2
+frames after the grave tap (frame 474), the 7 keys go in over 28 frames,
+the line reads `stage 2` at frame 512, Enter, executed at 513 (the line
+cleared after 1 frame) -- `Level::Init m_Stage 2` follows, 0 asserts, main
+0. `goto s.boss.1010`: 16 keys over 64 frames, the line read back at 548,
+executed at 549 -- `Room 5.1010(Monstro)`, 0 asserts, main 0. Typed is the
+default mode now; `recall` stays as a fallback. Selftest 296 checks (55
+new: the US map cells, Shift/CapsLock/Ctrl, the queue order, no character
+for F1/arrows), `tests/recomp-console.test.js` 14.
+
 ### 21.49 The shipping page and a hostable dist (round 34)
 
 `scripts/recomp/assets/ship.py build` assembles `.scratch/game-dist` from

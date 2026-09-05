@@ -214,7 +214,10 @@ SYMBOL_OVERRIDE = {
     # path is reached. Inert 0 is the right answer for these:
     "SendMessageA@user32.dll": "STUB",        # WM_SETICON after LoadImageA (0x00949b30): previous icon = 0
     "SendMessageW@user32.dll": "STUB",        # 0x00a5d651 (GLFW win32 window)
-    "TranslateMessage@user32.dll": "STUB",    # message pumps 0x00a5e690/0x00a6db02/0x00a81498: nothing translated
+    # Round 32: host_shims_win.c synthesises WM_CHAR from a WM_KEYDOWN (the
+    # US layout under the synchronous modifier state), queued ahead of the
+    # rest -- typed text reaches the debug console's GLFW char callback.
+    "TranslateMessage@user32.dll": "PROVIDED",  # message pumps 0x00a5e690/0x00a6db02/0x00a81498
     "PeekMessageA@user32.dll": "STUB",        # 0x00a6daeb: no message
     "GetClassLongW@user32.dll": "STUB",       # 0x00a5d631: no class storage
     "UnregisterClassW@user32.dll": "STUB",    # 0x00a81527 (GLFW terminate)

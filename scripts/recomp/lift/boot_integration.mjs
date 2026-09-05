@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, statSync, openSync, readSync, existsSync } f
 // Round 30: the key table, the explorer and the console driver share one
 // module; the debug profile runs COPIES of both files from the boot dir.
 import { KEYS, makeExplorer, makeConsole, consoleSeedFiles, SAVE_DIR } from './explore.mjs';
+import { makeTypedConsole } from './console_typing.mjs';
 
 // ISAAC_V8_FLAGS: V8 flags for this run, re-exec'd onto the command line
 // because node refuses them in NODE_OPTIONS ("--no-wasm-tier-up is not
@@ -302,8 +303,14 @@ if (process.env.ISAAC_DRIVE === 'explore') {
 // ISAAC_CONSOLE_DELAY frames (default 150) after the explorer's run starts and
 // the explorer is suspended while it runs; in timeline mode it starts at
 // ISAAC_CONSOLE_AT (a presented-frame number) and the timeline waits.
-// ISAAC_CONSOLE_MODE=type presses the characters' keys first (they do not
-// reach the console without WM_CHAR; the driver reports that and recalls).
+// ISAAC_CONSOLE_MODE (round 32, §21.47) selects how the text gets in:
+// `typed` -- the characters' keys, turned into WM_CHAR by the host's
+// TranslateMessage (console_typing.mjs; no history is seeded, so the only way
+// a command can reach the line is the typing); `recall` -- round 30's history
+// recall; `type` -- round 30's probe (typed first, recall as the fallback).
+const CONSOLE_MODES = ['recall', 'type', 'typed'];
+const DEFAULT_CONSOLE_MODE = 'typed';   // proven on the fast profile: `stage 2` and `goto s.boss.1010` typed and executed (§21.47)
+const consoleMode = CONSOLE_MODES.includes(process.env.ISAAC_CONSOLE_MODE || '') ? process.env.ISAAC_CONSOLE_MODE : DEFAULT_CONSOLE_MODE;
 const consoleCommands = (process.env.ISAAC_CONSOLE || '').split(';').map((s) => s.trim()).filter(Boolean);
 let consoleDrv = null;
 if (consoleCommands.length) {
@@ -312,7 +319,9 @@ if (consoleCommands.length) {
   const ready = explorer
     ? (frame) => { const r = explorer.report(); return r.firstRunFrame >= 0 && frame - r.firstRunFrame >= consoleDelay; }
     : (frame) => frame >= consoleAt;
-  consoleDrv = makeConsole(mem, { commands: consoleCommands, mode: process.env.ISAAC_CONSOLE_MODE, ready, log: (s) => console.log(s) });
+  consoleDrv = consoleMode === 'typed'
+    ? makeTypedConsole(consoleCommands, { mem, ready, log: (s) => console.log(s) })
+    : makeConsole(mem, { commands: consoleCommands, mode: consoleMode, ready, log: (s) => console.log(s) });
   const basePoll = m.isaacInputPoll || (() => 0);
   m.isaacInputPoll = (frame, out) => {
     // the console driver ticks first (idle -> open once `ready`); while it is
@@ -332,7 +341,8 @@ if (consoleCommands.length) {
     }
     return basePoll(frame, out);
   };
-  console.log(`  ISAAC_CONSOLE: ${consoleCommands.length} command(s) through the debug console, ${explorer ? `${consoleDelay} frames after the run starts` : `at frame ${consoleAt}`}${process.env.ISAAC_CONSOLE_MODE === 'type' ? ', typed first' : ', by history recall'}`);
+  const consoleHow = consoleMode === 'typed' ? 'typed (WM_CHAR from TranslateMessage)' : consoleMode === 'type' ? 'typed first, history recall as the fallback' : 'by history recall';
+  console.log(`  ISAAC_CONSOLE: ${consoleCommands.length} command(s) through the debug console, ${explorer ? `${consoleDelay} frames after the run starts` : `at frame ${consoleAt}`}, ${consoleHow}`);
 }
 if (typeof m._isaac_fs_seed === 'function') {
   stageOk('seed packed archives', () => {
@@ -442,6 +452,8 @@ if (typeof m._isaac_fs_seed === 'function') {
       const existing = existsSync(optPath) ? readFileSync(optPath, 'latin1') : null;
       let n = 0;
       for (const f of consoleSeedFiles(consoleCommands, existing)) {
+        // typed mode seeds no history: a command in the line can only have been typed
+        if (consoleMode === 'typed' && f.path.endsWith('cmd_history.txt')) { console.log(`  (skip ${f.path}: typed mode)`); continue; }
         const ok = seedFile(f.path, Buffer.from(f.text, 'latin1'));
         console.log(`  seed ${f.path} ${f.text.length} bytes${f.merged ? ' (merged with the instance\'s own options.ini)' : ''} -> ${ok ? 'ok' : 'FAIL'}`);
         if (ok) n += 1;

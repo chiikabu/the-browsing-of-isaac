@@ -528,7 +528,19 @@ void imp_user32__SetCursorPos(CpuState *restrict cpu) {
 /* Screen coordinates == client coordinates here: ScreenToClient and
  * ClientToScreen are identity shims and the window sits at the origin. */
 static int32_t g_cur_x, g_cur_y;
-static uint8_t g_keydown[256];
+static uint8_t g_keydown[256];          /* physical: set as the events are queued (isaac_input_key) */
+/* Round 32: Windows keeps two keyboard states. The physical one above is
+ * what GetAsyncKeyState would read; the SYNCHRONOUS one changes only as key
+ * messages are removed from the queue ("the key status ... changes as a
+ * thread reads key messages from its message queue") -- GetKeyState reads
+ * it, and it is the modifier state TranslateMessage translates under, so a
+ * batch queued in one frame (Shift down, S down, S up, Shift up) translates
+ * in message order rather than in whatever state the batch left. A generic
+ * VK_SHIFT / VK_CONTROL / VK_MENU message sets its left/right vk too, from
+ * the scancode / extended bit, as the kernel does. The toggle byte carries
+ * CapsLock / NumLock / ScrollLock (GetKeyState bit 0), flipped when the
+ * lock key's non-repeat key-down is removed. */
+static uint8_t g_keysync[256], g_keytoggle[256];
 static uint32_t g_mouse_mk;             /* MK_LBUTTON 1 | MK_RBUTTON 2 */
 void imp_user32__GetCursorPos(CpuState *restrict cpu) {
     uint32_t p = isaac_arg(cpu, 0);
@@ -545,12 +557,13 @@ void imp_user32__SetCursor(CpuState *restrict cpu) {
 }
 void imp_user32__GetKeyState(CpuState *restrict cpu) {
     uint32_t vk = isaac_arg(cpu, 0) & 0xFFu;
-    /* SHORT: bit 15 = down (sign-extended as the real API does) */
-    cpu->EAX = g_keydown[vk] ? 0xFFFF8000u : 0u;
-    if ((vk == 0x10u && (g_keydown[0xA0] || g_keydown[0xA1])) ||   /* VK_SHIFT   */
-        (vk == 0x11u && (g_keydown[0xA2] || g_keydown[0xA3])) ||   /* VK_CONTROL */
-        (vk == 0x12u && (g_keydown[0xA4] || g_keydown[0xA5])))     /* VK_MENU    */
-        cpu->EAX = 0xFFFF8000u;
+    /* SHORT: bit 15 = down (sign-extended as the real API does), bit 0 =
+     * toggled; the synchronous state, i.e. the key messages removed so far */
+    int down = g_keysync[vk] ||
+        (vk == 0x10u && (g_keysync[0xA0] || g_keysync[0xA1])) ||   /* VK_SHIFT   */
+        (vk == 0x11u && (g_keysync[0xA2] || g_keysync[0xA3])) ||   /* VK_CONTROL */
+        (vk == 0x12u && (g_keysync[0xA4] || g_keysync[0xA5]));     /* VK_MENU    */
+    cpu->EAX = (down ? 0xFFFF8000u : 0u) | (g_keytoggle[vk] & 1u);
 }
 void imp_user32__SendInput(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0); (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
@@ -688,6 +701,8 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
  *       which is exactly what GLFW's windowProc decodes (HIWORD & 0x1ff)
  *   [2, x, y, 0]      -> WM_MOUSEMOVE, lParam = x | y << 16
  *   [3, button, down] -> WM_LBUTTONDOWN/UP (0x201/0x202) or WM_RBUTTONDOWN/UP
+ * and, round 32, TranslateMessage (below) turns a WM_KEYDOWN of a printable
+ * key into the WM_CHAR (0x102) Windows would post, queued at the FRONT.
  * The queue is drained by PeekMessageW one message per call; the frame cap's
  * WM_QUIT (below) goes out only once the queue is empty, so scripted input
  * before the cap is always delivered. */
@@ -695,7 +710,7 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
 typedef struct { uint32_t hwnd, message, wParam, lParam, time, x, y; } win_msg;
 static win_msg g_msgq[MSGQ_MAX];
 static unsigned g_msgq_head, g_msgq_count;
-static uint32_t g_input_events, g_input_dropped, g_input_dispatched;
+static uint32_t g_input_events, g_input_dropped, g_input_dispatched, g_chars_posted;
 static uint32_t main_hwnd(void) {
     /* The game's real window is GLFW's "GLFW30" class (0x00a5b7b0's proc);
      * "GLFW3 Helper" is GLFW's hidden helper and "Message" the DirectInput
@@ -719,6 +734,41 @@ static void msgq_push(uint32_t message, uint32_t wParam, uint32_t lParam) {
     m->time = (uint32_t)emscripten_get_now();
     m->x = (uint32_t)g_cur_x; m->y = (uint32_t)g_cur_y;
     ++g_msgq_count;
+}
+/* A message that must be retrieved next (the WM_CHAR TranslateMessage
+ * posts: Windows serves posted messages before the remaining hardware
+ * input, so the character follows its key-down at once). */
+static void msgq_push_front(const win_msg *m) {
+    if (g_msgq_count >= MSGQ_MAX) { ++g_input_dropped; return; }
+    g_msgq_head = (g_msgq_head + MSGQ_MAX - 1u) % MSGQ_MAX;
+    g_msgq[g_msgq_head] = *m;
+    ++g_msgq_count;
+}
+/* The left/right vk a generic modifier message also sets (Windows posts
+ * VK_SHIFT in wParam and lets the scancode say which one; GLFW's
+ * pollEvents reads GetKeyState(VK_LSHIFT) to decide whether a Shift it
+ * holds pressed was released). */
+static uint32_t vk_specific(uint32_t vk, uint32_t lParam) {
+    uint32_t sc = (lParam >> 16) & 0xFFu, ext = (lParam >> 24) & 1u;
+    if (vk == 0x10u) return sc == 0x36u ? 0xA1u : 0xA0u;      /* VK_RSHIFT : VK_LSHIFT     */
+    if (vk == 0x11u) return ext ? 0xA3u : 0xA2u;              /* VK_RCONTROL : VK_LCONTROL */
+    if (vk == 0x12u) return ext ? 0xA5u : 0xA4u;              /* VK_RMENU : VK_LMENU       */
+    return 0u;
+}
+/* The synchronous keyboard state follows the key messages as they are
+ * removed from the queue. */
+static void keysync_apply(uint32_t message, uint32_t vk, uint32_t lParam) {
+    vk &= 0xFFu;
+    uint32_t side = vk_specific(vk, lParam);
+    if (message == 0x100u || message == 0x104u) {             /* WM_KEYDOWN / WM_SYSKEYDOWN */
+        /* CapsLock, NumLock, ScrollLock: a fresh press (bit 30 clear) toggles */
+        if ((vk == 0x14u || vk == 0x90u || vk == 0x91u) && !(lParam & (1u << 30))) g_keytoggle[vk] ^= 1u;
+        g_keysync[vk] = 1u;
+        if (side) g_keysync[side] = 1u;
+    } else if (message == 0x101u || message == 0x105u) {      /* WM_KEYUP / WM_SYSKEYUP */
+        g_keysync[vk] = 0u;
+        if (side) g_keysync[side] = 0u;
+    }
 }
 void isaac_input_key(uint32_t vk, uint32_t scancode, int extended, int down) {
     vk &= 0xFFu;
@@ -774,6 +824,7 @@ static int msgq_pop_into(uint32_t msg) {
     isaac_w32(msg + 16u, m->time);
     isaac_w32(msg + 20u, m->x);
     isaac_w32(msg + 24u, m->y);
+    keysync_apply(m->message, m->wParam, m->lParam);
     return 1;
 }
 /* Focus. A real window receives WM_ACTIVATEAPP, WM_ACTIVATE and WM_SETFOCUS
@@ -858,6 +909,119 @@ void imp_user32__DispatchMessageW(CpuState *restrict cpu) {
     cpu->EAX = sub.EAX;
 }
 uint32_t isaac_input_dispatched(void) { return g_input_dispatched; }
+/* ---- TranslateMessage (round 32) ---------------------------------------- */
+/* Windows turns the WM_KEYDOWN of a printable key into a WM_CHAR: the
+ * character the keyboard layout gives that virtual key under the
+ * synchronous modifier state, posted to the thread's queue -- and a posted
+ * message is retrieved before the remaining hardware input, so the pump's
+ * next PeekMessage/GetMessage is the character: the same window, wParam =
+ * the character, lParam = the key-down's lParam (repeat count, scancode,
+ * extended bit, previous state). GLFW's WndProc (0x00a5b7b0) hands WM_CHAR
+ * and WM_SYSCHAR to _glfwInputChar (0x00a25d60), which drops codepoints
+ * below 0x20 (so '\r', '\b', 0x1b and the Ctrl characters reach no callback,
+ * as on Windows) and calls the char callback at window+0x2a8; the debug
+ * console's (0x00686730) inserts 0x20..0x7f at its cursor while the console
+ * is open (state 2). Round 30 had to recall its commands from
+ * cmd_history.txt because this was a stub (§21.45).
+ *
+ * The map is the US layout (kbdus.c): a base, a Shift and a Ctrl column per
+ * key. Letters are computed: CapsLock swaps the case Shift gives, and Ctrl
+ * (Shift or not) makes 0x01..0x1a. Shift+Ctrl has no column; Ctrl+Alt
+ * (AltGr) yields nothing on this layout. NumLock needs no state: a numpad
+ * key arrives as VK_NUMPADn only while NumLock is on (otherwise it is
+ * VK_HOME and friends), so those rows are unconditional. NOCH: no
+ * character. One row per line: tests/recomp-console.test.js parses them. */
+#define NOCH 0xFFFFu
+typedef struct { uint16_t vk, base, shift, ctrl; } vk_char;
+static const vk_char g_vk_chars[] = {
+    { 0x30, '0', ')', NOCH },       /* the digit row and its shifted symbols */
+    { 0x31, '1', '!', NOCH },
+    { 0x32, '2', '@', 0x00 },       /* Ctrl+2 is NUL (Ctrl+@) */
+    { 0x33, '3', '#', NOCH },
+    { 0x34, '4', '$', NOCH },
+    { 0x35, '5', '%', NOCH },
+    { 0x36, '6', '^', 0x1E },       /* Ctrl+6 is RS (Ctrl+^) */
+    { 0x37, '7', '&', NOCH },
+    { 0x38, '8', '*', NOCH },
+    { 0x39, '9', '(', NOCH },
+    { 0x20, ' ', ' ', ' ' },        /* VK_SPACE */
+    { 0x0D, '\r', '\r', '\n' },     /* VK_RETURN */
+    { 0x08, '\b', '\b', 0x7F },     /* VK_BACK */
+    { 0x09, '\t', '\t', NOCH },     /* VK_TAB */
+    { 0x1B, 0x1B, 0x1B, 0x1B },     /* VK_ESCAPE */
+    { 0xBA, ';', ':', NOCH },       /* VK_OEM_1 */
+    { 0xBB, '=', '+', NOCH },       /* VK_OEM_PLUS */
+    { 0xBC, ',', '<', NOCH },       /* VK_OEM_COMMA */
+    { 0xBD, '-', '_', 0x1F },       /* VK_OEM_MINUS; Ctrl+- is US (Ctrl+_) */
+    { 0xBE, '.', '>', NOCH },       /* VK_OEM_PERIOD */
+    { 0xBF, '/', '?', NOCH },       /* VK_OEM_2 */
+    { 0xC0, '`', '~', NOCH },       /* VK_OEM_3: the console key */
+    { 0xDB, '[', '{', 0x1B },       /* VK_OEM_4 */
+    { 0xDC, '\\', '|', 0x1C },      /* VK_OEM_5 */
+    { 0xDD, ']', '}', 0x1D },       /* VK_OEM_6 */
+    { 0xDE, '\'', '"', NOCH },      /* VK_OEM_7 */
+    { 0xE2, '\\', '|', 0x1C },      /* VK_OEM_102 */
+    { 0x60, '0', NOCH, NOCH },      /* VK_NUMPAD0..9 */
+    { 0x61, '1', NOCH, NOCH },
+    { 0x62, '2', NOCH, NOCH },
+    { 0x63, '3', NOCH, NOCH },
+    { 0x64, '4', NOCH, NOCH },
+    { 0x65, '5', NOCH, NOCH },
+    { 0x66, '6', NOCH, NOCH },
+    { 0x67, '7', NOCH, NOCH },
+    { 0x68, '8', NOCH, NOCH },
+    { 0x69, '9', NOCH, NOCH },
+    { 0x6A, '*', '*', NOCH },       /* VK_MULTIPLY */
+    { 0x6B, '+', '+', NOCH },       /* VK_ADD */
+    { 0x6D, '-', '-', NOCH },       /* VK_SUBTRACT */
+    { 0x6E, '.', NOCH, NOCH },      /* VK_DECIMAL */
+    { 0x6F, '/', '/', NOCH },       /* VK_DIVIDE */
+};
+static uint32_t vk_to_char(uint32_t vk) {
+    int shift = g_keysync[0x10] || g_keysync[0xA0] || g_keysync[0xA1];
+    int ctrl  = g_keysync[0x11] || g_keysync[0xA2] || g_keysync[0xA3];
+    int alt   = g_keysync[0x12] || g_keysync[0xA4] || g_keysync[0xA5];
+    if (ctrl && alt) return NOCH;                         /* AltGr: nothing on the US layout */
+    if (vk >= 0x41u && vk <= 0x5Au) {                     /* A..Z */
+        if (ctrl) return vk & 0x1Fu;                      /* 0x01..0x1a, Shift or not */
+        int upper = shift ^ (g_keytoggle[0x14] & 1u);     /* CapsLock swaps the case */
+        return upper ? vk : vk + 0x20u;
+    }
+    for (size_t i = 0; i < sizeof g_vk_chars / sizeof g_vk_chars[0]; ++i) {
+        if (g_vk_chars[i].vk != vk) continue;
+        if (ctrl) return shift ? NOCH : g_vk_chars[i].ctrl;
+        return shift ? g_vk_chars[i].shift : g_vk_chars[i].base;
+    }
+    return NOCH;
+}
+/* BOOL TranslateMessage(const MSG*): nonzero for any key message whether or
+ * not a character was posted, 0 for anything else (MSDN); a WM_KEYDOWN /
+ * WM_SYSKEYDOWN with a character posts WM_CHAR / WM_SYSCHAR ahead of the
+ * queue. The caller's MSG is read, never written. */
+void imp_user32__TranslateMessage(CpuState *restrict cpu) {
+    uint32_t msg = isaac_arg(cpu, 0);
+    cpu->EAX = 0;
+    if (!msg || !isaac_is_guest_va(msg + 27u)) return;
+    uint32_t message = isaac_r32(msg + 4u);
+    if (message != 0x100u && message != 0x101u && message != 0x104u && message != 0x105u) return;
+    cpu->EAX = 1;
+    if (message == 0x101u || message == 0x105u) return;
+    uint32_t vk = isaac_r32(msg + 8u) & 0xFFu, lParam = isaac_r32(msg + 12u);
+    uint32_t ch = vk_to_char(vk);
+    if (ch == NOCH) return;
+    win_msg m;
+    m.hwnd = isaac_r32(msg);
+    m.message = message == 0x104u ? 0x106u : 0x102u;
+    m.wParam = ch; m.lParam = lParam;
+    m.time = isaac_r32(msg + 16u); m.x = isaac_r32(msg + 20u); m.y = isaac_r32(msg + 24u);
+    msgq_push_front(&m);
+    ++g_chars_posted;
+    if (g_chars_posted <= 48u)
+        isaac_log("[isaac][input] frame %u: TranslateMessage vk 0x%02x -> %s 0x%02x%s",
+                  g_frames_presented, vk, m.message == 0x106u ? "WM_SYSCHAR" : "WM_CHAR", ch,
+                  (ch >= 0x20u && ch < 0x7Fu) ? "" : " (control)");
+}
+uint32_t isaac_input_chars_posted(void) { return g_chars_posted; }
 void imp_user32__WaitMessage(CpuState *restrict cpu) {
     cpu->EAX = 0;
 }

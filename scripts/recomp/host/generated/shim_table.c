@@ -625,7 +625,7 @@ isaac_import isaac_imports[] = {
   { "user32.dll", "PeekMessageA", 0x00b185e4u, 0x33002660u, 20, 1, ISAAC_V_STUB, 0, imp_user32__PeekMessageA },
   { "user32.dll", "SendMessageA", 0x00b186b8u, 0x33002670u, 16, 1, ISAAC_V_STUB, 0, imp_user32__SendMessageA },
   { "user32.dll", "SendMessageW", 0x00b18704u, 0x33002680u, 16, 1, ISAAC_V_STUB, 0, imp_user32__SendMessageW },
-  { "user32.dll", "TranslateMessage", 0x00b18650u, 0x33002690u, 4, 1, ISAAC_V_STUB, 0, imp_user32__TranslateMessage },
+  { "user32.dll", "TranslateMessage", 0x00b18650u, 0x33002690u, 4, 1, ISAAC_V_PROVIDED, 0, imp_user32__TranslateMessage },
   { "user32.dll", "UnregisterClassW", 0x00b185a0u, 0x330026a0u, 8, 1, ISAAC_V_STUB, 0, imp_user32__UnregisterClassW },
   { "vcruntime140.dll", "__CxxLongjmpUnwind", 0x00b1873cu, 0x330026b0u, 0, 0, ISAAC_V_NEVER_CALLED, 0, imp_vcruntime140____CxxLongjmpUnwind },
   { "vcruntime140.dll", "__std_terminate", 0x00b18780u, 0x330026c0u, 0, 0, ISAAC_V_NEVER_CALLED, 0, imp_vcruntime140____std_terminate },

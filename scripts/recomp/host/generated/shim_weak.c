@@ -3096,7 +3096,7 @@ __attribute__((weak)) void imp_user32__SendMessageW(CpuState *restrict cpu) {
 __attribute__((weak)) void imp_user32__TranslateMessage(CpuState *restrict cpu) {
     static const isaac_import *self;
     if (!self) self = &isaac_imports[617];
-    isaac_stub_hit(self, cpu); cpu->EAX = 0;
+    isaac_trap(self, cpu);
 }
 __attribute__((weak)) void imp_user32__UnregisterClassW(CpuState *restrict cpu) {
     static const isaac_import *self;

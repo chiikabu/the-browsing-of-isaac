@@ -158,6 +158,12 @@ REQUIRE emsdk on PATH:
   page (`play.html`) shows a byte-accounted progress bar, a Play button
   that unlocks audio, fullscreen, key hints and a saves menu. Driven under
   headless Chromium: Play at 0.9 s, the run started, ~40 fps, main 0.
+- **Round 32: typed console text** (§21.47). `TranslateMessage` is real:
+  a WM_KEYDOWN of a printable key posts the US-layout WM_CHAR (Shift,
+  CapsLock, Ctrl) at the head of the queue, so `ISAAC_CONSOLE="stage
+  2;goto s.boss.1010"` is typed (`ISAAC_CONSOLE_MODE=typed`, the default):
+  `Level::Init m_Stage 2` and `Room 5.1010(Monstro)` on the fast profile,
+  0 asserts. Selftest 296/0, console tests 14/14.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)

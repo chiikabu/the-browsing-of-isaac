@@ -500,6 +500,7 @@ def main():
     shutil.copy2(driver_src, driver_dst)
     # Round 27: the door-aware explorer the driver imports for ISAAC_DRIVE=explore.
     shutil.copy2(HERE / "explore.mjs", BOOT_OUT / "explore.mjs")
+    shutil.copy2(HERE / "console_typing.mjs", BOOT_OUT / "console_typing.mjs")   # round 32: the typed console driver
 
     result["ok"] = True
     result["out"] = str(out_mjs)

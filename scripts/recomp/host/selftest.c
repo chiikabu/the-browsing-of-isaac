@@ -84,6 +84,27 @@ static void check(int cond, const char *what) {
     }
 }
 
+/* Round 36: the OpenAL model (host_audio.c) advances on THIS clock in the
+ * selftest -- its isaac_audio_clock_ms is weak -- so the retire rules are
+ * checked at exact instants; and its backend hooks (weak no-ops in the node
+ * profile, WebAudio in the web build) are counted here, which pins the
+ * contract the web backend is written against. */
+static double g_audio_ms;
+double isaac_audio_clock_ms(void) { return g_audio_ms; }
+static unsigned g_be_plays, g_be_queued, g_be_unqueued, g_be_stops, g_be_clears;
+static int g_be_stream;
+static uint32_t g_be_head;
+static float g_be_offset;
+void isaac_audio_backend_play(uint32_t src, uint32_t buffer, float gain, float pitch,
+                              int looping, int streaming, uint32_t head, float offset_sec) {
+    (void)src; (void)buffer; (void)gain; (void)pitch; (void)looping;
+    ++g_be_plays; g_be_stream = streaming; g_be_head = head; g_be_offset = offset_sec;
+}
+void isaac_audio_backend_queue(uint32_t src, uint32_t buffer) { (void)src; (void)buffer; ++g_be_queued; }
+void isaac_audio_backend_unqueue(uint32_t src, uint32_t n) { (void)src; g_be_unqueued += n; }
+void isaac_audio_backend_stop(uint32_t src) { (void)src; ++g_be_stops; }
+void isaac_audio_backend_clear(uint32_t src) { (void)src; ++g_be_clears; }
+
 /* Round 12f lazy-FS reader for the selftest: records the path it was asked
  * for and fills the buffer with a fixed pattern. */
 static unsigned g_lazy_calls;
@@ -858,6 +879,166 @@ int main(int argc, char **argv) {
         check(cpu.EAX == 0, "a different window has no such property");
     }
 
+    /* Round 32: TranslateMessage synthesises the WM_CHAR Windows would post
+     * for the WM_KEYDOWN of a printable key -- ahead of everything queued,
+     * to the key-down's window, wParam the character, lParam the key-down's
+     * -- under the synchronous modifier state (the key messages removed so
+     * far), on the US layout; a non-printable key adds nothing. */
+    {
+        extern void isaac_input_key(uint32_t vk, uint32_t scancode, int extended, int down);
+        extern void isaac_input_mouse_move(int32_t x, int32_t y);
+        extern uint32_t isaac_input_queued(void);
+        extern uint32_t isaac_input_chars_posted(void);
+        uint32_t msgbuf = ISAAC_STACK_TOP_VA - 0x3800;
+        #define NOCH 0xFFFFu
+        #define PEEK() do { memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf); \
+            isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, 0); isaac_w32(cpu.ESP + 16, 0); \
+            isaac_w32(cpu.ESP + 20, 1); imp_user32__PeekMessageW(&cpu); } while (0)
+        #define XLATE() do { memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, msgbuf); imp_user32__TranslateMessage(&cpu); } while (0)
+        #define KEYSTATE(v) do { memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, (v)); imp_user32__GetKeyState(&cpu); } while (0)
+        #define MSG_ID() isaac_r32(msgbuf + 4)
+        #define MSG_W()  isaac_r32(msgbuf + 8)
+        #define MSG_L()  isaac_r32(msgbuf + 12)
+        for (int n = 0; n < 16; ++n) { PEEK(); if (!cpu.EAX) break; }      /* whatever the block above left */
+        uint32_t chars0 = isaac_input_chars_posted();
+        /* 'a': the WM_KEYDOWN, then the WM_CHAR ahead of the already queued key-up */
+        isaac_input_key(0x41, 0x1E, 0, 1);
+        isaac_input_key(0x41, 0x1E, 0, 0);
+        PEEK();
+        uint32_t kd_hwnd = isaac_r32(msgbuf), kd_lp = MSG_L();
+        check(cpu.EAX == 1 && MSG_ID() == 0x100 && MSG_W() == 0x41 && kd_lp == ((0x1Eu << 16) | 1u),
+              "WM_KEYDOWN A comes out first, lParam = scancode 0x1E << 16 | repeat 1");
+        XLATE();
+        check(cpu.EAX == 1 && isaac_input_queued() == 2 && isaac_input_chars_posted() == chars0 + 1,
+              "TranslateMessage(WM_KEYDOWN A) returns nonzero and posts one message");
+        PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x102 && MSG_W() == 'a' && MSG_L() == kd_lp && isaac_r32(msgbuf) == kd_hwnd,
+              "the next message is WM_CHAR 'a' with the key-down's lParam, to the key-down's window, ahead of the queued key-up");
+        XLATE();
+        check(cpu.EAX == 0 && isaac_input_queued() == 1, "TranslateMessage(WM_CHAR) returns 0 and posts nothing");
+        PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x101 && MSG_W() == 0x41, "then the WM_KEYUP");
+        XLATE();
+        check(cpu.EAX == 1 && isaac_input_queued() == 0, "TranslateMessage(WM_KEYUP) returns nonzero (a key message) and posts nothing");
+        PEEK();
+        check(cpu.EAX == 0, "the queue is empty after a");
+        /* Shift+a queued as one batch: the physical Shift is already up when
+         * the A key-down is translated; the synchronous state (Shift's
+         * key-down removed, its key-up not yet) says Shift, so 'A' */
+        isaac_input_key(0x10, 0x2A, 0, 1);
+        isaac_input_key(0x41, 0x1E, 0, 1);
+        isaac_input_key(0x41, 0x1E, 0, 0);
+        isaac_input_key(0x10, 0x2A, 0, 0);
+        KEYSTATE(0x10);
+        check((cpu.EAX & 0x8000u) == 0, "GetKeyState(VK_SHIFT) is up while Shift's key-down is still queued (synchronous state)");
+        PEEK(); XLATE();
+        check(cpu.EAX == 1 && MSG_ID() == 0x100 && MSG_W() == 0x10 && isaac_input_queued() == 3, "Shift's key-down translates to nothing");
+        KEYSTATE(0x10);
+        check((cpu.EAX & 0x8000u) != 0, "GetKeyState(VK_SHIFT) is down once its key-down is removed");
+        KEYSTATE(0xA0);
+        check((cpu.EAX & 0x8000u) != 0, "GetKeyState(VK_LSHIFT) follows the VK_SHIFT message with the left scancode 0x2A");
+        KEYSTATE(0xA1);
+        check((cpu.EAX & 0x8000u) == 0, "GetKeyState(VK_RSHIFT) does not");
+        PEEK(); XLATE(); PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x102 && MSG_W() == 'A', "Shift + a posts WM_CHAR 'A'");
+        PEEK(); XLATE(); PEEK(); XLATE(); PEEK();
+        check(cpu.EAX == 0, "the batch drained: the key-up, Shift's key-up, then nothing");
+        KEYSTATE(0xA0);
+        check((cpu.EAX & 0x8000u) == 0, "VK_LSHIFT released by the VK_SHIFT key-up");
+        /* CapsLock: a toggle, flipped by a fresh key-down, not by a repeat */
+        isaac_input_key(0x14, 0x3A, 0, 1); isaac_input_key(0x14, 0x3A, 0, 0);
+        PEEK(); XLATE(); PEEK(); XLATE(); PEEK();
+        KEYSTATE(0x14);
+        check((cpu.EAX & 1u) == 1u && isaac_input_chars_posted() == chars0 + 2, "CapsLock's key-down sets GetKeyState bit 0 and posts no character");
+        isaac_input_key(0x42, 0x30, 0, 1); isaac_input_key(0x42, 0x30, 0, 0);
+        PEEK(); XLATE(); PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x102 && MSG_W() == 'B', "CapsLock: b posts 'B'");
+        PEEK(); XLATE(); PEEK();
+        isaac_input_key(0x10, 0x2A, 0, 1); isaac_input_key(0x42, 0x30, 0, 1); isaac_input_key(0x42, 0x30, 0, 0); isaac_input_key(0x10, 0x2A, 0, 0);
+        PEEK(); XLATE(); PEEK(); XLATE(); PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x102 && MSG_W() == 'b', "CapsLock + Shift: b posts 'b' (the case swaps back)");
+        PEEK(); XLATE(); PEEK(); XLATE(); PEEK();
+        isaac_input_key(0x32, 0x03, 0, 1); isaac_input_key(0x32, 0x03, 0, 0);
+        PEEK(); XLATE(); PEEK();
+        check(cpu.EAX == 1 && MSG_ID() == 0x102 && MSG_W() == '2', "CapsLock leaves '2' alone");
+        PEEK(); XLATE(); PEEK();
+        isaac_input_key(0x14, 0x3A, 0, 1); isaac_input_key(0x14, 0x3A, 0, 1); isaac_input_key(0x14, 0x3A, 0, 0);
+        PEEK(); XLATE(); PEEK(); XLATE(); PEEK(); XLATE(); PEEK();
+        KEYSTATE(0x14);
+        check((cpu.EAX & 1u) == 0u, "the next fresh CapsLock key-down toggles it off; the repeat (bit 30) did not toggle it back");
+        /* the rest of the map, one key at a time: modifiers down, the key
+         * down and up, modifiers up; a WM_CHAR must follow its key-down at once */
+        struct { uint32_t vk, sc, ext, shift, ctrl, want; const char *what; } cases[] = {
+            { 0xC0, 0x29, 0, 0, 0, '`',  "grave posts '`'" },
+            { 0xC0, 0x29, 0, 1, 0, '~',  "Shift+grave posts '~'" },
+            { 0x0D, 0x1C, 0, 0, 0, '\r', "Enter posts CR" },
+            { 0x08, 0x0E, 0, 0, 0, '\b', "Backspace posts BS" },
+            { 0x09, 0x0F, 0, 0, 0, '\t', "Tab posts TAB" },
+            { 0x1B, 0x01, 0, 0, 0, 0x1B, "Escape posts 0x1b" },
+            { 0x20, 0x39, 0, 0, 0, ' ',  "space posts ' '" },
+            { 0x39, 0x0A, 0, 0, 0, '9',  "9 posts '9'" },
+            { 0x32, 0x03, 0, 1, 0, '@',  "Shift+2 posts '@'" },
+            { 0x30, 0x0B, 0, 1, 0, ')',  "Shift+0 posts ')'" },
+            { 0xBE, 0x34, 0, 0, 0, '.',  "period posts '.'" },
+            { 0xBE, 0x34, 0, 1, 0, '>',  "Shift+period posts '>'" },
+            { 0xBD, 0x0C, 0, 0, 0, '-',  "minus posts '-'" },
+            { 0xBD, 0x0C, 0, 1, 0, '_',  "Shift+minus posts '_'" },
+            { 0xBB, 0x0D, 0, 1, 0, '+',  "Shift+equals posts '+'" },
+            { 0xDB, 0x1A, 0, 1, 0, '{',  "Shift+lbracket posts '{'" },
+            { 0xDD, 0x1B, 0, 0, 0, ']',  "rbracket posts ']'" },
+            { 0xDE, 0x28, 0, 0, 0, '\'', "quote posts the apostrophe" },
+            { 0xDE, 0x28, 0, 1, 0, '"',  "Shift+quote posts the double quote" },
+            { 0xBA, 0x27, 0, 1, 0, ':',  "Shift+semicolon posts ':'" },
+            { 0xBC, 0x33, 0, 0, 0, ',',  "comma posts ','" },
+            { 0xBF, 0x35, 0, 1, 0, '?',  "Shift+slash posts '?'" },
+            { 0xDC, 0x2B, 0, 0, 0, '\\', "backslash posts the backslash" },
+            { 0xDC, 0x2B, 0, 1, 0, '|',  "Shift+backslash posts '|'" },
+            { 0x43, 0x2E, 0, 0, 1, 0x03, "Ctrl+c posts 0x03" },
+            { 0x5A, 0x2C, 0, 1, 1, 0x1A, "Ctrl+Shift+z posts 0x1a too" },
+            { 0x0D, 0x1C, 0, 0, 1, '\n', "Ctrl+Enter posts LF" },
+            { 0xDB, 0x1A, 0, 0, 1, 0x1B, "Ctrl+lbracket posts 0x1b" },
+            { 0x32, 0x03, 0, 1, 1, NOCH, "Ctrl+Shift+2 posts nothing (no Shift+Ctrl column)" },
+            { 0x70, 0x3B, 0, 0, 0, NOCH, "F1 posts nothing" },
+            { 0x26, 0x48, 1, 0, 0, NOCH, "Up posts nothing" },
+            { 0x25, 0x4B, 1, 1, 0, NOCH, "Shift+Left posts nothing" },
+            { 0x10, 0x2A, 0, 0, 0, NOCH, "Shift itself posts nothing" },
+            { 0x2E, 0x53, 1, 0, 0, NOCH, "Delete posts nothing" },
+        };
+        for (size_t ci = 0; ci < sizeof cases / sizeof cases[0]; ++ci) {
+            uint32_t got = NOCH, nchars = 0, prev_msg = 0, prev_w = 0, ordered = 1;
+            if (cases[ci].shift) isaac_input_key(0x10, 0x2A, 0, 1);
+            if (cases[ci].ctrl) isaac_input_key(0x11, 0x1D, 0, 1);
+            isaac_input_key(cases[ci].vk, cases[ci].sc, (int)cases[ci].ext, 1);
+            isaac_input_key(cases[ci].vk, cases[ci].sc, (int)cases[ci].ext, 0);
+            if (cases[ci].ctrl) isaac_input_key(0x11, 0x1D, 0, 0);
+            if (cases[ci].shift) isaac_input_key(0x10, 0x2A, 0, 0);
+            for (int n = 0; n < 16; ++n) {
+                PEEK();
+                if (!cpu.EAX) break;
+                if (MSG_ID() == 0x102u) {
+                    ++nchars; got = MSG_W();
+                    if (!(prev_msg == 0x100u && prev_w == cases[ci].vk)) ordered = 0;
+                }
+                prev_msg = MSG_ID(); prev_w = MSG_W();
+                XLATE();
+            }
+            check(cases[ci].want == NOCH ? nchars == 0 : (nchars == 1 && got == cases[ci].want && ordered), cases[ci].what);
+        }
+        isaac_input_mouse_move(10, 10);
+        PEEK(); XLATE();
+        check(cpu.EAX == 0 && isaac_input_queued() == 0, "TranslateMessage(WM_MOUSEMOVE) returns 0 and posts nothing");
+        #undef MSG_L
+        #undef MSG_W
+        #undef MSG_ID
+        #undef KEYSTATE
+        #undef XLATE
+        #undef PEEK
+        #undef NOCH
+    }
+
     /* x87 register-convention CRT helpers (round 14e): first argument in
      * ST(1), second in ST(0), result in ST(0) with the stack popped once. */
     {
@@ -1045,6 +1226,122 @@ int main(int argc, char **argv) {
         isaac_w32(cpu.ESP + 12, out); isaac_w32(out, 0xFFFFFFFF);
         imp_opengl32__glGetRenderbufferParameteriv(&cpu);
         check(isaac_r32(out) == 0, "a deleted renderbuffer no longer reports a size");
+    }
+
+    /* The OpenAL model (host_audio.c, round 36): the streaming rules the music
+     * path relies on, on the settable clock above, with the backend hooks
+     * counted here so the contract the web backend is written against is
+     * pinned: every queued buffer reaches the backend, a play says whether
+     * the source streams and from which entry. 4000 bytes of stereo16 at
+     * 1000 Hz is exactly one second per buffer. */
+    {
+        extern void isaac_audio_gen_sources(uint32_t n, uint32_t out_va);
+        extern void isaac_audio_gen_buffers(uint32_t n, uint32_t out_va);
+        extern void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
+                                            uint32_t bytes, uint32_t freq);
+        extern void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value);
+        extern int32_t isaac_audio_get_source_i(uint32_t src, uint32_t param);
+        extern void isaac_audio_play(uint32_t src);
+        extern void isaac_audio_stop(uint32_t src);
+        extern void isaac_audio_pause(uint32_t src);
+        extern void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va);
+        extern uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va);
+        extern uint32_t isaac_guest_alloc(uint32_t n);
+        enum { STATE = 0x1010, PLAYING = 0x1012, PAUSED = 0x1013, STOPPED = 0x1014,
+               QUEUED = 0x1015, PROCESSED = 0x1016, BUFFER = 0x1009, LOOPING = 0x1007,
+               SRC_TYPE = 0x1027, UNDETERMINED = 0x1030, STEREO16 = 0x1103 };
+        uint32_t ids = isaac_guest_alloc(64), out = isaac_guest_alloc(64), pcm = isaac_guest_alloc(4000);
+        uint32_t src, b[4];
+        unsigned k;
+        memset(isaac_g(pcm), 0x40, 4000);
+        isaac_audio_gen_sources(1, ids); src = isaac_r32(ids);
+        isaac_audio_gen_buffers(4, ids);
+        for (k = 0; k < 4; ++k) b[k] = isaac_r32(ids + 4u * k);
+        for (k = 0; k < 3; ++k) isaac_audio_buffer_data(b[k], STEREO16, pcm, 4000, 1000);
+        g_audio_ms = 1000.0;
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED && g_be_plays == 0,
+              "audio: a play with nothing queued stops at once and never reaches the backend");
+        for (k = 0; k < 3; ++k) isaac_w32(ids + 4u * k, b[k]);
+        isaac_audio_queue(src, 3, ids);
+        check(g_be_queued == 3 && isaac_audio_get_source_i(src, QUEUED) == 3 &&
+              isaac_audio_get_source_i(src, STATE) == STOPPED,
+              "audio: queueing hands each buffer to the backend and does not start the source");
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING && g_be_plays == 1 && g_be_stream == 1 &&
+              g_be_head == 0 && isaac_audio_get_source_i(src, PROCESSED) == 0,
+              "audio: the play reaches the backend as a stream from entry 0");
+        g_audio_ms = 2500.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 1 && isaac_audio_get_source_i(src, QUEUED) == 3,
+              "audio: a chunk retires when its second has elapsed; AL_BUFFERS_QUEUED still counts the whole queue");
+        check(isaac_audio_unqueue(src, 2, out) == 0 && isaac_audio_get_source_i(src, QUEUED) == 3 &&
+              isaac_audio_get_source_i(src, PROCESSED) == 1 && g_be_unqueued == 0,
+              "audio: an unqueue asking past the processed count takes nothing");
+        check(isaac_audio_unqueue(src, 1, out) == 1 && isaac_r32(out) == b[0] &&
+              isaac_audio_get_source_i(src, QUEUED) == 2 && isaac_audio_get_source_i(src, PROCESSED) == 0 &&
+              g_be_unqueued == 1,
+              "audio: the unqueue returns the oldest buffer and tells the backend");
+        isaac_w32(ids, b[0]);
+        isaac_audio_queue(src, 1, ids);                       /* the refill, as the game does it */
+        g_audio_ms = 4100.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 2 && isaac_audio_get_source_i(src, STATE) == PLAYING,
+              "audio: the re-queued chunk plays at the chain's end (two retired at 4.1 s, still playing)");
+        g_audio_ms = 5100.0;
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED && isaac_audio_get_source_i(src, PROCESSED) == 3,
+              "audio: a drained queue stops the source with everything processed");
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING && isaac_audio_get_source_i(src, PROCESSED) == 0 &&
+              g_be_head == 0 && g_be_stream == 1,
+              "audio: a play from stopped restarts at the head of the queue");
+        isaac_audio_stop(src);
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED && isaac_audio_get_source_i(src, PROCESSED) == 3 &&
+              g_be_stops == 1,
+              "audio: a stop marks every queued buffer processed");
+        check(isaac_audio_unqueue(src, 3, out) == 3 && isaac_audio_get_source_i(src, QUEUED) == 0,
+              "audio: so the game can unqueue the whole queue after a stop");
+        isaac_w32(ids, b[0]);
+        isaac_audio_queue(src, 1, ids);
+        g_audio_ms = 6000.0;
+        isaac_audio_play(src);
+        isaac_audio_source_i(src, BUFFER, 0);
+        check(isaac_audio_get_source_i(src, QUEUED) == 1 && isaac_audio_get_source_i(src, STATE) == PLAYING,
+              "audio: AL_BUFFER 0 is refused on a playing source");
+        isaac_audio_stop(src);
+        isaac_audio_source_i(src, BUFFER, 0);
+        check(isaac_audio_get_source_i(src, QUEUED) == 0 && isaac_audio_get_source_i(src, SRC_TYPE) == UNDETERMINED &&
+              g_be_clears == 1,
+              "audio: AL_BUFFER 0 on a stopped source drops the queue and clears the backend");
+        isaac_w32(ids, b[0]); isaac_w32(ids + 4, b[1]);
+        isaac_audio_queue(src, 2, ids);
+        g_audio_ms = 7000.0;
+        isaac_audio_play(src);
+        g_audio_ms = 7400.0;
+        isaac_audio_pause(src);
+        check(isaac_audio_get_source_i(src, STATE) == PAUSED, "audio: pause");
+        g_audio_ms = 9000.0;
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING && g_be_head == 0 &&
+              g_be_offset > 0.39f && g_be_offset < 0.41f,
+              "audio: a play from paused resumes the current entry at its offset (0.4 s)");
+        g_audio_ms = 9500.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 0, "audio: 0.5 s after the resume the chunk is still playing");
+        g_audio_ms = 9700.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 1, "audio: it retires 0.6 s after the resume, when its second is up");
+        isaac_audio_stop(src);
+        isaac_audio_unqueue(src, 2, out);
+        /* the static case: a bound buffer plays once, or loops */
+        isaac_audio_source_i(src, BUFFER, (int32_t)b[2]);
+        g_audio_ms = 10000.0;
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING && g_be_stream == 0,
+              "audio: a static source plays its bound buffer (the backend sees a static play)");
+        g_audio_ms = 11100.0;
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED, "audio: and stops when the buffer has played out");
+        isaac_audio_source_i(src, LOOPING, 1);
+        isaac_audio_play(src);
+        g_audio_ms = 13500.0;
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING, "audio: a looping static source keeps playing");
+        isaac_audio_stop(src);
     }
 
     /* Steam accessor policy (boot round 11): SteamInternal_ContextInit is

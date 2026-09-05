@@ -8,12 +8,22 @@
 // the key table every command needs, the seeding of the two files (merged
 // with an existing options.ini on a temp dir), the typing plan, and the
 // census parser over the engine's own log lines.
+//
+// Round 32 (console_typing.mjs): the host's TranslateMessage synthesises
+// WM_CHAR, so the console is typed into. The tests below pin the key-event
+// plan for a command, the vk-to-character table against the C source, and
+// the typed driver against a fake console that inserts what the host would
+// post (and against one that does not, the round-30 host).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { KEYS, keyEvent, planTyping, consoleSeedFiles, makeConsole, censusFromLog, GAME_PTR, CONSOLE, SAVE_DIR } from '../scripts/recomp/lift/explore.mjs';
+import { planTyping as planTypedEvents, typingFrames, makeTypedConsole, VK_CHARS, vkToChar, consoleAccepts, NOCH } from '../scripts/recomp/lift/console_typing.mjs';
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const NAME = Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [v[0], k]));
 
@@ -262,4 +272,238 @@ test('censusFromLog: the engine lines for a floor change, rooms, a boss room, bo
   assert.equal(c.invalidPositions, 1);
   assert.deepEqual(c.explorer, { transitions: 3, rooms: [5, -3] });
   assert.deepEqual(c.console.executed, [{ cmd: 'stage 2' }]);
+});
+
+// ---- round 32: typed console text ------------------------------------------
+
+test('planTyping (console_typing): "goto s.boss.1010" as key events -- one down/up per character, held >= 2 frames, no Shift; Shift around the characters that need it', () => {
+  const plan = planTypedEvents('goto s.boss.1010');
+  const want = ['g', 'o', 't', 'o', 'space', 's', 'period', 'b', 'o', 's', 's', 'period', '1', '0', '1', '0'];
+  assert.deepEqual(plan.filter((e) => e.down).map((e) => e.key), want);
+  assert.equal(plan.length, 2 * want.length, 'a down and an up per character, nothing else');
+  assert.ok(!plan.some((e) => e.key === 'shift'), 'the command needs no Shift');
+  assert.equal(plan.filter((e) => e.down).map((e) => e.char).join(''), 'goto s.boss.1010', 'the key-downs spell the command');
+  // the event shape the node driver hands the host, from the same KEYS table
+  for (const e of plan) {
+    const [vk, sc, ext] = KEYS[e.key];
+    assert.deepEqual(e.ev, [1, vk, sc | (ext << 8), e.down ? 1 : 0], `${e.key} ${e.down ? 'down' : 'up'}`);
+  }
+  assert.deepEqual(plan[0].ev, [1, 0x47, 0x22, 1]);                       // g down
+  assert.deepEqual(plan[13].ev, [1, 0xBE, 0x34, 0]);                      // the first period's up
+  // frames: down at t, up at t + hold (3), the next character at t + 4; the 's' of "ss" is released before it is pressed again
+  const downs = plan.filter((e) => e.down), ups = plan.filter((e) => !e.down);
+  downs.forEach((d, i) => { assert.equal(ups[i].at - d.at, 3, `${d.key} held 3 frames`); assert.ok(ups[i].at - d.at >= 2); });
+  assert.deepEqual(downs.map((d) => d.at), downs.map((_, i) => i * 4));
+  assert.equal(typingFrames('goto s.boss.1010'), 16 * 4);
+  assert.equal(typingFrames('stage 2', { hold: 2, gap: 0 }), 6 * 2 + 2 + 1, 'the last release is on frame 14: 15 frames');
+  assert.equal(planTypedEvents('stage 2', { start: 100 })[0].at, 100);
+  // Shift: down with the key, up with it, in that order
+  const cap = planTypedEvents('Debug ~3');
+  assert.deepEqual(cap.map((e) => `${e.key}${e.down ? '+' : '-'}@${e.at}`),
+    ['shift+@0', 'd+@0', 'd-@3', 'shift-@3', 'e+@4', 'e-@7', 'b+@8', 'b-@11', 'u+@12', 'u-@15', 'g+@16', 'g-@19', 'space+@20', 'space-@23',
+      'shift+@24', 'grave+@24', 'grave-@27', 'shift-@27', '3+@28', '3-@31']);
+  assert.deepEqual(cap.filter((e) => e.down && e.key !== 'shift').map((e) => e.char), ['D', 'e', 'b', 'u', 'g', ' ', '~', '3']);
+  assert.throws(() => planTypedEvents('stage 2', { hold: 1 }), /held >= 2/);
+  assert.throws(() => planTypedEvents('é'), /no key/);
+});
+
+// The C table, one row per line: { 0xVK, base, Shift, Ctrl } with C char
+// literals, hex or NOCH.
+function cTable() {
+  const src = readFileSync(join(REPO, 'scripts', 'recomp', 'host', 'src', 'host_shims_win.c'), 'utf8');
+  const start = src.indexOf('static const vk_char g_vk_chars[] = {');
+  assert.ok(start > 0, 'g_vk_chars is in host_shims_win.c');
+  const body = src.slice(start, src.indexOf('};', start));
+  const cell = (s) => {
+    if (s === 'NOCH') return NOCH;
+    if (/^0x[0-9A-Fa-f]+$/.test(s)) return String.fromCharCode(parseInt(s, 16));
+    const m = /^'(.*)'$/.exec(s);
+    assert.ok(m, `C cell ${s}`);
+    const esc = { '\\\\': '\\', "\\'": "'", '\\"': '"', '\\r': '\r', '\\n': '\n', '\\b': '\b', '\\t': '\t' };
+    if (m[1].length === 1) return m[1];
+    assert.ok(esc[m[1]] !== undefined, `C escape ${s}`);
+    return esc[m[1]];
+  };
+  const rows = {};
+  for (const line of body.split('\n')) {
+    const m = /^\s*\{\s*0x([0-9A-Fa-f]{2}),\s*('(?:\\.|[^'])*'|0x[0-9A-Fa-f]+|NOCH),\s*('(?:\\.|[^'])*'|0x[0-9A-Fa-f]+|NOCH),\s*('(?:\\.|[^'])*'|0x[0-9A-Fa-f]+|NOCH)\s*\}/.exec(line);
+    if (m) rows[parseInt(m[1], 16)] = [cell(m[2]), cell(m[3]), cell(m[4])];
+  }
+  return rows;
+}
+
+test('VK_CHARS mirrors host_shims_win.c g_vk_chars row for row; vkToChar follows the host rules for letters, CapsLock, Ctrl and AltGr', () => {
+  const rows = cTable();
+  assert.ok(Object.keys(rows).length >= 40, `parsed ${Object.keys(rows).length} rows`);
+  assert.deepEqual(Object.keys(VK_CHARS).map(Number).sort((a, b) => a - b), Object.keys(rows).map(Number).sort((a, b) => a - b), 'the same virtual keys');
+  for (const vk of Object.keys(rows)) assert.deepEqual(VK_CHARS[vk], rows[vk], `vk 0x${Number(vk).toString(16)}`);
+  // every key the commands can use posts its character; digits and punctuation ignore CapsLock
+  assert.equal(vkToChar(0xC0), '`'); assert.equal(vkToChar(0xC0, { shift: true }), '~');
+  assert.equal(vkToChar(0x32), '2'); assert.equal(vkToChar(0x32, { shift: true }), '@'); assert.equal(vkToChar(0x32, { caps: true }), '2');
+  assert.equal(vkToChar(0x0D), '\r'); assert.equal(vkToChar(0x08), '\b'); assert.equal(vkToChar(0x09), '\t'); assert.equal(vkToChar(0x1B), '\x1b'); assert.equal(vkToChar(0x20), ' ');
+  assert.equal(vkToChar(0xBE), '.'); assert.equal(vkToChar(0xBD, { shift: true }), '_'); assert.equal(vkToChar(0xDE), "'"); assert.equal(vkToChar(0xDC), '\\');
+  // letters: Shift and CapsLock swap the case, both together swap it back; Ctrl makes the control character, Shift or not
+  assert.equal(vkToChar(0x41), 'a'); assert.equal(vkToChar(0x41, { shift: true }), 'A'); assert.equal(vkToChar(0x41, { caps: true }), 'A');
+  assert.equal(vkToChar(0x41, { shift: true, caps: true }), 'a');
+  assert.equal(vkToChar(0x41, { ctrl: true }), '\x01'); assert.equal(vkToChar(0x5A, { ctrl: true, shift: true }), '\x1a');
+  assert.equal(vkToChar(0x41, { ctrl: true, alt: true }), NOCH, 'AltGr: nothing on the US layout');
+  assert.equal(vkToChar(0x32, { ctrl: true }), '\0', 'Ctrl+2 is NUL'); assert.equal(vkToChar(0x32, { ctrl: true, shift: true }), NOCH, 'no Shift+Ctrl column');
+  assert.equal(vkToChar(0x0D, { ctrl: true }), '\n'); assert.equal(vkToChar(0xDB, { ctrl: true }), '\x1b');
+  assert.equal(vkToChar(0x70), NOCH); assert.equal(vkToChar(0x26), NOCH); assert.equal(vkToChar(0x10), NOCH);
+  // what the console's line can take: GLFW drops < 0x20, the callback stops at 0x7f
+  assert.equal(consoleAccepts(' '), true); assert.equal(consoleAccepts('~'), true); assert.equal(consoleAccepts('\r'), false);
+  assert.equal(consoleAccepts('\x7f'), false); assert.equal(consoleAccepts(NOCH), false);
+  // the KEYS table and the C table agree on every key planTyping can emit
+  for (const [name, [vk]] of Object.entries(KEYS)) {
+    if (name.length === 1 && /[a-z]/.test(name)) { assert.equal(vkToChar(vk), name); assert.equal(vkToChar(vk, { shift: true }), name.toUpperCase()); }
+    else if (/^[0-9]$/.test(name)) assert.equal(vkToChar(vk), name);
+  }
+});
+
+// A fake console with the host's WM_CHAR (round 32): every key-down that
+// TranslateMessage would turn into a printable character inserts it -- but
+// only while the console is open (state 2), as the callback 0x00686730
+// checks, and only if GLFW lets it through (consoleAccepts). The rest is the
+// round-30 fake: grave opens, Enter runs a non-empty line or closes on an
+// empty one, DOWN at the head clears the line, Backspace deletes one
+// character. `chars: false` is the round-30 host (no WM_CHAR);
+// `downClears: false` a DOWN that leaves the line alone.
+function fakeTypedConsole({ chars = true, downClears = true, text = '' } = {}) {
+  const u = new Map(), bytes = new Map();
+  const game = 0x01000000;
+  u.set(GAME_PTR, game);
+  const mem = { ok: (va) => va >= 0x00400000 && va < 0x34000000, u32: (va) => u.get(va) || 0, f32: () => 0, u8: (va) => bytes.get(va) || 0 };
+  const setStr = (va, s) => {
+    u.set(va + 0x10, s.length); u.set(va + 0x14, Math.max(15, s.length));
+    const base = s.length > 15 ? (u.set(va, 0x01300000 + (va & 0xffff) * 0x100), 0x01300000 + (va & 0xffff) * 0x100) : va;
+    for (let i = 0; i < 64; i++) bytes.set(base + i, i < s.length ? s.charCodeAt(i) : 0);
+  };
+  const line = game + CONSOLE.line;
+  const w = { state: 0, opening: 0, closing: 0, text, executed: [], inserted: [], dropped: [] };
+  u.set(game + CONSOLE.state, 0);
+  setStr(line, w.text);
+  const mods = new Set(), downKeys = new Set();
+  // one engine frame: the pump first (every message in delivery order; a
+  // key-down's WM_CHAR follows it at once and lands only in state 2), then
+  // the update's key edges
+  const step = (events) => {
+    const edges = [];
+    for (const { name, down } of events) {
+      if (name === 'shift' || name === 'ctrl' || name === 'alt') { if (down) mods.add(name); else mods.delete(name); }
+      if (down) {
+        const ch = chars ? vkToChar(KEYS[name][0], { shift: mods.has('shift'), ctrl: mods.has('ctrl'), alt: mods.has('alt') }) : NOCH;
+        if (consoleAccepts(ch)) { if (w.state === 2) { w.text += ch; w.inserted.push(ch); } else w.dropped.push(ch); }
+        if (!downKeys.has(name)) { downKeys.add(name); edges.push(name); }
+      } else downKeys.delete(name);
+    }
+    for (const k of edges) {
+      if (w.state === 0 && k === 'grave') { w.state = 1; w.opening = 2; }
+      else if (w.state === 2) {
+        if (k === 'enter') { if (w.text.length) { w.executed.push(w.text); w.text = ''; } else { w.state = 4; w.closing = 2; } }
+        else if (k === 'down') { if (downClears) w.text = ''; }
+        else if (k === 'backspace') w.text = w.text.slice(0, -1);
+        else if (k === 'escape') { w.state = 4; w.closing = 2; }
+      }
+    }
+    if (w.state === 1 && --w.opening <= 0) w.state = 2;
+    if (w.state === 4 && --w.closing <= 0) w.state = 0;
+    u.set(game + CONSOLE.state, w.state);
+    setStr(line, w.text);
+  };
+  return { mem, w, step };
+}
+
+// Frame by frame: drain the driver's events (in order), hand them to the
+// fake, note the key-downs and the hold of every key.
+function runTyped(drv, fake, frames) {
+  const heap32 = new Int32Array(64);
+  const trace = [], downAt = new Map(), holds = [];
+  for (let f = 0; f < frames; f++) {
+    const events = [];
+    while (drv.poll(f, 64, heap32)) {
+      const [, vk, , isDown] = heap32.subarray(16, 20);
+      const name = NAME[vk];
+      events.push({ name, down: !!isDown });
+      if (isDown) { downAt.set(name, f); trace.push([f, name]); } else holds.push(f - downAt.get(name));
+    }
+    fake.step(events);
+    if (drv.done()) return { f, trace, holds };
+  }
+  return { f: frames, trace, holds };
+}
+
+test('makeTypedConsole: grave opens, each command is typed and read back from the line, Enter runs it, Enter on the empty line closes; no history, no UP', () => {
+  const cmds = ['stage 2', 'goto s.boss.1010'];
+  const fake = fakeTypedConsole();
+  const log = [];
+  const drv = makeTypedConsole(cmds, { mem: fake.mem, ready: (f) => f >= 5, log: (s) => log.push(s) });
+  assert.equal(drv.active(), false);
+  const { f, trace, holds } = runTyped(drv, fake, 1500);
+  assert.equal(drv.done(), true, log.join('\n'));
+  assert.deepEqual(fake.w.executed, cmds, 'both commands ran, in order, from typed text');
+  assert.equal(fake.w.state, 0, 'closed again');
+  const r = drv.report();
+  assert.equal(r.mode, 'typed');
+  assert.deepEqual(r.executed.map((e) => e.cmd), cmds);
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(r.mismatches, []);
+  assert.equal(r.retypes, 0);
+  assert.equal(r.typedKeys, 7 + 16);
+  assert.equal(r.typedChars, 7 + 16);
+  assert.ok(r.openedAt >= 5 && r.closedAt > r.openedAt && f === r.closedAt, JSON.stringify(r));
+  const keys = trace.map(([, k]) => k);
+  assert.deepEqual(keys, ['grave', 's', 't', 'a', 'g', 'e', 'space', '2', 'enter',
+    'g', 'o', 't', 'o', 'space', 's', 'period', 'b', 'o', 's', 's', 'period', '1', '0', '1', '0', 'enter', 'enter'],
+  trace.map((t) => t.join(':')).join(' '));
+  assert.ok(!keys.includes('up') && !keys.includes('down'), 'nothing recalled, nothing cleared');
+  assert.ok(holds.length === keys.length && holds.every((h) => h >= 2), `holds ${holds.join(',')}`);
+  assert.deepEqual(fake.w.inserted.join(''), 'stage 2goto s.boss.1010', 'exactly the commands reached the line');
+  assert.deepEqual(fake.w.dropped, ['`'], "the opening grave key's own WM_CHAR arrives with the console still closed and is dropped");
+  assert.ok(log.some((s) => /console open \(state 2\)/.test(s)) && log.some((s) => /typing "stage 2": 7 key\(s\)/.test(s))
+    && log.some((s) => /line reads "goto s.boss.1010" \d+ frames after the first key \(typed\); Enter/.test(s))
+    && log.some((s) => /"goto s.boss.1010" executed/.test(s)) && log.some((s) => /console closed after \d+ frames; 2\/2 command\(s\) typed and executed/.test(s)), log.join('\n'));
+  assert.throws(() => makeTypedConsole(cmds, {}), /opts.mem/);
+});
+
+test('makeTypedConsole on a host without WM_CHAR (round 30): the line stays empty, the driver retypes twice, reports it and closes', () => {
+  const fake = fakeTypedConsole({ chars: false });
+  const log = [];
+  const drv = makeTypedConsole(['stage 2', 'debug 3'], { mem: fake.mem, log: (s) => log.push(s) });
+  const { trace } = runTyped(drv, fake, 2000);
+  assert.equal(drv.done(), true, log.join('\n'));
+  assert.deepEqual(fake.w.executed, []);
+  const r = drv.report();
+  assert.deepEqual(r.executed, []);
+  assert.equal(r.failed.length, 2);
+  assert.match(r.failed[0].reason, /typed characters did not reach the console/);
+  assert.equal(r.retypes, 4, 'maxRetypes (2) per command');
+  assert.equal(r.mismatches.length, 6, 'three attempts per command, each read back');
+  assert.equal(r.typedKeys, 3 * 7 + 3 * 7);
+  assert.equal(fake.w.state, 0, 'closed at the end');
+  const keys = trace.map(([, k]) => k);
+  assert.equal(keys.filter((k) => k === 'up').length, 0, 'no history recall in typed mode');
+  assert.equal(keys.filter((k) => k === 's').length, 3, 'stage 2 typed three times');
+  assert.ok(log.some((s) => /line reads "" after typing "stage 2"; clearing and typing again \(1\/2\)/.test(s)), log.join('\n'));
+});
+
+test('makeTypedConsole: a leftover line is cleared with DOWN first; when DOWN leaves it, one Backspace per character', () => {
+  const fake = fakeTypedConsole({ downClears: false, text: 'xy' });
+  const log = [];
+  const drv = makeTypedConsole(['stage 2'], { mem: fake.mem, log: (s) => log.push(s) });
+  const { trace } = runTyped(drv, fake, 1500);
+  assert.equal(drv.done(), true, log.join('\n'));
+  assert.deepEqual(fake.w.executed, ['stage 2']);
+  const r = drv.report();
+  assert.deepEqual(r.failed, []);
+  assert.equal(r.clears, 1);
+  const keys = trace.map(([, k]) => k);
+  assert.deepEqual(keys.slice(0, 4), ['grave', 'down', 'backspace', 'backspace']);
+  assert.deepEqual(keys.slice(4), ['s', 't', 'a', 'g', 'e', 'space', '2', 'enter', 'enter']);
+  assert.ok(log.some((s) => /line reads "xy" before typing; DOWN to clear it/.test(s)) && log.some((s) => /line still "xy" after DOWN; 2 Backspace\(s\)/.test(s)) && log.some((s) => /line cleared/.test(s)), log.join('\n'));
+  // and a DOWN that does clear it costs no Backspace
+  const fake2 = fakeTypedConsole({ text: 'x' });
+  const drv2 = makeTypedConsole(['debug 3'], { mem: fake2.mem });
+  const t2 = runTyped(drv2, fake2, 1500);
+  assert.deepEqual(fake2.w.executed, ['debug 3']);
+  assert.deepEqual(t2.trace.map(([, k]) => k).slice(0, 3), ['grave', 'down', 'd']);
 });
