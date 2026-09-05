@@ -24,8 +24,25 @@
  * host_audio_web.c. The backend hooks are weak, so a profile that provides
  * none links and runs silent.
  *
- * ISAAC_AUDIO_TRACE=1 logs every state change; isaac_audio_report() prints
- * the census with the stub report.
+ * Round 36 (music): the backend used to be told about ONE buffer, at
+ * alSourcePlay -- the queue head -- and nothing else. The engine starts its
+ * music stream with an empty queue (alSourcePlay first, four 64 KB chunks
+ * queued afterwards, then one chunk per processed chunk for as long as the
+ * track runs), so the web backend was handed buffer 0 and played nothing,
+ * ever, while this model kept answering "processed" off the wall clock and
+ * the game kept refilling into silence. The backend now sees the queue:
+ * every queue/unqueue/clear, and a play that says whether the source streams,
+ * from which entry, at what offset. The model also follows OpenAL Soft where
+ * it used to diverge: AL_BUFFERS_QUEUED is the whole queue (processed
+ * entries included), a play with nothing to play stops at once, a stop marks
+ * every queued buffer processed, a play from stopped restarts at the head of
+ * the queue, an unqueue asking for more than is processed takes nothing, and
+ * AL_BUFFER cannot be changed on a playing or paused source.
+ *
+ * ISAAC_AUDIO_TRACE=1 logs every state change (per source: static/stream,
+ * play/stop/pause, queue/unqueue with ids and counts, gain, pitch, the
+ * buffers the clock retires); isaac_audio_report() prints the census with
+ * the stub report.
  */
 
 #include "isaac_host.h"
@@ -67,19 +84,44 @@ static double emscripten_get_now(void) { return 0.0; }
 #define AL_FORMAT_STEREO8     0x1102u
 #define AL_FORMAT_STEREO16    0x1103u
 
-/* ---- backend hooks (weak: a profile with no output still links) --------- */
+/* ---- backend hooks (weak: a profile with no output still links) ---------
+ * The contract, in the order a streaming source goes through it:
+ *   buffer(id, pcm...)          PCM arrived for a buffer id (re-uploads replace)
+ *   queue(src, id)              one buffer appended to the source's queue
+ *   play(src, buffer, gain, pitch, looping, streaming, head, offset_sec)
+ *                               static: play `buffer` (from offset_sec on a
+ *                               resume); streaming: play the queue from entry
+ *                               `head` (0 = a restart from the queue head,
+ *                               the processed count on a resume), the first
+ *                               entry from offset_sec
+ *   unqueue(src, n)             the n oldest queue entries left the queue
+ *   stop/pause(src)             the source stopped (a later play restarts it)
+ *   clear(src)                  AL_BUFFER 0: forget the queue
+ *   delete(src)                 alDeleteSources: the source is gone, queue and all
+ *   gain/pitch(src, v)          a parameter changed, playing or not
+ *   drop_buffer(id)             the buffer was deleted */
 __attribute__((weak)) void isaac_audio_backend_buffer(uint32_t id, const void *pcm, uint32_t bytes,
                                                       int channels, int bits, int freq) {
     (void)id; (void)pcm; (void)bytes; (void)channels; (void)bits; (void)freq;
 }
-__attribute__((weak)) void isaac_audio_backend_play(uint32_t src, uint32_t buffer,
-                                                    float gain, float pitch, int looping) {
-    (void)src; (void)buffer; (void)gain; (void)pitch; (void)looping;
+__attribute__((weak)) void isaac_audio_backend_play(uint32_t src, uint32_t buffer, float gain, float pitch,
+                                                    int looping, int streaming, uint32_t head, float offset_sec) {
+    (void)src; (void)buffer; (void)gain; (void)pitch; (void)looping; (void)streaming; (void)head; (void)offset_sec;
 }
+__attribute__((weak)) void isaac_audio_backend_queue(uint32_t src, uint32_t buffer) { (void)src; (void)buffer; }
+__attribute__((weak)) void isaac_audio_backend_unqueue(uint32_t src, uint32_t n) { (void)src; (void)n; }
+__attribute__((weak)) void isaac_audio_backend_clear(uint32_t src) { (void)src; }
+__attribute__((weak)) void isaac_audio_backend_delete(uint32_t src) { (void)src; }
 __attribute__((weak)) void isaac_audio_backend_stop(uint32_t src) { (void)src; }
 __attribute__((weak)) void isaac_audio_backend_pause(uint32_t src) { (void)src; }
 __attribute__((weak)) void isaac_audio_backend_gain(uint32_t src, float gain) { (void)src; (void)gain; }
+__attribute__((weak)) void isaac_audio_backend_pitch(uint32_t src, float pitch) { (void)src; (void)pitch; }
 __attribute__((weak)) void isaac_audio_backend_drop_buffer(uint32_t id) { (void)id; }
+
+/* The clock the model advances on: the wall clock, unless a test overrides
+ * it (the selftest links a settable one so the retire logic is checked at
+ * exact instants rather than by sleeping). */
+__attribute__((weak)) double isaac_audio_clock_ms(void) { return emscripten_get_now(); }
 
 /* ---- objects ------------------------------------------------------------ */
 #define AL_MAX_QUEUE 64
@@ -115,6 +157,7 @@ static int g_trace = -1;
 
 /* census, printed with the stub report */
 static unsigned g_stat_buffers, g_stat_plays, g_stat_queued, g_stat_unqueued;
+static unsigned g_stat_stream_plays, g_stat_empty_plays, g_stat_unqueue_refused, g_stat_bind_refused;
 static unsigned long long g_stat_pcm_bytes;
 static double g_stat_seconds;
 
@@ -125,8 +168,30 @@ static int trace_on(void) {
     }
     return g_trace;
 }
+int isaac_audio_trace_on(void) { return trace_on(); }
 
-static double now_ms(void) { return emscripten_get_now(); }
+static double now_ms(void) { return isaac_audio_clock_ms(); }
+
+/* trace lines carry the model's clock, relative to the first trace line, so
+ * a queue/retire/schedule sequence can be read against the web backend's
+ * AudioContext times */
+static double g_trace_t0 = -1.0;
+static double trace_t(void) {
+    double t = now_ms();
+    if (g_trace_t0 < 0.0) g_trace_t0 = t;
+    return t - g_trace_t0;
+}
+#define ATRACE(...) do { if (trace_on()) isaac_log(__VA_ARGS__); } while (0)
+
+static const char *state_name(uint32_t st) {
+    switch (st) {
+    case AL_INITIAL: return "INITIAL";
+    case AL_PLAYING: return "PLAYING";
+    case AL_PAUSED:  return "PAUSED";
+    case AL_STOPPED: return "STOPPED";
+    default:         return "?";
+    }
+}
 
 static al_buffer *buf_find(uint32_t id) {
     for (unsigned i = 0; i < g_nbuf; ++i) if (g_buf[i].id == id) return &g_buf[i];
@@ -174,9 +239,10 @@ static uint32_t src_current_buffer(const al_source *s) {
     if (s->qn > s->processed) return s->queue[s->processed];
     return s->buffer;
 }
+static int src_is_stream(const al_source *s) { return s->qn != 0 || s->type == AL_STREAMING; }
 
-/* Advance a playing source over the wall clock: retire whole buffers whose
- * audio would have finished, and stop (or loop) when nothing is left. */
+/* Advance a playing source over the clock: retire whole buffers whose audio
+ * would have finished, and stop (or loop) when nothing is left. */
 static void src_advance(al_source *s) {
     if (s->state != AL_PLAYING) return;
     double pitch = s->pitch > 0.01f ? (double)s->pitch : 1.0;
@@ -185,21 +251,29 @@ static void src_advance(al_source *s) {
         al_buffer *b = buf_find(cur);
         double dur = buf_seconds(b) * 1000.0 / pitch;
         if (dur <= 0.0) {
-            /* nothing playable: a source with no buffer is not playing */
+            /* nothing playable: an empty queue entry is retired at once, a
+             * source with no buffer at all is not playing */
             if (s->qn > s->processed) { ++s->processed; continue; }
             s->state = AL_STOPPED;
+            ATRACE("[isaac][audio] t=%.1f source %u has nothing to play: STOPPED (%u queued, %u processed)",
+                   trace_t(), s->id, s->qn, s->processed);
             return;
         }
-        if (now_ms() - s->start_ms < dur) return;      /* still inside it */
+        double t = now_ms();
+        if (t - s->start_ms < dur) return;             /* still inside it */
         s->start_ms += dur;
         if (s->qn > s->processed) {
             ++s->processed;                            /* streaming: retire it */
+            ATRACE("[isaac][audio] t=%.1f source %u retired buffer %u (%u/%u processed, seen %.0f ms after its end)",
+                   trace_t(), s->id, cur, s->processed, s->qn, t - s->start_ms);
             if (s->qn > s->processed) continue;        /* next queued buffer */
             s->state = AL_STOPPED;                     /* queue ran dry */
+            ATRACE("[isaac][audio] t=%.1f source %u ran dry: STOPPED with %u processed", trace_t(), s->id, s->processed);
             return;
         }
         if (s->looping) continue;                      /* static loop: keep going */
         s->state = AL_STOPPED;
+        ATRACE("[isaac][audio] t=%.1f source %u finished buffer %u: STOPPED", trace_t(), s->id, cur);
         return;
     }
 }
@@ -240,7 +314,9 @@ void isaac_audio_delete_sources(uint32_t n, uint32_t va) {
         uint32_t id = isaac_r32(va + 4u * i);
         al_source *s = src_find(id);
         if (!s) continue;
-        isaac_audio_backend_stop(id);
+        isaac_audio_backend_delete(id);
+        ATRACE("[isaac][audio] t=%.1f delete source %u (%s, %u queued)", trace_t(), id,
+               src_is_stream(s) ? "stream" : "static", s->qn);
         *s = g_src[--g_nsrc];
     }
 }
@@ -270,9 +346,8 @@ void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
     g_stat_pcm_bytes += bytes;
     g_stat_seconds += b->seconds;
     if (b->pcm) isaac_audio_backend_buffer(b->id, b->pcm, b->bytes, channels, bits, (int)freq);
-    if (trace_on())
-        isaac_log("[isaac][audio] buffer %u: %u bytes, %d ch, %d bit, %u Hz, %.3f s",
-                  buf, bytes, channels, bits, freq, b->seconds);
+    ATRACE("[isaac][audio] t=%.1f buffer %u: %u bytes, %d ch, %d bit, %u Hz, %.3f s (format 0x%x)",
+           trace_t(), buf, bytes, channels, bits, freq, b->seconds, format);
 }
 
 void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value) {
@@ -280,11 +355,26 @@ void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value) {
     if (!s) return;
     switch (param) {
     case AL_BUFFER:
+        /* OpenAL: AL_INVALID_OPERATION on a playing or paused source; the
+         * binding (or the detach, value 0) only takes on a stopped/initial one */
+        src_advance(s);
+        if (s->state == AL_PLAYING || s->state == AL_PAUSED) {
+            ++g_stat_bind_refused;
+            ATRACE("[isaac][audio] t=%.1f AL_BUFFER %d refused on source %u: it is %s",
+                   trace_t(), value, src, state_name(s->state));
+            break;
+        }
+        ATRACE("[isaac][audio] t=%.1f source %u %s (queue of %u dropped)", trace_t(), src,
+               value ? "bound to a static buffer" : "detached: AL_BUFFER 0", s->qn);
         s->buffer = (uint32_t)value;
         s->type = value ? AL_STATIC : AL_UNDETERMINED;
         s->qn = s->processed = 0;
+        isaac_audio_backend_clear(src);
         break;
-    case AL_LOOPING: s->looping = value != 0; break;
+    case AL_LOOPING:
+        s->looping = value != 0;
+        ATRACE("[isaac][audio] t=%.1f source %u looping = %d", trace_t(), src, s->looping);
+        break;
     default: break;
     }
 }
@@ -294,10 +384,19 @@ void isaac_audio_source_f(uint32_t src, uint32_t param, float value) {
     if (!s) return;
     switch (param) {
     case AL_GAIN:
+        if (trace_on() && s->gain != value)
+            isaac_log("[isaac][audio] t=%.1f source %u gain %.3f -> %.3f (%s, %s)", trace_t(), src,
+                      (double)s->gain, (double)value, src_is_stream(s) ? "stream" : "static", state_name(s->state));
         s->gain = value;
         isaac_audio_backend_gain(src, value);
         break;
-    case AL_PITCH: s->pitch = value; break;
+    case AL_PITCH:
+        if (trace_on() && s->pitch != value)
+            isaac_log("[isaac][audio] t=%.1f source %u pitch %.3f -> %.3f", trace_t(), src,
+                      (double)s->pitch, (double)value);
+        s->pitch = value;
+        isaac_audio_backend_pitch(src, value);
+        break;
     default: break;
     }
 }
@@ -308,7 +407,7 @@ int32_t isaac_audio_get_source_i(uint32_t src, uint32_t param) {
     src_advance(s);
     switch (param) {
     case AL_SOURCE_STATE:      return (int32_t)s->state;
-    case AL_BUFFERS_QUEUED:    return (int32_t)(s->qn - s->processed);
+    case AL_BUFFERS_QUEUED:    return (int32_t)s->qn;          /* the whole queue, processed included */
     case AL_BUFFERS_PROCESSED: return (int32_t)s->processed;
     case AL_BUFFER:            return (int32_t)src_current_buffer(s);
     case AL_LOOPING:           return s->looping;
@@ -344,46 +443,85 @@ float isaac_audio_get_source_f(uint32_t src, uint32_t param) {
 void isaac_audio_play(uint32_t src) {
     al_source *s = src_find(src);
     if (!s) return;
+    src_advance(s);
+    uint32_t before = s->state;
+    int stream = src_is_stream(s);
+    uint32_t head = 0;
+    float offset = 0.0f;
     if (s->state == AL_PAUSED) {
         s->start_ms = now_ms() - s->pause_ms;     /* resume where it stopped */
+        head = s->processed;
+        offset = (float)(s->pause_ms / 1000.0);
     } else {
+        /* OpenAL: a play from initial, stopped OR playing restarts the source:
+         * a static buffer from its start, a queue from its head */
         s->start_ms = now_ms();
+        s->processed = 0;
+    }
+    s->pause_ms = 0.0;
+    uint32_t cur = src_current_buffer(s);
+    al_buffer *b = buf_find(cur);
+    if (!b || b->seconds <= 0.0) {
+        /* OpenAL Soft: nothing to play goes straight to stopped, no voice */
+        s->state = AL_STOPPED;
+        ++g_stat_empty_plays;
+        ATRACE("[isaac][audio] t=%.1f play source %u from %s: nothing to play (%s, %u queued) -> STOPPED",
+               trace_t(), src, state_name(before), stream ? "stream" : "static", s->qn);
+        return;
     }
     s->state = AL_PLAYING;
-    uint32_t cur = src_current_buffer(s);
     ++g_stat_plays;
-    isaac_audio_backend_play(src, cur, s->gain, s->pitch, s->looping);
-    if (trace_on())
-        isaac_log("[isaac][audio] play source %u buffer %u gain %.2f pitch %.2f%s",
-                  src, cur, (double)s->gain, (double)s->pitch, s->looping ? " looping" : "");
+    if (stream) ++g_stat_stream_plays;
+    isaac_audio_backend_play(src, cur, s->gain, s->pitch, s->looping, stream, head, offset);
+    if (trace_on()) {
+        if (stream)
+            isaac_log("[isaac][audio] t=%.1f play source %u from %s: stream, entry %u of %u (buffer %u, %.3f s), offset %.3f s, gain %.3f pitch %.2f",
+                      trace_t(), src, state_name(before), head, s->qn, cur, b->seconds, (double)offset,
+                      (double)s->gain, (double)s->pitch);
+        else
+            isaac_log("[isaac][audio] t=%.1f play source %u from %s: static buffer %u (%.3f s), offset %.3f s, gain %.3f pitch %.2f%s",
+                      trace_t(), src, state_name(before), cur, b->seconds, (double)offset,
+                      (double)s->gain, (double)s->pitch, s->looping ? " looping" : "");
+    }
 }
 
 void isaac_audio_stop(uint32_t src) {
     al_source *s = src_find(src);
     if (!s) return;
+    src_advance(s);
+    uint32_t before = s->state;
     s->state = AL_STOPPED;
     s->pause_ms = 0.0;
+    /* OpenAL: on a stopped source every queued buffer counts as processed */
+    s->processed = s->qn;
     isaac_audio_backend_stop(src);
-    if (trace_on()) isaac_log("[isaac][audio] stop source %u", src);
+    ATRACE("[isaac][audio] t=%.1f stop source %u from %s (%s, %u queued now all processed)",
+           trace_t(), src, state_name(before), src_is_stream(s) ? "stream" : "static", s->qn);
 }
 
 void isaac_audio_pause(uint32_t src) {
     al_source *s = src_find(src);
     if (!s) return;
-    if (s->state == AL_PLAYING) s->pause_ms = now_ms() - s->start_ms;
+    src_advance(s);
+    if (s->state != AL_PLAYING) return;          /* OpenAL: pause only affects a playing source */
+    s->pause_ms = now_ms() - s->start_ms;
     s->state = AL_PAUSED;
     isaac_audio_backend_pause(src);
+    ATRACE("[isaac][audio] t=%.1f pause source %u at +%.0f ms into entry %u", trace_t(), src, s->pause_ms, s->processed);
 }
 
 void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va) {
     al_source *s = src_find(src);
     if (!s) return;
+    src_advance(s);
     s->type = AL_STREAMING;
+    uint32_t first = 0, taken = 0;
     for (uint32_t i = 0; i < n; ++i) {
         if (!isaac_is_guest_va(bufs_va + 4u * i)) break;
         if (s->qn >= AL_MAX_QUEUE) {
             /* compact: drop the already-processed head entries */
             if (s->processed) {
+                isaac_audio_backend_unqueue(src, s->processed);
                 memmove(s->queue, s->queue + s->processed,
                         (s->qn - s->processed) * sizeof s->queue[0]);
                 s->qn -= s->processed;
@@ -391,18 +529,32 @@ void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va) {
             }
             if (s->qn >= AL_MAX_QUEUE) break;
         }
-        s->queue[s->qn++] = isaac_r32(bufs_va + 4u * i);
+        uint32_t id = isaac_r32(bufs_va + 4u * i);
+        if (!taken) first = id;
+        s->queue[s->qn++] = id;
+        isaac_audio_backend_queue(src, id);
+        ++taken;
         ++g_stat_queued;
     }
-    if (trace_on()) isaac_log("[isaac][audio] queue %u buffer(s) on source %u (%u waiting)",
-                              n, src, s->qn - s->processed);
+    ATRACE("[isaac][audio] t=%.1f queue %u buffer(s) on source %u (first %u): %u queued, %u processed, %s",
+           trace_t(), taken, src, first, s->qn, s->processed, state_name(s->state));
 }
 
 uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
     al_source *s = src_find(src);
     if (!s) return 0;
     src_advance(s);
-    uint32_t take = n < s->processed ? n : s->processed;
+    /* OpenAL: AL_INVALID_VALUE and nothing removed when more is asked for
+     * than has been processed (a partial take would hand the game ids it
+     * never got back, which it then refills and re-queues as dead entries) */
+    if (n > s->processed) {
+        ++g_stat_unqueue_refused;
+        ATRACE("[isaac][audio] t=%.1f unqueue %u from source %u refused: only %u of %u processed (%s)",
+               trace_t(), n, src, s->processed, s->qn, state_name(s->state));
+        return 0;
+    }
+    uint32_t take = n;
+    uint32_t first = take ? s->queue[0] : 0;
     for (uint32_t i = 0; i < take; ++i)
         if (isaac_is_guest_va(out_va + 4u * i))
             isaac_w32(out_va + 4u * i, s->queue[i]);
@@ -411,7 +563,10 @@ uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va) {
         s->qn -= take;
         s->processed -= take;
         g_stat_unqueued += take;
+        isaac_audio_backend_unqueue(src, take);
     }
+    ATRACE("[isaac][audio] t=%.1f unqueue %u from source %u (first %u): %u left, %u processed, %s",
+           trace_t(), take, src, first, s->qn, s->processed, state_name(s->state));
     return take;
 }
 
@@ -570,15 +725,22 @@ void isaac_audio_report(void) {
         isaac_log("[isaac][audio] no audio data was ever submitted (mixer pumped %u iteration(s)).", g_pump_iters);
         return;
     }
-    unsigned playing = 0;
+    unsigned playing = 0, streams = 0;
     for (unsigned i = 0; i < g_nsrc; ++i) {
         src_advance(&g_src[i]);
         if (g_src[i].state == AL_PLAYING) ++playing;
+        if (src_is_stream(&g_src[i])) ++streams;
     }
     isaac_log("[isaac][audio] mixer pumped %u iteration(s), %u of them idle",
               g_pump_iters, g_pump_idle);
     isaac_log("[isaac][audio] %u buffer uploads (%.1f MB of PCM, %.1f s of audio), "
-              "%u plays, %u queued / %u unqueued, %u source(s) live (%u playing), %u buffer(s) live",
+              "%u plays (%u of streams, %u with nothing to play), %u queued / %u unqueued, "
+              "%u source(s) live (%u playing, %u streaming), %u buffer(s) live",
               g_stat_buffers, (double)g_stat_pcm_bytes / 1048576.0, g_stat_seconds,
-              g_stat_plays, g_stat_queued, g_stat_unqueued, g_nsrc, playing, g_nbuf);
+              g_stat_plays, g_stat_stream_plays, g_stat_empty_plays, g_stat_queued, g_stat_unqueued,
+              g_nsrc, playing, streams, g_nbuf);
+    if (g_stat_unqueue_refused || g_stat_bind_refused)
+        isaac_log("[isaac][audio] OpenAL rules refused %u unqueue(s) asking past the processed count and "
+                  "%u AL_BUFFER change(s) on a playing/paused source",
+                  g_stat_unqueue_refused, g_stat_bind_refused);
 }

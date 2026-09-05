@@ -164,6 +164,23 @@ REQUIRE emsdk on PATH:
   2;goto s.boss.1010"` is typed (`ISAAC_CONSOLE_MODE=typed`, the default):
   `Level::Init m_Stage 2` and `Room 5.1010(Monstro)` on the fast profile,
   0 asserts. Selftest 296/0, console tests 14/14.
+- **Round 36: music plays** (§21.51). The WebAudio backend was handed ONE
+  buffer at `alSourcePlay` -- and the engine starts its music stream with
+  an EMPTY source (play first, then four 64 KiB chunks queued by the
+  OpenAL thread, then one per processed chunk), so the title theme never
+  had a node; `alSourceQueueBuffers` had no backend hook at all. Now every
+  queue/unqueue reaches the backend, a stream is a chain of
+  `AudioBufferSourceNode`s started back to back on the context clock, and
+  the model follows OpenAL Soft (play with nothing queued stops at once,
+  stop marks the queue processed, play from stopped restarts at the head).
+  Measured on the master output (`drive_audio.mjs`, `window.isaacAudioLevel()`):
+  before **20/20 samples at 0.0000 RMS**; after **20/20 above 0.005,
+  median 0.0442 RMS, peaks 0.21**, two streams, ~5.9 chunks/s scheduled;
+  the headless timeline schedules 201 chunks, scheduled == queued per
+  stream, 0 refusals, `main` 0.
+  `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
+  `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
+  fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -282,8 +299,10 @@ is started:
   and `output/recomp/web-gameplay/frame_1500.png` shows a Basement room
   with Isaac, the HUD, the minimap and two enemies. The old 1-fps figure
   was the debug module.
-- ~~No audio yet.~~ **Audio plays, in node and in the browser** (§21.39):
-  samples decode, bind and play; the title music streams. Headless
+- ~~No audio yet.~~ **Audio plays, in node and in the browser** (§21.39);
+  **music too, since round 36** (§21.51: the stream queue is scheduled as a
+  chain of nodes; before that only the census said it played).
+  Samples decode, bind and play; the title music streams. Headless
   Chromium, fast module, the HANDOFF timeline: **329 PCM uploads (42 MB,
   385 s of audio), 102 plays, 308/76 stream buffers queued/unqueued,
   WebAudio context running, 1,501 frames in 67.6 s wall** including the

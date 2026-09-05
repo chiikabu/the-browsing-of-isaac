@@ -439,8 +439,12 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   for (const s of ['m.isaacAudio = { ctx: null, buffers: new Map(), sources: new Map() };', 'm.isaacAudio.ctx = new C();',
     "if (m.isaacAudio.ctx.state === 'suspended') m.isaacAudio.ctx.resume();", 'canvas.focus();'])
     assert.ok(unlock.includes(s), `unlockAudio: ${s}`);
+  // round 36: the AL shim adopts that page-made object (its ctx, buffers and
+  // sources) instead of making its own, and adds the master node and helpers
   const al = rd('scripts', 'recomp', 'host', 'src', 'host_audio_web.c');
-  assert.ok(al.includes('if (!Module.isaacAudio) Module.isaacAudio = { ctx: null, buffers: new Map(), sources: new Map() };'), 'the same shape the AL shim creates lazily');
+  for (const s of ['if (!A) A = Module.isaacAudio = {};', 'A.ctx = A.ctx || null;', 'A.buffers = A.buffers || new Map();',
+    'A.sources = A.sources || new Map();', 'if (A.master) return true;', 'if (!A.ctx) {'])
+    assert.ok(al.includes(s), `the AL shim adopts the shape the page creates: ${s}`);
   assert.ok(page.includes("if (AUTOPLAY) { start(); return; }"), 'autoplay=1 skips the button (headless drivers)');
   // the progress accounting: module and image from dist.json, archives + scripts from the index, streamed while the module is compiled
   for (const s of ["stages.module.total = sizeOf('boot.wasm');", "stages.image.total = sizeOf('isaac.segs.bin');",

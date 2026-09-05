@@ -257,6 +257,52 @@ function onKey(ev, down) {
 const resumeAudio = () => {
   try { const A = m.isaacAudio; if (A && A.ctx && A.ctx.state === 'suspended') A.ctx.resume(); } catch (e) { /* audio never traps the page */ }
 };
+// Round 36: a level meter on the master output. The proof that music plays
+// is energy, not log lines: the WebAudio backend (host_audio_web.c) routes
+// every source through Module.isaacAudio.master and calls
+// Module.isaacAudioReady(A) once the AudioContext exists; the page puts an
+// AnalyserNode between the master and the destination and keeps the RMS of
+// the last second (100 ms blocks, while the page's timers run -- the JSPI
+// page yields every frame). window.isaacAudioLevel() answers a driver:
+//   { rms, rmsNow, peak, blocks, ctxTime, state, sampleRate, scheduled, played, streams }
+// rms is the last second, rmsNow the freshest block (always current, timers
+// or not), peak the last second's peak sample.
+let audioTap = null;
+cfg.isaacAudioReady = (A) => {
+  try {
+    const an = A.ctx.createAnalyser();
+    an.fftSize = 8192;                                   // 171 ms per read at 48 kHz
+    A.master.disconnect();
+    A.master.connect(an);
+    an.connect(A.ctx.destination);
+    const buf = new Float32Array(an.fftSize);
+    const blocks = [];
+    const sample = () => {
+      an.getFloatTimeDomainData(buf);
+      let ss = 0, pk = 0;
+      for (let i = 0; i < buf.length; i++) { const v = buf[i]; ss += v * v; const a = v < 0 ? -v : v; if (a > pk) pk = a; }
+      const b = { t: performance.now(), ms: ss / buf.length, peak: pk };
+      blocks.push(b);
+      while (blocks.length && blocks[0].t < b.t - 1000) blocks.shift();
+      return b;
+    };
+    audioTap = { A, sample, blocks, timer: setInterval(sample, 100) };
+    log(`  audio tap: analyser on the master output (${A.ctx.sampleRate} Hz, ${A.ctx.state})`);
+  } catch (e) { log(`  audio tap failed: ${e.message}`); }
+};
+window.isaacAudioLevel = () => {
+  if (!audioTap) return null;
+  const b = audioTap.sample();
+  const bl = audioTap.blocks;
+  let ms = 0, peak = 0;
+  for (const x of bl) { ms += x.ms; if (x.peak > peak) peak = x.peak; }
+  const A = audioTap.A;
+  let streams = 0;
+  A.sources.forEach((s) => { if (s.playing) streams += 1; });
+  return { rms: Math.sqrt(ms / bl.length), rmsNow: Math.sqrt(b.ms), peak, blocks: bl.length,
+           ctxTime: A.ctx.currentTime, state: A.ctx.state, sampleRate: A.ctx.sampleRate,
+           scheduled: A.scheduled || 0, played: A.played || 0, streams };
+};
 window.addEventListener('keydown', (ev) => { resumeAudio(); onKey(ev, true); });
 window.addEventListener('pointerdown', resumeAudio);
 window.addEventListener('keyup', (ev) => onKey(ev, false));

@@ -4950,6 +4950,155 @@ covers the assembler on a synthetic tree, the manifest and size
 arithmetic, `check` on broken dists, and the server's types, slices,
 encodings and 404s on an ephemeral port.
 
+### 21.51 Music: the streaming path (round 36)
+
+**The report.** In the browser the sound effects play and the music does
+not. Every log said the music path ran: `Queued Path
+music/Repentance/Genesis Retake Light Loop.ogg`, hundreds of `alBufferData`
+uploads, `202 queued / 125 unqueued` stream buffers in the census, `WebAudio
+context: running`. Nothing was heard. Rounds 22-35 had measured the music
+by its bookkeeping; this round measures it by the energy on the master
+output, and the bookkeeping turned out to be the whole problem.
+
+**What the engine does (read off the binary, PE index + decompile).** A
+`KAGE::Sound::StreamSourceOgg` (vtable 0x00ba2b50) owns one AL source and
+four AL buffers with four 64 KiB PCM slots. `Music::Play` (0x007e1d50 ->
+0x007df5b0) sets the handle's looping flag, pitch and volume, then calls the
+stream's Play (0x00a7cab0), which registers it with the manager and issues
+**`alSourcePlay` on the still-empty source** (0x00a7cb79). The OpenAL
+thread (0x00a7da80, a per-frame slice since round 24) then runs the
+stream's Update (0x00aa0490) on every pass: for each queued slot it asks
+`AL_BUFFERS_PROCESSED` (0x00aa04c0) and unqueues that many, one buffer per
+call (0x00aa04e0); the first empty slot gets one stb_vorbis decode of
+`0x10000 / (2 * channels)` frames (0x00a7c2c0: 65,536 bytes of stereo 16-bit
+at 48 kHz, 0.341 s); every filled slot is then uploaded and queued
+(`alBufferData` 0x00aa06d0, `alSourceQueueBuffers(src, 1, &buf)` 0x00aa06df)
+and after each upload **`alSourcePlay` is issued if `AL_SOURCE_STATE` is
+not `AL_PLAYING`** (0x00aa06fd; IsPlaying 0x00a9fde0 is that one compare).
+Looping is a decoder seek, never `AL_LOOPING`. The gain is
+`alSourcef(AL_GAIN)` (0x00a9ff30, the only AL_GAIN site): entry volume x
+handle fade x master gate x slot crossfade, set before the first play and
+re-applied per frame whenever the product changes. Stop (0x00aa0470)
+removes the stream from the manager's list and calls `alSourceStop` when
+the state is not `AL_STOPPED`; nothing is unqueued or detached, and Close
+deletes the source and its four buffers outright. `AL_BUFFERS_QUEUED` is
+never asked; the four `AL_BUFFER = 0` sites act on the 64-entry sample
+pool, never on a stream.
+
+**What the port did with it.** `host_audio.c` timed a source on the wall
+clock from `alSourcePlay` on, so the play on the empty source started the
+clock; when the first chunk was queued a third of a second later it was
+retired on the spot, the second play came with `head == processed`, and the
+backend hook -- which received exactly ONE buffer id, the "current" one --
+got buffer 0. `host_audio_web.c` did `A.buffers.get(0)`, found nothing and
+returned. No `AudioBufferSourceNode` was ever created for the title theme:
+in the old trace every `play source` on a stream reads `buffer 0` (one
+layer got one 0.34-s node, at gain 0). And `alSourceQueueBuffers` had no
+backend hook at all -- a chunk queued while playing went nowhere. The model
+kept answering "processed" off the wall clock, the game kept refilling, the
+census kept counting, into silence. Sound effects worked because a static
+source's buffer is bound with `AL_BUFFER` and one node is the whole sound.
+Measured on the master output (`drive_audio.mjs`, the old module):
+**20 of 20 one-second samples at 0.0000 RMS** with the context running and
+445 audio-trace lines of queue traffic behind them.
+
+**The fix, in three parts.**
+
+1. *The backend sees the queue.* `host_audio.c`'s hooks are now
+   `queue(src, buf)`, `unqueue(src, n)`, `clear(src)` (AL_BUFFER 0),
+   `delete(src)`, `pitch`, and a `play(src, buf, gain, pitch, looping,
+   streaming, head, offset_sec)` that says whether the source streams, the
+   queue entry to start from and the offset into it (0 on a restart, the
+   paused position on a resume).
+2. *The model follows OpenAL Soft where the music path needs it*, each rule
+   pinned in the host selftest on a settable clock (`isaac_audio_clock_ms`
+   is weak; the selftest sets it): a play with nothing to play goes to
+   `AL_STOPPED` at once and starts no clock; `AL_BUFFERS_QUEUED` is the
+   whole queue, processed entries included; a stop marks every queued
+   buffer processed; a play from initial/stopped/playing restarts at the
+   queue head, from paused it resumes at the offset; an unqueue asking past
+   the processed count takes nothing (a partial take would hand the game
+   ids it never got, which it refills and re-queues as dead entries);
+   `AL_BUFFER` is refused on a playing or paused source.
+3. *The WebAudio backend schedules the chain.* One `GainNode` per source
+   feeds a master `GainNode` (-> destination). A stream is a chain of
+   `AudioBufferSourceNode`s, each `start(at)`-ed at the AudioContext time
+   the previous one ends; a chunk queued while the stream plays lands at
+   the chain's end; an unqueue drops bookkeeping only (the node plays out);
+   a stop cancels the chain and a later play re-schedules from the head the
+   model names; a suspended context (the autoplay policy) leaves chunks
+   pending and the `statechange` resume schedules what is still queued
+   from *now* -- the music picks up at the game's current position instead
+   of replaying a backlog; a chain more than `ISAAC_AUDIO_MAX_LEAD` (3 s)
+   ahead of the context clock is trimmed and re-anchored after the chunk
+   that is playing. The shipping page's Play-click object (`play.mjs
+   unlockAudio`: `{ ctx, buffers, sources }` made inside the user gesture)
+   is adopted, not replaced. The re-upload the engine does into a buffer id
+   whose node is still scheduled is safe here: the node keeps the old
+   `AudioBuffer`, the queue entry takes the new one.
+
+**Instrumentation (observe-only).** `ISAAC_AUDIO_TRACE=1` now logs, per
+source and with the model's clock: static/stream; play/stop/pause with the
+state before; queue/unqueue with ids and counts; gain and pitch changes;
+each buffer the clock retires and how late it was seen; every refusal. The
+JS side (`[isaac][audio-web]`) logs the context, every scheduled node with
+its start time and duration on the AudioContext clock, and each stop, trim,
+deferral and resume; it goes through the glue's `err()`, i.e. the page's
+`printErr`, so it lands in the page log (`web-run.log`'s page section,
+`drive_audio.mjs`'s `page.log`) while the model's lines are console
+output -- each carries its own clock. The audio report gains the
+stream/empty play counts, the refusals and the backend's
+scheduled/trimmed/deferred/resumed census. Read on the HANDOFF timeline
+(fast module, headless Chromium, 1,500 frames, `main` 0, 54 s wall) the
+title theme's source goes `gain 0 -> 0.6`, a play from INITIAL with
+nothing to play (STOPPED at once), the first chunk queued at t=150 ms and
+played from entry 0, three more queued while PLAYING, then every 341 ms one
+chunk retired (seen 0-14 ms after its end), one unqueued, one refilled and
+scheduled at the chain's end -- 27 queued, 27 scheduled for the theme before
+the run's music change stops it. Over the run: 203 uploads, 200 queued /
+180 unqueued, **201 chunks scheduled, scheduled == queued on every stream**
+(a restarted stream re-schedules its still-queued entries), 0 refusals, 0
+trimmed, 0 deferred.
+
+**Proof by energy.** `boot_web.mjs` puts an `AnalyserNode` between the
+master and the destination when the backend announces its context
+(`Module.isaacAudioReady`), keeps 100-ms RMS blocks, and answers
+`window.isaacAudioLevel()` with the last second's RMS, the freshest block,
+the peak, the context time and state and the backend census.
+`scripts/recomp/web/drive_audio.mjs` drives the interactive page under
+Playwright: a click on the canvas (the user activation), 20 one-second
+samples of the boot screen, two held Enters (the beta notice, the title),
+20 samples of the screen after them; sound effects are key-driven, so a
+window with no keys in it carries music only. For a module older than this
+round it installs its own tap (every `connect()` to the destination routed
+through an analyser), which is how the "before" number above was taken on
+one page. Before (the round-35 module): the title window's 20 one-second
+samples all read **0.0000 RMS** with the context running -- and no node had
+connected to the destination at all until the first menu sound, the bug
+seen from the tap's side. After (this round's module): **20 of 20 samples
+above 0.005 RMS, median 0.0442 (0.0177-0.0682), peaks to 0.21**, two
+streams playing (the theme and its layer, gain 0.6 and 0.02) and the
+backend's chunk count rising by ~5.9 per second, i.e. two streams x
+1/0.341 s. The boot window (the intro, one stream) reads 0.001-0.005 for
+its first six seconds and 0.03 once the theme fades in. The day's
+intermediate build measured the same (median 0.0457).
+
+**Node.** The node profile links the model's weak no-op hooks and is silent
+by design; the model's rules -- the processed counts the refill loop lives
+on -- are the same there. It was not relinked this round.
+
+**Pins.** `tests/recomp-audio.test.js` (10): the EM_JS bodies are extracted
+from `host_audio_web.c` and run in node against a fake AudioContext (a
+queue becomes a chain started back to back, a refill lands at the chain's
+end, unqueue drops bookkeeping only, stop cancels and play re-schedules,
+resume-from-paused starts at the offset, a suspended context defers and the
+resume replays from now, the lead cap trims and re-anchors, static
+loop/pitch/restart, nothing throws with no AudioContext at all), the
+model's rules by their code and by the selftest's `audio:` lines, the
+page's tap and the driver's verdict. The host selftest carries the 20
+`audio:` checks (316 total). `tests/recomp-ship.test.js` pins the
+adoption of the page-made object.
+
 ## Appendix: reproduction
 
 ```bash
