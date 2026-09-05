@@ -181,6 +181,12 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 45: the cold start** (§21.60). `profile_play.mjs phase=boot`:
+  first frame at 4.5 s at the 4x throttle served locally (fetchSync 30 %,
+  shader compiles 7 %, atob 6 %); the first visit is the download. The
+  dist server re-reads `dist.json` on change (a stale manifest had made
+  the module `no-cache`). Neither browser here reuses the HTTP cache
+  across navigations, so the wasm code cache remains unverified.
 - **Round 44: below the cap** (§21.59). A 6x throttle measures throughput
   under the 60 fps pacing: at 10x (below the cap) round 43's module runs 33.6-34.2 fps, with the GL state filter 33.5-36.7; the 4x-5x range of a Chromebook core holds 60. The web GL wrappers skip
   redundant `glUseProgram` / `glActiveTexture` / `glBindTexture` /

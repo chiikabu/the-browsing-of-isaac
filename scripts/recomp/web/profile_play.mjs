@@ -23,6 +23,9 @@ const opt = Object.fromEntries(process.argv.slice(4).map((a) => a.split('=')));
 const CPU = Number(opt.cpu || '4');
 const GL = opt.gl || 'hw';
 const SECONDS = Number(opt.seconds || '10');
+// phase=boot (round 45): profile from the navigation to the first presented
+// frame instead of the play window -- where the cold start's seconds go.
+const PHASE = opt.phase || 'play';
 if (!URL) { console.log('usage: node profile_play.mjs <url> <out-dir> [cpu=4] [gl=hw|swiftshader] [seconds=10]'); process.exit(2); }
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -84,7 +87,18 @@ const t0 = Date.now(); const now = () => Date.now() - t0;
 let profile = null, framesInProfile = 0, error = null;
 try {
   for (let attempt = 1; ; attempt++) { try { if (attempt === 1) await prepare(cdp, URL); await page.goto(URL); break; } catch (e) { if (attempt === 1) console.log(`[prepare] ${e.message}`); if (attempt >= 30) throw e; await sleep(1000); } }
+  if (PHASE === 'boot') {
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 1000 });
+    await cdp.send('Profiler.start');
+  }
   for (;;) { const s = await state(); if (s.f > 0) break; if (s.done || now() > 600000) throw new Error('no first frame'); await sleep(250); }
+  if (PHASE === 'boot') {
+    const r = await cdp.send('Profiler.stop');
+    profile = r.profile; framesInProfile = 1;
+    console.log(`[profile] boot: first frame at ${now()} ms`);
+    throw new Error('__boot_done__');
+  }
   await traceReport(cdp);
   const startRe = /Room 1\.2\(Start Room\)|Starting room transition/;
   for (let enters = 0; ; enters++) {
@@ -106,7 +120,7 @@ try {
   const r = await cdp.send('Profiler.stop');
   profile = r.profile;
   framesInProfile = (await state()).f - f0;
-} catch (e) { error = e.message; console.log(`[profile] ERROR ${e.message}`); }
+} catch (e) { if (e.message !== '__boot_done__') { error = e.message; console.log(`[profile] ERROR ${e.message}`); } }
 await context.close();
 if (!profile) { process.exit(1); }
 writeFileSync(join(OUT, 'play.cpuprofile'), JSON.stringify(profile));
@@ -138,7 +152,7 @@ for (const [id, t] of self) {
 }
 const pct = (t) => (100 * t / total).toFixed(1) + '%';
 const lines = [];
-lines.push(`profile: ${(total / 1000).toFixed(0)} ms sampled, ${framesInProfile} frames -> ${(total / 1000 / Math.max(1, framesInProfile)).toFixed(1)} ms/frame; cpu x${CPU}, gl ${GL}`);
+lines.push(PHASE === 'boot' ? `profile: boot, ${(total / 1000).toFixed(0)} ms sampled to the first frame; cpu x${CPU}, gl ${GL}` : `profile: ${(total / 1000).toFixed(0)} ms sampled, ${framesInProfile} frames -> ${(total / 1000 / Math.max(1, framesInProfile)).toFixed(1)} ms/frame; cpu x${CPU}, gl ${GL}`);
 lines.push('by group:');
 for (const [g, t] of [...groups].sort((a, b) => b[1] - a[1])) lines.push(`  ${pct(t).padStart(6)}  ${g}`);
 lines.push('top 40 by self time:');

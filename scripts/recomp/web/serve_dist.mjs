@@ -46,9 +46,21 @@ if (!existsSync(DIST) || !statSync(DIST).isDirectory()) {
 }
 
 // dist.json: the sha256 of every file (ETags, the ?v= immutable rule) and the totals for the banner
-let manifest = null;
-try { manifest = JSON.parse(readFileSync(join(DIST, 'dist.json'), 'utf8')); } catch { manifest = null; }
-const hashes = new Map((manifest?.files || []).map((f) => [f.path, f.sha256]));
+let manifest = null, manifestMtime = -1, hashes = new Map();
+// Round 45: re-read when dist.json changes. A dist rebuilt under a running
+// server kept serving the old hashes, so the page's fresh ?v= never matched
+// and the module went out `no-cache` instead of immutable -- the browser's
+// HTTP cache and the wasm code cache both key on that.
+function refreshManifest() {
+  try {
+    const st = statSync(join(DIST, 'dist.json'));
+    if (st.mtimeMs === manifestMtime) return;
+    manifest = JSON.parse(readFileSync(join(DIST, 'dist.json'), 'utf8'));
+    manifestMtime = st.mtimeMs;
+    hashes = new Map((manifest?.files || []).map((f) => [f.path, f.sha256]));
+  } catch { manifest = null; hashes = new Map(); manifestMtime = -1; }
+}
+refreshManifest();
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -114,6 +126,7 @@ function parseRange(header, size) {
 
 let notFoundPrinted = 0;
 const server = createServer((req, res) => {
+  refreshManifest();
   stats.requests += 1;
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/__stats') {

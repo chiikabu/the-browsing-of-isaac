@@ -501,3 +501,9 @@ test('ship.py ships the three page files and mirrors the runner\'s index policy'
   assert.ok(srv.includes("if (COI) { headers['Cross-Origin-Opener-Policy'] = 'same-origin'; headers['Cross-Origin-Embedder-Policy'] = 'require-corp'; }"), 'COOP/COEP only on request');
   assert.ok(srv.includes("const positionalPort = argv.slice(1).find((a) => /^\\d+$/.test(a));") && srv.includes('?? 8200'), 'port 8200 by default');
 });
+
+test('round 45: the dist server re-reads dist.json when it changes, so a rebuilt dist is served with matching hashes', () => {
+  const s = readFileSync(join(root, 'scripts', 'recomp', 'web', 'serve_dist.mjs'), 'utf8');
+  assert.ok(s.includes('if (st.mtimeMs === manifestMtime) return;'), 'the manifest is re-read on an mtime change');
+  assert.ok(/createServer\([^\n]*=>[^\n]*\n  refreshManifest\(\);/.test(s), 'every request checks it first');
+});

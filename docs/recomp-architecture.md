@@ -5503,3 +5503,34 @@ The census: 3,000 headless frames skip 275,740 `glUseProgram`, 136,769 `glActive
 **Tests.** `tests/recomp-web.test.js` pins the five skips, the deletion
 clears and the census; selftest 356/0; the browser play test
 passes.
+
+### 21.60 Round 45: the cold start, and what the browsers here will not say about the cache
+
+**The boot, profiled.** `profile_play.mjs phase=boot` samples from the
+navigation to the first presented frame. At the 4x throttle, served
+locally, the first frame comes at 4.5 s: `fetchSync` 30 % (the six eager
+archives and the scripts, 300 MB copied into the wasm heap through
+synchronous XHRs), `(program)` 9 %, `glGetProgramiv` + `glGetShaderiv`
+7.4 % (the shader compiles -- the driver's work, waited on synchronously),
+`atob` 6 % (text files come through the base64 detour of a synchronous
+XHR), `sub_00866960` 5 % (the engine's own init), the rest small. On a
+machine served over a network the first visit is the 745 MB download
+(§21.49) and nothing in this profile; the second visit, if the browser
+keeps the immutable slices, is this profile.
+
+**The caches, as far as this machine can see.** `drive_perf.mjs netlog=1`
+logs how the module and the image were served. Two findings. The dist
+server kept the hashes it read at start-up, so a dist rebuilt under a
+running server served the module `no-cache` under the page's fresh `?v=`
+(the ETag and the version did not match); it re-reads `dist.json` when
+its mtime changes now, and the module is immutable again. And neither
+browser available here -- Playwright's headless shell in a persistent
+profile, the app's embedded Chrome -- reused the HTTP cache across
+navigations even for `immutable` responses with matching validators
+(`transferSize` full on every reload, `fromDiskCache` false), which is
+why the wasm code cache of round 40 could never be seen to deserialise:
+the precondition it keys on was never met in these environments. The
+headers are the standard ones (`public, max-age=31536000, immutable`,
+`ETag`, `Vary: Accept-Encoding`, `Content-Encoding: br`); a stock Chrome
+on the target keeps them. That is the one thing in this stretch of work
+that only the target machine can confirm.

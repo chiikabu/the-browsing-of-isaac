@@ -57,8 +57,22 @@ const FRESH_SAVES = opt.fresh_saves === '1';
 // optimised code came from the cache, `v8.wasm.cachedModule` that it was
 // stored, `v8.wasm.compiledModule` a compile from bytes.
 const TRACE_WASM = opt.trace_wasm === '1';
+// netlog=1 (round 45): how the module and the image were served -- from the
+// network, the disk cache, or a 304 -- with their transfer sizes; the wasm
+// code cache can only be reused when the module comes back from the cache.
+const NETLOG = opt.netlog === '1';
+const netRows = [];
 const wasmEvents = new Map();
 async function prepare(cdp, url) {
+  if (NETLOG) {
+    await cdp.send('Network.enable');
+    cdp.on('Network.responseReceived', (e) => {
+      const r = e.response;
+      if (/boot\.wasm|boot\.mjs|isaac\.segs\.bin|play\.html|boot_web\.html/.test(r.url))
+        netRows.push({ url: r.url.replace(/^.*\//, ''), status: r.status, fromDiskCache: !!r.fromDiskCache, fromServiceWorker: !!r.fromServiceWorker,
+          encoded: r.encodedDataLength, cc: (r.headers['cache-control'] || r.headers['Cache-Control'] || ''), etag: (r.headers.etag || r.headers.ETag || '') });
+    });
+  }
   if (FRESH_SAVES) {
     const origin = new globalThis.URL(url).origin;       // `URL` here is the argv constant
     await page.goto(origin + '/instance_index.json').catch(() => {});
@@ -228,6 +242,7 @@ try {
   summary.lazy = await page.evaluate(() => (typeof window.isaacLazyStats === 'function' ? window.isaacLazyStats() : null));
   if (summary.lazy) console.log(`[perf] lazy reads: ${summary.lazy.reads} whole files, ${(summary.lazy.bytes / 1048576).toFixed(1)} MB; ${summary.lazy.windows} windows (${summary.lazy.distinctWindows} distinct), ${(summary.lazy.windowBytes / 1048576).toFixed(1)} MB; top: ${summary.lazy.top.join(', ')}; trail: ${(summary.lazy.trail || []).join(' ')}`);
   for (const st of (summary.lazy && summary.lazy.stacks) || []) console.log(`[perf] window fetch stack: ${st}`);
+  if (NETLOG) { summary.net = netRows; for (const r of netRows) console.log(`[net] ${r.url} ${r.status} ${r.fromDiskCache ? 'disk-cache' : 'network'} encoded ${r.encoded} cc="${r.cc}" etag=${r.etag}`); }
   summary.memory = await memSnapshot();
   {
     const big = (summary.memory.processes || []).filter((q) => q.type === 'renderer' || q.type === 'gpu')
