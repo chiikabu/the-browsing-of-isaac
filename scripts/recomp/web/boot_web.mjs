@@ -10,6 +10,11 @@
 import Module from './boot.mjs';
 
 const logEl = document.getElementById('log');
+// Round 34: the shipping page (play.mjs) sets window.isaacPageHooks before importing this module:
+// url(u) rewrites every synchronous fetch (root path, cache-busting ?v=), fetchBytes(u) fetches the
+// boot stages asynchronously with a progress bar, instantiateWasm streams the module, onLog sees
+// every line, beforeMain(m) is awaited before main (the Play click). All optional; boot_web.html sets none.
+const hooks = (typeof window !== 'undefined' && window.isaacPageHooks) || {};
 window.isaacLog = [];
 window.isaacFrames = [];
 window.isaacDone = null;
@@ -17,6 +22,7 @@ window.isaacFrame = 0;     // the host's frame counter, live (round 25: a driver
 const KEEP_FRAMES = 6;
 function log(line) {
   window.isaacLog.push(String(line));
+  if (hooks.onLog) hooks.onLog(String(line));
   if (window.isaacLog.length % 50 === 0 || /RESULT|TRAP|frame\]/.test(line)) {
     logEl.textContent = window.isaacLog.slice(-12).join('\n');
   }
@@ -30,6 +36,7 @@ function log(line) {
 // so the runner serves ?b64=1 as base64 and the bytes are decoded here.
 function fetchSync(url) {
   const x = new XMLHttpRequest();
+  if (hooks.url) url = hooks.url(url);
   x.open('GET', url + (url.includes('?') ? '&' : '?') + 'b64=1', false);
   x.send(null);
   if (x.status !== 200) throw new Error(`${url}: HTTP ${x.status}`);
@@ -37,12 +44,17 @@ function fetchSync(url) {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
+// The boot stages (memory image, index, the eagerly seeded archives, the Lua) go through
+// fetchBytes: the synchronous fetch by default, an asynchronous one with byte-level progress
+// under the shipping page (round 34). The reads the RAM-FS makes during main stay synchronous.
+const fetchBytes = hooks.fetchBytes || (async (url) => fetchSync(url));
 
 const params = new URLSearchParams(location.search);
 const cfg = {
   canvas: document.getElementById('canvas'),
   print: log,
   printErr: log,
+  instantiateWasm: hooks.instantiateWasm,     // round 34: the shipping page streams the module with a progress bar
   preRun: [() => {
     // a live page (ISAAC_YIELD=1) with no budget plays until it is closed
     cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');
@@ -192,6 +204,7 @@ const KEYS = {
   z: [0x5A, 0x2C, 0], '0': [0x30, 0x0B, 0], '1': [0x31, 0x02, 0], '2': [0x32, 0x03, 0], '3': [0x33, 0x04, 0],
   '4': [0x34, 0x05, 0], '5': [0x35, 0x06, 0], '6': [0x36, 0x07, 0], '7': [0x37, 0x08, 0], '8': [0x38, 0x09, 0],
   '9': [0x39, 0x0A, 0], f1: [0x70, 0x3B, 0], f2: [0x71, 0x3C, 0], f3: [0x72, 0x3D, 0], f4: [0x73, 0x3E, 0],
+  grave: [0xC0, 0x29, 0],      // the debug console key (GLFW_KEY_GRAVE_ACCENT; the same row as explore.mjs)
 };
 const timeline = [];
 for (const item of (params.get('input') || '').split(',').map((t) => t.trim()).filter(Boolean)) {
@@ -219,7 +232,7 @@ let inputsDelivered = 0;
 const live = [];
 const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
-  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt' };
+  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave' };
 function keyName(ev) {
   const c = ev.code || '';
   if (CODE_TO_KEY[c]) return CODE_TO_KEY[c];
@@ -303,7 +316,7 @@ function cstr(s) {
 const done = { mainRc: null, bootRc: null, presented: 0, lazyReads: 0, lazyBytes: 0 };
 try {
   // --- memory image
-  const blob = fetchSync('/isaac.segs.bin');
+  const blob = await fetchBytes('/isaac.segs.bin');
   const p = m._malloc(blob.length);
   m.HEAPU8.set(blob, p);
   const nseg = await stageOk('place memory image', () => m._isaac_place_image(p, blob.length));
@@ -324,13 +337,13 @@ try {
   // (repentance.a is not listed: this exe never names it -- round 26)
   const LAZY_ARCHIVES = new Set(['resources/packed/music.a', 'resources/packed/videos.a',
     'resources/packed/afterbirth.a', 'resources/packed/afterbirthp.a']);
-  const index = JSON.parse(new TextDecoder().decode(fetchSync('/instance_index.json')));
-  await stageOk('seed packed archives', () => {
+  const index = JSON.parse(new TextDecoder().decode(await fetchBytes('/instance_index.json')));
+  await stageOk('seed packed archives', async () => {
     let n = 0;
     for (const name of ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a']) {
       const rel = `resources/packed/${name}`;
       let bytes;
-      try { bytes = fetchSync(`/instance/${rel}`); } catch { log(`  (skip ${name}: not served)`); continue; }
+      try { bytes = await fetchBytes(`/instance/${rel}`); } catch { log(`  (skip ${name}: not served)`); continue; }
       const pp = cstr(rel), dp = m._malloc(bytes.length || 1);
       m.HEAPU8.set(bytes, dp);
       const ok = m._isaac_fs_seed(pp, dp, bytes.length);
@@ -376,13 +389,13 @@ try {
     return n;
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there
-  await stageOk('lua scripts into MEMFS', () => {
+  await stageOk('lua scripts into MEMFS', async () => {
     let n = 0;
     for (const { p: rel } of index) {
       if (!rel.startsWith('resources/scripts/')) continue;
       const dir = rel.slice(0, rel.lastIndexOf('/'));
       m.FS.mkdirTree('/' + dir);
-      m.FS.writeFile('/' + rel, fetchSync(`/instance/${rel}`));
+      m.FS.writeFile('/' + rel, await fetchBytes(`/instance/${rel}`));
       n += 1;
     }
     log(`  ${n} lua scripts written`);
@@ -393,6 +406,8 @@ try {
   done.bootRc = await stageOk('host boot (IAT + TEB + TLS + _initterm)', () => m._isaac_run_boot(1));
   log(`  isaac_boot_init -> ${done.bootRc}`);
   if (done.bootRc === null) throw new Error('boot trapped');
+  // Round 34: the shipping page waits for its Play button here (a user gesture for WebAudio).
+  if (hooks.beforeMain) await hooks.beforeMain(m);
   // Under JSPI (round 25) _isaac_run_main returns a promise that settles when
   // main returns; without it the call is synchronous. Both are awaited here.
   done.mainRc = await stageOk('main @ 0x00931050', () => {

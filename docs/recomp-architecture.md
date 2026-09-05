@@ -4782,6 +4782,163 @@ of the same page.
 
 **Census.** Node: two boots of the automated player (6,000 frames, epoch 1700000000, fast profile): boot 1 persisted 36 file closes (persistentgamedata1..3.dat, their save_backups, gamestate1.dat, options.ini, log.txt), boot 2 restored 10 files, the game found every save (0 misses, no 'No Repentance save found'), same 3 runs / 2 deaths, main 0. Browser: one Chromium profile, the headless timeline to 1,500 frames then a reload: load 1 persisted 24 closes, load 2 restored 10 files before main and ran its 1,500 frames, main 0, 0 asserts (drive_persist.mjs OK). The first attempt aborted on load 2 in the game's VSync setter: with the written options.ini read back it asks GLFW for the primary monitor, and EnumDisplayDevicesW enumerated nothing -- the shims now describe one adapter, one monitor and one 1280x720@60 mode (selftest 241/0).
 
+### 21.47 Typed console text: TranslateMessage synthesises WM_CHAR (round 32)
+
+**Before.** Round 30 (§21.45) reached the debug console but could not type
+into it. The console takes its text from GLFW's char callback; GLFW's
+WndProc (0x00a5b7b0) feeds that from WM_CHAR / WM_SYSCHAR / WM_UNICHAR; on
+Windows those come from `TranslateMessage`, and the host stubbed it
+("nothing translated") while its queue built WM_KEYDOWN / WM_KEYUP only. A
+typed letter landed in the key tables and never in the line, so the
+commands were seeded into `cmd_history.txt` and recalled with UP.
+
+**What Windows does, and the host now does.** `TranslateMessage(const
+MSG*)` takes a WM_KEYDOWN (or WM_SYSKEYDOWN), asks the keyboard layout what
+character that virtual key gives under the current modifier state, and
+posts a WM_CHAR (WM_SYSCHAR) to the thread's queue: hwnd = the key-down's
+window, wParam = the character, lParam = the key-down's lParam (repeat
+count, scancode, extended bit, previous state). A posted message is
+retrieved before the remaining hardware input, so the pump's next
+PeekMessage is the character. It returns nonzero for any key message,
+translated or not, and 0 for anything else. `host_shims_win.c` does exactly
+that: `imp_user32__TranslateMessage` reads the caller's MSG (never writes
+it), `vk_to_char` maps the key, and `msgq_push_front` puts the WM_CHAR at
+the head of the ring -- the WM_KEYUP already queued behind it waits its
+turn. The verdict in `gen_shims.py` moved from STUB to PROVIDED (the
+regenerated table differs in those two rows only). The first 48 characters
+are logged (`[isaac][input] frame N: TranslateMessage vk 0x53 -> WM_CHAR
+0x73`), which is how a run's log shows the typing.
+
+**The synchronous keyboard state.** Windows keeps two: the physical state
+(GetAsyncKeyState) and the state "as of the key messages this thread has
+retrieved" (GetKeyState); translation uses the latter. The host had one
+table, written when an event was *queued* (`isaac_input_key`). A driver that
+queues Shift down, S down, S up, Shift up in one frame would then have the
+S translated with Shift already up. The queue now keeps a second table
+(`g_keysync`), applied in `msgq_pop_into` as each key message is removed;
+`GetKeyState` reads it (bit 15 down, bit 0 the CapsLock / NumLock /
+ScrollLock toggle, flipped when the lock key's non-repeat key-down is
+removed) and so does `vk_to_char`. A generic VK_SHIFT / VK_CONTROL /
+VK_MENU message also sets its left/right vk from the scancode / extended
+bit, as the kernel does (Windows posts the generic vk in wParam and lets
+the scancode say which side). That last point matters beyond typing:
+GLFW's pollEvents reads `GetKeyState(VK_LSHIFT)` after every pump to
+release a Shift it believes stuck, and with the old table (VK_LSHIFT never
+down) it released the driver's held Shift on every frame.
+
+**The map (US layout, kbdus.c).** Letters `a`..`z`: upper with Shift;
+CapsLock swaps the case Shift gives (Shift+CapsLock is lower again); Ctrl,
+Shift or not, posts the control character `vk & 0x1f` (0x01..0x1a);
+Ctrl+Alt (AltGr) posts nothing on this layout. Everything else is a table
+of base / Shift / Ctrl columns (`g_vk_chars`, one row per line): the digit
+row `0`..`9` with `)!@#$%^&*(`, space, Enter `\r` (Ctrl: `\n`), Backspace
+`\b` (Ctrl: 0x7f), Tab, Escape 0x1b, the OEM keys `;:` `=+` `,<` `-_` `.>`
+`/?` `` `~ `` `[{` `\|` `]}` `'"` with the Ctrl characters kbdus.c gives
+them (`[` 0x1b, `\` 0x1c, `]` 0x1d, `-` 0x1f, `6` 0x1e, `2` NUL);
+Shift+Ctrl has no column, so nothing; the numpad digits and operators are
+unconditional because a numpad vk (VK_NUMPAD5 rather than VK_CLEAR)
+already says NumLock was on. F-keys, arrows, Delete and the modifiers
+themselves post nothing. What the game then sees: `_glfwInputChar`
+(0x00a25d60) drops codepoints below 0x20 and 0x7f..0x9f before any
+callback -- `\r`, `\b`, 0x1b and the Ctrl characters go nowhere, as on
+Windows, and Enter / Backspace keep working as key state -- and the
+console's callback (0x00686730) takes 0x20..0x7f only while the console is
+open (state 2), inserting at its cursor (Console+0x108, a `char*` into the
+line). The grave key that opens the console never puts a '`' in the line:
+its WM_CHAR is dispatched in the pump, before Console::Update opens it.
+
+**Selftest (296 checks, 0 failures; 55 new).** With the three windows of
+the round-14a block in place: `a` -- the WM_KEYDOWN pops first, Translate
+returns 1 and queues one message, the next pop is WM_CHAR 'a' with the
+key-down's lParam and hwnd, ahead of the already queued key-up; Translate
+of the WM_CHAR returns 0 and adds nothing, of the WM_KEYUP returns 1 and
+adds nothing. Shift+a queued as one batch: GetKeyState(VK_SHIFT) reads up
+while Shift's key-down is still queued and down once it is removed
+(VK_LSHIFT with it, VK_RSHIFT not), the a posts 'A', the batch drains,
+VK_LSHIFT releases with the VK_SHIFT key-up. CapsLock: its key-down sets
+GetKeyState bit 0 and posts nothing, `b` posts 'B', Shift+b posts 'b', '2'
+is untouched, the next fresh key-down toggles it off and a repeat (bit 30)
+does not toggle. Then 34 keys one at a time (modifiers down, key down/up,
+modifiers up; the WM_CHAR must follow its key-down at once): grave / ~,
+CR, BS, TAB, 0x1b, space, 9, @, ), . >, - _, +, {, ], ' ", :, ,, ?, \ |,
+Ctrl+c 0x03, Ctrl+Shift+z 0x1a, Ctrl+Enter LF, Ctrl+[ 0x1b, and nothing
+for Ctrl+Shift+2, F1, Up, Shift+Left, Shift itself, Delete; a WM_MOUSEMOVE
+translates to 0 with nothing posted.
+
+**The typed driver.** `scripts/recomp/lift/console_typing.mjs`:
+`planTyping(text)` gives the key events the node driver's poll hands the
+host -- `[1, vk, scancode | extended << 8, down]` from explore.mjs's `KEYS`
+and its per-character key/Shift plan -- with Shift down and up around the
+characters that need it, each key held `hold` frames (3; >= 2, the engine
+samples key state per frame) and a one-frame gap before the next
+(`typingFrames("goto s.boss.1010")` = 64); every key-down carries the
+character the host will post for it (`vkToChar`, the JS mirror of the C
+rules; `VK_CHARS` mirrors `g_vk_chars` row for row) and the plan throws if
+that is not the character wanted, so the two tables cannot drift apart
+silently. `makeTypedConsole(commands, { mem, ready, log })` has
+`makeConsole`'s contract (poll / active / done / report) and its
+verification discipline: grave until state 2 (retried, timed out), then
+per command: the plan is scheduled, the line (Console+0x1c, the MSVC
+std::string read out of guest memory) is read back after the last key
+settles and must equal the command before Enter is tapped; a wrong line is
+cleared (DOWN at the head, then one Backspace per character if DOWN left
+it) and typed again, twice, before the command is reported as never having
+reached the console; Enter, then the line must clear (the engine ran it);
+Enter on the empty line closes. `ISAAC_CONSOLE_MODE=typed` on the node
+driver selects it; typed mode seeds `options.ini` only -- no
+`cmd_history.txt` -- so the only way a command can be in the line is the
+typing. `recall` (round 30) and `type` (round 30's probe) remain.
+
+**Tests.** `tests/recomp-console.test.js` (14, five new): the plan for
+"goto s.boss.1010" (16 down/up pairs, no Shift, the key-downs spell the
+command, every event equal to `keyEvent`'s, held 3 frames, 4 frames per
+character) and "Debug ~3" (Shift down with the d and up with it, again
+around the grave); `VK_CHARS` against the C rows parsed out of
+`host_shims_win.c` (the same vks, the same three cells each) plus the
+letter / CapsLock / Ctrl / AltGr / Shift+Ctrl rules and what the line
+accepts; the typed driver against a fake console that inserts what the
+host would post only in state 2 (both commands typed, read back and run,
+the trace `grave, s t a g e space 2, enter, g o t o space s . b o s s . 1
+0 1 0, enter, enter` with no UP, every key held >= 2 frames, exactly the
+commands' characters inserted, the opening grave's own '`' dropped); the
+same driver on a fake without WM_CHAR (three attempts per command, the
+failure reported, nothing recalled, closed at the end); and a leftover
+line cleared by DOWN, or by Backspaces when DOWN leaves it.
+
+### 21.49 The shipping page and a hostable dist (round 34)
+
+`scripts/recomp/assets/ship.py build` assembles `.scratch/game-dist` from
+the shipping bundle (§21.43), the fast web module and the memory image:
+`play.html` + `play.mjs` (the player page), `boot.mjs`, `boot.wasm`,
+`isaac.segs.bin`, the bundle under `instance/`, `instance_index.json` in
+the shape `boot_web.mjs` consumes, precompressed siblings (`.br`, `.gz`)
+for every large file that compresses, and `dist.json` with sizes and
+sha256s; `ship.py check <dist>` re-hashes everything and decodes every
+sibling against its source. `scripts/recomp/web/serve_dist.mjs <dist>
+<port>` serves it: content types by file, `Content-Encoding` negotiation
+for the siblings, `Range` and `?off=&len=` byte slices, `?b64=1` text
+answers (the page's synchronous fetches), `Cache-Control`.
+
+The page: a loading screen with a real byte-accounted progress bar per
+stage (module, image, archives, boot), a Play button once the module is
+ready (its click unlocks WebAudio and focuses the canvas), the canvas
+scaled to the viewport at 16:9 with crisp pixels, fullscreen, a key-hint
+strip, a saves menu (export/import/reset of the IndexedDB store, §21.46),
+an error panel that appears only when the module fails, and no frame
+budget (it plays until closed).
+
+**Census (the assembled dist, 2026-09-04):** 30 files, 793,418,516 bytes
+raw, 744,521,328 bytes transfer with the best encoding (the module
+50.8 MB -> 10.5 MB brotli; the archives are already compressed). Driven
+under headless Chromium against `serve_dist.mjs` (r34-drive.log): the
+manifest at 138 ms, the module fetched by 651 ms, Play visible at 919 ms,
+first frame 50 ms after the click, the run started after 9 held Enters,
+walked, ~40 fps in play (software GL), `main` 0; the server counted 499
+requests, 701.5 MB on the wire (10.5 MB of it brotli). `tests/recomp-ship.test.js`
+covers the assembler on a synthetic tree, the manifest and size
+arithmetic, `check` on broken dists, and the server's types, slices,
+encodings and 404s on an ephemeral port.
+
 ## Appendix: reproduction
 
 ```bash

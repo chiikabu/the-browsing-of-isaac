@@ -150,6 +150,14 @@ REQUIRE emsdk on PATH:
   next boot; the browser page keeps them in IndexedDB and restores them
   before main (`persist=0` turns it off; `drive_persist.mjs` proves a
   reload restores them). Node: two boots of the automated player (6,000 frames, epoch 1700000000, fast profile): boot 1 persisted 36 file closes (persistentgamedata1..3.dat, their save_backups, gamestate1.dat, options.ini, log.txt), boot 2 restored 10 files, the game found every save (0 misses, no 'No Repentance save found'), same 3 runs / 2 deaths, main 0. Browser: one Chromium profile, the headless timeline to 1,500 frames then a reload: load 1 persisted 24 closes, load 2 restored 10 files before main and ran its 1,500 frames, main 0, 0 asserts (drive_persist.mjs OK). The first attempt aborted on load 2 in the game's VSync setter: with the written options.ini read back it asks GLFW for the primary monitor, and EnumDisplayDevicesW enumerated nothing -- the shims now describe one adapter, one monitor and one 1280x720@60 mode (selftest 241/0).
+- **Round 34: a hostable dist and a player page** (§21.49).
+  `python scripts/recomp/assets/ship.py build` -> `.scratch/game-dist`
+  (30 files, 793,418,516 bytes raw, **744,521,328 bytes transfer** with the
+  brotli/gzip siblings; `ship.py check` re-verifies), served by
+  `node scripts/recomp/web/serve_dist.mjs .scratch/game-dist 8200`; the
+  page (`play.html`) shows a byte-accounted progress bar, a Play button
+  that unlocks audio, fullscreen, key hints and a saves menu. Driven under
+  headless Chromium: Play at 0.9 s, the run started, ~40 fps, main 0.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -195,6 +203,13 @@ takes real keyboard/mouse input):
 
 ```
 node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 interactive=1 port=8099 fast=1
+```
+
+Ship it (round 34, §21.49): assemble the dist once, serve it, open the page:
+
+```
+python scripts/recomp/assets/ship.py build
+node scripts/recomp/web/serve_dist.mjs .scratch/game-dist 8200
 ```
 
 The automated player (round 29, §21.44): 20,000 frames of rooms, pickups,
