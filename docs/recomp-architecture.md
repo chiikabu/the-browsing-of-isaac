@@ -5067,9 +5067,12 @@ master and the destination when the backend announces its context
 the peak, the context time and state and the backend census.
 `scripts/recomp/web/drive_audio.mjs` drives the interactive page under
 Playwright: a click on the canvas (the user activation), 20 one-second
-samples of the boot screen, two held Enters (the beta notice, the title),
-20 samples of the screen after them; sound effects are key-driven, so a
-window with no keys in it carries music only. For a module older than this
+samples of the boot screen, two held Enters, 20 samples of the screen after
+them; sound effects are key-driven, so a window with no keys in it carries
+music only. (In the measured runs that second window was still the beta
+notice -- its ACCEPT prompt arms late, so the Enters did not pass it -- with
+the title theme playing and nothing else: the screenshot the driver keeps,
+`shot_title.png`, shows it.) For a module older than this
 round it installs its own tap (every `connect()` to the destination routed
 through an analyser), which is how the "before" number above was taken on
 one page. Before (the round-35 module): the title window's 20 one-second
