@@ -169,6 +169,15 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     // ten -- so a test on the target machine reports numbers without tooling.
     let last = window.isaacFrame || 0, lastT = performance.now(), first = true;
     const recent = [];
+    // the machine, once: cores, memory (Chrome rounds it), the GPU renderer --
+    // what a report from the target has to say alongside the frame rate
+    let machine = '';
+    try {
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'gpu?';
+      machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${renderer}`;
+    } catch (e) { machine = ''; }
     setInterval(() => {
       const f = window.isaacFrame || 0, t = performance.now();
       if (f <= 0) return;
@@ -177,7 +186,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
       recent.push(fps); if (recent.length > 10) recent.shift();
       const med = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
       if (first) { first = false; render(); }
-      setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}` + (document.hidden ? ' -- paused while hidden' : ''));
+      setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}` + (document.hidden ? ' -- paused while hidden' : '') + machine);
     }, 1000);
   };
   if (AUTOPLAY) { start(); return; }

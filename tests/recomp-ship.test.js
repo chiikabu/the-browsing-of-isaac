@@ -512,4 +512,5 @@ test('round 46: the shipping page shows a frame-rate readout once the engine run
   const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
   assert.ok(page.includes("setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}`"), 'fps and the median of the last ten seconds in the status line');
   assert.ok(page.includes('const f = window.isaacFrame || 0, t = performance.now();'), 'sampled from the host frame counter');
+  assert.ok(page.includes("machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${renderer}`;"), 'the line names the machine: cores, memory, GPU renderer');
 });
