@@ -52,6 +52,8 @@ const toggleFullscreen = () => {
 };
 window.addEventListener('keydown', (ev) => {
   if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();
+  // Q flips the FPS readout (round 52c); the key still reaches the game
+  if (ev.code === 'KeyQ' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()) window.isaacEditFileMenu.toggleFps();
 });
 const mb = (n) => (n / 1048576).toFixed(1);
 const fmtBytes = (n) => n >= 1048576 ? `${mb(n)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`;
@@ -324,29 +326,12 @@ async function importSlot(slot) {
   setTimeout(() => location.reload(), 1500);               // the engine holds the old data: a reload applies the import
   return 'IMPORTED. RELOADING...';
 }
-const PAGE_SETTINGS_KEY = 'page-settings.json';
 const editMenu = createEditFileMenu({
   stage: $('stage'), canvas, assetsUrl: `${ROOT}/instance/page-assets`,
   audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
   injectKey: (name, down) => { if (typeof window.isaacInjectKey === 'function') window.isaacInjectKey(name, down); },
   log: (line) => console.log(line),
   actions: { export: exportSlot, import: importSlot },
-  // the page's own settings (the FPS viewer) live in the saves store as
-  // page-settings.json, beside the game's files: they survive a reload, a new
-  // browser profile restored from an export, and a reset clears them with the rest
-  settings: {
-    load: async () => {
-      const db = await openStore(); if (!db) return null;
-      const items = (await readAllSaves(db)).filter((it) => it.key === PAGE_SETTINGS_KEY);
-      return items.length ? JSON.parse(new TextDecoder().decode(items[0].bytes)) : null;
-    },
-    save: async (obj) => {
-      const db = await openStore(); if (!db) return;
-      let cur = {};
-      try { const items = (await readAllSaves(db)).filter((it) => it.key === PAGE_SETTINGS_KEY); if (items.length) cur = JSON.parse(new TextDecoder().decode(items[0].bytes)); } catch (e) { cur = {}; }
-      await writeSaves(db, [{ key: PAGE_SETTINGS_KEY, src: '', bytes: new TextEncoder().encode(JSON.stringify({ ...cur, ...obj }, null, 1)) }], false);
-    },
-  },
 });
 window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;

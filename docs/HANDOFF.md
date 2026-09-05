@@ -185,7 +185,7 @@ REQUIRE emsdk on PATH:
   strip reads EDIT FILE (the sheet reset in the Team Meat font, repacked
   into the bundle's `afterbirthp.a` by `page_assets.py`, run by `bundle.py
   build`); confirming on a file in that mode opens the page's menu -- EXPORT
-  FILE, IMPORT FILE, DELETE FILE, FPS VIEWER, BACK -- drawn with the game's
+  FILE, IMPORT FILE, DELETE FILE, BACK; Q flips the FPS readout -- drawn with the game's
   paper, font, cursor and sounds (`page-assets/`, `menu_overlay.mjs`) and
   driven by the game's keys. The hook is a block patch at 0x9d9d59 in
   `Menu_Save::Update` asking `isaac_editfile_gate`; Delete hands the flow

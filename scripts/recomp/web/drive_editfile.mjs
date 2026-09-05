@@ -5,8 +5,9 @@
 // the menu in file-choosing mode) -> confirm on file 1: the page's menu opens
 // instead of the engine's prompt. Then: BACK closes it; DELETE hands the flow
 // back to the engine (the page names the slot and presses confirm; the gate
-// consumes the name), and Backspace leaves the engine's own prompt; FPS VIEWER
-// toggles and is remembered. Screenshots land in <out-dir>.
+// consumes the name), and Backspace leaves the engine's own prompt; Q flips
+// the FPS readout, remembered by the browser and never by the saves store.
+// Screenshots land in <out-dir>.
 import { chromium } from 'playwright';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,22 +73,28 @@ try {
   await sleep(600);
   await page.screenshot({ path: join(OUT, 'menu-open.png') });
   // BACK (the last entry) closes it
-  for (let i = 0; i < 4; i++) { await hold('ArrowDown'); await sleep(150); }
+  for (let i = 0; i < 3; i++) { await hold('ArrowDown'); await sleep(150); }
   await hold('Enter'); await sleep(400);
   st = await state();
   check(!st.open, 'BACK closes the menu', `open=${st.open}`);
+  // Q flips the FPS readout (no menu entry, no setting in the store) and this browser remembers it
+  await hold('KeyQ'); await sleep(600);
+  const fpsOn = await page.evaluate(() => ({ stored: localStorage.getItem('isaac-fps-viewer'), on: window.isaacEditFileMenu.fpsViewer() }));
+  check(fpsOn.on && fpsOn.stored === '1', 'Q turns the FPS readout on and this browser remembers it', JSON.stringify(fpsOn));
+  const noStore = await page.evaluate(async () => new Promise((resolve) => {
+    const req = indexedDB.open('isaac-saves', 1);
+    req.onerror = () => resolve('open failed');
+    req.onsuccess = () => { const db = req.result; const g = db.transaction('files', 'readonly').objectStore('files').get('page-settings.json'); g.onsuccess = () => { db.close(); resolve(g.result ? 'present' : 'absent'); }; g.onerror = () => resolve('error'); };
+  }));
+  check(noStore === 'absent', 'the readout is no save: nothing lands in the saves store', noStore);
   // open again: the game is still in file-choosing mode, so one confirm does it
   await hold('Enter');
   st = await until(async () => { const s = await state(); return s.open ? s : null; }, 5000, 'the menu opening again').catch(() => null);
   check(st && st.open, 'the menu opens again on the next confirm', st ? 'open' : 'not open');
-  // FPS VIEWER toggles and is remembered
-  for (let i = 0; i < 3; i++) { await hold('ArrowDown'); await sleep(150); }
-  await hold('Enter'); await sleep(500);
-  const fpsOn = await page.evaluate(() => ({ stored: localStorage.getItem('isaac-fps-viewer'), on: window.isaacEditFileMenu.fpsViewer() }));
-  check(fpsOn.on && fpsOn.stored === '1', 'FPS VIEWER toggles on and is remembered', JSON.stringify(fpsOn));
+  await sleep(300);
   await page.screenshot({ path: join(OUT, 'menu-fps.png') });
   // DELETE FILE: the menu closes and the engine's own prompt takes over (the gate consumes the named slot)
-  await hold('ArrowUp'); await sleep(150);
+  for (let i = 0; i < 2; i++) { await hold('ArrowDown'); await sleep(150); }
   await hold('Enter'); await sleep(900);
   st = await state();
   check(!st.open && st.del === -1, 'DELETE hands the flow to the engine: menu closed, the named slot consumed by the gate', `open=${st.open} del=${st.del}`);

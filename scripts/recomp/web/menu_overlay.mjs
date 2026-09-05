@@ -6,8 +6,9 @@
 // The engine's Menu_Save::Update is about to show its "ARE YOU SURE?" prompt
 // for the file the cursor is on; the lifted block at 0x9d9d59 asks the host
 // gate first, which asks window.isaacEditFile(slot): this module opens the
-// menu instead. Its entries: EXPORT FILE, IMPORT FILE, DELETE FILE, FPS
-// VIEWER (on/off), BACK. Delete hands the flow back to the engine (the
+// menu instead. Its entries: EXPORT FILE, IMPORT FILE, DELETE FILE, BACK.
+// The FPS readout is a key, not an entry: Q flips it (play.mjs), a corner
+// text in the same font, remembered by this browser only. Delete hands the flow back to the engine (the
 // page sets window.isaacEditFileDelete and presses confirm again, so the
 // game's own prompt and deletion run untouched). Export and import are the
 // page's saves store; the fps viewer is a corner readout in the same font.
@@ -59,12 +60,6 @@ export function createEditFileMenu(opts) {
   const state = { open: false, slot: 0, cursor: 0, ready: false, loading: null, message: null, fps: null, fpsOn: false, closing: false };
   const A = { menu: null, sheet: null, paper: null, cursor: null, font: null, atlas: null, sounds: new Map() };
   try { state.fpsOn = localStorage.getItem('isaac-fps-viewer') === '1'; } catch (e) { /* no storage */ }
-  // the saves store's copy of the setting wins once it is read (it is the one that travels)
-  if (opts.settings && opts.settings.load) {
-    opts.settings.load().then((s) => {
-      if (s && typeof s.fpsViewer === 'boolean') { state.fpsOn = s.fpsViewer; try { localStorage.setItem('isaac-fps-viewer', s.fpsViewer ? '1' : '0'); } catch (e) { /* no storage */ } }
-    }).catch(() => {});
-  }
 
   const overlay = document.createElement('canvas');
   overlay.id = 'menu-overlay';
@@ -134,7 +129,16 @@ export function createEditFileMenu(opts) {
     return cx - x;
   };
 
-  const items = () => ['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', `FPS VIEWER: ${state.fpsOn ? 'ON' : 'OFF'}`, 'BACK'];
+  const items = () => ['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK'];
+  // the FPS readout is a key, not a setting: Q flips it (play.mjs), this browser remembers it
+  const toggleFps = () => {
+    state.fpsOn = !state.fpsOn;
+    try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }
+    fpsEl.hidden = !state.fpsOn;
+    if (state.fpsOn && !state.ready) load().then(() => { fpsEl.hidden = !state.fpsOn; drawFps(); }).catch(() => {});
+    else if (state.fpsOn) drawFps();
+    return state.fpsOn;
+  };
   const draw = () => {
     if (!state.open || !state.ready) return;
     const R = A.menu.rects, [px0, py0] = R.prompt_at, [sx, sy, sw, sh0] = R.prompt_paper;
@@ -187,15 +191,7 @@ export function createEditFileMenu(opts) {
   };
   const select = async () => {
     const i = state.cursor;
-    if (i === 4) { close('back'); return; }
-    if (i === 3) {
-      state.fpsOn = !state.fpsOn;
-      try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }
-      // a real setting: it travels with the saves store (and its export/import), not just this browser's storage
-      if (opts.settings && opts.settings.save) opts.settings.save({ fpsViewer: state.fpsOn }).catch(() => {});
-      fpsEl.hidden = !state.fpsOn;
-      play('select'); draw(); return;
-    }
+    if (i === 3) { close('back'); return; }
     if (i === 2) {
       // the engine's own prompt: the gate lets the transition through when the
       // page has named the slot, and the confirm is pressed for the player
@@ -230,7 +226,7 @@ export function createEditFileMenu(opts) {
   };
 
   return {
-    open, close, onKey, draw,
+    open, close, onKey, draw, toggleFps,
     isOpen: () => state.open,
     fpsViewer: () => state.fpsOn,
     setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!state.ready) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
