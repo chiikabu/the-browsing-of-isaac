@@ -5400,3 +5400,38 @@ the same cold start, before and after. Windows fetched per run start 812 (808 MB
 three host reads (the far-back read finds window 0 resident), the census
 counts fills and hits; `tests/recomp-archives.test.js` pins the 32 slots,
 the LRU eviction and the census.
+
+### 21.57 Round 42: the rest of the run-start transient is V8's optimiser
+
+**The tool.** `drive_perf.mjs memdump=1` asks Chrome for a memory-infra
+dump (`Tracing.requestMemoryDump` under `disabled-by-default-memory-infra`)
+in the menu, at the run start and 3, 7 and 25 s into play, keeps the raw
+dumps, and prints the renderer's allocators by effective size. The
+renderer is the process whose dump has `v8` allocators; the wasm memory's
+resident pages are not attributed to any allocator, so the totals sit
+below the OS working set.
+
+**The attribution.** In the menu the renderer's allocators total 497 MB
+(`partition_alloc` 268, `gpu/mapped_memory` 98, `malloc` 87). Three seconds
+into play they total 1,895 MB, and the difference is two lines:
+`v8/main/malloc` 1,107 MB (absent in the menu) and `malloc/allocated_objects`
+365 MB (73). Seven seconds in they are 809 and 266; at 25 s both are back
+to the menu's figures. `v8/main/malloc` is the isolate's own heap outside
+the JS heap -- compiler zones. The run start makes hundreds of large lifted
+functions hot at once and TurboFan compiles them on every core, each job
+holding its graph until it finishes; on the 16-core desktop that is a
+gigabyte for ten seconds. The dispatcher cache, the archive windows and
+the XHR bodies (rounds 38-41) were the rest of the 2.8 GB; this is what
+remains after them, and no host code allocates it.
+
+**What it means for the four-core target.** It does not scale with the compiler's threads, and it is not the optimiser at all: with V8 limited to two compilation tasks (`js_flags=--wasm-num-compilation-tasks=2`, a four-core machine's compiler) `v8/main/malloc` reads the same 1,100 MB three seconds in, and with tier-up disabled outright (`--no-wasm-tier-up`, Liftoff only) it reads 2,503 MB. Zone memory of that size at the first run start is the baseline compiler meeting the giant lifted functions for the first time (they are compiled lazily, on first call): a wasm function's baseline compile keeps a register/stack snapshot at every jump target, sized by the function's locals, and the game's largest routine -- `sub_005d4380`, 1.57 MB of wasm, 338,000 lines of C, 5,042 labels, thousands of temporaries -- costs that product. Eleven functions are above 256 KB. That is a property of the module, the same on any machine, and round 43 splits them.
+
+**Where this leaves the 4 GB budget.** Steady state after a run start:
+renderer 1.1 GB and GPU process 0.5 GB working sets, the JS heap under
+130 MB; the transient on top of that is the optimiser's, sized by the
+number of cores that run it. The two remaining levers are on the module
+itself: smaller lifted functions (the lifter emits one C function per
+original function, and a 100 KB routine is a graph TurboFan holds for
+hundreds of MB) and a working code cache (§21.55), which would remove the
+tier-up from a returning player's run start entirely. Both are lifter or
+browser work, recorded in the frontier as the next memory rounds.

@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-04, recomp rounds 26-31: fixes, video, bundle, automated player, console, saves)
+# Handoff — read this first (2026-09-04, recomp rounds 26-41: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,13 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 42: the run-start transient is TurboFan** (§21.57).
+  `drive_perf.mjs memdump=1` (memory-infra dumps) attributes what is left
+  of the run-start spike after rounds 38-41 to `v8/main/malloc` -- the
+  optimiser's compile zones while hundreds of big lifted functions tier up
+  at once (1.1 GB for ~10 s on 16 cores; the same 1.1 GB with two compile threads and 2.5 GB with TurboFan off: the baseline compiler on the giant lifted functions (quadratic in labels x locals) -- round 43 splits them). Steady state
+  after a run start: renderer 1.1 GB + GPU process 0.5 GB working set.
+  Levers left: smaller lifted functions, a working code cache.
 - **Round 41: the archive windows** (§21.56). A run start fetched 812
   1 MB windows (808 MB, 712 MB of `afterbirthp.a`) because a level load
   walks scattered resources and the two-window cache of round 24e

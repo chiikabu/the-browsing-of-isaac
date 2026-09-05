@@ -99,6 +99,47 @@ const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length 
 // the browser's processes' private bytes and working sets, sampled every 5 s
 // of play and at the end -- the target is a 4 GB Chromebook, so the renderer
 // (wasm memory lives there) and the GPU process are what count.
+// memdump=1 (round 42): Chrome's memory-infra dump at chosen moments -- the
+// renderer's allocators (v8, partition_alloc, blink_gc, malloc, gpu shared
+// memory, ...) by effective size, so a transient can be named, not guessed.
+const MEMDUMP = opt.memdump === '1';
+const takeMemoryDump = async (label) => {
+  if (!MEMDUMP) return;
+  const events = [];
+  const onData = (e) => { for (const ev of e.value || []) if (ev.ph === 'v') events.push(ev); };
+  cdp.on('Tracing.dataCollected', onData);
+  try {
+    await cdp.send('Tracing.start', { traceConfig: { includedCategories: ['disabled-by-default-memory-infra'], memoryDumpConfig: { triggers: [] } }, transferMode: 'ReportEvents' });
+    await cdp.send('Tracing.requestMemoryDump', { levelOfDetail: 'detailed' });
+    const done = new Promise((r) => cdp.once('Tracing.tracingComplete', r));
+    await cdp.send('Tracing.end'); await done;
+  } catch (e) { console.log(`[memdump] ${label}: ${e.message}`); cdp.off('Tracing.dataCollected', onData); return; }
+  cdp.off('Tracing.dataCollected', onData);
+  const hex = (x) => (x && x.value ? parseInt(x.value, 16) : 0);
+  const mb = (v) => (v / 1048576).toFixed(0);
+  try { writeFileSync(join(OUT, `memdump-${label.replace(/[^a-z0-9]+/gi, '_')}.json`), JSON.stringify(events)); } catch (e) { /* diagnostics only */ }
+  const perPid = [];
+  for (const ev of events) {
+    const d = ev.args && ev.args.dumps; if (!d || !d.allocators) continue;
+    const tot = d.process_totals || {};
+    const rows = [];
+    let total = 0, top = 0;
+    for (const [name, a] of Object.entries(d.allocators)) {
+      const depth = name.split('/').length;
+      const v = hex(a.attrs && (a.attrs.effective_size || a.attrs.size));
+      if (depth === 1) top += v;
+      if (depth <= 2 && v >= 8 * 1048576) rows.push([name, v]);
+      total += v;
+    }
+    rows.sort((x, y) => y[1] - x[1]);
+    perPid.push({ pid: ev.pid, top, hasV8: Object.keys(d.allocators).some((n) => n.startsWith('v8')), rss: hex({ value: tot.resident_set_bytes }), pf: hex({ value: tot.private_footprint_bytes }), rows });
+  }
+  perPid.sort((x, y) => (y.hasV8 - x.hasV8) || (y.top - x.top));      // the renderer: the process with v8 allocators, the biggest of them
+  const big = perPid[0];
+  if (!big) { console.log(`[memdump] ${label}: no dump events`); return; }
+  console.log(`[memdump] ${label}: ${perPid.length} processes; renderer pid ${big.pid}: allocators total ${mb(big.top)} MB, private footprint ${mb(big.pf)} MB, rss ${mb(big.rss)} MB; ${big.rows.slice(0, 16).map(([n, v]) => `${n} ${mb(v)}`).join(', ')}`);
+  summary.memDumps = summary.memDumps || []; summary.memDumps.push({ label, pid: big.pid, privateFootprintMB: +mb(big.pf), rows: big.rows.slice(0, 40).map(([n, v]) => [n, +mb(v)]) });
+};
 const memSnapshot = async () => {
   const m = await page.evaluate(() => {
     const mm = performance.memory;
@@ -155,6 +196,7 @@ try {
   // menu fps for 5 s, then Enter until the run starts
   let last = (await state()).f, lastT = now();
   for (let i = 0; i < 5; i++) { await sleep(1000); const s = await state(); summary.fpsMenu.push((s.f - last) * 1000 / (now() - lastT)); last = s.f; lastT = now(); await memTick(); }
+  await takeMemoryDump('menu');
   const startRe = /Room 1\.2\(Start Room\)|Starting room transition/;
   let enters = 0;
   for (;;) {
@@ -164,6 +206,7 @@ try {
     enters += 1; await sleep(1500); await memTick();
   }
   console.log(`[perf] run started at frame ${summary.runStartedFrame} (${summary.runStartedMs} ms) after ${enters} Enter(s)`);
+  await takeMemoryDump('run start');
   // play: walk in a square and fire, sampling fps each second
   const walk = ['KeyD', 'KeyS', 'KeyA', 'KeyW'], fire = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'];
   last = (await state()).f; lastT = now();
@@ -177,6 +220,7 @@ try {
     last = s.f; lastT = now();
     if (s.done) break;
     if (i % 5 === 4) { summary.memoryTimeline.push({ t: now(), ...(await memSnapshot()) }); nextMem = now() + 5000; last = (await state()).f; lastT = now(); }
+    if (i === 2 || i === 6 || i === 24) { await takeMemoryDump(`play +${i + 1} s`); last = (await state()).f; lastT = now(); }
   }
   summary.medianMenu = median(summary.fpsMenu); summary.medianPlay = median(summary.fpsPlay);
   summary.wasmTrace = await traceReport(cdp);
