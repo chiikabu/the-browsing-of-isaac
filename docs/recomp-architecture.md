@@ -5504,6 +5504,65 @@ The census: 3,000 headless frames skip 275,740 `glUseProgram`, 136,769 `glActive
 clears and the census; selftest 356/0; the browser play test
 passes.
 
+### 21.60 Round 47: the browser's edge cases, driven for real
+
+**The driver (`scripts/recomp/web/drive_edges.mjs`).** Against the served
+page it seeds an `options.ini` with `EnableDebugConsole=1` into the
+IndexedDB save store before the load (the store restores it before main),
+starts a run with real Enter presses, types `stage 2` and `goto
+s.boss.1010` into the debug console with real key events, forges
+`document.hidden` for eight seconds (neither a headless page nor a tab
+behind another reports itself hidden under Playwright, and the page's own
+signal is what the yield and the audio react to), returns, and reads the
+master-output RMS across it all.
+
+**What it found.** The live keyboard path dropped every key the page's
+table did not name, and the table had no punctuation: `goto s.boss.1010`
+reached the console as `goto sboss1010`. The page's table carries the same
+punctuation row as the node driver's now (`tests/recomp-web.test.js` keeps
+the two equal). A headed run also reported the music dead behind another
+tab; that was the occluded window (Chrome throttles it to 15 fps and mutes
+its output), not the game -- with the hidden signal forged the music comes
+back at once.
+
+**Verified (round 47's module, 16 of 16 checks):** the console changes the
+floor (`Level::Init m_Stage 2`) and reaches the boss room (`Room 5.1010`);
+hidden, the game ticks at 3.7 fps and keeps its audio context; back in
+front it resumes at 59.7 fps with no empty 250 ms sample; the music RMS
+goes 0.067 -> 0.072 (hidden, the chain still scheduled) -> 0.047.
+
+**The readback.** The GL cache's census now records the largest
+`glReadPixels`: in play the engine makes 186 calls per 2,200 frames, every
+one a 1x1 RGBA read at (60, 227), 744 bytes in all -- a probe every dozen
+frames, and each a GPU pipeline drain (`readPixels` 3.3 % of a 6x-throttled
+frame). Round 48 logged the wasm stack under the first three reads: `imp_opengl32__glReadPixels` <- `sub_00a69760` <- `sub_00a69700` <- `sub_007b8cb0` <- `sub_00782af0` (one of the split giants: a game update routine going through the engine's graphics layer), and the position follows the player (221, 208 in the seeded run, 60, 227 in another) -- the engine samples the pixel under the player. The value is read synchronously and used, so the drain stays; it is documented, not removed.
+
+### 21.61 Round 48: three more redundancies in the GL stream
+
+**The profile at 6x** (below the cap: 21.0 ms a frame, 6 % idle) put
+`bufferSubData` at 3.1 %, `enableVertexAttribArray` 0.5 %,
+`uniformMatrix4fv` 0.7 % with `uniform1i`/`uniform4fv` below the cut; the
+node census counts per frame 41 `glUniformMatrix4fv`, 30 `glUniform1i`, 21
+`glUniform4fv`, 32 `glDrawElements` with their index uploads.
+- **Index blocks.** The engine draws quads with the same six-index pattern;
+  an index block identical to the last upload is drawn from the ring offset
+  it already has, as long as the ring's storage is the one it went into (a
+  generation counter bumps on grow and wrap).
+- **Attribute enables.** The engine enables its attributes before every
+  draw; the wrappers mirror the enable state and skip a call that would set
+  what is set.
+- **Uniforms.** The current program's (location -> last value) is mirrored
+  for `glUniform1i/1fv/2fv/3fv/4fv` and `glUniformMatrix4fv` (count 1); a
+  re-send of the same value is skipped. Uniform values live in the program
+  object and reset on a link, so a link or a delete forgets the program's
+  entries; a call with no current program is forwarded.
+
+**Census and result.** In the seeded 3,000-frame play run: 319,906 uniform re-sends skipped (107 a frame -- the projection matrix, the sampler unit and the colour vector go out with every draw), 31,262 of 65,146 index blocks reused (48 %: the quad pattern), attribute enables 0 (the engine does not re-enable), the state filter's five counters unchanged; index bytes staged 1.36 MB -> 0.90 MB; the same single pre-existing GL error. Seeded (`ISAAC_EPOCH=1700000000`), interleaved, 10x throttle, 60 s of play: round 47's module 35.1 and 36.4 fps median, round 48's 38.4 and 37.1 -- about +2.5 fps, 7 %, at the point where the page is far below the cap; at 4x it stays pinned at 60.
+
+**Tests.** The web pins cover the five skips and the forgets; the host pins
+the index reuse and its generation check; selftest 356/0; the
+browser play test passes.
+
 ### 21.60 Round 45: the cold start, and what the browsers here will not say about the cache
 
 **The boot, profiled.** `profile_play.mjs phase=boot` samples from the

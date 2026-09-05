@@ -722,3 +722,11 @@ test('round 39: the client-array staging buffers are rings -- appends, orphan on
   assert.ok(!c.includes('glBufferSubData(target, 0,'), 'nothing writes at offset 0 any more');
   assert.match(c, /rings orphaned %u \/ %u times/, 'the report counts the orphans');
 });
+
+test('round 48: an index block identical to the last upload is drawn from its ring offset, unless the ring storage was replaced', () => {
+  const c = readFileSync(join(src, 'src', 'host_gl_clientarrays.c'), 'utf8');
+  assert.ok(c.includes('g_idx_gen == g_iring.gen && g_iring.buf'), 'the reuse checks the ring generation (an orphan replaced the storage)');
+  assert.ok(c.includes('iat = g_idx_at; ++g_idx_reuse;'), 'the draw reuses the offset');
+  assert.ok(/glBufferData\(target, \(GLsizeiptr\)r->cap, 0, GL_STREAM_DRAW\);\s*r->head = 0; \+\+r->gen;/.test(c), 'grow and wrap bump the generation');
+  assert.ok(c.includes('%u identical index blocks reused'), 'the census');
+});

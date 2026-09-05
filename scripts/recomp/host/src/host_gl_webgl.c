@@ -102,6 +102,35 @@ static uint32_t gls_prog, gls_unit, gls_tex2d[GLS_UNITS], gls_texcube[GLS_UNITS]
 static uint32_t gls_blend[4], gls_blend_eq, gls_vp[4];
 static uint8_t gls_prog_ok, gls_unit_ok, gls_blend_ok, gls_blend_eq_ok, gls_vp_ok;
 static uint32_t gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp;
+/* Round 48: the same idea for the vertex-attribute enables (the engine
+ * enables its attributes before every draw) and for uniforms: the current
+ * program's (location -> last value) is mirrored, and a glUniform* that
+ * would set what the program already holds is skipped. Uniform values live
+ * in the program object and reset on a link, so a link or a delete forgets
+ * that program's entries; a call with no current program is forwarded (GL
+ * reports the error). */
+#define GLS_ATTRIBS 16
+static uint8_t gls_attrib_on[GLS_ATTRIBS], gls_attrib_known[GLS_ATTRIBS];
+static uint32_t gls_skip_attrib, gls_skip_uniform;
+#define GLU_SLOTS 1024
+typedef struct { uint32_t prog; int32_t loc; uint8_t kind, n, live; uint32_t v[16]; } glu_ent;
+static glu_ent g_glu[GLU_SLOTS];
+static glu_ent *glu_slot(int32_t loc) {
+    uint32_t h = (gls_prog * 2654435761u) ^ ((uint32_t)loc * 40503u);
+    return &g_glu[(h ^ (h >> 16)) & (GLU_SLOTS - 1u)];
+}
+/* 1 when the current program already holds these n words at loc (kind tells the call apart) */
+static int glu_same(int32_t loc, uint8_t kind, const void *vals, unsigned n) {
+    if (!gls_prog_ok || n > 16u) return 0;
+    glu_ent *e = glu_slot(loc);
+    if (e->live && e->prog == gls_prog && e->loc == loc && e->kind == kind && e->n == n && memcmp(e->v, vals, n * 4u) == 0) return 1;
+    e->live = 1; e->prog = gls_prog; e->loc = loc; e->kind = kind; e->n = (uint8_t)n;
+    memcpy(e->v, vals, n * 4u);
+    return 0;
+}
+static void glu_forget(uint32_t prog) {
+    for (unsigned i = 0; i < GLU_SLOTS; ++i) if (g_glu[i].live && g_glu[i].prog == prog) g_glu[i].live = 0;
+}
 
 /* ---- context capability answers the shared shim delegates here ---------- */
 void isaac_web_get_integerv(uint32_t pname, uint32_t out) {
@@ -162,8 +191,9 @@ void isaac_web_gl_report(void) {
     isaac_log("[isaac][gl] web backend: %u GL calls, %u GL errors, %u frames presented",
               g_gl_calls, g_gl_errors, g_present_count);
     isaac_glc_report();
-    isaac_log("[isaac][gl] redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u",
-              gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp);
+    isaac_log("[isaac][gl] redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u, "
+              "attrib enables %u, uniforms %u",
+              gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp, gls_skip_attrib, gls_skip_uniform);
 }
 
 /* ---- the entry points ------------------------------------------------------ */
@@ -264,7 +294,7 @@ GLFN(glDeleteFramebuffers) {
     glDeleteFramebuffers((GLsizei)A(0), names);
     RET0;
 }
-GLFN(glDeleteProgram)        { ENTER; isaac_glc_loc_flush(A(0)); if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0)); RET0; }
+GLFN(glDeleteProgram)        { ENTER; isaac_glc_loc_flush(A(0)); glu_forget(A(0)); if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0)); RET0; }
 GLFN(glDeleteRenderbuffers) {
     ENTER;
     const GLuint *names = (const GLuint *)AP(1);
@@ -291,6 +321,10 @@ GLFN(glDisable)              { ENTER; glDisable(A(0)); RET0; }
 GLFN(glDisableVertexAttribArray) {
     ENTER;
     isaac_gl_disable_vertex_attrib_array(A(0));
+    if (A(0) < GLS_ATTRIBS) {
+        if (gls_attrib_known[A(0)] && !gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }
+        gls_attrib_known[A(0)] = 1; gls_attrib_on[A(0)] = 0;
+    }
     glDisableVertexAttribArray(A(0));
     RET0;
 }
@@ -308,6 +342,10 @@ GLFN(glEnable)               { ENTER; glEnable(A(0)); RET0; }
 GLFN(glEnableVertexAttribArray) {
     ENTER;
     isaac_gl_enable_vertex_attrib_array(A(0));
+    if (A(0) < GLS_ATTRIBS) {
+        if (gls_attrib_known[A(0)] && gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }
+        gls_attrib_known[A(0)] = 1; gls_attrib_on[A(0)] = 1;
+    }
     glEnableVertexAttribArray(A(0));
     RET0;
 }
@@ -351,6 +389,7 @@ GLFN(glLinkProgram) {
     ENTER;
     GLuint prog = A(0);
     isaac_glc_loc_flush(prog);
+    glu_forget(prog);                /* a link resets the program's uniforms */
     glLinkProgram(prog);
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
@@ -365,9 +404,18 @@ GLFN(glLinkProgram) {
 }
 GLFN(glMultiDrawArraysIndirectEXT) { ENTER; RET0; }
 GLFN(glProgramUniform1ivEXT) { ENTER; RET0; }
+/* Round 48: the first three of the game's own glReadPixels log the wasm stack
+ * (the names come from the module's name section): the engine reads pixels
+ * back in play, one call every dozen frames, each a GPU pipeline drain. */
+EM_JS(void, isaac_readpixels_stack_js, (int x, int y, int w, int h), {
+    var st = (new Error().stack || "").split("\n").slice(2, 12).map(function (l) { var t = l.trim(); if (t.indexOf("at ") === 0) t = t.slice(3); return t.split(" ")[0]; }).join(" < ");
+    err("[isaac][gl] glReadPixels " + w + "x" + h + " at " + x + "," + y + " from: " + st);
+});
+static uint32_t g_rp_logged;
 GLFN(glReadPixels) {
     ENTER;
     isaac_glc_count_readpixels(A(0), A(1), A(2), A(3), A(4), A(4) == 0x1908u ? 4u : A(4) == 0x1907u ? 3u : 1u);   /* GL_RGBA / GL_RGB */
+    if (g_rp_logged < 3u) { ++g_rp_logged; isaac_readpixels_stack_js((int)A(0), (int)A(1), (int)A(2), (int)A(3)); }
     glReadPixels((GLint)A(0), (GLint)A(1), (GLsizei)A(2), (GLsizei)A(3), A(4), A(5), AP(6));
     RET0;
 }
@@ -443,17 +491,17 @@ GLFN(glTexSubImage2D) {
                     A(6), A(7), AP(8));
     RET0;
 }
-GLFN(glUniform1fv)           { ENTER; glUniform1fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
-GLFN(glUniform1i)            { ENTER; glUniform1i((GLint)A(0), (GLint)A(1)); RET0; }
+GLFN(glUniform1fv)           { ENTER; if (A(1) == 1u && AP(2) && glu_same((GLint)A(0), 1, AP(2), 1)) { ++gls_skip_uniform; RET0; } glUniform1fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
+GLFN(glUniform1i)            { ENTER; { uint32_t v = A(1); if (glu_same((GLint)A(0), 2, &v, 1)) { ++gls_skip_uniform; RET0; } } glUniform1i((GLint)A(0), (GLint)A(1)); RET0; }
 GLFN(glUniform1iv)           { ENTER; glUniform1iv((GLint)A(0), (GLsizei)A(1), (const GLint *)AP(2)); RET0; }
 GLFN(glUniform1uiv)          { ENTER; glUniform1uiv((GLint)A(0), (GLsizei)A(1), (const GLuint *)AP(2)); RET0; }
-GLFN(glUniform2fv)           { ENTER; glUniform2fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
+GLFN(glUniform2fv)           { ENTER; if (A(1) == 1u && AP(2) && glu_same((GLint)A(0), 3, AP(2), 2)) { ++gls_skip_uniform; RET0; } glUniform2fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
 GLFN(glUniform2iv)           { ENTER; glUniform2iv((GLint)A(0), (GLsizei)A(1), (const GLint *)AP(2)); RET0; }
 GLFN(glUniform2uiv)          { ENTER; glUniform2uiv((GLint)A(0), (GLsizei)A(1), (const GLuint *)AP(2)); RET0; }
-GLFN(glUniform3fv)           { ENTER; glUniform3fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
+GLFN(glUniform3fv)           { ENTER; if (A(1) == 1u && AP(2) && glu_same((GLint)A(0), 4, AP(2), 3)) { ++gls_skip_uniform; RET0; } glUniform3fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
 GLFN(glUniform3iv)           { ENTER; glUniform3iv((GLint)A(0), (GLsizei)A(1), (const GLint *)AP(2)); RET0; }
 GLFN(glUniform3uiv)          { ENTER; glUniform3uiv((GLint)A(0), (GLsizei)A(1), (const GLuint *)AP(2)); RET0; }
-GLFN(glUniform4fv)           { ENTER; glUniform4fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
+GLFN(glUniform4fv)           { ENTER; if (A(1) == 1u && AP(2) && glu_same((GLint)A(0), 5, AP(2), 4)) { ++gls_skip_uniform; RET0; } glUniform4fv((GLint)A(0), (GLsizei)A(1), (const GLfloat *)AP(2)); RET0; }
 GLFN(glUniform4iv)           { ENTER; glUniform4iv((GLint)A(0), (GLsizei)A(1), (const GLint *)AP(2)); RET0; }
 GLFN(glUniform4uiv)          { ENTER; glUniform4uiv((GLint)A(0), (GLsizei)A(1), (const GLuint *)AP(2)); RET0; }
 #define UMAT(name, fn) GLFN(name) { ENTER; fn((GLint)A(0), (GLsizei)A(1), (GLboolean)A(2), (const GLfloat *)AP(3)); RET0; }
@@ -463,7 +511,12 @@ UMAT(glUniformMatrix2x4fv, glUniformMatrix2x4fv)
 UMAT(glUniformMatrix3fv, glUniformMatrix3fv)
 UMAT(glUniformMatrix3x2fv, glUniformMatrix3x2fv)
 UMAT(glUniformMatrix3x4fv, glUniformMatrix3x4fv)
-UMAT(glUniformMatrix4fv, glUniformMatrix4fv)
+GLFN(glUniformMatrix4fv) {          /* round 48: the projection matrix is re-sent per draw */
+    ENTER;
+    if (A(1) == 1u && AP(3) && glu_same((GLint)A(0), (uint8_t)(A(2) ? 7 : 6), AP(3), 16)) { ++gls_skip_uniform; RET0; }
+    glUniformMatrix4fv((GLint)A(0), (GLsizei)A(1), (GLboolean)A(2), (const GLfloat *)AP(3));
+    RET0;
+}
 UMAT(glUniformMatrix4x2fv, glUniformMatrix4x2fv)
 UMAT(glUniformMatrix4x3fv, glUniformMatrix4x3fv)
 GLFN(glUseProgram) {

@@ -200,3 +200,15 @@ test('round 44: redundant GL state calls are skipped in the web wrappers, and de
     'the framebuffer memo is told about the unit and the binding even when the call is skipped');
   assert.ok(gl.includes('redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u'), 'the census');
 });
+
+test('round 48: redundant attribute enables and uniform re-sends are skipped; a link or delete forgets the program', () => {
+  const gl = readFileSync(join(hostSrc, 'host_gl_webgl.c'), 'utf8');
+  assert.ok(gl.includes('if (gls_attrib_known[A(0)] && gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }'), 'an enable of an enabled attribute is skipped');
+  assert.ok(gl.includes('if (gls_attrib_known[A(0)] && !gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }'), 'a disable of a disabled one too');
+  assert.ok(gl.includes('glu_same((GLint)A(0), (uint8_t)(A(2) ? 7 : 6), AP(3), 16)'), 'a matrix already held by the program is not re-sent');
+  assert.ok(gl.includes('glu_same((GLint)A(0), 2, &v, 1)'), 'nor a sampler unit');
+  assert.ok(gl.includes('if (!gls_prog_ok || n > 16u) return 0;'), 'no current program: forwarded (GL reports it)');
+  assert.ok(/glu_forget\(prog\);[^\n]*\n\s*glLinkProgram\(prog\);/.test(gl) && gl.includes('glu_forget(A(0)); if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0));'),
+    'a link resets the uniforms, a delete frees the name: both forget');
+  assert.ok(gl.includes('attrib enables %u, uniforms %u'), 'the census');
+});

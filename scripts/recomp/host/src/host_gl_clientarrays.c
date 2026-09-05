@@ -144,7 +144,15 @@ static attrib_state g_attribs[ISAAC_MAX_ATTRIBS];
  * dies with the draws that read it). 4 MB holds ~90 frames of the menus'
  * 45 KB a frame. The head is reported by isaac_gl_ring_head() for the
  * selftest. */
-typedef struct { GLuint buf; uint32_t cap, head, orphans; } gl_ring;
+typedef struct { GLuint buf; uint32_t cap, head, orphans, gen; } gl_ring;   /* gen: bumps when the storage is replaced */
+/* Round 48: the engine draws quads with the same six-index pattern over and
+ * over; an index block identical to the last one uploaded is drawn from the
+ * ring offset it already has, as long as that storage is still the one it
+ * went into (the ring's generation). */
+#define IDX_KEEP 4096
+static uint8_t g_idx_last[IDX_KEEP];
+static uint32_t g_idx_len, g_idx_at, g_idx_gen, g_idx_reuse;
+static int g_idx_valid;
 static gl_ring g_vring, g_iring;
 #define RING_VERTEX_BYTES (4u << 20)
 #define RING_INDEX_BYTES  (1u << 20)
@@ -166,6 +174,7 @@ void isaac_gl_reset_state(void) {
     memset(g_attribs, 0, sizeof g_attribs);
     memset(&g_vring, 0, sizeof g_vring);
     memset(&g_iring, 0, sizeof g_iring);
+    g_idx_valid = 0;
 }
 
 static void ensure_buffers(void) {
@@ -184,10 +193,10 @@ static uint32_t ring_put(GLenum target, gl_ring *r, uint32_t initial,
         r->cap = need + need / 2;
         if (r->cap < initial) r->cap = initial;
         glBufferData(target, (GLsizeiptr)r->cap, 0, GL_STREAM_DRAW);
-        r->head = 0;
+        r->head = 0; ++r->gen;
     } else if (r->head + need > r->cap) {      /* wrap: orphan, never overwrite */
         glBufferData(target, (GLsizeiptr)r->cap, 0, GL_STREAM_DRAW);
-        r->head = 0;
+        r->head = 0; ++r->gen;
         ++r->orphans;
     }
     uint32_t off = r->head;
@@ -335,9 +344,17 @@ void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
     stage_attributes(maxi + 1u);
 
     uint32_t ibytes = (uint32_t)count * type_size(type);
-    uint32_t iat = ring_put(GL_ELEMENT_ARRAY_BUFFER, &g_iring, RING_INDEX_BYTES,
-                            isaac_g(indices_va), ibytes);
-    g_index_bytes += ibytes;
+    uint32_t iat;
+    const uint8_t *isrc = (const uint8_t *)isaac_g(indices_va);
+    if (g_idx_valid && ibytes == g_idx_len && ibytes <= IDX_KEEP && g_idx_gen == g_iring.gen && g_iring.buf
+        && memcmp(isrc, g_idx_last, ibytes) == 0) {
+        iat = g_idx_at; ++g_idx_reuse;               /* the same indices: already in the ring */
+    } else {
+        iat = ring_put(GL_ELEMENT_ARRAY_BUFFER, &g_iring, RING_INDEX_BYTES, isrc, ibytes);
+        g_index_bytes += ibytes;
+        if (ibytes <= IDX_KEEP) { memcpy(g_idx_last, isrc, ibytes); g_idx_len = ibytes; g_idx_at = iat; g_idx_gen = g_iring.gen; g_idx_valid = 1; }
+        else g_idx_valid = 0;
+    }
 
     glDrawElements(mode, count, type, (const void *)(uintptr_t)iat);
     ++g_draws;
@@ -368,10 +385,10 @@ void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count,
 void isaac_gl_report(void) {
     isaac_log("[isaac][gl] client-array emulation: %llu draws, %llu indices "
               "scanned, %llu vertex bytes staged, %llu index bytes staged; "
-              "rings orphaned %u / %u times (vertex %u KB, index %u KB)",
+              "rings orphaned %u / %u times (vertex %u KB, index %u KB); %u identical index blocks reused",
               (unsigned long long)g_draws,
               (unsigned long long)g_indices_scanned,
               (unsigned long long)g_vertex_bytes,
               (unsigned long long)g_index_bytes,
-              g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10);
+              g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10, g_idx_reuse);
 }

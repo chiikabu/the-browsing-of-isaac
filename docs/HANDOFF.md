@@ -187,6 +187,12 @@ REQUIRE emsdk on PATH:
   dist server re-reads `dist.json` on change (a stale manifest had made
   the module `no-cache`). Neither browser here reuses the HTTP cache
   across navigations, so the wasm code cache remains unverified.
+- **Rounds 47-48: edge cases and three more GL redundancies** (§21.60-61).
+  `drive_edges.mjs` (typed console, forged hidden tab, resume, music RMS):
+  16/16; it found and fixed the page's missing punctuation keys. The
+  engine's own `glReadPixels` is a 1x1 probe at (60, 227) every dozen
+  frames (a probe under the player, `sub_007b8cb0` through the graphics layer -- kept). Identical index blocks, redundant attribute
+  enables and uniform re-sends are skipped (107 uniform re-sends and 10 index uploads a frame gone; seeded 10x A/B 35.1/36.4 -> 38.4/37.1 fps).
 - **Round 44: below the cap** (§21.59). A 6x throttle measures throughput
   under the 60 fps pacing: at 10x (below the cap) round 43's module runs 33.6-34.2 fps, with the GL state filter 33.5-36.7; the 4x-5x range of a Chromebook core holds 60. The web GL wrappers skip
   redundant `glUseProgram` / `glActiveTexture` / `glBindTexture` /
@@ -270,6 +276,13 @@ selftest 196 checks (two stale pins fixed: the import canary is 728, the
 adopted-thread contract runs with slices off).
 
 ## Try it yourself
+
+**Drive the edge cases (round 47):**
+```
+node scripts/recomp/web/drive_edges.mjs http://127.0.0.1:8102/ output/recomp/web-edges options=<options.ini with EnableDebugConsole=1> hidden_s=8
+```
+The typed console (`stage 2`, `goto s.boss.1010`), a forged hidden period,
+the return, the music across it; 16 checks, exit 0 when all pass.
 
 **Measure the browser under a Chromebook-class budget (round 37):**
 ```
