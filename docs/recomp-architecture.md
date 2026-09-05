@@ -5475,3 +5475,31 @@ guard and the entry-first goto are absorbed), idempotent, marked
 guard inside the declarations, an entry-first goto, 64-bit temporaries
 after the guard, jumps both ways across the cut): the parts, the spill,
 the routing, the untouched neighbour, idempotence, `--check`. The node explorer's deterministic 2,000-frame run before and after is the correctness proof (frame-identical census and room sequence, main 0), the browser play test passes, the test family is 170/170, selftest 356/0.
+
+### 21.59 Round 44: below the cap -- a 6x throttle, the link level, and redundant GL state
+
+**Measuring under the cap.** With the display pacing of round 37 every
+run at the 4x throttle reads 58-60 fps, so a change to the frame's work
+only shows in the profile's idle share. A 6x throttle puts the page below
+60 and the play median measures throughput directly; two 40 s runs each,
+fresh browser profile and saves.
+
+**The link level.** Linking with `-O3` instead of `-O2` (wasm-opt over the whole module; 51.26 MB against 51.46) changes nothing the throttle can see: at 10x, two interleaved pairs give 33.2 / 35.4 fps for `-O2` and 36.5 / 32.4 for `-O3` (34.3 against 34.5 on average). The link stays at `-O2`. Two lessons about the measurement itself came out of it. At 6x the page straddles the cap (54 and 60 in alternate runs of the same module), so 10x is the throughput setting on this machine. And unseeded runs split into two clusters, about 28 and about 35 fps, for the same module and at 40 s and 100 s alike: the game seeds the run from the clock, and a different level costs a different frame. `run_web.mjs ... ISAAC_EPOCH=1700000000` (a server argument, passed to the page) pins it; with the seed pinned the four runs land within 3 fps of each other.
+
+**Redundant GL state.** The node profile's GL census counts, per frame,
+73 `glUseProgram`, 30 `glActiveTexture(GL_TEXTURE0)` (one distinct
+argument in a whole run), 30 `glBindTexture`, 32 `glBlendFuncSeparate`
+(four distinct tuples in a run) and 9 `glViewport` (eight distinct), each
+a wasm-to-JS-to-native round trip in the browser. The web wrappers now
+mirror those five pieces of state, update the mirror on every forwarded
+call, and skip a call that would set what is already set; a program or
+texture deletion clears what referred to it (a name GL still uses cannot
+be handed out again, so an equal name is the same object), and the
+framebuffer memo of round 37 is still told about the unit and the binding.
+The census: 3,000 headless frames skip 275,740 `glUseProgram`, 136,769 `glActiveTexture`, 273,576 blend calls, 13,454 `glViewport` and 1,302 `glBindTexture` -- about 230 native calls a frame -- with the same single pre-existing GL error and the browser play test passing.
+
+**Result.** Seeded (`ISAAC_EPOCH=1700000000`), interleaved, 10x throttle, 60 s of play: round 43's module 33.6 and 34.2 fps median (34.7 and 34.5 over the last 30 s), with the state filter 33.5 and 36.7 (34.7 and 37.2). A small gain, inside the noise on one pair; the filter stays because the census says what it removes and the play test says nothing changed. For the target: 10x this desktop core is far slower than a Chromebook's (a Celeron core is four to five times slower, where the page holds 60 fps), so the 34 fps here is the floor of a machine well below the target.
+
+**Tests.** `tests/recomp-web.test.js` pins the five skips, the deletion
+clears and the census; selftest 356/0; the browser play test
+passes.

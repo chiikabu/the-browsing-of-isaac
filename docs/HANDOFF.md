@@ -181,6 +181,10 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 44: below the cap** (§21.59). A 6x throttle measures throughput
+  under the 60 fps pacing: at 10x (below the cap) round 43's module runs 33.6-34.2 fps, with the GL state filter 33.5-36.7; the 4x-5x range of a Chromebook core holds 60. The web GL wrappers skip
+  redundant `glUseProgram` / `glActiveTexture` / `glBindTexture` /
+  `glBlendFuncSeparate` / `glViewport` (about 230 skipped native calls a frame).
 - **Round 43: the giant functions, split** (§21.58). The transient was
   the baseline compiler on 338,000-line lifted functions (quadratic in
   labels x locals; 1.1 GB with tier-up, 2.5 GB without).

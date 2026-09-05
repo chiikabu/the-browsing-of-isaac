@@ -186,3 +186,17 @@ test('round 41: a fetched archive window is detached right after the copy, so th
   assert.ok(/m\.HEAPU8\.set\(bytes, dst\);[\s\S]{0,400}dropBody\(bytes\);[\s\S]{0,400}return n;/.test(b), 'the window is copied, then dropped, and the count returned is the saved one');
   assert.ok(/lazyBytes \+= len;[^\n]*\n\s*dropBody\(bytes\);/.test(b), 'a whole-file lazy read drops its body too');
 });
+
+test('round 44: redundant GL state calls are skipped in the web wrappers, and deletions clear the mirrors', () => {
+  const gl = readFileSync(join(hostSrc, 'host_gl_webgl.c'), 'utf8');
+  assert.ok(gl.includes('if (gls_prog_ok && gls_prog == A(0)) { ++gls_skip_prog; RET0; }'), 'glUseProgram of the current program is skipped');
+  assert.ok(gl.includes('if (gls_unit_ok && gls_unit == A(0)) { ++gls_skip_unit; RET0; }'), 'glActiveTexture of the active unit is skipped');
+  assert.ok(gl.includes("if (slot && *slot == A(1) + 1u) { ++gls_skip_tex; RET0; }"), 'glBindTexture of the bound texture (per unit and target) is skipped');
+  assert.ok(gl.includes('gls_blend[2] == A(2) && gls_blend[3] == A(3)) { ++gls_skip_blend; RET0; }'), 'an identical blend function is skipped');
+  assert.ok(gl.includes('gls_vp[2] == A(2) && gls_vp[3] == A(3)) { ++gls_skip_vp; RET0; }'), 'an identical viewport is skipped');
+  assert.ok(gl.includes('if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0));'), 'deleting the current program forgets it');
+  assert.ok(gl.includes('if (gls_tex2d[u] == names[i] + 1u) gls_tex2d[u] = 0;'), 'deleting a bound texture forgets the binding');
+  assert.ok(/isaac_glc_tex_active\(A\(0\)\);\s*if \(gls_unit_ok/.test(gl) && /isaac_glc_tex_bind\(A\(0\), A\(1\)\);\s*\{/.test(gl),
+    'the framebuffer memo is told about the unit and the binding even when the call is skipped');
+  assert.ok(gl.includes('redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u'), 'the census');
+});

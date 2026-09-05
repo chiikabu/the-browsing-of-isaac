@@ -88,6 +88,21 @@ void isaac_glc_report(void);
 static uint32_t g_gl_calls, g_gl_errors;
 static uint32_t g_present_count;
 
+/* Round 44: redundant state calls are not forwarded. The engine re-issues
+ * the same glUseProgram (73 a frame), glActiveTexture(GL_TEXTURE0) (30),
+ * glBindTexture (30), glBlendFuncSeparate (32, four distinct tuples in a
+ * run) and glViewport (9, eight distinct) every frame; each is a wasm->JS->
+ * native round trip. The state below mirrors what GL holds, is updated on
+ * every forwarded call, and a call that would set what is already set is
+ * skipped (counted; the report prints the census). A program or texture
+ * deletion clears what referred to it; a name GL is still using cannot be
+ * handed out again, so an equal name always is the same object. */
+#define GLS_UNITS 32
+static uint32_t gls_prog, gls_unit, gls_tex2d[GLS_UNITS], gls_texcube[GLS_UNITS];
+static uint32_t gls_blend[4], gls_blend_eq, gls_vp[4];
+static uint8_t gls_prog_ok, gls_unit_ok, gls_blend_ok, gls_blend_eq_ok, gls_vp_ok;
+static uint32_t gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp;
+
 /* ---- context capability answers the shared shim delegates here ---------- */
 void isaac_web_get_integerv(uint32_t pname, uint32_t out) {
     GLint v[4] = {0, 0, 0, 0};
@@ -147,6 +162,8 @@ void isaac_web_gl_report(void) {
     isaac_log("[isaac][gl] web backend: %u GL calls, %u GL errors, %u frames presented",
               g_gl_calls, g_gl_errors, g_present_count);
     isaac_glc_report();
+    isaac_log("[isaac][gl] redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u",
+              gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp);
 }
 
 /* ---- the entry points ------------------------------------------------------ */
@@ -175,13 +192,43 @@ static void gl_check(const char *fn) {
 static uint8_t g_shader_is_frag[GL_SHADER_NAMES];
 
 GLFN(glClear)                { ENTER; glClear(A(0)); RET0; }
-GLFN(glActiveTexture)        { ENTER; isaac_glc_tex_active(A(0)); glActiveTexture(A(0)); RET0; }
+GLFN(glActiveTexture) {
+    ENTER;
+    isaac_glc_tex_active(A(0));
+    if (gls_unit_ok && gls_unit == A(0)) { ++gls_skip_unit; RET0; }
+    gls_unit = A(0); gls_unit_ok = 1;
+    glActiveTexture(A(0));
+    RET0;
+}
 GLFN(glAttachShader)         { ENTER; glAttachShader(A(0), A(1)); RET0; }
 GLFN(glBindFramebuffer)      { ENTER; isaac_glc_fbo_bind(A(0), A(1)); glBindFramebuffer(A(0), A(1)); RET0; }
 GLFN(glBindRenderbuffer)     { ENTER; isaac_glc_rb_bind(A(1)); glBindRenderbuffer(A(0), A(1)); RET0; }
-GLFN(glBindTexture)          { ENTER; isaac_glc_tex_bind(A(0), A(1)); glBindTexture(A(0), A(1)); RET0; }
-GLFN(glBlendEquation)        { ENTER; glBlendEquation(A(0)); RET0; }
-GLFN(glBlendFuncSeparate)    { ENTER; glBlendFuncSeparate(A(0), A(1), A(2), A(3)); RET0; }
+GLFN(glBindTexture) {
+    ENTER;
+    isaac_glc_tex_bind(A(0), A(1));
+    {
+        uint32_t u = gls_unit_ok ? gls_unit - 0x84C0u : 0u;          /* GL_TEXTURE0 */
+        uint32_t *slot = u < GLS_UNITS ? (A(0) == 0x0DE1u ? &gls_tex2d[u] : A(0) == 0x8513u ? &gls_texcube[u] : NULL) : NULL;
+        if (slot && *slot == A(1) + 1u) { ++gls_skip_tex; RET0; }    /* stored as name + 1: 0 means unknown */
+        if (slot) *slot = A(1) + 1u;
+    }
+    glBindTexture(A(0), A(1));
+    RET0;
+}
+GLFN(glBlendEquation) {
+    ENTER;
+    if (gls_blend_eq_ok && gls_blend_eq == A(0)) { ++gls_skip_blend; RET0; }
+    gls_blend_eq = A(0); gls_blend_eq_ok = 1;
+    glBlendEquation(A(0));
+    RET0;
+}
+GLFN(glBlendFuncSeparate) {
+    ENTER;
+    if (gls_blend_ok && gls_blend[0] == A(0) && gls_blend[1] == A(1) && gls_blend[2] == A(2) && gls_blend[3] == A(3)) { ++gls_skip_blend; RET0; }
+    gls_blend[0] = A(0); gls_blend[1] = A(1); gls_blend[2] = A(2); gls_blend[3] = A(3); gls_blend_ok = 1;
+    glBlendFuncSeparate(A(0), A(1), A(2), A(3));
+    RET0;
+}
 GLFN(glCheckFramebufferStatus) {
     ENTER;
     uint32_t st;                     /* round 37: remembered until an attachment changes */
@@ -217,7 +264,7 @@ GLFN(glDeleteFramebuffers) {
     glDeleteFramebuffers((GLsizei)A(0), names);
     RET0;
 }
-GLFN(glDeleteProgram)        { ENTER; isaac_glc_loc_flush(A(0)); glDeleteProgram(A(0)); RET0; }
+GLFN(glDeleteProgram)        { ENTER; isaac_glc_loc_flush(A(0)); if (gls_prog_ok && gls_prog == A(0)) gls_prog_ok = 0; glDeleteProgram(A(0)); RET0; }
 GLFN(glDeleteRenderbuffers) {
     ENTER;
     const GLuint *names = (const GLuint *)AP(1);
@@ -229,7 +276,13 @@ GLFN(glDeleteShader)         { ENTER; glDeleteShader(A(0)); RET0; }
 GLFN(glDeleteTextures) {
     ENTER;
     const GLuint *names = (const GLuint *)AP(1);
-    for (uint32_t i = 0; names && i < A(0); ++i) isaac_glc_tex_delete(names[i]);
+    for (uint32_t i = 0; names && i < A(0); ++i) {
+        isaac_glc_tex_delete(names[i]);
+        for (unsigned u = 0; u < GLS_UNITS; ++u) {
+            if (gls_tex2d[u] == names[i] + 1u) gls_tex2d[u] = 0;
+            if (gls_texcube[u] == names[i] + 1u) gls_texcube[u] = 0;
+        }
+    }
     glDeleteTextures((GLsizei)A(0), names);
     RET0;
 }
@@ -413,13 +466,25 @@ UMAT(glUniformMatrix3x4fv, glUniformMatrix3x4fv)
 UMAT(glUniformMatrix4fv, glUniformMatrix4fv)
 UMAT(glUniformMatrix4x2fv, glUniformMatrix4x2fv)
 UMAT(glUniformMatrix4x3fv, glUniformMatrix4x3fv)
-GLFN(glUseProgram)           { ENTER; glUseProgram(A(0)); RET0; }
+GLFN(glUseProgram) {
+    ENTER;
+    if (gls_prog_ok && gls_prog == A(0)) { ++gls_skip_prog; RET0; }
+    gls_prog = A(0); gls_prog_ok = 1;
+    glUseProgram(A(0));
+    RET0;
+}
 GLFN(glVertexAttribPointer) {
     ENTER;
     isaac_gl_vertex_attrib_pointer(A(0), (GLint)A(1), A(2), (GLboolean)A(3), (GLsizei)A(4), A(5));
     RET0;
 }
 GLFN(glVertexStream2fATI)    { ENTER; RET0; }
-GLFN(glViewport)             { ENTER; glViewport((GLint)A(0), (GLint)A(1), (GLsizei)A(2), (GLsizei)A(3)); RET0; }
+GLFN(glViewport) {
+    ENTER;
+    if (gls_vp_ok && gls_vp[0] == A(0) && gls_vp[1] == A(1) && gls_vp[2] == A(2) && gls_vp[3] == A(3)) { ++gls_skip_vp; RET0; }
+    gls_vp[0] = A(0); gls_vp[1] = A(1); gls_vp[2] = A(2); gls_vp[3] = A(3); gls_vp_ok = 1;
+    glViewport((GLint)A(0), (GLint)A(1), (GLsizei)A(2), (GLsizei)A(3));
+    RET0;
+}
 
 #endif /* ISAAC_WEB */
