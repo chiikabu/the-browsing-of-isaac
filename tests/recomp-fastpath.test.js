@@ -219,3 +219,15 @@ test('round 49: the imdct butterfly has a host fastpath with the verify mode', (
   assert.ok(fp.includes('void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,'), 'the host implementation');
   assert.ok(fp.includes('e2[-7] = k00 * A3[1] + k01 * A3[0];'), 'four butterflies per iteration in the source order');
 });
+
+test('round 50: the whole inverse_mdct has a host fastpath with the verify mode', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH wrap 0x00aa38a0: host inverse_mdct (host_fastpath.c)'), 'the wrapper for 0x00aa38a0');
+  assert.ok(lp.includes('if (!isaac_fast_verify_equal(host, buf, len)) isaac_fastpath_mismatch("inverse_mdct", n, bt);'), 'the verify mode compares the n floats at buffer');
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  for (const fn of ['imdct_iter0_loop', 'imdct_s_loop', 'imdct_ld654_loop', 'imdct_ilog'])
+    assert.ok(fp.includes(`static ${fn === 'imdct_ilog' ? 'int' : 'void'} ${fn}(`), `${fn}: the helper is on the host`);
+  assert.ok(fp.includes('if (off < so) return 0;                                       /* the original would crash here */'), 'a scratch below setup_offset is left to the lifted body');
+  assert.ok(fp.includes('buf2 = (float *)isaac_g(ab + (uint32_t)(to - (int32_t)((uint32_t)n2 * 4u)));'), 'the scratch is the guest temp region the original uses');
+  assert.ok(fp.includes('imdct_ld654_loop(n >> 5, buffer, n2 - 1, A, n);'), 'the last stage');
+});

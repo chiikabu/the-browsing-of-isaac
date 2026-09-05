@@ -64,6 +64,8 @@ void isaac_fastpath_count(uint32_t va, int kind);        /* round 27 exit census
 void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t a_va, uint32_t k1);  /* round 49 */
 void isaac_fast_imdct_r_loop_range(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t *lo, uint32_t *len);
 int  isaac_fast_imdct_r_loop_ok(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t a_va, uint32_t k1, uint32_t *lo, uint32_t *len);
+void isaac_fast_inverse_mdct(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);   /* round 50 */
+int  isaac_fast_inverse_mdct_ok(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);
 /* round 27 (host_fastpath.c): the archive keystream, ArchivedFile::read, the engine Mutex */
 int  isaac_fast_guest_range(uint32_t va, uint32_t len);
 int  isaac_fast_isaac(uint32_t ctx_va, uint32_t *edx_out);

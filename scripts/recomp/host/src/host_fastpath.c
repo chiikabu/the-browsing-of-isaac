@@ -80,6 +80,378 @@ void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t 
         e0 -= 8; e2 -= 8;
     }
 }
+
+/* Round 50: the whole of stb_vorbis's inverse_mdct (0x00aa38a0) -- the
+ * function the round-49 butterfly belongs to, 2.3 % of a 6x frame on its
+ * own and about 4 % with its helpers. It is transcribed from the Ghidra
+ * decompile statement by statement (the compiler's own operation order,
+ * so every single-precision product, sum and difference rounds where the
+ * binary's does), the helper loops included: iter0 (0x00aa30a0), the r loop
+ * (0x00aa3270, round 49), the s loop (0x00aa3430) and ld654 (0x00aa3620).
+ * Calling convention: buffer in ecx, n in edx, (f, blocktype) on the
+ * stack, a plain ret. The original keeps its n/2-float scratch either on
+ * the stack (alloca, when no alloc_buffer is installed: the host uses its
+ * own scratch then) or, as the engine has it, in the vorb's alloc_buffer
+ * at temp_offset - n/2*4 (temp_alloc; the host writes the same guest
+ * bytes the original would, and leaves temp_offset as the original does:
+ * taken and given back). A block that would not fit (temp_offset - size
+ * below setup_offset: the original dereferences NULL) is left to the
+ * lifted body. The output is the n floats at buffer, which the verify mode
+ * compares against the lifted body. The vorb layout it reads:
+ * +0x60 alloc_buffer, +0x68 setup_offset, +0x6c temp_offset,
+ * +0x43c A[2], +0x444 B[2], +0x44c C[2], +0x45c bit_reverse[2]. */
+#define IMDCT_MAX_N 8192u
+static float g_imdct_buf2[IMDCT_MAX_N / 2];
+
+static int imdct_ilog(int n) {           /* stb_vorbis ilog: floor(log2 n) + 1, 0 for n <= 0 */
+    static const signed char log2_4[16] = { 0,1,2,2,3,3,3,3,4,4,4,4,4,4,4,4 };
+    if (n < (1 << 14)) {
+        if (n < (1 << 4)) return n < 0 ? 0 : log2_4[n];
+        if (n < (1 << 9)) return 5 + log2_4[n >> 5];
+        return 10 + log2_4[n >> 10];
+    }
+    if (n < (1 << 24)) {
+        if (n < (1 << 19)) return 15 + log2_4[n >> 15];
+        return 20 + log2_4[n >> 20];
+    }
+    if (n < (1 << 29)) return 25 + log2_4[n >> 25];
+    if (n < (1 << 31)) return 30 + log2_4[n >> 30];
+    return 0;
+}
+
+static void imdct_iter0_loop(int cnt, float *e, int i_off, int k_off, const float *A) {
+    float *e2 = e + i_off + k_off;
+    float *e0 = e2 - k_off - 2;
+    int i;
+    for (i = cnt >> 2; i > 0; --i) {
+        float k00, k01;
+        k00 = e0[2] - e2[0];  k01 = e0[1] - e2[-1];
+        e0[2] = e2[0] + e0[2];  e0[1] = e0[1] + e2[-1];
+        e2[0]  = k00 * A[0] - k01 * A[1];
+        e2[-1] = k01 * A[0] + k00 * A[1];
+        k00 = e0[0] - e2[-2];  k01 = e0[-1] - e2[-3];
+        e0[0] = e0[0] + e2[-2];  e0[-1] = e0[-1] + e2[-3];
+        e2[-2] = k00 * A[8] - k01 * A[9];
+        e2[-3] = k01 * A[8] + k00 * A[9];
+        k00 = e0[-2] - e2[-4];  k01 = e0[-3] - e2[-5];
+        e0[-2] = e0[-2] + e2[-4];  e0[-3] = e0[-3] + e2[-5];
+        e2[-4] = k00 * A[16] - k01 * A[17];
+        e2[-5] = k01 * A[16] + k00 * A[17];
+        k00 = e0[-4] - e2[-6];  k01 = e0[-5] - e2[-7];
+        e0[-4] = e2[-6] + e0[-4];  e0[-5] = e0[-5] + e2[-7];
+        e2[-6] = k00 * A[24] - k01 * A[25];
+        e2[-7] = k01 * A[24] + k00 * A[25];
+        A += 32; e2 -= 8; e0 -= 8;
+    }
+}
+
+static void imdct_r_loop(int lim, float *e, int i_off, int k_off, const float *A, int k1) {
+    isaac_fast_imdct_r_loop((uint32_t)lim, isaac_va((void *)e), (uint32_t)i_off, (uint32_t)k_off,
+                            isaac_va((void *)A), (uint32_t)k1);
+}
+
+static void imdct_s_loop(int cnt, float *e, int i_off, int k_off, const float *A, int k1, int k0) {
+    const float A0 = A[0], A1 = A[1], A2 = A[k1], A3 = A[k1 + 1],
+                A4 = A[k1 * 2], A5 = A[k1 * 2 + 1], A6 = A[k1 * 3], A7 = A[k1 * 3 + 1];
+    float *e2 = e + i_off + k_off;
+    float *e0 = e2 - k_off - 2;
+    for (; cnt > 0; --cnt) {
+        float k00, k01;
+        k00 = e0[2] - e2[0];  k01 = e0[1] - e2[-1];
+        e0[2] = e0[2] + e2[0];  e0[1] = e0[1] + e2[-1];
+        e2[0]  = k00 * A0 - k01 * A1;
+        e2[-1] = k00 * A1 + k01 * A0;
+        k00 = e0[0] - e2[-2];  k01 = e0[-1] - e2[-3];
+        e0[0] = e0[0] + e2[-2];  e0[-1] = e0[-1] + e2[-3];
+        e2[-2] = k00 * A2 - k01 * A3;
+        e2[-3] = k00 * A3 + k01 * A2;
+        k00 = e0[-2] - e2[-4];  k01 = e0[-3] - e2[-5];
+        e0[-2] = e0[-2] + e2[-4];  e0[-3] = e0[-3] + e2[-5];
+        e2[-4] = k00 * A4 - k01 * A5;
+        e2[-5] = k00 * A5 + k01 * A4;
+        k00 = e0[-4] - e2[-6];  k01 = e0[-5] - e2[-7];
+        e0[-4] = e0[-4] + e2[-6];  e0[-5] = e0[-5] + e2[-7];
+        e2[-6] = k00 * A6 - k01 * A7;
+        e2[-7] = k00 * A7 + k01 * A6;
+        e2 -= k0; e0 -= k0;
+    }
+}
+
+static void imdct_ld654_loop(int cnt, float *e, int i_off, const float *A, int base_n) {
+    const float A2 = A[base_n >> 3];
+    float *z = e + i_off;
+    float *base = z - 16 * cnt;
+    for (; base < z; z -= 16) {
+        float f13, f10, f4, f6, f17, f11, f7, f14, f15, f12, f5, f8, f18, f20, f16, f21, f9, f19;
+        f13 = z[-1] - z[-9];
+        f10 = z[-9] + z[-1];
+        f4 = z[0] - z[-8];
+        f6 = z[-8] + z[0];
+        f17 = z[-3] - z[-11];
+        f11 = z[-11] + z[-3];
+        f7 = z[-2] - z[-10];
+        f14 = z[-10] + z[-2];
+        f15 = z[-14] - z[-6];
+        f12 = z[-6] + z[-14];
+        f5 = (f17 + f7) * A2;
+        f8 = z[-5] - z[-13];
+        f18 = (f17 - f7) * A2;
+        f7 = z[-12] - z[-4];
+        f20 = z[-4] + z[-12];
+        f17 = z[-7] - z[-15];
+        f16 = z[-15] + z[-7];
+        f21 = z[-13] + z[-5];
+        f9 = f6 - f20;
+        f20 = f20 + f6;
+        f19 = (f17 + f15) * A2;
+        f17 = (f15 - f17) * A2;
+        f6 = f12 + f14;
+        f14 = f14 - f12;
+        f12 = f11 - f16;
+        f16 = f16 + f11;
+        z[0] = f6 + f20;
+        z[-2] = f20 - f6;
+        f6 = f10 - f21;
+        f21 = f21 + f10;
+        z[-4] = f12 + f9;
+        z[-6] = f9 - f12;
+        f9 = f4 + f8;
+        f4 = f4 - f8;
+        z[-1] = f16 + f21;
+        z[-3] = f21 - f16;
+        z[-7] = f6 + f14;
+        f12 = f19 + f5;
+        z[-5] = f6 - f14;
+        f5 = f5 - f19;
+        f14 = f18 - f17;
+        f17 = f17 + f18;
+        z[-8] = f12 + f9;
+        z[-10] = f9 - f12;
+        z[-12] = f14 + f4;
+        z[-14] = f4 - f14;
+        f4 = f13 + f7;
+        f13 = f13 - f7;
+        z[-9] = f17 + f4;
+        z[-11] = f4 - f17;
+        z[-13] = f13 - f5;
+        z[-15] = f13 + f5;
+    }
+}
+
+/* may the host inverse_mdct run? a power-of-two n in the codec's range, a
+ * blocktype of 0 or 1, the stack (alloca) scratch path, and every table
+ * inside guest memory */
+int isaac_fast_inverse_mdct_ok(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt) {
+    uint32_t n2, n4, n8, a, b, c, br;
+    if (n < 64u || n > IMDCT_MAX_N || (n & (n - 1u)) || bt > 1u) return 0;
+    if (!isaac_is_guest_va(f_va) || !isaac_is_guest_va(f_va + 0x460u + bt * 4u + 3u)) return 0;
+    n2 = n >> 1; n4 = n >> 2; n8 = n >> 3;
+    {   /* alloc_buffer installed: the scratch is guest memory at temp_offset - n2*4 */
+        uint32_t ab = *(const uint32_t *)isaac_g(f_va + 0x60u);
+        if (ab) {
+            int32_t so = *(const int32_t *)isaac_g(f_va + 0x68u), to = *(const int32_t *)isaac_g(f_va + 0x6cu);
+            int32_t off = to - (int32_t)(n2 * 4u);
+            if (off < so) return 0;                                       /* the original would crash here */
+            if (!isaac_is_guest_va(ab + (uint32_t)off) || !isaac_is_guest_va(ab + (uint32_t)off + n2 * 4u - 1u)) return 0;
+        }
+    }
+    a = *(const uint32_t *)isaac_g(f_va + 0x43cu + bt * 4u);
+    b = *(const uint32_t *)isaac_g(f_va + 0x444u + bt * 4u);
+    c = *(const uint32_t *)isaac_g(f_va + 0x44cu + bt * 4u);
+    br = *(const uint32_t *)isaac_g(f_va + 0x45cu + bt * 4u);
+    if (!buf_va || !a || !b || !c || !br) return 0;
+    if (!isaac_is_guest_va(buf_va) || !isaac_is_guest_va(buf_va + n * 4u - 1u)) return 0;
+    if (!isaac_is_guest_va(a) || !isaac_is_guest_va(a + n2 * 4u - 1u)) return 0;
+    if (!isaac_is_guest_va(b) || !isaac_is_guest_va(b + n2 * 4u - 1u)) return 0;
+    if (!isaac_is_guest_va(c) || !isaac_is_guest_va(c + n4 * 4u - 1u)) return 0;
+    if (!isaac_is_guest_va(br) || !isaac_is_guest_va(br + n8 * 2u - 1u)) return 0;
+    return 1;
+}
+
+void isaac_fast_inverse_mdct(uint32_t buf_va, uint32_t n_u, uint32_t f_va, uint32_t bt) {
+    const int n = (int)n_u, n2 = n >> 1, n4 = n >> 2, n8 = n >> 3;
+    float *buffer = (float *)isaac_g(buf_va);
+    float *buf2 = g_imdct_buf2;
+    {
+        uint32_t ab = *(const uint32_t *)isaac_g(f_va + 0x60u);
+        if (ab) {
+            int32_t to = *(const int32_t *)isaac_g(f_va + 0x6cu);
+            buf2 = (float *)isaac_g(ab + (uint32_t)(to - (int32_t)((uint32_t)n2 * 4u)));
+        }
+    }
+    const float *A = (const float *)isaac_g(*(const uint32_t *)isaac_g(f_va + 0x43cu + bt * 4u));
+    const float *B = (const float *)isaac_g(*(const uint32_t *)isaac_g(f_va + 0x444u + bt * 4u));
+    const float *C = (const float *)isaac_g(*(const uint32_t *)isaac_g(f_va + 0x44cu + bt * 4u));
+    const uint16_t *bitrev = (const uint16_t *)isaac_g(*(const uint32_t *)isaac_g(f_va + 0x45cu + bt * 4u));
+    int ld, l, lim, bound;
+
+    /* step 1: twiddle the input into the scratch, in two halves */
+    {
+        float *d = buf2 + n2 - 2;
+        const float *AA = A;
+        const float *e = buffer;
+        const float *e_stop = buffer + n2;
+        for (; e != e_stop; e += 4) {
+            d[1] = AA[0] * e[0] - AA[1] * e[2];
+            d[0] = AA[0] * e[2] + AA[1] * e[0];
+            AA += 2; d -= 2;
+        }
+        e = buffer + n2 - 3;
+        for (; buf2 <= d; d -= 2) {
+            d[1] = -e[2] * AA[0] - -e[0] * AA[1];
+            d[0] = -e[0] * AA[0] - AA[1] * e[2];
+            AA += 2; e -= 4;
+        }
+    }
+    /* step 2: back into the buffer, the paper's w -> u */
+    {
+        const float *AA = A + n2 - 8;
+        if (A <= AA) {
+            const float *e0 = buf2 + n4 + 2;
+            const float *e1 = buf2 + 2;
+            float *d0 = buffer + n4;
+            float *d1 = buffer + 1;
+            do {
+                float a = e0[-2], b = e1[-2];
+                float v41 = e0[-1] - e1[-1];
+                float c, d, v43;
+                d0[1] = e0[-1] + e1[-1];
+                d0[0] = e1[-2] + e0[-2];
+                d1[0] = v41 * AA[4] - (a - b) * AA[5];
+                d1[-1] = (a - b) * AA[4] + v41 * AA[5];
+                c = e0[0]; v43 = e0[1] - e1[1]; d = e1[0];
+                d0[3] = e1[1] + e0[1];
+                d0[2] = e0[0] + e1[0];
+                e1 += 4; e0 += 4;
+                d1[2] = v43 * AA[0] - (c - d) * AA[1];
+                d1[1] = v43 * AA[1] + (c - d) * AA[0];
+                AA -= 8; d1 += 4; d0 += 4;
+            } while (A <= AA);
+        }
+    }
+    /* step 3: the butterflies -- two iter0 stages, four r loops at k1 16,
+     * r loops while l < (ld-3)>>1, s loops while l < ld-6, then ld654 */
+    ld = imdct_ilog(n);
+    imdct_iter0_loop(n >> 4, buffer, n2 - 1, -n8, A);
+    imdct_iter0_loop(n >> 4, buffer, n2 - n4 - 1, -n8, A);
+    imdct_r_loop(n >> 5, buffer, n2 - 1, -(n >> 4), A, 16);
+    imdct_r_loop(n >> 5, buffer, n2 - n8 - 1, -(n >> 4), A, 16);
+    imdct_r_loop(n >> 5, buffer, n2 - n8 * 2 - 1, -(n >> 4), A, 16);
+    imdct_r_loop(n >> 5, buffer, n2 - n8 * 3 - 1, -(n >> 4), A, 16);
+    l = 2; lim = 4;
+    bound = (ld - 4) >> 1;
+    while (l < bound) {
+        int k0 = n >> (l + 2);
+        lim <<= 1;
+        if (lim > 0) {
+            int i_off = n2 - 1, i;
+            for (i = lim; i != 0; --i) {
+                imdct_r_loop(n >> (l + 4), buffer, i_off, -(k0 >> 1), A, 1 << (l + 3));
+                i_off -= k0;
+            }
+        }
+        ++l;
+    }
+    if (l < ld - 7) {
+        int kbase = 1 << l, sh = l + 6, count = (ld - 7) - l;
+        do {
+            int k0 = n >> (sh - 4);
+            int k1 = kbase << 3;
+            int rlim = n >> sh;
+            kbase <<= 1;
+            if (rlim > 0) {
+                const float *A0 = A;
+                int i_off = n2 - 1;
+                do {
+                    imdct_s_loop(kbase, buffer, i_off, -(k0 >> 1), A0, k1, k0);
+                    --rlim; A0 += k1 * 4; i_off -= 8;
+                } while (rlim > 0);
+            }
+            ++sh; --count;
+        } while (count != 0);
+    }
+    imdct_ld654_loop(n >> 5, buffer, n2 - 1, A, n);
+    /* step 4: bit-reverse the buffer back into the scratch */
+    {
+        float *d0 = buf2 + n2 - 4;
+        float *d1 = buf2 + n4 - 4;
+        if (buf2 <= d1) {
+            float *d2 = buf2 + n2 - 2;
+            const uint16_t *br = bitrev;
+            do {
+                unsigned k = br[0];
+                d2[1] = buffer[k]; d2[0] = buffer[k + 1]; d1[3] = buffer[k + 2]; d1[2] = buffer[k + 3];
+                k = br[1];
+                d2[-1] = buffer[k]; d2[-2] = buffer[k + 1]; d1[1] = buffer[k + 2]; d1[0] = buffer[k + 3];
+                d1 -= 4; br += 2; d2 -= 4;
+            } while (buf2 <= d1);
+        }
+        /* step 7: the C twiddle across the scratch's two halves */
+        if (buf2 < d0) {
+            const float *Cp = C + 2;
+            float *d = buf2 + 2;
+            const float *dm;
+            do {
+                float a02 = d[-1] + d0[3];
+                float a11 = d[-2] - d0[2];
+                float b0 = d[-2] + d0[2];
+                float b1 = Cp[-2] * a02 + Cp[-1] * a11;
+                float b2 = Cp[-1] * a02 - Cp[-2] * a11;
+                float a13 = d[-1] - d0[3];
+                float c0, s, t, u, v, w, x;
+                const float *C1;
+                d[-2] = b0 + b1;
+                d[-1] = a13 + b2;
+                d0[2] = b0 - b1;
+                d0[3] = b2 - a13;
+                c0 = Cp[0]; C1 = Cp + 1;
+                s = d[1] + d0[1];
+                Cp += 4;
+                t = d[0] - d0[0];
+                u = C1[0] * s - c0 * t;
+                v = d[0] + d0[0];
+                w = d[1] - d0[1];
+                x = C1[0] * t + c0 * s;
+                d[0] = v + x;
+                d[1] = w + u;
+                d0[0] = v - x;
+                d0[1] = u - w;
+                d0 -= 4; dm = d + 2; d += 4;
+            } while (dm < d0);
+        }
+    }
+    /* step 8: the B window, four outputs per scratch pair, into the buffer */
+    {
+        float *d0 = buffer + n2 - 4;
+        const float *e = buf2 + n2 - 8;
+        if (buf2 <= e) {
+            float *d1 = buffer + 2;
+            const float *Bp = B + n2 - 2;
+            float *d3 = d0 + (n - n2) + 2;
+            float *d2 = buffer + n2 + 2;
+            do {
+                float p0, p1, e0v;
+                const float *B5, *B6, *e1p;
+                p0 = Bp[1] * e[6] - Bp[0] * e[7];
+                p1 = -e[6] * Bp[0] - Bp[1] * e[7];
+                d1[-2] = p0; d0[3] = -p0; d2[-2] = p1; d3[1] = p1;
+                p0 = Bp[-1] * e[4] - Bp[-2] * e[5];
+                p1 = -e[4] * Bp[-2] - Bp[-1] * e[5];
+                d1[-1] = p0; d0[2] = -p0; d2[-1] = p1; d3[0] = p1;
+                p0 = Bp[-3] * e[2] - Bp[-4] * e[3];
+                p1 = -e[2] * Bp[-4] - Bp[-3] * e[3];
+                d1[0] = p0; d0[1] = -p0; d2[0] = p1; d3[-1] = p1;
+                B5 = Bp - 5; e0v = e[0]; B6 = Bp - 6; e1p = e + 1;
+                e -= 8; Bp -= 8;
+                p0 = B5[0] * e0v - B6[0] * e1p[0];
+                p1 = -e0v * B6[0] - B5[0] * e1p[0];
+                d1[1] = p0; d0[0] = -p0; d1 += 4; d2[1] = p1; d0 -= 4; d3[-2] = p1; d3 -= 4; d2 += 4;
+            } while (buf2 <= e);
+        }
+    }
+    /* temp_offset is left as it was (the original restores what it took) */
+}
+
 /* the bytes the loop touches: [lo, lo + len) covering both runs (for the verify mode) */
 void isaac_fast_imdct_r_loop_range(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,
                                    uint32_t *lo, uint32_t *len) {

@@ -1900,6 +1900,45 @@ int main(int argc, char **argv) {
                         "fastpath: the imdct gate declines a run outside guest memory"); }
             }
 
+            /* Round 50: the whole inverse_mdct on the host -- the gate, and a
+             * zero block through every step (the tables are zero too, so the
+             * output is zero and nothing outside the buffer is touched) */
+            {
+                uint32_t fv = ISAAC_HEAP_VA + 0x220000u, bufv = ISAAC_HEAP_VA + 0x230000u, tab = ISAAC_HEAP_VA + 0x240000u;
+                uint8_t *f = (uint8_t *)isaac_g(fv);
+                float *buf = (float *)isaac_g(bufv);
+                unsigned i;
+                memset(f, 0, 0x480u);
+                *(uint32_t *)(f + 0x43c) = tab;              /* A[0]: 1024 floats */
+                *(uint32_t *)(f + 0x444) = tab + 0x1000u;    /* B[0] */
+                *(uint32_t *)(f + 0x44c) = tab + 0x2000u;    /* C[0]: 512 floats */
+                *(uint32_t *)(f + 0x45c) = tab + 0x2800u;    /* bit_reverse[0]: 256 uint16 */
+                memset(isaac_g(tab), 0, 0x3000u);
+                for (i = 0; i < 2048u + 8u; ++i) buf[i] = 1.0f;
+                check(isaac_fast_inverse_mdct_ok(bufv, 2048u, fv, 0u) == 1, "fastpath: the inverse_mdct gate admits a 2048 block with its tables in the heap");
+                check(isaac_fast_inverse_mdct_ok(bufv, 2048u, fv, 2u) == 0, "fastpath: the gate declines a blocktype past 1");
+                check(isaac_fast_inverse_mdct_ok(bufv, 1000u, fv, 0u) == 0, "fastpath: the gate declines a block that is not a power of two");
+                check(isaac_fast_inverse_mdct_ok(bufv, 32u, fv, 0u) == 0 && isaac_fast_inverse_mdct_ok(bufv, 16384u, fv, 0u) == 0,
+                      "fastpath: the gate declines blocks outside 64..8192");
+                *(uint32_t *)(f + 0x60) = tab + 0x4000u;      /* alloc_buffer */
+                *(uint32_t *)(f + 0x68) = 0x100u;             /* setup_offset */
+                *(uint32_t *)(f + 0x6c) = 0x1100u;            /* temp_offset: room for 0x1000 bytes of scratch */
+                check(isaac_fast_inverse_mdct_ok(bufv, 2048u, fv, 0u) == 1, "fastpath: the engine's alloc_buffer (temp_alloc) path is admitted when the scratch fits");
+                *(uint32_t *)(f + 0x6c) = 0x10ffu;
+                check(isaac_fast_inverse_mdct_ok(bufv, 2048u, fv, 0u) == 0, "fastpath: a scratch that would reach below setup_offset (the original's NULL) is left to the lifted body");
+                *(uint32_t *)(f + 0x6c) = 0x1100u;
+                memset(isaac_g(tab + 0x4000u + 0x100u), 0x5a, 0x1000u);
+                isaac_fast_inverse_mdct(bufv, 2048u, fv, 0u);
+                for (i = 0; i < 2048u && buf[i] == 0.0f; ++i) ;
+                check(i == 2048u, "fastpath: zero tables turn a block of ones into 2048 zeros");
+                check(buf[2048] == 1.0f && buf[2048 + 7] == 1.0f, "fastpath: nothing past the block is written");
+                check(*(uint32_t *)(f + 0x6c) == 0x1100u, "fastpath: temp_offset is left as it was (taken and given back)");
+                check(*(uint8_t *)isaac_g(tab + 0x4000u + 0x100u) != 0x5au, "fastpath: the scratch went into the guest temp region, where the original puts it");
+                *(uint32_t *)(f + 0x60) = 0u;
+                isaac_fast_inverse_mdct(bufv, 2048u, fv, 0u);
+                check(buf[0] == 0.0f && buf[2047] == 0.0f, "fastpath: without an alloc_buffer the host scratch serves");
+            }
+
             /* Round 37: the host GL cache. Renderbuffer parameters come from
              * the storage call, a framebuffer's status is remembered until
              * something that can change its completeness happens, locations

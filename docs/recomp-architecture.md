@@ -5697,3 +5697,70 @@ Round numbers: explorer census identical to round 43's; dispatch census
 11,730,132 dispatches, cache 11,628,857 hits / 99,718 fills; selftest
 361/0; the family 176/176 (the imdct pin in recomp-fastpath, the edge pin
 in recomp-web); the dist rebuilt on this module and played at 4x.
+
+### 21.64 Round 50: the whole inverse_mdct on the host
+
+Round 49 moved one butterfly loop of stb_vorbis's inverse MDCT to the host;
+this round moves the function that owns it, sub_00aa38a0, with its other
+three helpers -- the iter0 loop (0x00aa30a0), the s loop (0x00aa3430) and
+ld654 (0x00aa3620) -- so that a music or effect block is transformed by one
+host call instead of a lifted body making some forty lifted and host calls.
+
+**Transcription, not translation.** The host function is the Ghidra
+decompile statement by statement, temporaries and all, because the
+operation order is what makes the floats bit-identical: MSVC's rendering of
+the public-domain source hoists, reuses and reorders products, and the C
+source's own ordering would round differently in places. The pieces the
+decompile hides -- the register arguments of the helper calls -- came from
+the disassembly: the iter0 count is `n >> 4`, the r-loop count `n >> (l+4)`,
+the s-loop count `1 << (l+1)`, the ld654 count `n >> 5`, and `ilog` is taken
+of n. The step-3 loop bounds are the binary's, not the reference's: r loops
+while `l < (ld-3) >> 1`, s loops while `l < ld-6`, with `ld = ilog(n) - 1`
+(the source's `ilog` is the off-by-one one, a lookup table in
+FUN_00aa08f0, reproduced).
+
+**Where the scratch lives.** The original's n/2-float scratch is
+`temp_alloc`: `alloca` when the vorb has no `alloc_buffer`, otherwise a slice
+of that buffer at `temp_offset - size`, given back at the end. The first
+gate assumed the alloca path and refused an installed `alloc_buffer`; the
+verify census answered at once -- `sub_00aa38a0: 2114 lifted, 0 verified`
+-- the engine installs one (every one of the 2,114 blocks took that path),
+and a gate that declines everything looks exactly like that: read the
+census before the profile. The host now puts the scratch where the original
+puts it, `alloc_buffer + temp_offset - n/2*4`, writes the same guest bytes,
+leaves `temp_offset` as it finds it (taken and given back, the net the
+original leaves), and declines only a block that would reach below
+`setup_offset` -- the case the original dereferences NULL on. Without an
+`alloc_buffer` the host uses its own 16 KB scratch, since the alloca bytes
+below the guest stack pointer are nobody's to read.
+
+**Verification.** `ISAAC_FASTPATH_VERIFY=1` over the 2,000-frame explorer:
+`sub_00aa38a0: 0 lifted, 2114 verified`, 0 mismatches on the n floats at
+buffer -- and, because the lifted body runs in that mode, the round-49 r-loop
+wrapper inside it verified its 36,056 calls at the same time. The explorer's
+census is byte-identical (the round-43 md5). The selftest (372 checks) pins
+the gate -- a power of two in 64..8192, blocktype 0 or 1, the temp_alloc
+room -- and runs a block of ones through every step against zero tables:
+2,048 zeros out, nothing past the block written, `temp_offset` untouched,
+the scratch bytes landing in the guest temp region. The edge suite is
+22/22 with the music through the host decoder (the master RMS before,
+during and after the hidden minute reads as before).
+
+**Measurement.** Interleaved 6x profiles, two passes: r49 25.2 / 21.1
+ms a frame against r50 24.3 / 19.3 -- sub_00aa38a0 (2.2 %) and sub_00aa3620
+(0.6 %) gone from the top 40, `isaac_fast_inverse_mdct` at 0.6 % in their
+place, about 2 % of the frame. (The machine drifts between passes -- the
+same r49 build read 18.9 ms at 13:19 and 25.2 at 14:38 -- which is why the
+pairs are interleaved and read as pairs.) The node clock cannot see it:
+9095 -> 9020 ms over 3,000 frames, inside the noise, because the node
+explorer decodes about one block a frame while the browser's mixer keeps
+two streams and the effects fed. What is left of the decoder is the residue
+(sub_00aa2580, 0.8-0.9 %) and codebook (sub_00aa44d0, 0.6 %) paths.
+
+Two other lines of the profile are worth a note for later. `readPixels`
+(0.9-3.2 %, the engine's own 1x1 probe every dozen frames) is a GPU sync;
+an asynchronous readback through a pixel-pack buffer and a fence would
+remove the stall but hand the engine a pixel one frame late -- a semantic
+deviation the port does not make silently; if it is ever tried it is
+opt-in. `bufferSubData` (2.6-3.2 %) is the client-array ring's uploads,
+already halved by round 48's identical-block reuse.

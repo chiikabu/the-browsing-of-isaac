@@ -382,6 +382,34 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 # so the equivalence is measured on the game's own data, not assumed.
 # Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
 WRAP_PATCHES: dict[int, str] = {
+    # stb_vorbis inverse_mdct (round 50): buffer in ecx, n in edx, (f,
+    # blocktype) on the stack, plain ret; writes the n floats at buffer.
+    0x00aa38a0: """void sub_00aa38a0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00aa38a0: host inverse_mdct (host_fastpath.c) */
+  RECOMP_VA(0xaa38a0u);
+  uint32_t buf = s->ECX, n = s->EDX, f = MEMR32(s->ESP + 4u), bt = MEMR32(s->ESP + 8u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_inverse_mdct_ok(buf, n, f, bt)) { isaac_fastpath_count(0xaa38a0u, 1); sub_00aa38a0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t len = n * 4u;
+    uint8_t *snap = (uint8_t *)malloc(len);
+    uint8_t *host = (uint8_t *)malloc(len);
+    if (!snap || !host) { free(snap); free(host); isaac_fastpath_count(0xaa38a0u, 1); sub_00aa38a0__lifted(s); return; }
+    memcpy(snap, RECOMP_PTR(buf), len);
+    isaac_fast_inverse_mdct(buf, n, f, bt);
+    memcpy(host, RECOMP_PTR(buf), len);
+    memcpy(RECOMP_PTR(buf), snap, len);
+    sub_00aa38a0__lifted(s);
+    if (!isaac_fast_verify_equal(host, buf, len)) isaac_fastpath_mismatch("inverse_mdct", n, bt);
+    isaac_fastpath_count(0xaa38a0u, 2);
+    free(snap); free(host);
+    return;
+  }
+  isaac_fast_inverse_mdct(buf, n, f, bt);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
     # stb_vorbis imdct_step3_inner_r_loop (round 49): lim in ecx, e in edx,
     # (d0, k_off, A, k1) on the stack, plain ret. Touches two runs of
     # 8 * (lim >> 2) floats (host_fastpath.c has the exact range).

@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-49: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-50: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,18 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 50: the whole inverse_mdct on the host** (§21.64). sub_00aa38a0
+  with its iter0 / s / ld654 helpers, transcribed from the decompile
+  statement by statement (the helper register arguments from the
+  disassembly); the scratch goes where the original's `temp_alloc` puts it
+  (the engine installs an `alloc_buffer` -- the first gate refused all
+  2,114 calls, which the census showed as `0 verified`). Verify mode:
+  2,114 calls, 0 mismatches; census identical; selftest 372; edges 22/22.
+  Interleaved 6x profiles r49 25.2 / 21.1 -> r50 24.3 / 19.3 ms a frame
+  (about 2 % of the frame; the node clock cannot see it, node decodes one
+  block a frame). Left in the decoder: residue (0.8 %) and codebook
+  (0.6 %). `readPixels` (the engine's probe) would need an asynchronous
+  readback -- a one-frame-late pixel, opt-in only if ever.
 - **Round 49: -O3 for the lifted TUs, the imdct butterfly on the host,
   save + continue** (§21.63). The 38 lifted TUs compile at -O3 in the fast
   profile: +0.38 % module, the same compile time, an identical explorer
