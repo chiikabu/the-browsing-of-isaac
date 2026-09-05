@@ -33,7 +33,7 @@ test('build_boot.py: the web profile links with JSPI and Wasm-EH setjmp/longjmp;
   const src = readFileSync(join(lift, 'build_boot.py'), 'utf8');
   const webBlock = src.slice(src.indexOf('    if args.web:'), src.indexOf('    if args.fast:'));
   assert.ok(webBlock.length > 0, 'the web profile block exists before the fast profile block');
-  for (const flag of ['"-sJSPI"', '"-sJSPI_IMPORTS=emscripten_sleep"', '"-sSUPPORT_LONGJMP=wasm"'])
+  for (const flag of ['"-sJSPI"', '"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js"', '"-sSUPPORT_LONGJMP=wasm"'])
     assert.ok(webBlock.includes(flag), `web LDFLAGS carry ${flag}`);
   // JSPI_EXPORTS names wasm exports: 'isaac_run_main', never '_isaac_run_main'
   const m = webBlock.match(/"-sJSPI_EXPORTS=([A-Za-z0-9_,]+)"/);
@@ -70,7 +70,7 @@ test('SwapBuffers hands the frame to the browser: one JSPI suspension per presen
   const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
   const fn = win.slice(win.indexOf('void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {'));
   const body = fn.slice(0, fn.indexOf('\n}') + 2);
-  assert.ok(/#ifdef ISAAC_WEB\s*\/\*[^]*?\*\/\s*if \(isaac_web_yield_enabled\(\)\) emscripten_sleep\(0\);\s*#endif\s*\}$/.test(body),
+  assert.ok(/#ifdef ISAAC_WEB\s*\/\*[^]*?\*\/\s*if \(isaac_web_yield_enabled\(\)\) isaac_yield_js\(\);\s*#endif\s*\}$/.test(body),
     'the yield is the last thing SwapBuffers does, under ISAAC_WEB, gated on the runtime switch');
   assert.ok(body.indexOf('isaac_threads_slice(cpu); }') < body.indexOf('emscripten_sleep(0)'),
     'the thread slices run before the frame is handed over');

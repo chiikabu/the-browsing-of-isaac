@@ -133,8 +133,21 @@ typedef struct {
 } attrib_state;
 
 static attrib_state g_attribs[ISAAC_MAX_ATTRIBS];
-static GLuint g_vertex_vbo, g_index_ibo;
-static uint32_t g_vbo_capacity, g_ibo_capacity;
+/* Round 39: the staging buffers are rings. Every draw used to glBufferSubData
+ * its vertices and indices at offset 0 of one VBO and one IBO -- on top of the
+ * bytes the previous draw, still queued on the GPU, was reading. ANGLE keeps
+ * that correct with a copy or a stall per upload, and the browser profile
+ * charged 3.2% of a throttled frame to bufferSubData for 47 draws. A ring
+ * appends instead: a write never lands on bytes a queued draw still reads;
+ * when the remainder cannot hold a request the storage is orphaned with
+ * glBufferData(NULL) (the driver hands out fresh memory and the old block
+ * dies with the draws that read it). 4 MB holds ~90 frames of the menus'
+ * 45 KB a frame. The head is reported by isaac_gl_ring_head() for the
+ * selftest. */
+typedef struct { GLuint buf; uint32_t cap, head, orphans; } gl_ring;
+static gl_ring g_vring, g_iring;
+#define RING_VERTEX_BYTES (4u << 20)
+#define RING_INDEX_BYTES  (1u << 20)
 
 /* stats, reported by isaac_gl_report() -- this is a hot path, so it is
  * measured rather than guessed at. */
@@ -151,31 +164,43 @@ static unsigned type_size(GLenum t) {
 
 void isaac_gl_reset_state(void) {
     memset(g_attribs, 0, sizeof g_attribs);
-    g_vertex_vbo = g_index_ibo = 0;
-    g_vbo_capacity = g_ibo_capacity = 0;
+    memset(&g_vring, 0, sizeof g_vring);
+    memset(&g_iring, 0, sizeof g_iring);
 }
 
 static void ensure_buffers(void) {
-    if (!g_vertex_vbo) glGenBuffers(1, &g_vertex_vbo);
-    if (!g_index_ibo)  glGenBuffers(1, &g_index_ibo);
+    if (!g_vring.buf) glGenBuffers(1, &g_vring.buf);
+    if (!g_iring.buf) glGenBuffers(1, &g_iring.buf);
 }
 
-/* Grow-only streaming buffers. Reallocating with glBufferData(NULL) on growth
- * and glBufferSubData afterwards avoids reallocating every frame. */
-static void upload(GLenum target, GLuint buf, uint32_t *cap,
-                   const void *src, uint32_t bytes) {
-    glBindBuffer(target, buf);
-    if (bytes > *cap) {
-        uint32_t want = bytes + bytes / 2 + 4096;
-        glBufferData(target, (GLsizeiptr)want, 0, GL_STREAM_DRAW);
-        *cap = want;
+/* Append `bytes` (from `src`, or reserve them when src is NULL) to a ring and
+ * return the offset they occupy. Requests are 16-byte aligned so any
+ * attribute offset stays aligned to its type. */
+static uint32_t ring_put(GLenum target, gl_ring *r, uint32_t initial,
+                         const void *src, uint32_t bytes) {
+    uint32_t need = (bytes + 15u) & ~15u;
+    glBindBuffer(target, r->buf);
+    if (r->cap < need) {                       /* a single draw bigger than the ring: grow it */
+        r->cap = need + need / 2;
+        if (r->cap < initial) r->cap = initial;
+        glBufferData(target, (GLsizeiptr)r->cap, 0, GL_STREAM_DRAW);
+        r->head = 0;
+    } else if (r->head + need > r->cap) {      /* wrap: orphan, never overwrite */
+        glBufferData(target, (GLsizeiptr)r->cap, 0, GL_STREAM_DRAW);
+        r->head = 0;
+        ++r->orphans;
     }
+    uint32_t off = r->head;
 #ifdef __EMSCRIPTEN__
-    glBufferSubData(target, 0, (GLsizeiptr)bytes, src);
+    if (src) glBufferSubData(target, (GLintptr)off, (GLsizeiptr)bytes, src);
 #else
     (void)src;
 #endif
+    r->head += need;
+    return off;
 }
+uint32_t isaac_gl_ring_head(int which) { return which ? g_iring.head : g_vring.head; }
+uint32_t isaac_gl_ring_orphans(int which) { return which ? g_iring.orphans : g_vring.orphans; }
 
 /* ------------------------------------------------------- intercepted API -- */
 
@@ -261,14 +286,14 @@ static void stage_attributes(uint32_t vertex_count) {
 
     if (interleaved && (top - base) <= (uint32_t)stride0 * vertex_count + 256) {
         uint32_t bytes = top - base;
-        upload(GL_ARRAY_BUFFER, g_vertex_vbo, &g_vbo_capacity,
-               isaac_g(base), bytes);
+        uint32_t at = ring_put(GL_ARRAY_BUFFER, &g_vring, RING_VERTEX_BYTES,
+                               isaac_g(base), bytes);
         g_vertex_bytes += bytes;
         for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
             attrib_state *a = &g_attribs[i];
             if (!a->enabled || !a->configured || !a->client_ptr) continue;
             glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride,
-                                  (const void *)(uintptr_t)(a->client_ptr - base));
+                                  (const void *)(uintptr_t)(at + (a->client_ptr - base)));
         }
         return;
     }
@@ -281,18 +306,18 @@ static void stage_attributes(uint32_t vertex_count) {
         if (!a->enabled || !a->configured || !a->client_ptr) continue;
         total += (uint32_t)a->stride * vertex_count;
     }
-    upload(GL_ARRAY_BUFFER, g_vertex_vbo, &g_vbo_capacity, 0, total);
+    uint32_t at = ring_put(GL_ARRAY_BUFFER, &g_vring, RING_VERTEX_BYTES, 0, total);
     uint32_t off = 0;
     for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
         attrib_state *a = &g_attribs[i];
         if (!a->enabled || !a->configured || !a->client_ptr) continue;
         uint32_t bytes = (uint32_t)a->stride * vertex_count;
 #ifdef __EMSCRIPTEN__
-        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)off, (GLsizeiptr)bytes,
+        glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(at + off), (GLsizeiptr)bytes,
                         isaac_g(a->client_ptr));
 #endif
         glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride,
-                              (const void *)(uintptr_t)off);
+                              (const void *)(uintptr_t)(at + off));
         off += bytes;
         g_vertex_bytes += bytes;
     }
@@ -310,11 +335,11 @@ void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
     stage_attributes(maxi + 1u);
 
     uint32_t ibytes = (uint32_t)count * type_size(type);
-    upload(GL_ELEMENT_ARRAY_BUFFER, g_index_ibo, &g_ibo_capacity,
-           isaac_g(indices_va), ibytes);
+    uint32_t iat = ring_put(GL_ELEMENT_ARRAY_BUFFER, &g_iring, RING_INDEX_BYTES,
+                            isaac_g(indices_va), ibytes);
     g_index_bytes += ibytes;
 
-    glDrawElements(mode, count, type, (const void *)0);
+    glDrawElements(mode, count, type, (const void *)(uintptr_t)iat);
     ++g_draws;
 }
 
@@ -342,9 +367,11 @@ void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count,
 
 void isaac_gl_report(void) {
     isaac_log("[isaac][gl] client-array emulation: %llu draws, %llu indices "
-              "scanned, %llu vertex bytes staged, %llu index bytes staged",
+              "scanned, %llu vertex bytes staged, %llu index bytes staged; "
+              "rings orphaned %u / %u times (vertex %u KB, index %u KB)",
               (unsigned long long)g_draws,
               (unsigned long long)g_indices_scanned,
               (unsigned long long)g_vertex_bytes,
-              (unsigned long long)g_index_bytes);
+              (unsigned long long)g_index_bytes,
+              g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10);
 }

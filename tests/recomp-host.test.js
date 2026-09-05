@@ -710,3 +710,15 @@ test('loud-stub engine has no silent success path', () => {
   // Unknown purge must stop execution rather than desynchronise the stack.
   assert.match(t, /0xFFFF/);
 });
+
+test('round 39: the client-array staging buffers are rings -- appends, orphan on wrap, offsets carried into the pointers and the draw', () => {
+  const c = readFileSync(join(src, 'src', 'host_gl_clientarrays.c'), 'utf8');
+  assert.match(c, /static uint32_t ring_put\(GLenum target, gl_ring \*r, uint32_t initial,/, 'one append primitive for both rings');
+  assert.ok(c.includes('} else if (r->head + need > r->cap) {      /* wrap: orphan, never overwrite */'), 'a wrap orphans the storage instead of overwriting bytes a queued draw reads');
+  assert.ok(c.includes('if (src) glBufferSubData(target, (GLintptr)off, (GLsizeiptr)bytes, src);'), 'the upload lands at the ring head');
+  assert.ok(c.includes('(const void *)(uintptr_t)(at + (a->client_ptr - base)))'), 'interleaved attributes point at the ring offset');
+  assert.ok(c.includes('(const void *)(uintptr_t)(at + off))'), 'separate attributes point at the ring offset');
+  assert.ok(c.includes('glDrawElements(mode, count, type, (const void *)(uintptr_t)iat);'), 'the draw reads its indices at the ring offset');
+  assert.ok(!c.includes('glBufferSubData(target, 0,'), 'nothing writes at offset 0 any more');
+  assert.match(c, /rings orphaned %u \/ %u times/, 'the report counts the orphans');
+});

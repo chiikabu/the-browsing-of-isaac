@@ -324,6 +324,29 @@ isaac_import *isaac_resolve_shim(uint32_t target);
 /* Runs the shim and performs the callee's own `ret [N]`. Returns 1 if handled. */
 int isaac_indirect_call(uint32_t target, isaac_cpu *cpu);
 
+/* The host-side GL cache (host_gl_cache.c, round 37): renderbuffer
+ * parameters, framebuffer completeness and program locations answered from
+ * what the game set, so the web build skips the synchronous GL queries. */
+void isaac_glc_rb_bind(uint32_t name);
+void isaac_glc_rb_storage(uint32_t fmt, uint32_t w, uint32_t h, uint32_t samples);
+void isaac_glc_rb_delete(uint32_t name);
+int  isaac_glc_rb_param(uint32_t pname, uint32_t *out);
+void isaac_glc_tex_active(uint32_t unit);
+void isaac_glc_tex_bind(uint32_t target, uint32_t name);
+void isaac_glc_tex_image(uint32_t target);
+void isaac_glc_tex_delete(uint32_t name);
+void isaac_glc_fbo_bind(uint32_t target, uint32_t name);
+void isaac_glc_fbo_attach(uint32_t target, uint32_t attachment, uint8_t kind, uint32_t name, uint32_t extra);
+void isaac_glc_fbo_delete(uint32_t name);
+int  isaac_glc_fbo_status(uint32_t target, uint32_t *status);
+void isaac_glc_fbo_set_status(uint32_t target, uint32_t status);
+int  isaac_glc_loc_get(uint32_t prog, uint8_t kind, const char *name, int32_t *loc);
+void isaac_glc_loc_put(uint32_t prog, uint8_t kind, const char *name, int32_t loc);
+void isaac_glc_loc_flush(uint32_t prog);
+void isaac_glc_count_readpixels(void);
+void isaac_glc_report(void);
+void isaac_glc_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -181,6 +181,38 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 41: the archive windows** (§21.56). A run start fetched 812
+  1 MB windows (808 MB, 712 MB of `afterbirthp.a`) because a level load
+  walks scattered resources and the two-window cache of round 24e
+  thrashed; the renderer peaked at 2.4 GB. 32 LRU windows per file:
+  812 -> 466 windows (327 distinct) per run start; the bodies are detached after the copy, so the renderer peak fell from 2.8 GB to 1.9 GB (steady 1.1 GB). Selftest 356/0.
+- **Round 40: the wasm code cache** (§21.55). Cold runs are bimodal
+  because of V8's tier-up (Liftoff first, TurboFan on background threads
+  -- minutes on a Chromebook); the code cache that skips it needs a
+  cacheable response and `instantiateStreaming` on the fetch Response
+  itself, and both were broken (`no-store` on the dev server, a synthetic
+  Response in `play.mjs`). Fixed; `drive_perf.mjs`/`profile_play.mjs
+  profile_dir=<dir>` measure the warm start: cold 60.0 / warm 59.9 fps at 4x; Chrome stores the chunks (155-214 MB in Code Cache/wasm) but no reload deserialises them yet; the memory timeline found an 808 MB window-fetch burst per run start (round 41).
+- **Round 39: rings and a two-way cache** (§21.54). The client-array
+  staging buffers are rings (append, orphan on wrap: no `bufferSubData`
+  ever lands on bytes a queued draw reads), and the dispatch cache is
+  16,384 x 2 ways with a hit census (99.85 % in the menus, 99.35 % in a scripted run). 4x throttle: play
+  58.2 fps, frame work about 15 ms at the 4x throttle; profile: steady state `isaac_lifted_dispatch` 7.5 %, `bufferSubData` 1.7 %; cold runs are bimodal (V8 tier-up, round 40).
+- **Round 38: the dispatcher's cache** (§21.53). `recomp_call_indirect`
+  tries a 4096-slot direct-mapped (va, id) cache before the shim check and
+  the 18 MB index (`isaac_lifted_dispatch` was 10.9 % of a throttled
+  frame; 7.3 % after); a hidden document ticks on a slow timer
+  instead of stalling on requestAnimationFrame. 4x throttle: play 59.0
+  fps; 32.4 M dispatches in 3,000 frames still counted exactly.
+- **Round 37: the Chromebook budget** (§21.52). The web GL wrappers answer
+  renderbuffer parameters, framebuffer completeness and uniform/attrib
+  locations from a host-side cache of what the game set
+  (`host_gl_cache.c`; 3,000 frames: renderbuffer params 26,922/0, framebuffer status 7,450/8, locations 1,230,948/32 answered by the host), the present path
+  drains `glGetError` every 64th frame, and the per-frame yield is a
+  MessageChannel message paced by `requestAnimationFrame` when the frame
+  had spare time (was `setTimeout(0)`, clamped to 4 ms). `drive_perf.mjs`
+  at a 4x CPU throttle: play **60.0 fps** (was 28), SwiftShader 35.6
+  (was 27); memory renderer 1.2 GB + GPU process 0.5 GB working set. Selftest 354/0.
 - `node scripts/check-repo-safety.mjs` passes; no binary-derived material tracked.
 
 ## What changed this round (rounds 22-25: audio root cause, threads, JSPI)
@@ -216,6 +248,25 @@ selftest 196 checks (two stale pins fixed: the import canary is 728, the
 adopted-thread contract runs with slices off).
 
 ## Try it yourself
+
+**Measure the browser under a Chromebook-class budget (round 37):**
+```
+node scripts/recomp/web/run_web.mjs output/recomp/web-live 100000000 serve=1 interactive=1 port=8102 fast=1 instance=.scratch/game-bundle
+node scripts/recomp/web/drive_perf.mjs http://127.0.0.1:8102/ output/recomp/web-perf cpu=4 gl=hw seconds=30
+node scripts/recomp/web/profile_play.mjs http://127.0.0.1:8102/ output/recomp/web-profile cpu=4 gl=hw seconds=12
+```
+`cpu=4` is the DevTools CPU throttle, `gl=swiftshader` takes the GPU away,
+`profile_dir=<dir>` keeps a browser profile so the second run is the warm
+start (V8's code cache, round 40), `fresh_saves=1` drops the IndexedDB saves
+first so a warm run still starts a new run, `trace_wasm=1` reports Chrome's
+`v8.wasm` trace events, `js_flags=<flags>` reaches V8 (e.g.
+`--wasm-num-compilation-tasks=2` for a four-core machine's compiler); the
+perf driver also prints the lazy-read census (windows fetched / distinct,
+bytes per archive, the first offsets) and a memory timeline every 5 s;
+the perf driver prints the fps medians and the memory census, the profiler
+the self time by group and the top 40 functions. Measure on an idle machine
+and from a snapshot copy of the module (`boot=<dir>`): a relink overwrites
+`boot-web-fast/` under a running page.
 
 ```
 node scripts/recomp/web/run_web.mjs output/recomp/web-live 4000 serve=1 port=8099 fast=1     "input=420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150" keep=200

@@ -618,6 +618,49 @@ static int frame_cap(void) {
 }
 uint32_t isaac_frames_presented(void) { return g_frames_presented; }
 #ifdef ISAAC_WEB
+/* Round 37: the per-frame yield is not a timer. emscripten_sleep(0) is
+ * setTimeout(0), which Chrome clamps to 4 ms once timers nest five deep --
+ * and every frame resumes inside the previous timer's task, so the clamp
+ * was permanent: the profile at a 4x CPU throttle showed 11% of the frame
+ * idle. A MessageChannel message is a plain task with no clamp, queued
+ * behind whatever else is waiting (input, fetch completions, IndexedDB,
+ * the DevTools protocol), so the page stays responsive between frames.
+ * Not scheduler.yield(): its continuation outranks those tasks, and when
+ * the game is CPU-bound (a 4x throttle) nothing else ever ran -- the perf
+ * driver's evaluate calls hung for minutes.
+ *
+ * Pacing: the engine has no frame limiter of its own here (unclamped, the
+ * 4x-throttled page ran 122 fps), and frames the compositor never shows are
+ * wasted work. So a frame that took less than a display period (< 15 ms of
+ * work) waits for requestAnimationFrame -- one game frame per refresh, and
+ * a hidden tab pauses -- while a slower frame takes the message, so a 20 ms
+ * frame gives 50 fps rather than the 30 that vsync quantisation would.
+ * A hidden document gets no requestAnimationFrame at all, so a frame there
+ * waits on a 250 ms timer instead (the browser stretches it to about a
+ * second): the game ticks along slowly like the desktop game does
+ * unfocused, the engine's wall-clock delta stays small, and a tab brought
+ * back after an hour does not replay the hour. */
+EM_ASYNC_JS(void, isaac_yield_js, (void), {
+    var now = performance.now();
+    var work = Module.isaacYieldResumed ? now - Module.isaacYieldResumed : 1e9;
+    if (typeof document !== "undefined" && document.hidden) {
+        await new Promise(function (resolve) { setTimeout(resolve, 250); });
+    } else if (work < 15 && typeof requestAnimationFrame === "function") {
+        await new Promise(function (resolve) { requestAnimationFrame(function () { resolve(); }); });
+    } else {
+        if (!Module.isaacYieldChannel) {
+            Module.isaacYieldChannel = new MessageChannel();
+            Module.isaacYieldChannel.port1.onmessage = function () {
+                var r = Module.isaacYieldResolve; Module.isaacYieldResolve = null; if (r) r();
+            };
+        }
+        await new Promise(function (resolve) {
+            Module.isaacYieldResolve = resolve;
+            Module.isaacYieldChannel.port2.postMessage(0);
+        });
+    }
+    Module.isaacYieldResumed = performance.now();
+});
 /* ISAAC_YIELD=1: the web build yields to the event loop per frame and paces
  * itself on the wall clock -- interactive mode (round 25). */
 int isaac_web_yield_enabled(void) {
@@ -689,7 +732,7 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
      * runs (input events are delivered, the canvas is composited), and the
      * stack resumes on the next macrotask. Off unless ISAAC_YIELD=1, so the
      * headless runner keeps its as-fast-as-possible behaviour. */
-    if (isaac_web_yield_enabled()) emscripten_sleep(0);
+    if (isaac_web_yield_enabled()) isaac_yield_js();
 #endif
 }
 /* ---- message queue (round 14a) ------------------------------------------ */

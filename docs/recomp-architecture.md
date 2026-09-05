@@ -5155,3 +5155,248 @@ Round-2 flags:
 
 Artifacts: `output/recomp/lift/` (gitignored via the existing `/output/`
 rule in `.gitignore` — verified with `git check-ignore -v`).
+
+### 21.52 Round 37: the host GL cache, and a yield that is not a timer (the Chromebook budget)
+
+**The measure.** `scripts/recomp/web/drive_perf.mjs` drives the live page
+under headless Chromium with the machine's real GPU (ANGLE over D3D11 on an
+RTX 2060) and the DevTools CPU throttle standing in for a slow CPU
+(`Emulation.setCPUThrottlingRate` 4 -- roughly a Chromebook's integrated
+part). Round 32's baseline: 58 fps at full CPU, **28 fps at 4x** (27 with
+SwiftShader, so the ceiling was the CPU side, not the GPU).
+`scripts/recomp/web/profile_play.mjs` (new) records a V8 CPU profile of 12 s
+of play under the same throttle and sums self time per function. At 4x the
+frame cost 35.6 ms, and the top of the list was not the game:
+`getRenderbufferParameter` 17.0 %, `(idle)` 10.9 %, `isaac_lifted_dispatch`
+8.0 %, `checkFramebufferStatus` 5.9 %, `(program)` 5.6 %, `bufferSubData`
+2.1 %, `readPixels` 2.0 %, `wasm-to-js` 1.7 %, `getAttribLocation` 1.6 %,
+`getUniformLocation` 1.0 %, `getError` 1.0 % -- native WebGL getters 37 %
+of the frame, the lifted game 27 %, the host C 14 %.
+
+**What the engine does.** Every frame it re-validates each render target:
+binds the renderbuffer and asks its width, height and internal format back
+(`glGetRenderbufferParameteriv`, 9 per frame), re-attaches the same texture
+to the same framebuffer attachment point (`glFramebufferTexture2D`) and asks
+`glCheckFramebufferStatus`, and looks its uniforms and attributes up by
+name for every draw (`glGetUniformLocation`/`glGetAttribLocation`, ~410 per
+frame). In WebGL each of those is a synchronous round trip into the GPU
+process; on the desktop driver it was noise, in the browser it was a third
+of the frame.
+
+**The cache (`scripts/recomp/host/src/host_gl_cache.c`).** Every one of
+those answers is a function of what the game itself set, so the host keeps
+that state and the web wrappers answer from it; anything the tables do not
+know falls through to the real call, so the answers are exact:
+- renderbuffers: name -> (width, height, internal format, samples) from
+  `glRenderbufferStorage`; the sizes (`GL_RENDERBUFFER_WIDTH/HEIGHT/
+  INTERNAL_FORMAT/SAMPLES`) and the component bit counts of the sized
+  formats are answered from the table;
+- framebuffer status: name -> the last status GL returned, kept until
+  something that can change completeness happens to that framebuffer: an
+  attachment point gets a *different* image (re-attaching the same texture,
+  level and target -- what the engine does every frame -- changes nothing
+  and keeps the memo), an attached renderbuffer gets *different* storage,
+  an attached texture gets a new `glTexImage2D` (the bound 2D texture per
+  unit is tracked for that), an attached object is deleted, or the
+  framebuffer itself is. The default framebuffer is always complete.
+- locations: (program, attrib|uniform, name) -> location, forgotten when
+  the program is linked again or deleted (a 4096-slot open-addressing
+  table; names of 48+ characters fall through).
+The first cut forgot a framebuffer on *every* attachment call and answered
+0 of 7,458 status queries -- the census showed the engine re-attaches per
+frame -- hence the attachment-point rule. `glReadPixels` by the game is
+counted (0 in 3,000 frames: the 2 % in the profile was the runner's own
+frame capture, already gated on the page wanting a PNG), and the present
+path's `glGetError` drain runs every 64th frame unless `ISAAC_GL_CHECK=1`
+(errors are sticky until read, so nothing is lost; the count is a lower
+bound). One pre-existing GL error (0x501 at present #2, before this round)
+is still reported.
+
+**Census (3,000 headless frames, `run_web.mjs ... fast=1`, the final
+module):** renderbuffer parameters 26,922 answered / 0 to GL; framebuffer status 7,450 answered / 8 to GL (the first cut answered 0 of 7,458, the attachment-point rule 2,997 of 7,458; the 4,462 attachment changes now only switch configurations, and the 2 deletes are the forgets); locations 1,230,948 / 32; glReadPixels by the game 0 in the menus (the node explorer's GL census in play: 579 reads of a sub-64-pixel RGBA region in 3,391 play frames, the engine's own); 4,003,882 GL calls, 1 GL error (the pre-existing 0x501).
+
+**The yield.** `SwapBuffers` handed the frame to the browser with
+`emscripten_sleep(0)`, which is `setTimeout(0)` -- and Chrome clamps a
+timer to 4 ms once timers nest five deep. Every frame resumes inside the
+previous timer's task, so the clamp was permanent: the 10.9 % `(idle)` was
+4 ms a frame. Two replacements were measured. `scheduler.yield()` has no
+clamp but its continuation outranks every other task, and when the game is
+CPU-bound (the 4x throttle) nothing else ever ran: the perf driver's
+DevTools evaluate calls hung for minutes (the page itself rendered). A
+`MessageChannel` message is a plain task with no clamp, queued behind
+input, fetch completions, IndexedDB and the protocol, and the driver ran.
+Unclamped, the 4x page ran **122 fps** -- the engine has no frame limiter
+of its own here, and a frame the compositor never shows is wasted work --
+so the yield paces: a frame that took under 15 ms of work waits for
+`requestAnimationFrame` (one game frame per display refresh; a hidden tab
+pauses), a slower one takes the message, so a 20 ms frame gives 50 fps
+rather than the 30 that vsync quantisation would. `isaac_yield_js` is an
+`EM_ASYNC_JS` import, suspended by JSPI like `emscripten_sleep`
+(`-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js`).
+
+**Result (`drive_perf.mjs`, 30 s of walking and firing in the first
+room, medians of 1 s samples):**
+- 4x CPU throttle, real GPU: play **60.0 fps** (was 28), menu 59.9;
+  samples `22.7 11.2 39.5 49.7 57.1 58.1 56.6 57 56.2 44.9 60 60.2 59.8 60.2 55 60.1 60.1 60.1 58.9 60 59.7 60.3 60 60.1 60 60 60.1 57.8 60.4 60` (the first two are the level load).
+- 4x CPU throttle, SwiftShader (no GPU at all): play **35.6 fps** (was 27).
+- full CPU, real GPU: play 60.0 fps (was 58; the display pacing caps it).
+- the profile after, 4x: 20.5 ms per frame of which 18.1 % is `(idle)` -- the rAF wait, i.e. the frame has spare time -- lifted guest code 35.8 %, host C 19.2 %, native 14.0 %, `(program)` 8.5 %; the top functions are `isaac_lifted_dispatch` 10.9 %, `bufferSubData` 3.2 %, `wasm-to-js` 1.7 %, `isaac_indirect_call` 1.5 %, `readPixels` 1.2 % (the engine's own small readback), `isaac_glc_loc_get` 0.6 %; `getRenderbufferParameter`, `checkFramebufferStatus`, `getUniformLocation`, `getAttribLocation` and `getError` are gone from the list. The next lever is the indirect-call dispatch
+- memory, the same run (`SystemInfo.getProcessInfo` + the OS working
+  sets): renderer 1,198 MB working set (1,697 MB private), GPU process 507 MB working set (656 MB private), JS heap 104 MB; the SwiftShader run: renderer 1,031 MB and GPU process 576 MB working set. The wasm memory is 1088 MiB (`-sINITIAL_MEMORY`), the
+  preloaded assets live in JS ArrayBuffers; the 4 GB target holds with
+  room for the OS, and the two levers left are lazy asset fetches (round
+  28's lazy-read path) and the audio PCM copies.
+
+**Tests.** Selftest 354 checks / 0 failures (35 new `gl cache:`
+checks driving the tables directly: the fall-throughs, the sizes, every
+forget rule and the two keep rules, the location separation and flush);
+`tests/recomp-web.test.js` pins the wrappers' cache calls, the sparse
+error drain and the MessageChannel/rAF yield; `tests/recomp-jspi.test.js`
+follows the new import. `drive_perf.mjs` also reports the memory census.
+
+### 21.53 Round 38: the dispatcher's cache, and a hidden tab that keeps ticking
+
+**The dispatcher.** After round 37 the largest single entry of the 4x
+profile was `isaac_lifted_dispatch` at 10.9 % -- the indirect-call resolver
+itself, not what it calls. It resolves a target VA through `g_index`, one
+`uint16` per byte of `.text` (18 MB), so the call-site's usual target was a
+cache miss into that table on every call: 17.6 M dispatches in 4,000
+explorer frames (4,400 a frame), the six hottest entries 8.5 M of them
+(`sub_0040c6b0`, `sub_00a69510`, `sub_0040c630`, `sub_00a12240`,
+`sub_0040c200`, `sub_00a12420` -- small virtuals and vector helpers).
+`mkdispatch.py` now emits `isaac_lifted_dispatch_cached`: a 4096-slot
+direct-mapped (va, id) cache, 32 KB, that stays in L1/L2. A hit skips the
+index, the range check and the mode checks and still counts, so the
+census is unchanged; `recomp_call_indirect` tries it before the shim check
+(a hit is always an image VA the index resolved once, never a shim token).
+The cache is off while `ISAAC_HEARTBEAT`, `ISAAC_DISPATCH_WATCH` or
+`ISAAC_DISPATCH_TIME` is on, so those modes still see every dispatch. Block
+re-entries (1,567 in 4,000 frames) keep the old path.
+
+**The hidden tab.** Round 37's yield waits on `requestAnimationFrame` when
+the frame had spare time, and a hidden document gets no animation frames at
+all: the desktop app's Browser pane, opened in the background, sat at frame
+4. Now a hidden document waits on a 250 ms timer instead (the browser
+stretches it to about a second): the game ticks along slowly as the desktop
+game does unfocused, the engine's wall-clock delta stays small, and a tab
+brought back after an hour does not replay the hour.
+
+**Census and result (3,000 headless frames; `drive_perf.mjs` and
+`profile_play.mjs` at the 4x throttle with the real GPU):** 32,404,049 dispatches in 3,001 frames (1,553 block re-entries, 0 misses) -- the same count the uncached dispatcher reports, since a hit still counts; the GL cache census is unchanged (renderbuffer params 26,922/0, framebuffer status 7,450/8, locations 1,230,948/32).
+Play 59.0 fps median (menu 59.7); the profile: 19.0 ms per frame, 31.8 % of it `(idle)` (was 18.1 %: the frame's work fell from about 16.8 ms to about 13 ms at the 4x throttle), lifted guest code 29.9 %, host C 15.6 %, native 12.3 %, `(program)` 7.3 %; `isaac_lifted_dispatch` 10.9 % -> 7.3 % with `recomp_call_indirect` now visible at 2.3 % -- the remaining dispatcher time is the tail-jump trampoline (`recomp_run_pending`), which still resolves through the index (round 39 gives it the cache too); `readPixels` 3.0 % is the engine's own small readback in play; `bufferSubData` 1.9 %.
+
+**Tests.** `tests/recomp-fastpath.test.js` pins the cached entry, its
+counting, its mode gate and its place before the shim check; the web pins
+follow the hidden-document branch; selftest 354/0 (the host links
+the weak fallback).
+
+### 21.54 Round 39: ring-buffer staging, and a two-way dispatch cache
+
+**The rings.** The client-array emulation (§21.x, round 13) staged every
+draw's vertices and indices with `glBufferSubData` at offset 0 of one VBO
+and one IBO -- on top of the bytes the previous draw, still queued on the
+GPU, was reading. WebGL keeps that correct, but the way ANGLE keeps it
+correct is a copy or a stall per upload, and the throttled profile charged
+1.9-3.2 % of the frame to `bufferSubData` for 47 draws a frame (45 KB of
+vertices, 3.7 KB of indices). The buffers are rings now (`ring_put` in
+`host_gl_clientarrays.c`): a write appends at the head, 16-byte aligned,
+and the attribute pointers and the draw carry the offset; when the
+remainder cannot hold a request the storage is orphaned with
+`glBufferData(NULL)` -- the driver hands out fresh memory and the old block
+dies with the draws that read it -- so no upload ever lands on bytes a
+queued draw still reads. 4 MB of vertices and 1 MB of indices hold about
+90 and 270 frames of the menus; the census counts the orphans.
+
+**The cache, second cut.** Round 38's 4096-slot direct-mapped dispatch
+cache left `isaac_lifted_dispatch` at 7.3 %: the game's per-frame set of
+indirect targets is larger than the cache, and a direct-mapped cache
+thrashes on it. Now 16,384 sets of two ways (256 KB), the older way
+replaced on a fill, and the census reports the hit rate.
+
+**Census and result (3,000 headless frames; `drive_perf.mjs` and
+`profile_play.mjs` at the 4x throttle with the real GPU):** the rings were orphaned 32 (vertex) and 11 (index) times in 3,001 frames -- 142,015 draws, 136.6 MB of vertices and 11.1 MB of indices staged, every other GL count unchanged; the dispatch cache: 32,348,293 hits / 49,165 fills in the menus (99.85 %), and 12,289,187 hits / 80,576 fills (99.35 %) in a scripted run (Enter x7, then walking -- `web-census-play-r39`).
+Play 58.2 fps median (menu 59.8); the profile: bimodal from run to run, and the same for the round 38 module measured back to back (`isaac_lifted_dispatch` 23.1 % / 7.5 % on this module, 25.2 % / 24.5 % / 7.3 % on round 38's) while the cache census says 99 % hits either way -- so the 23 % runs are not misses. They are V8's baseline tier: every headless run is a cold start with a fresh browser profile, the 50 MB module is compiled by Liftoff first and optimised in the background, and a 12 s window taken 40 s into the run lands before or after the optimiser reaches the dispatcher. That finding is round 40 (the wasm code cache). The steady-state figures: 20.8 ms per frame, 26.7 % idle (frame work about 15 ms), `isaac_lifted_dispatch` 7.5 %, `recomp_call_indirect` 2.2 %, `bufferSubData` 1.7 %.
+The browser play test on the same module: run started after 9 Enters, screenshots after walking and after firing differ, 30 s of play at 45-60 fps (headless, software GL, another game tab live).
+
+**Tests.** `tests/recomp-host.test.js` pins the ring (one append primitive,
+orphan on wrap, offsets carried into the pointers and the draw, nothing
+writes at offset 0); `tests/recomp-fastpath.test.js` pins the two ways and
+the hit census; selftest 354/0.
+
+### 21.55 Round 40: the wasm code cache -- a warm start for the returning player
+
+**The finding.** Round 39's profiles were bimodal with the same module:
+`isaac_lifted_dispatch` 7 % in one run and 24 % in the next, while the
+dispatch cache's own census read 99 % hits in both. The variable was not
+the module but V8's tiers. Every headless run is a cold start in a fresh
+browser profile: the 50 MB module is compiled first by Liftoff (the
+baseline compiler, code two to three times slower) and only then, function
+by function on background threads, by TurboFan; a 12 s window taken 40 s
+into the run lands before or after the optimiser reaches the hot
+functions. On a 16-core desktop that catch-up takes about a minute; on a
+four-core Chromebook it takes several, and the CPU throttle does not model
+it (the DevTools throttle slows the main thread, not the compiler
+threads) -- so every measurement before this round was optimistic about
+the first minutes of a cold start and pessimistic about everything after.
+
+**The cache.** Chrome keeps a module's optimised machine code in the HTTP
+cache entry of the response it was compiled from, and reuses it on the next
+visit -- no Liftoff, no catch-up -- when three things hold: the module is
+at least 128 KB, it was compiled by `WebAssembly.instantiateStreaming` (or
+`compileStreaming`) from the `fetch` Response itself, and that response
+was cacheable. The port broke two of the three. The dev server
+(`run_web.mjs`) sent `Cache-Control: no-store` on everything, which
+forbids the cache entry; now a whole file served from disk carries a
+validator (`ETag` from size and mtime, `no-cache`, 304 on
+`If-None-Match`), while byte slices and base64 bodies stay `no-store`. The
+shipping page (`play.mjs`) counted the module's bytes for its progress bar
+by piping the fetch body through a `ReadableStream` into a synthetic
+`new Response(stream)` -- a response with no URL and no cache entry; now
+the fetch Response goes to `instantiateStreaming` and the progress bar
+reads a clone of the body. The shipping server already served the module
+immutable under its `?v=` hash (§21.49), so a dist visitor now gets the
+cache on the second visit.
+
+**Measured (`drive_perf.mjs ... profile_dir=<dir>`, a persistent browser
+profile: the first run is the cold start, the second the returning
+player; 4x CPU throttle, real GPU):** the dev page: cold play 60.0 fps median (the run start 68.4 s in, 9 Enters), warm 59.9 (fresh saves: `fresh_saves=1` drops the IndexedDB store first, or the warm run resumes the previous driver's run -- 4 Enters, another room); the dist: cold 59.7, warm 58.9 (the resumed run). The DevTools trace (`trace_wasm=1`, categories v8 / v8.wasm / blink / loading) settles what the cache does: a 120 s cold run shows `wasm.SerializeModule` x11 after `wasm.CompilationChunkFinished` x11, and the profile's `Code Cache/wasm` directory holds 155-214 MB of entries afterwards -- Chrome stores the optimised chunks -- but every reload, dev page or immutable dist alike, shows the same `wasm.StartStreamingCompilation`, `wasm.CompileLazy` x4,400 and `wasm.TopTierCompilation` x700 as a cold start and no deserialisation event. Whether that is a size limit on the entry, the lazy-compilation split, or the headless shell is not settled; the two fixes stand because they are prerequisites, and the warm start is not yet the returning player's start. The memory timeline (sampled every 5 s) found something more important: the renderer's working set peaks at 2.3-2.4 GB for about ten seconds around the run start and settles at 1.0 GB -- the same on the old `no-store` server and with the compiler limited to two threads, so neither the cache write nor TurboFan; the lazy-read census attributes it: one run start issues 812 window fetches, 808 MB, 712 MB of them from `afterbirthp.a`, as 1 MB XHR bodies the GC frees late (round 41)
+
+**Tests.** `tests/recomp-web.test.js` pins the validator, the `no-cache`/
+`no-store` split, the 304, the streamed fetch Response and the absence of
+the synthetic one, and the drivers' `profile_dir=`; `tests/recomp-ship.test.js`
+follows the progress-bar change.
+
+### 21.56 Round 41: the archive windows were thrashing -- 808 MB per run start
+
+**The finding.** Round 40's memory timeline showed the renderer at 2.3-2.4
+GB for about ten seconds around every run start, settling at 1.0 GB, on
+every server and with any number of compiler threads. The lazy-read
+census (`window.isaacLazyStats()`, printed by `drive_perf.mjs`) named the
+bytes: one run start makes 812 window fetches, 808 MB, 712 MB of them
+from `afterbirthp.a` and 89 MB from `afterbirth.a`, each a 1 MB
+`?off=&len=` XHR whose body the GC frees late. The first sixty offsets
+(`afterbirthp.a@264 266 265 270 226 227 221 236 227 266 267 ... 270 271
+272 270 271 272 273 269 270`) are not a scan: the same windows come back
+within a few reads. The wasm stacks under the fetches (`new Error().stack`
+inside the pread hook, names from the module's name section) run
+`fread` <- `sub_00a52820` (ArchivedFile's window fill) <- `sub_00a179c0` /
+`sub_009aa040` / `sub_00931050`: the level load reading its resources,
+scattered over a few dozen MB of the archive. Round 24e gave each windowed
+file two 1 MB windows -- enough for the mount loop, which alternates
+between the entry table at the end and one entry's data -- and a level
+load, touching three or more windows in rotation, refetched a window per
+read.
+
+**The fix (`host_shims_fs.c`).** A windowed entry has `FS_WIN_SLOTS` (32)
+windows in an LRU set: the slot used last is tried first, then the set; a
+miss fills an empty slot or evicts the least recently used. At most 32 MB
+per windowed file, and only for windows actually touched; the fill/hit
+census is `isaac_fs_window_stats()`.
+
+**Measured (`drive_perf.mjs`, 4x throttle, real GPU, a cold start):**
+the same cold start, before and after. Windows fetched per run start 812 (808 MB) -> 463-466 (461-464 MB; 324-327 of them distinct, so the level load really touches about 400 MB of `afterbirthp.a` and 43 MB of `afterbirth.a`, and the rest is a modest remaining re-fetch); the steady-state renderer working set 1.0 -> 1.1 GB (the resident windows). The peak did not move with the windows alone (2.8 GB): it was the fetched bodies themselves, 1 MB `ArrayBuffer`s the GC freed late, so the page now detaches each body right after copying it into the wasm heap (`ArrayBuffer.prototype.transfer(0)` frees the backing store at once; guarded for older browsers) -- peak 1.9 GB, settling to 1.1 GB within ten seconds. Neither V8's compiler (one compile thread: the same transient) nor the code-cache write is the remaining 0.8 GB; attributing it is round 42's memory dump. Play stays at 58-60 fps median at the 4x throttle; the browser play test (run start, walking and firing) and the node explorer smoke (2,000 frames, 2 runs, 1 death, main 0) pass on the relinked profiles.
+
+**Tests.** Selftest 356/0: the three windowed reads now cost
+three host reads (the far-back read finds window 0 resident), the census
+counts fills and hits; `tests/recomp-archives.test.js` pins the 32 slots,
+the LRU eviction and the census.

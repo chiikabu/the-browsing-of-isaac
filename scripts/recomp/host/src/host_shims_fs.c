@@ -21,6 +21,7 @@
  * host mapping (and IndexedDB for saves) without changing these handlers.
  */
 #include "isaac_host.h"
+#define FS_WIN_SLOTS 32           /* round 41: LRU windows per windowed file (see fs_window_read) */
 #include "shim_decls.h"
 
 #include <stdlib.h>
@@ -53,9 +54,9 @@ typedef struct {
     uint8_t *data;            /* file bytes (host heap) */
     uint32_t size, cap;
     char    *src;             /* lazy entries: the seed path the loader reads */
-    uint8_t *win[2];          /* windowed entries: two FS_WIN-byte caches of the host file */
-    uint32_t win_off[2], win_len[2];
-    uint8_t  win_last;        /* the slot used last; a miss refills the other one */
+    uint8_t *win[FS_WIN_SLOTS]; /* windowed entries: FS_WIN-byte caches of the host file, LRU (round 41) */
+    uint32_t win_off[FS_WIN_SLOTS], win_len[FS_WIN_SLOTS], win_tick[FS_WIN_SLOTS];
+    uint8_t  win_last;        /* the slot used last */
 } fs_entry;
 
 static fs_entry g_fs[FS_SLOTS];
@@ -205,8 +206,7 @@ static fs_entry *fs_new(const char *key, int is_dir) {
 static void fs_free_entry(fs_entry *e) {
     if (e->data) free(e->data);
     if (e->src) free(e->src);
-    if (e->win[0]) free(e->win[0]);
-    if (e->win[1]) free(e->win[1]);
+    for (unsigned wk = 0; wk < FS_WIN_SLOTS; ++wk) if (e->win[wk]) free(e->win[wk]);
     memset(e, 0, sizeof *e);
     fs_hash_rebuild();                        /* deletes are rare; keep the index exact */
 }
@@ -247,6 +247,16 @@ static uint32_t g_lazy_loads, g_lazy_failures, g_lazy_windowed;
  * every archive front to back at mount (its per-entry checksum), so the
  * window turns ~1.5 million 1 KB freads into ~1,500 host reads. */
 #define FS_WIN (1u << 20)
+/* Round 41: windows per file. Two windows served the mount loop (table +
+ * data) but thrashed on a level load: the engine reads a level's resources
+ * scattered over a few dozen MB of the archive, alternating between
+ * neighbouring windows, and the two-slot cache refetched 827 MB (831
+ * windows) for one run start -- 712 MB of afterbirthp.a alone -- as 1 MB
+ * XHR bodies that peaked the renderer at 2.4 GB before the GC caught up.
+ * 32 slots (32 MB per windowed file, only while touched) hold the working
+ * set; a miss evicts the least recently used. The fill/hit census is in
+ * isaac_fs_window_stats(). */
+static uint32_t g_win_tick, g_win_fills, g_win_hits;
 #ifdef __EMSCRIPTEN__
 EM_JS(int, isaac_fs_lazy_pread_avail, (void), {
     return (typeof Module.isaacLazyPread === "function") ? 1 : 0;
@@ -339,26 +349,35 @@ static int fs_pread(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
     return g_lazy_preader ? g_lazy_preader(src, dst, off, len) : isaac_fs_lazy_pread_js(src, dst, off, len);
 }
 /* Copy [pos, pos+want) of a windowed entry into dst; returns the bytes copied.
- * Two windows, because the mount loop alternates between the entry table at
- * the END of an archive and each entry's data near its start: one window
- * thrashed (4.7 GB of host reads for 1.5 GB of archives); the second one
- * keeps the table resident while the data window streams. */
+ * The mount loop alternates between the entry table at the END of an archive
+ * and each entry's data near its start (one window thrashed: 4.7 GB of host
+ * reads for 1.5 GB of archives); a level load walks a few dozen MB of
+ * scattered resources (two windows thrashed: 827 MB for one run start). The
+ * slots are an LRU set; the window used last is tried first. */
 static uint32_t fs_window_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t *dst) {
     uint32_t done = 0;
     while (done < want) {
         uint64_t p = pos + done;
-        unsigned k, hit = 2u;
+        unsigned k, hit = FS_WIN_SLOTS;
         if (p >= e->size) break;
-        for (k = 0; k < 2u; ++k)
+        k = e->win_last;
+        if (e->win[k] && p >= e->win_off[k] && p < (uint64_t)e->win_off[k] + e->win_len[k]) hit = k;
+        else for (k = 0; k < FS_WIN_SLOTS; ++k)
             if (e->win[k] && p >= e->win_off[k] && p < (uint64_t)e->win_off[k] + e->win_len[k]) { hit = k; break; }
-        if (hit == 2u) {
+        if (hit == FS_WIN_SLOTS) {
             uint64_t start = p & ~(uint64_t)(FS_WIN - 1u);
             uint32_t len = (uint32_t)((e->size - start) < FS_WIN ? (e->size - start) : FS_WIN);
             int n;
-            k = e->win[0] ? (e->win[1] ? (unsigned)(e->win_last ^ 1u) : 1u) : 0u;   /* an empty slot, else the older one */
+            unsigned oldest = 0;
+            for (k = 0; k < FS_WIN_SLOTS; ++k) {          /* an empty slot, else the least recently used */
+                if (!e->win[k]) { oldest = k; break; }
+                if (e->win_tick[k] < e->win_tick[oldest]) oldest = k;
+            }
+            k = oldest;
             if (!e->win[k]) e->win[k] = (uint8_t *)malloc(FS_WIN);
             if (!e->win[k]) break;
             n = fs_pread(e->src ? e->src : e->key, e->win[k], (uint32_t)start, len);
+            ++g_win_fills;
             if (n <= 0) {
                 isaac_log("[isaac][fs] windowed read of '%s' at %llu (%u bytes) FAILED (%d)",
                           e->src ? e->src : e->key, (unsigned long long)start, len, n);
@@ -368,7 +387,8 @@ static uint32_t fs_window_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t
             e->win_off[k] = (uint32_t)start; e->win_len[k] = (uint32_t)n;
             if (p >= (uint64_t)e->win_off[k] + e->win_len[k]) break;
             hit = k;
-        }
+        } else ++g_win_hits;
+        e->win_tick[hit] = ++g_win_tick;
         e->win_last = (uint8_t)hit;
         {
             uint32_t o = (uint32_t)(p - e->win_off[hit]);
@@ -382,13 +402,15 @@ static uint32_t fs_window_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t
 }
 static void fs_window_drop(fs_entry *e) {
     unsigned k;
-    for (k = 0; k < 2u; ++k) {
+    for (k = 0; k < FS_WIN_SLOTS; ++k) {
         if (e->win[k]) { free(e->win[k]); e->win[k] = NULL; }
-        e->win_off[k] = e->win_len[k] = 0;
+        e->win_off[k] = e->win_len[k] = e->win_tick[k] = 0;
     }
     e->win_last = 0; e->windowed = 0;
 }
 uint32_t isaac_fs_lazy_windowed(void) { return g_lazy_windowed; }
+/* the window census: host reads (fills) and reads served from a resident window */
+void isaac_fs_window_stats(uint32_t *fills, uint32_t *hits) { *fills = g_win_fills; *hits = g_win_hits; }
 
 /* Round 26: the engine verifies every archive entry at mount (a checksum
  * over the whole payload, 1.5 GB with the DLC set). The archives are

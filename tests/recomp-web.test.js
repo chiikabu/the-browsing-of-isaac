@@ -135,3 +135,54 @@ test('a served page is playable from the bare origin: it redirects to the run qu
   assert.ok(w.includes("cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');"),
     'a live page without frames= plays until it is closed');
 });
+
+test('round 37: the web GL wrappers answer from the host cache, the present drains errors sparsely, the yield is not a timer', () => {
+  const gl = readFileSync(join(hostSrc, 'host_gl_webgl.c'), 'utf8');
+  assert.ok(existsSync(join(hostSrc, 'host_gl_cache.c')), 'host_gl_cache.c holds the tables (compiled into every profile by the src glob)');
+  assert.ok(gl.includes('if (out && A(0) == GL_RENDERBUFFER && isaac_glc_rb_param(A(1), &v)) { *out = (GLint)v; RET0; }'),
+    'glGetRenderbufferParameteriv answers from the storage call');
+  assert.ok(gl.includes('if (isaac_glc_fbo_status(A(0), &st)) RETV(st);'), 'glCheckFramebufferStatus is remembered');
+  assert.ok(gl.includes('if (isaac_glc_loc_get(A(0), 1, name, &loc)) RETV((uint32_t)loc);'), 'glGetUniformLocation is remembered');
+  assert.ok(gl.includes('if (isaac_glc_loc_get(A(0), 0, name, &loc)) RETV((uint32_t)loc);'), 'glGetAttribLocation is remembered');
+  for (const feed of ['isaac_glc_rb_storage(A(1), A(2), A(3), 0);', 'isaac_glc_fbo_attach(A(0), A(1), 0, A(3), 0);',
+                      'isaac_glc_fbo_attach(A(0), A(1), 1, A(3), (A(2) << 8) ^ A(4));', 'isaac_glc_tex_image(A(0));', 'isaac_glc_loc_flush(prog);',
+                      'isaac_glc_tex_bind(A(0), A(1));', 'isaac_glc_tex_active(A(0));'])
+    assert.ok(gl.includes(feed), `the cache is fed by ${feed}`);
+  assert.ok(gl.includes('if (gl_check_mode() || (g_present_count & 63u) == 1u) {'),
+    'the present drains glGetError every 64th frame unless ISAAC_GL_CHECK=1');
+  const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
+  assert.ok(win.includes('if (isaac_web_yield_enabled()) isaac_yield_js();'), 'SwapBuffers yields through isaac_yield_js');
+  const yieldBody = win.slice(win.indexOf('EM_ASYNC_JS(void, isaac_yield_js, (void), {'), win.indexOf('/* ISAAC_YIELD=1:'));
+  assert.ok(yieldBody.includes('new MessageChannel()') && yieldBody.includes('port2.postMessage(0)'),
+    'the yield is a MessageChannel message');
+  assert.ok(yieldBody.includes('if (work < 15 && typeof requestAnimationFrame === "function") {'),
+    'a frame with spare time waits for the next refresh instead (one game frame per display frame)');
+  assert.ok(!/scheduler\.yield\(/.test(yieldBody), 'never scheduler.yield() (its continuation starves the other tasks)');
+  assert.ok(!/setTimeout\(resolve, 0\)|emscripten_sleep/.test(yieldBody), 'never a zero timer (the 4 ms clamp)');
+  assert.ok(yieldBody.includes('if (typeof document !== "undefined" && document.hidden) {') && yieldBody.includes('setTimeout(resolve, 250)'),
+    'a hidden document ticks on a slow timer instead of stalling on requestAnimationFrame');
+  const bb = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'build_boot.py'), 'utf8');
+  assert.ok(bb.includes('"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js"'), 'the yield import suspends the wasm stack');
+});
+
+test('round 40: the module is served cacheably and instantiated from the fetch itself, so V8 keeps its optimised code across visits', () => {
+  const r = readFileSync(join(root, 'scripts', 'recomp', 'web', 'run_web.mjs'), 'utf8');
+  assert.ok(r.includes("const whole = r.file && !u.searchParams.has('off') && !b64;"), 'whole files get a validator');
+  assert.ok(r.includes("'Cache-Control': whole ? 'no-cache' : 'no-store' };"), 'whole files are no-cache (revalidate), slices stay no-store');
+  assert.ok(r.includes("if (req.headers['if-none-match'] === etag) { res.writeHead(304,"), 'a matching validator answers 304');
+  const p = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(p.includes('await WebAssembly.instantiateStreaming(res, info);'), 'the shipping page streams the fetch Response itself');
+  assert.ok(!p.includes('new Response(counted'), 'no synthetic Response (it has no cache entry for the code cache)');
+  assert.ok(p.includes('const counted = res.clone().body.getReader();'), 'the progress bar reads a clone');
+  for (const d of ['drive_perf.mjs', 'profile_play.mjs']) {
+    const s = readFileSync(join(root, 'scripts', 'recomp', 'web', d), 'utf8');
+    assert.ok(s.includes('chromium.launchPersistentContext(PROFILE_DIR,'), `${d} can measure a warm start (profile_dir=)`);
+  }
+});
+
+test('round 41: a fetched archive window is detached right after the copy, so the GC never has to catch up with a level load', () => {
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes("if (b && typeof b.transfer === 'function' && !b.detached) b.transfer(0);"), 'transfer(0) frees the backing store at once (guarded for older browsers)');
+  assert.ok(/m\.HEAPU8\.set\(bytes, dst\);[\s\S]{0,400}dropBody\(bytes\);[\s\S]{0,400}return n;/.test(b), 'the window is copied, then dropped, and the count returned is the saved one');
+  assert.ok(/lazyBytes \+= len;[^\n]*\n\s*dropBody\(bytes\);/.test(b), 'a whole-file lazy read drops its body too');
+});

@@ -505,6 +505,13 @@ __attribute__((weak)) int isaac_lifted_dispatch(uint32_t va, CpuState *restrict 
     (void)va; (void)cpu;
     return 0;
 }
+/* Round 38: the dispatcher's direct-mapped cache (dispatch_tbl.c). A hit is
+ * always an image VA the index resolved once, never a shim token, so the
+ * indirect call may try it before the shim check. */
+__attribute__((weak)) int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu) {
+    (void)va; (void)cpu;
+    return 0;
+}
 
 /* Thunks the function-start scan never records (boot round 12: the static
  * destructor pass reached two of them through the atexit table): an
@@ -529,6 +536,8 @@ int isaac_decode_thunk(uint32_t va, int32_t *ecx_delta, uint32_t *dest) {
 }
 
 void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
+    if (isaac_lifted_dispatch_cached(target, s))
+        return;
     if (isaac_indirect_call(target, s))
         return;
     if (isaac_lifted_dispatch(target, s))

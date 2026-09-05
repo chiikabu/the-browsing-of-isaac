@@ -63,12 +63,18 @@ const cfg = {
   }],
 };
 let lazyReads = 0, lazyBytes = 0;
+const lazyByFile = new Map();                              // src -> bytes (round 40: what the run start reads)
+const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
+const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
+window.isaacLazyStats = () => ({ reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
+  top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
   try {
     const bytes = fetchSync(`/instance/${src}`);
     if (bytes.length < len) { log(`  lazy read of ${src}: ${bytes.length} bytes served, ${len} registered`); return 0; }
     m.HEAPU8.set(bytes.subarray(0, len), dst);
-    lazyReads += 1; lazyBytes += len;
+    lazyReads += 1; lazyBytes += len; lazyByFile.set(src, (lazyByFile.get(src) || 0) + len);
+    dropBody(bytes);
     return 1;
   } catch (e) {
     log(`  lazy read FAILED for ${src}: ${e.message}`);
@@ -139,12 +145,24 @@ function readSaves() {
 }
 window.isaacSaveStats = () => ({ persisted, unlinked, pending: persistPending.length });
 let preads = 0, preadBytes = 0;
+// Round 41: a fetched body is copied into the wasm heap and then DETACHED
+// (ArrayBuffer.prototype.transfer(0) frees the backing store at once). A run
+// start reads some 460 MB of archive windows in a few seconds; left to the
+// GC, those 1 MB bodies piled up to a 2.8 GB renderer peak before it caught
+// up -- on a 4 GB machine, the difference between playing and a dead tab.
+const dropBody = (bytes) => { try { const b = bytes.buffer; if (b && typeof b.transfer === 'function' && !b.detached) b.transfer(0); } catch (e) { /* older browser: the GC frees it */ } };
+const windowsSeen = new Set();
 cfg.isaacLazyPread = (src, dst, off, len) => {
   try {
     const bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);
     m.HEAPU8.set(bytes, dst);
-    preads += 1; preadBytes += bytes.length;
-    return bytes.length;
+    windowsSeen.add(`${src}@${off}`);
+    preads += 1; preadBytes += bytes.length; lazyByFile.set(src, (lazyByFile.get(src) || 0) + bytes.length);
+    const n = bytes.length;
+    dropBody(bytes);
+    if (preadTrail.length < 60) preadTrail.push(`${src.replace(/^.*\//, '')}@${(off / 1048576).toFixed(0)}`);
+    if (preadStacks.length < 3 && preads > 6) preadStacks.push((new Error().stack || '').split('\n').slice(1, 16).map((l) => l.trim().replace(/^at /, '').replace(/ \(.*$/, '')).join(' < '));
+    return n;
   } catch (e) {
     log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${e.message}`);
     return -1;

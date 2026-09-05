@@ -51,10 +51,12 @@ test('the browser driver mounts the same archive set through byte-slice reads', 
   assert.ok(/const n = readSync\(fd, buf, 0, len, off\);/.test(runner), 'the runner reads the slice positionally, never the whole archive');
 });
 
-test('a big lazy file is served through two windows and is never loaded whole', () => {
+test('a big lazy file is served through an LRU set of windows and is never loaded whole', () => {
   const fs = readFileSync(join(host, 'host_shims_fs.c'), 'utf8');
   assert.ok(fs.includes('#define FS_WIN (1u << 20)'), 'one window is 1 MB');
-  assert.ok(fs.includes('uint8_t *win[2];'), 'two windows per entry (the mount loop alternates table and data)');
+  assert.ok(fs.includes('#define FS_WIN_SLOTS 32') && fs.includes('uint8_t *win[FS_WIN_SLOTS];'), '32 windows per entry (round 41: a level load walks scattered resources; two slots thrashed 827 MB per run start)');
+  assert.ok(fs.includes('if (e->win_tick[k] < e->win_tick[oldest]) oldest = k;'), 'a miss evicts the least recently used window');
+  assert.ok(fs.includes('void isaac_fs_window_stats(uint32_t *fills, uint32_t *hits)'), 'the fill/hit census');
   assert.ok(/if \(e->size >= fs_window_min\(\) && fs_pread_avail\(\)\) \{\s*e->lazy = 0; e->windowed = 1;/.test(fs),
     'materialise turns a large lazy entry into a windowed one when the driver can pread');
   assert.ok(fs.includes('if (e->windowed) got = fs_window_read(e, pos, got, (uint8_t *)isaac_g(dst));'),

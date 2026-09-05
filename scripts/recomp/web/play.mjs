@@ -132,17 +132,21 @@ hooks.instantiateWasm = (info, receive) => {
     st.received = 0; render();
     const res = await fetch(rewrite('/boot.wasm'));
     if (!res.ok) throw new Error(`boot.wasm: HTTP ${res.status}`);
-    const reader = res.body.getReader();
-    const counted = new ReadableStream({
-      async pull(c) {
-        const { done, value } = await reader.read();
-        if (done) { c.close(); return; }
+    // Round 40: the fetch's own Response goes to instantiateStreaming. V8 keeps
+    // the optimised machine code of a module in the HTTP cache entry of the
+    // response it was compiled from (a cacheable URL, >= 128 KB, streaming);
+    // a synthetic `new Response(stream)` has no cache entry, so every visit
+    // compiled 50 MB with the baseline tier and ran slower for minutes while
+    // the optimiser caught up. The progress bar reads a clone of the body.
+    const counted = res.clone().body.getReader();
+    (async () => {
+      for (;;) {
+        const { done, value } = await counted.read();
+        if (done) return;
         st.received += value.length; render();
-        c.enqueue(value);
-      },
-      cancel() { reader.cancel(); },
-    });
-    const { instance, module } = await WebAssembly.instantiateStreaming(new Response(counted, { headers: { 'Content-Type': 'application/wasm' } }), info);
+      }
+    })().catch(() => {});
+    const { instance, module } = await WebAssembly.instantiateStreaming(res, info);
     st.done = true; render();
     setStatus('module compiled');
     receive(instance, module);

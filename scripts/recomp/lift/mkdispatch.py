@@ -117,6 +117,7 @@ def main():
             fh.write('extern const uint32_t g_bva[G_NBLOCK];\n')
             fh.write('extern const recomp_fn g_bfn[G_NBLOCK];\n')
         fh.write('int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu);\n')
+        fh.write('int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu);\n')
         fh.write('int isaac_dispatch_return(uint32_t va, CpuState *restrict cpu);\n')
         fh.write('void isaac_guest_call(uint32_t va, CpuState *restrict cpu);\n')
         fh.write('void isaac_guest_longjmp(CpuState *restrict cpu);\n')
@@ -214,6 +215,31 @@ static uint32_t g_watch_va[8], g_watch_hits[8];
 static double *g_dtime;
 static double g_dself, g_dtotal;
 static int g_dtime_on = -1;
+/* Round 38: a direct-mapped cache in front of the index. g_index is one
+ * uint16 per text byte -- 18 MB -- so every dispatch of a call-site's usual
+ * target was a cache miss into it (10.9% of a throttled browser frame,
+ * 4,400 dispatches a frame). 4096 (va, id) pairs stay in L1/L2; a hit skips
+ * the index, the range check and the mode checks, and still counts (the
+ * census must stay exact). Off while any dispatch mode (ISAAC_HEARTBEAT,
+ * ISAAC_DISPATCH_WATCH, ISAAC_DISPATCH_TIME) is on. */
+#define DCACHE_BITS 14           /* 16384 sets x 2 ways x 8 bytes = 256 KB */
+typedef struct { uint32_t va[2]; uint16_t id[2]; uint8_t next; } dcache_set;
+static dcache_set g_dcache[1u << DCACHE_BITS];
+static int g_dfast;      /* 1 once the modes are read and none is on */
+static uint32_t g_dchits, g_dcmiss;
+static inline uint32_t dcache_slot(uint32_t va) { return ((va >> 2) ^ (va >> 16)) & ((1u << DCACHE_BITS) - 1u); }
+int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu) {
+  dcache_set *c = &g_dcache[dcache_slot(va)];
+  uint16_t id;
+  if (!g_dfast || !va) return 0;
+  if (c->va[0] == va) id = c->id[0];
+  else if (c->va[1] == va) id = c->id[1];
+  else return 0;
+  ++g_dcalls; ++g_dchits;
+  g_dcount[id]++;
+  g_dfn[id](cpu);
+  return 1;
+}
 int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
   if (!g_index) build_index();
   uint32_t off = va - G_TEXT_LO;
@@ -259,6 +285,13 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
     g_dtime_on = (e && *e && *e != '0') ? 1 : 0;
     if (g_dtime_on) g_dtime = (double *)calloc(G_NDISPATCH, sizeof(double));
   }
+  if (!g_dfast && g_hb_every == 0 && g_watch_n == 0 && g_dtime_on == 0 && g_dcount) g_dfast = 1;
+  if (g_dfast) {                            /* a miss: fill the set's older way */
+    dcache_set *c = &g_dcache[dcache_slot(va)];
+    unsigned w = c->next & 1u;
+    c->va[w] = va; c->id[w] = id; c->next = (uint8_t)(w ^ 1u);
+    ++g_dcmiss;
+  }
   if (g_dtime_on && g_dtime) {
     double t0 = emscripten_get_now();
     g_dfn[id](cpu);
@@ -276,8 +309,8 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
  * trace is compiled out. */
 uint32_t isaac_dispatch_calls(void) { return g_dcalls; }
 void isaac_dispatch_report(void) {
-  fprintf(stderr, "[isaac][dispatch] %u dispatches (%u block re-entries, %u misses); hottest entries:\\n",
-          g_dcalls, g_dblocks, g_dmisses);
+  fprintf(stderr, "[isaac][dispatch] %u dispatches (%u block re-entries, %u misses; cache %u hits / %u fills); hottest entries:\\n",
+          g_dcalls, g_dblocks, g_dmisses, g_dchits, g_dcmiss);
   if (!g_dcount) return;
   for (int round = 0; round < 16; ++round) {
     uint32_t best = 0;

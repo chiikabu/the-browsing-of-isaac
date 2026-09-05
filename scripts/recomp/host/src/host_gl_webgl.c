@@ -64,6 +64,26 @@ void isaac_gl_vertex_attrib_pointer(GLuint index, GLint size, GLenum type,
 void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type, uint32_t indices_va);
 void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count, GLsizei prims);
 int  isaac_web_gl_ready(void);
+static int gl_check_mode(void);
+/* the host-side GL cache (host_gl_cache.c, round 37) */
+void isaac_glc_rb_bind(uint32_t name);
+void isaac_glc_rb_storage(uint32_t fmt, uint32_t w, uint32_t h, uint32_t samples);
+void isaac_glc_rb_delete(uint32_t name);
+int  isaac_glc_rb_param(uint32_t pname, uint32_t *out);
+void isaac_glc_tex_active(uint32_t unit);
+void isaac_glc_tex_bind(uint32_t target, uint32_t name);
+void isaac_glc_tex_image(uint32_t target);
+void isaac_glc_tex_delete(uint32_t name);
+void isaac_glc_fbo_bind(uint32_t target, uint32_t name);
+void isaac_glc_fbo_attach(uint32_t target, uint32_t attachment, uint8_t kind, uint32_t name, uint32_t extra);
+void isaac_glc_fbo_delete(uint32_t name);
+int  isaac_glc_fbo_status(uint32_t target, uint32_t *status);
+void isaac_glc_fbo_set_status(uint32_t target, uint32_t status);
+int  isaac_glc_loc_get(uint32_t prog, uint8_t kind, const char *name, int32_t *loc);
+void isaac_glc_loc_put(uint32_t prog, uint8_t kind, const char *name, int32_t loc);
+void isaac_glc_loc_flush(uint32_t prog);
+void isaac_glc_count_readpixels(void);
+void isaac_glc_report(void);
 
 static uint32_t g_gl_calls, g_gl_errors;
 static uint32_t g_present_count;
@@ -94,11 +114,16 @@ static uint32_t g_present_cap;
 void isaac_web_present(void) {
     if (!isaac_web_gl_ready()) return;
     ++g_present_count;
-    GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR) {
-        ++g_gl_errors;
-        if (g_gl_errors <= 20)
-            isaac_log("[isaac][gl] GL error 0x%x pending at present #%u", err, g_present_count);
+    /* Round 37: glGetError was 1% of a throttled frame. GL errors are sticky
+     * until read, so draining every 64th present still catches any (the
+     * count is a lower bound); ISAAC_GL_CHECK=1 drains every present. */
+    if (gl_check_mode() || (g_present_count & 63u) == 1u) {
+        GLenum err;
+        while ((err = glGetError()) != GL_NO_ERROR) {
+            ++g_gl_errors;
+            if (g_gl_errors <= 20)
+                isaac_log("[isaac][gl] GL error 0x%x pending at present #%u", err, g_present_count);
+        }
     }
     if (!isaac_wants_frame_js(g_present_count)) return;   /* no PNG wanted: no readback */
     int w = 0, h = 0;
@@ -121,6 +146,7 @@ void isaac_web_present(void) {
 void isaac_web_gl_report(void) {
     isaac_log("[isaac][gl] web backend: %u GL calls, %u GL errors, %u frames presented",
               g_gl_calls, g_gl_errors, g_present_count);
+    isaac_glc_report();
 }
 
 /* ---- the entry points ------------------------------------------------------ */
@@ -149,14 +175,21 @@ static void gl_check(const char *fn) {
 static uint8_t g_shader_is_frag[GL_SHADER_NAMES];
 
 GLFN(glClear)                { ENTER; glClear(A(0)); RET0; }
-GLFN(glActiveTexture)        { ENTER; glActiveTexture(A(0)); RET0; }
+GLFN(glActiveTexture)        { ENTER; isaac_glc_tex_active(A(0)); glActiveTexture(A(0)); RET0; }
 GLFN(glAttachShader)         { ENTER; glAttachShader(A(0), A(1)); RET0; }
-GLFN(glBindFramebuffer)      { ENTER; glBindFramebuffer(A(0), A(1)); RET0; }
-GLFN(glBindRenderbuffer)     { ENTER; glBindRenderbuffer(A(0), A(1)); RET0; }
-GLFN(glBindTexture)          { ENTER; glBindTexture(A(0), A(1)); RET0; }
+GLFN(glBindFramebuffer)      { ENTER; isaac_glc_fbo_bind(A(0), A(1)); glBindFramebuffer(A(0), A(1)); RET0; }
+GLFN(glBindRenderbuffer)     { ENTER; isaac_glc_rb_bind(A(1)); glBindRenderbuffer(A(0), A(1)); RET0; }
+GLFN(glBindTexture)          { ENTER; isaac_glc_tex_bind(A(0), A(1)); glBindTexture(A(0), A(1)); RET0; }
 GLFN(glBlendEquation)        { ENTER; glBlendEquation(A(0)); RET0; }
 GLFN(glBlendFuncSeparate)    { ENTER; glBlendFuncSeparate(A(0), A(1), A(2), A(3)); RET0; }
-GLFN(glCheckFramebufferStatus) { ENTER; RETV(glCheckFramebufferStatus(A(0))); }
+GLFN(glCheckFramebufferStatus) {
+    ENTER;
+    uint32_t st;                     /* round 37: remembered until an attachment changes */
+    if (isaac_glc_fbo_status(A(0), &st)) RETV(st);
+    st = glCheckFramebufferStatus(A(0));
+    isaac_glc_fbo_set_status(A(0), st);
+    RETV(st);
+}
 GLFN(glClampColorARB)        { ENTER; RET0; }
 GLFN(glClearColor)           { ENTER; glClearColor(AF(0), AF(1), AF(2), AF(3)); RET0; }
 GLFN(glClearDepth) {
@@ -177,11 +210,29 @@ GLFN(glCreateShader) {
     RETV(sh);
 }
 GLFN(glCullFace)             { ENTER; glCullFace(A(0)); RET0; }
-GLFN(glDeleteFramebuffers)   { ENTER; glDeleteFramebuffers((GLsizei)A(0), (const GLuint *)AP(1)); RET0; }
-GLFN(glDeleteProgram)        { ENTER; glDeleteProgram(A(0)); RET0; }
-GLFN(glDeleteRenderbuffers)  { ENTER; glDeleteRenderbuffers((GLsizei)A(0), (const GLuint *)AP(1)); RET0; }
+GLFN(glDeleteFramebuffers) {
+    ENTER;
+    const GLuint *names = (const GLuint *)AP(1);
+    for (uint32_t i = 0; names && i < A(0); ++i) isaac_glc_fbo_delete(names[i]);
+    glDeleteFramebuffers((GLsizei)A(0), names);
+    RET0;
+}
+GLFN(glDeleteProgram)        { ENTER; isaac_glc_loc_flush(A(0)); glDeleteProgram(A(0)); RET0; }
+GLFN(glDeleteRenderbuffers) {
+    ENTER;
+    const GLuint *names = (const GLuint *)AP(1);
+    for (uint32_t i = 0; names && i < A(0); ++i) isaac_glc_rb_delete(names[i]);
+    glDeleteRenderbuffers((GLsizei)A(0), names);
+    RET0;
+}
 GLFN(glDeleteShader)         { ENTER; glDeleteShader(A(0)); RET0; }
-GLFN(glDeleteTextures)       { ENTER; glDeleteTextures((GLsizei)A(0), (const GLuint *)AP(1)); RET0; }
+GLFN(glDeleteTextures) {
+    ENTER;
+    const GLuint *names = (const GLuint *)AP(1);
+    for (uint32_t i = 0; names && i < A(0); ++i) isaac_glc_tex_delete(names[i]);
+    glDeleteTextures((GLsizei)A(0), names);
+    RET0;
+}
 GLFN(glDepthFunc)            { ENTER; glDepthFunc(A(0)); RET0; }
 GLFN(glDisable)              { ENTER; glDisable(A(0)); RET0; }
 GLFN(glDisableVertexAttribArray) {
@@ -207,22 +258,46 @@ GLFN(glEnableVertexAttribArray) {
     glEnableVertexAttribArray(A(0));
     RET0;
 }
-GLFN(glFramebufferRenderbuffer) { ENTER; glFramebufferRenderbuffer(A(0), A(1), A(2), A(3)); RET0; }
-GLFN(glFramebufferTexture2D) { ENTER; glFramebufferTexture2D(A(0), A(1), A(2), A(3), (GLint)A(4)); RET0; }
+GLFN(glFramebufferRenderbuffer) { ENTER; isaac_glc_fbo_attach(A(0), A(1), 0, A(3), 0); glFramebufferRenderbuffer(A(0), A(1), A(2), A(3)); RET0; }
+GLFN(glFramebufferTexture2D) { ENTER; isaac_glc_fbo_attach(A(0), A(1), 1, A(3), (A(2) << 8) ^ A(4)); glFramebufferTexture2D(A(0), A(1), A(2), A(3), (GLint)A(4)); RET0; }
 GLFN(glGenFramebuffers)      { ENTER; glGenFramebuffers((GLsizei)A(0), (GLuint *)AP(1)); RET0; }
 GLFN(glGenRenderbuffers)     { ENTER; glGenRenderbuffers((GLsizei)A(0), (GLuint *)AP(1)); RET0; }
 GLFN(glGenTextures)          { ENTER; glGenTextures((GLsizei)A(0), (GLuint *)AP(1)); RET0; }
-GLFN(glGetAttribLocation)    { ENTER; RETV(glGetAttribLocation(A(0), (const GLchar *)AP(1))); }
+GLFN(glGetAttribLocation) {
+    ENTER;
+    const char *name = (const char *)AP(1);
+    int32_t loc;                     /* round 37: one lookup per (program, name) per link */
+    if (isaac_glc_loc_get(A(0), 0, name, &loc)) RETV((uint32_t)loc);
+    loc = glGetAttribLocation(A(0), name);
+    isaac_glc_loc_put(A(0), 0, name, loc);
+    RETV((uint32_t)loc);
+}
 GLFN(glGetCombinerInputParameterivNV) { ENTER; RET0; }
 GLFN(glGetProgramInfoLog)    { ENTER; glGetProgramInfoLog(A(0), (GLsizei)A(1), (GLsizei *)AP(2), (GLchar *)AP(3)); RET0; }
 GLFN(glGetProgramiv)         { ENTER; glGetProgramiv(A(0), A(1), (GLint *)AP(2)); RET0; }
-GLFN(glGetRenderbufferParameteriv) { ENTER; glGetRenderbufferParameteriv(A(0), A(1), (GLint *)AP(2)); RET0; }
+GLFN(glGetRenderbufferParameteriv) {
+    ENTER;
+    uint32_t v;                      /* round 37: answered from the storage call */
+    GLint *out = (GLint *)AP(2);
+    if (out && A(0) == GL_RENDERBUFFER && isaac_glc_rb_param(A(1), &v)) { *out = (GLint)v; RET0; }
+    glGetRenderbufferParameteriv(A(0), A(1), out);
+    RET0;
+}
 GLFN(glGetShaderInfoLog)     { ENTER; glGetShaderInfoLog(A(0), (GLsizei)A(1), (GLsizei *)AP(2), (GLchar *)AP(3)); RET0; }
 GLFN(glGetShaderiv)          { ENTER; glGetShaderiv(A(0), A(1), (GLint *)AP(2)); RET0; }
-GLFN(glGetUniformLocation)   { ENTER; RETV(glGetUniformLocation(A(0), (const GLchar *)AP(1))); }
+GLFN(glGetUniformLocation) {
+    ENTER;
+    const char *name = (const char *)AP(1);
+    int32_t loc;
+    if (isaac_glc_loc_get(A(0), 1, name, &loc)) RETV((uint32_t)loc);
+    loc = glGetUniformLocation(A(0), name);
+    isaac_glc_loc_put(A(0), 1, name, loc);
+    RETV((uint32_t)loc);
+}
 GLFN(glLinkProgram) {
     ENTER;
     GLuint prog = A(0);
+    isaac_glc_loc_flush(prog);
     glLinkProgram(prog);
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
@@ -239,10 +314,11 @@ GLFN(glMultiDrawArraysIndirectEXT) { ENTER; RET0; }
 GLFN(glProgramUniform1ivEXT) { ENTER; RET0; }
 GLFN(glReadPixels) {
     ENTER;
+    isaac_glc_count_readpixels();
     glReadPixels((GLint)A(0), (GLint)A(1), (GLsizei)A(2), (GLsizei)A(3), A(4), A(5), AP(6));
     RET0;
 }
-GLFN(glRenderbufferStorage)  { ENTER; glRenderbufferStorage(A(0), A(1), (GLsizei)A(2), (GLsizei)A(3)); RET0; }
+GLFN(glRenderbufferStorage)  { ENTER; isaac_glc_rb_storage(A(1), A(2), A(3), 0); glRenderbufferStorage(A(0), A(1), (GLsizei)A(2), (GLsizei)A(3)); RET0; }
 GLFN(glShaderSource) {
     ENTER;
     GLuint shader = A(0);
@@ -302,6 +378,7 @@ GLFN(glShaderSource) {
 }
 GLFN(glTexImage2D) {
     ENTER;
+    isaac_glc_tex_image(A(0));
     glTexImage2D(A(0), (GLint)A(1), (GLint)A(2), (GLsizei)A(3), (GLsizei)A(4), (GLint)A(5),
                  A(6), A(7), AP(8));
     RET0;

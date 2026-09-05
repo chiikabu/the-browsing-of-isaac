@@ -450,7 +450,7 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   for (const s of ["stages.module.total = sizeOf('boot.wasm');", "stages.image.total = sizeOf('isaac.segs.bin');",
     "stages.archives.total = EAGER_ARCHIVES.reduce((s, n) => s + (indexSize.get(`resources/packed/${n}`) || 0), 0)",
     "index.filter((e) => e.p.startsWith('resources/scripts/')).reduce((s, e) => s + e.s, 0)",
-    "WebAssembly.instantiateStreaming(new Response(counted, { headers: { 'Content-Type': 'application/wasm' } }), info)",
+    "WebAssembly.instantiateStreaming(res, info)", "const counted = res.clone().body.getReader();",
     'st.received += value.length; render();', 'if (st) { st.received += value.length; render(); }'])
     assert.ok(page.includes(s), `progress: ${s}`);
   // the eager list is the pipeline's

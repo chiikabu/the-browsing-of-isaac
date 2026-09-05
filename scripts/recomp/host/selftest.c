@@ -1860,6 +1860,95 @@ int main(int argc, char **argv) {
                 check(cpu.EAX == 0u, "and mode 1 does not exist");
             }
 
+            /* Round 37: the host GL cache. Renderbuffer parameters come from
+             * the storage call, a framebuffer's status is remembered until
+             * something that can change its completeness happens, locations
+             * live until the program is linked again; anything unknown falls
+             * through to the real GL. */
+            {
+                uint32_t v = 0, st = 0; int32_t loc = 0;
+                isaac_glc_reset();
+                check(!isaac_glc_rb_param(0x8D42u, &v), "gl cache: no renderbuffer bound -> the real GL answers");
+                isaac_glc_rb_bind(7);
+                check(!isaac_glc_rb_param(0x8D42u, &v), "gl cache: a renderbuffer without storage -> the real GL answers");
+                isaac_glc_rb_storage(0x8058u, 640, 480, 0);
+                check(isaac_glc_rb_param(0x8D42u, &v) && v == 640u, "gl cache: GL_RENDERBUFFER_WIDTH from the storage call");
+                check(isaac_glc_rb_param(0x8D43u, &v) && v == 480u, "gl cache: GL_RENDERBUFFER_HEIGHT too");
+                check(isaac_glc_rb_param(0x8D44u, &v) && v == 0x8058u, "gl cache: and the internal format");
+                check(isaac_glc_rb_param(0x8D50u, &v) && v == 8u, "gl cache: GL_RGBA8 has 8 red bits");
+                check(isaac_glc_rb_param(0x8D54u, &v) && v == 0u, "gl cache: and no depth bits");
+                check(!isaac_glc_rb_param(0x9999u, &v), "gl cache: an unknown pname falls through");
+                isaac_glc_rb_bind(8); isaac_glc_rb_storage(0x88F0u, 64, 32, 0);
+                check(isaac_glc_rb_param(0x8D54u, &v) && v == 24u && isaac_glc_rb_param(0x8D55u, &v) && v == 8u,
+                      "gl cache: GL_DEPTH24_STENCIL8 is 24 depth bits and 8 stencil bits");
+                isaac_glc_rb_bind(7);
+                check(isaac_glc_rb_param(0x8D42u, &v) && v == 640u, "gl cache: rebinding recalls the first renderbuffer");
+                isaac_glc_rb_delete(7);
+                check(!isaac_glc_rb_param(0x8D42u, &v), "gl cache: a deleted renderbuffer is forgotten");
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: the default framebuffer is complete");
+                isaac_glc_fbo_bind(0x8D40u, 3);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a fresh framebuffer asks GL");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: GL's answer is remembered");
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8));
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: an attachment call forgets it");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8));
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: re-attaching the same image changes nothing (the engine does it every frame)");
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8) ^ 1u);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: another level of the same texture is a change");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD6u);
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8));
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: a configuration seen before is remembered when it comes back (the engine swaps textures through one attachment point)");
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8) ^ 1u);
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD6u, "gl cache: each configuration keeps its own answer");
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 23, (0x0DE1u << 8));
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_tex_active(0x84C0u); isaac_glc_tex_bind(0x0DE1u, 21); isaac_glc_tex_image(0x0DE1u);
+                isaac_glc_fbo_attach(0x8D40u, 0x8CE0u, 1, 21, (0x0DE1u << 8));
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a new image for a texture a remembered configuration used (not the slot's) forgets it too");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_tex_active(0x84C1u); isaac_glc_tex_bind(0x0DE1u, 22); isaac_glc_tex_image(0x0DE1u);
+                check(isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a new image for another texture keeps it");
+                isaac_glc_tex_bind(0x0DE1u, 21); isaac_glc_tex_image(0x0DE1u);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a new image for the attached texture forgets it");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_fbo_attach(0x8D40u, 0x8D00u, 0, 8, 0);
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_rb_bind(9); isaac_glc_rb_storage(0x8058u, 8, 8, 0);
+                check(isaac_glc_fbo_status(0x8D40u, &st), "gl cache: storage for another renderbuffer keeps it");
+                isaac_glc_rb_bind(8); isaac_glc_rb_storage(0x88F0u, 64, 32, 0);
+                check(isaac_glc_fbo_status(0x8D40u, &st), "gl cache: the same storage again for the attached renderbuffer keeps it");
+                isaac_glc_rb_bind(8); isaac_glc_rb_storage(0x8058u, 16, 16, 0);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: storage for the attached renderbuffer forgets it");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_fbo_bind(0x8CA8u, 4);
+                check(!isaac_glc_fbo_status(0x8CA8u, &st), "gl cache: the read binding is its own framebuffer");
+                check(isaac_glc_fbo_status(0x8CA9u, &st) && st == 0x8CD5u, "gl cache: the draw binding still remembers");
+                isaac_glc_tex_delete(21);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: deleting an attached texture forgets it");
+                isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                isaac_glc_fbo_delete(3);
+                check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: deleting the bound framebuffer leaves the default bound");
+                isaac_glc_fbo_bind(0x8D40u, 3);
+                check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a deleted name comes back fresh");
+                check(!isaac_glc_loc_get(5, 1, "Transform", &loc), "gl cache: an unknown uniform asks GL");
+                isaac_glc_loc_put(5, 1, "Transform", 3);
+                check(isaac_glc_loc_get(5, 1, "Transform", &loc) && loc == 3, "gl cache: the uniform location is remembered");
+                check(!isaac_glc_loc_get(5, 0, "Transform", &loc), "gl cache: attribs and uniforms are separate");
+                check(!isaac_glc_loc_get(6, 1, "Transform", &loc), "gl cache: programs are separate");
+                isaac_glc_loc_put(5, 1, "Missing", -1);
+                check(isaac_glc_loc_get(5, 1, "Missing", &loc) && loc == -1, "gl cache: -1 is an answer too");
+                isaac_glc_loc_put(6, 0, "Position", 0);
+                isaac_glc_loc_flush(5);
+                check(!isaac_glc_loc_get(5, 1, "Transform", &loc), "gl cache: a link forgets the program's names");
+                check(isaac_glc_loc_get(6, 0, "Position", &loc) && loc == 0, "gl cache: and keeps the other program's");
+                { char longname[80]; memset(longname, 'a', 79); longname[79] = 0;
+                  isaac_glc_loc_put(5, 1, longname, 1);
+                  check(!isaac_glc_loc_get(5, 1, longname, &loc), "gl cache: a long name falls through"); }
+                isaac_glc_reset();
+            }
+
             /* Round 31: a file the guest writes reaches the persist hook on
              * fclose with its bytes and key; a delete reaches the unlink hook. */
             {
@@ -1968,7 +2057,7 @@ int main(int argc, char **argv) {
                 static const struct { uint32_t off, len; const char *what; } reads[] = {
                     { 1047000u, 4000u, "a read across the first 1 MB window edge is byte-exact" },
                     { WIN_FILE_SIZE - 300000u, 300000u, "a read across the short last window is byte-exact" },
-                    { 5u, 3u, "a small read far back lands in a re-fetched window, byte-exact" },
+                    { 5u, 3u, "a small read far back lands in a still-resident window, byte-exact" },
                 };
                 for (unsigned r = 0; r < sizeof reads / sizeof reads[0]; ++r) {
                     memset(&cpu, 0, sizeof cpu);
@@ -1994,6 +2083,9 @@ int main(int argc, char **argv) {
                 check(g_pread_calls - pbefore >= 3u && g_pread_calls - pbefore <= 6u,
                       "the three reads cost a handful of window refills, not one host read per fread");
                 check(isaac_fs_lazy_windowed() == wbefore + 1, "the entry was served windowed, never loaded whole");
+                { extern void isaac_fs_window_stats(uint32_t *, uint32_t *); uint32_t wf = 0, wh2 = 0; isaac_fs_window_stats(&wf, &wh2);
+                  check(g_pread_calls - pbefore == 3u, "round 41: three windows touched, three host reads -- the far-back read found window 0 still resident (LRU slots, not two)");
+                  check(wf >= 3u && wh2 >= 1u, "round 41: the window census counts the fills and the resident hits"); }
                 memset(&cpu, 0, sizeof cpu);
                 cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
                 isaac_w32(cpu.ESP, 0xDEADBEEF);

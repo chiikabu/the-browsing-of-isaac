@@ -220,9 +220,23 @@ const server = createServer((req, res) => {
   }
   recordServed(rel, body.length);
   if (b64) body = Buffer.from(body.toString('base64'), 'ascii');
+  // Round 40: a whole file served from disk gets a validator (size + mtime)
+  // and `no-cache`, so the browser revalidates it and may keep it -- V8
+  // stores a module's optimised machine code in the HTTP cache entry of the
+  // response it was compiled from, and `no-store` forbids that entry, which
+  // made every load of the 50 MB module a baseline-tier compile. Slices,
+  // base64 bodies and generated bodies stay `no-store`.
+  const whole = r.file && !u.searchParams.has('off') && !b64;
+  const headers = { 'Content-Type': b64 ? 'text/plain' : mime(r.file || rel), 'Content-Length': body.length,
+                    'Cache-Control': whole ? 'no-cache' : 'no-store' };
+  if (whole) {
+    const st = statSync(r.file);
+    const etag = `"${st.size}-${Math.floor(st.mtimeMs)}"`;
+    headers.ETag = etag;
+    if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' }); res.end(); return; }
+  }
   // the type follows the file served, not the request path: '/' is the page
-  res.writeHead(200, { 'Content-Type': b64 ? 'text/plain' : mime(r.file || rel), 'Content-Length': body.length,
-                       'Cache-Control': 'no-store' });
+  res.writeHead(200, headers);
   res.end(body);
 });
 await new Promise((ok) => server.listen(PORT, '127.0.0.1', ok));
