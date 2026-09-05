@@ -5898,11 +5898,24 @@ Escape/Backspace go back. Export zips the file's `persistentgamedata` and
 `gamestate` (and their `rep_` forms) from the saves store; import takes a
 zip from that export or a bare `.dat`, renumbers it into the chosen file's
 slot and reloads (the engine holds the old data in memory). The FPS viewer
-is a small paper in the top-left corner with the frame rate in the same
-font, fed by the status line each second, remembered in `localStorage`. The
-game's own Options menu is engine-drawn and engine-driven; adding an item
-there is engine work of another size, so the toggle lives in this menu (and
-`?stats=1` still shows the full status line).
+is plain text in the top-left corner -- the frame rate in the same font, a
+light shadow under the ink -- fed by the status line each second; the
+setting is a real one: it lives in the saves store as `page-settings.json`
+beside the game's files (a reload, an export and import, a reset all treat
+it like a save), with `localStorage` as the first read. The game's own
+Options menu is engine-drawn and engine-driven (the anm2 has one animation
+per option -- Fullscreen, ChargeBars, ExtraHUD, ... -- over a scrolling
+paper, and the item table is code); adding an item there is engine work of
+another size, so the toggle lives in this menu (and `?stats=1` still shows
+the full status line).
+
+The first cut of the strip painted a flat rectangle of the paper's median
+colour under the new text, and the rectangle showed against the strip's
+shading; the second erases only the ink -- every dark or anti-aliased pixel
+in the letters' rows takes the median of its own row's paper pixels -- and
+sets the text a pixel heavier (the glyphs land twice, a pixel apart) to
+match the strip's hand-lettered weight, from the pristine sheet in the
+instance's archive so a rebuild never works from its own output.
 
 **Proof.** `drive_editfile.mjs` reaches the menu as a player does on the
 shipping page -- title, Enter to the save select, Down onto EDIT FILE, Enter

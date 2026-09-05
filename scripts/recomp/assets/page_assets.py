@@ -145,13 +145,28 @@ def patch_sheet(sheet_png: bytes, fnt: bytes, atlas_png: bytes) -> tuple[bytes, 
     sx, sy, sw, sh = STRIP
     strip = sheet.crop((sx, sy, sx + sw, sy + sh))
     paper, ink = strip_colours(strip)
-    for x in range(STRIP_TEXT_X[0], STRIP_TEXT_X[1]):
-        for y in range(STRIP_TEXT_Y[0], STRIP_TEXT_Y[1]):
-            strip.putpixel((x, y), paper + (255,))
+    # erase the letters only: an ink pixel (dark, or an anti-aliased edge) takes
+    # the median of its own row's paper pixels, so the strip's shading survives
+    # and no rectangle shows; the rows are the letters' (the border rows stay)
+    px = strip.load()
+    lum = lambda p: (p[0] * 299 + p[1] * 587 + p[2] * 114) // 1000
+    ink_lim = lum(paper) - 18
+    for y in range(STRIP_TEXT_Y[0] + 2, STRIP_TEXT_Y[1] - 6):
+        row = [px[x, y] for x in range(STRIP_TEXT_X[0], STRIP_TEXT_X[1])]
+        clean = [p for p in row if p[3] > 200 and lum(p) > ink_lim]
+        if len(clean) < 8:
+            continue
+        med = tuple(sorted(c[i] for c in clean)[len(clean) // 2] for i in range(3)) + (255,)
+        for x in range(STRIP_TEXT_X[0], STRIP_TEXT_X[1]):
+            p = px[x, y]
+            if p[3] > 200 and lum(p) <= ink_lim:
+                px[x, y] = med
+    # the strip's letters are the font's, a pixel heavier: the glyphs land twice, a pixel apart
     text = render_text(font, atlas, "EDIT FILE", ink)
-    tx = STRIP_TEXT_X[0] + (STRIP_TEXT_X[1] - STRIP_TEXT_X[0] - text.width) // 2
+    tx = STRIP_TEXT_X[0] + (STRIP_TEXT_X[1] - STRIP_TEXT_X[0] - text.width - 1) // 2
     ty = 13 - 4                                  # the strip's letters sit at y 13; the glyph boxes start 4 px above
     strip.alpha_composite(text, (tx, ty))
+    strip.alpha_composite(text, (tx + 1, ty))
     sheet.paste(strip, (sx, sy))
     out = io.BytesIO()
     sheet.save(out, format="PNG", optimize=True)
@@ -181,19 +196,27 @@ def build(bundle_dir: str, quiet: bool = False) -> dict:
         if not quiet:
             print("page-assets: no %s / %s in %s, nothing to do" % (ARCHIVE, BASE_ARCHIVE, bundle_dir))
         return {"repacked": False, "files": [], "sheet_sha256": None}
+    # the pristine sheet: the instance's archive when it sits beside the bundle
+    # (the bundle's own entry is the patched one after the first build, and the
+    # letters are cut from the paper it came with)
+    pristine = os.path.join(os.path.dirname(os.path.abspath(bundle_dir)), "game-instance", ARCHIVE)
     try:
         with A.Archive(arch) as ar:
             raw = {k: entry_bytes(ar, k) for k in EXTRACT}
             version = ar.version
             sheet_key = A.key_of(A.resource_key(SHEET))
             current = raw[SHEET]
+        source = current
+        if os.path.isfile(pristine):
+            with A.Archive(pristine) as pr:
+                source = entry_bytes(pr, SHEET)
     except (ValueError, OSError, SystemExit) as e:
         # not the game's archive (a fixture stands in for it), or one without the menu's entries
         if not quiet:
             print("page-assets: %s is not the game's archive (%s), nothing to do" % (ARCHIVE, str(e).splitlines()[0][:120]))
         return {"repacked": False, "files": [], "sheet_sha256": None}
     os.makedirs(out_dir, exist_ok=True)
-    patched, facts = patch_sheet(current, raw[FONT_FNT], raw[FONT_PNG])
+    patched, facts = patch_sheet(source, raw[FONT_FNT], raw[FONT_PNG])
     # already patched? the entry regenerates to itself (the pristine sheet does not)
     already = current == patched
     if not already:

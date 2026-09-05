@@ -59,6 +59,12 @@ export function createEditFileMenu(opts) {
   const state = { open: false, slot: 0, cursor: 0, ready: false, loading: null, message: null, fps: null, fpsOn: false, closing: false };
   const A = { menu: null, sheet: null, paper: null, cursor: null, font: null, atlas: null, sounds: new Map() };
   try { state.fpsOn = localStorage.getItem('isaac-fps-viewer') === '1'; } catch (e) { /* no storage */ }
+  // the saves store's copy of the setting wins once it is read (it is the one that travels)
+  if (opts.settings && opts.settings.load) {
+    opts.settings.load().then((s) => {
+      if (s && typeof s.fpsViewer === 'boolean') { state.fpsOn = s.fpsViewer; try { localStorage.setItem('isaac-fps-viewer', s.fpsViewer ? '1' : '0'); } catch (e) { /* no storage */ } }
+    }).catch(() => {});
+  }
 
   const overlay = document.createElement('canvas');
   overlay.id = 'menu-overlay';
@@ -157,10 +163,10 @@ export function createEditFileMenu(opts) {
     gg.imageSmoothingEnabled = false;
     gg.clearRect(0, 0, fpsEl.width, fpsEl.height);
     if (state.fps == null) return;
+    // plain text in the game's font: a light shadow a pixel down-right, the ink on top
     const text = `${Math.round(state.fps)} FPS`;
-    // a sliver of the seed paper under the text, the way the game frames its numbers
-    gg.drawImage(A.paper, 0, 0, A.paper.width, A.paper.height, 0, 0, (measure(text) + 16) * SCALE, 24 * SCALE);
-    drawText(gg, text, 8, 4, A.atlas);
+    drawText(gg, text, 3, 3, A.atlasLight);
+    drawText(gg, text, 2, 2, A.atlas);
   };
 
   const open = async (slot) => {
@@ -185,6 +191,8 @@ export function createEditFileMenu(opts) {
     if (i === 3) {
       state.fpsOn = !state.fpsOn;
       try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }
+      // a real setting: it travels with the saves store (and its export/import), not just this browser's storage
+      if (opts.settings && opts.settings.save) opts.settings.save({ fpsViewer: state.fpsOn }).catch(() => {});
       fpsEl.hidden = !state.fpsOn;
       play('select'); draw(); return;
     }
