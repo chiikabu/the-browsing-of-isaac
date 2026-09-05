@@ -244,3 +244,17 @@ test('round 51: a retired wrapper leaves the lifted TU clean (the body back unde
   assert.ok(lp.includes('print("wrap-patch %s: retired, the lifted body is %s again in %s" % (name, name, tu.name))'), 'a retired wrapper is undone in the TU');
   assert.ok(lp.includes('text = text.replace("void %s__lifted(CpuState *restrict s);\\n" % name, "", 1)'), 'its forward declaration goes too');
 });
+
+test('round 52: the save-select delete confirmation is gated by the page (EDIT FILE), the engine flow untouched without a page', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH 0x009d9d59 (round 52): the EDIT FILE menu.'), 'the block patch at 0x9d9d59');
+  // the block text is a Python literal in lift_patches.py (its newlines are escapes there)
+  assert.ok(lp.includes('if (!isaac_editfile_gate(EDI)) {') && lp.includes('goto L_009da447;'), 'the gate skips to the common exit');
+  assert.ok(lp.includes('u44180_4 = ((uint32_t)0xb7fb20u);'), 'the block still pushes DeleteConfirmationAppear when the gate says go');
+  const win = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_win.c'), 'utf8');
+  assert.ok(win.includes('if (typeof window === "undefined" || typeof window.isaacEditFile !== "function") return 1;'), 'no page menu: the engine prompt');
+  assert.ok(win.includes('if (window.isaacEditFileDelete === slot) { window.isaacEditFileDelete = -1; return 1; }'), 'the menu chose Delete: the engine prompt now');
+  assert.ok(win.includes('slot = (int)*(const uint32_t *)isaac_g(menu_va + 4u);'), 'the slot is this[1]');
+  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
+  assert.ok(rt.includes('int  isaac_editfile_gate(uint32_t menu_va);'), 'declared for the lifted TUs');
+});

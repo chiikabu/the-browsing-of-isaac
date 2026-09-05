@@ -143,10 +143,10 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     // the tree: the page, the module, the image, the bundle under instance/, the index, the manifest, the siblings
     const got = walk(dist).sort();
     const bundleFiles = walk(tree.bundle).map((p) => `instance/${p}`);
-    const expected = ['play.html', 'play.mjs', 'boot_web.mjs', 'boot.mjs', 'boot.wasm', 'isaac.segs.bin', 'instance_index.json', 'dist.json', ...bundleFiles,
+    const expected = ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'boot.mjs', 'boot.wasm', 'isaac.segs.bin', 'instance_index.json', 'dist.json', ...bundleFiles,
       'boot.wasm.gz', 'instance/resources/packed/sfx.a.gz', ...(hasBr ? ['boot.wasm.br', 'instance/resources/packed/sfx.a.br'] : [])].sort();
     assert.deepEqual(got, expected);
-    for (const f of ['play.html', 'play.mjs', 'boot_web.mjs']) assert.ok(readFileSync(join(dist, f)).equals(readFileSync(join(web, f))), `${f} is the page's file`);
+    for (const f of ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs']) assert.ok(readFileSync(join(dist, f)).equals(readFileSync(join(web, f))), `${f} is the page's file`);
     assert.ok(readFileSync(join(dist, 'boot.wasm')).equals(tree.modFiles['boot.wasm']), 'the module is copied');
     assert.ok(readFileSync(join(dist, 'isaac.segs.bin')).equals(tree.segsBytes), 'the image is copied');
     assert.ok(readFileSync(join(dist, 'instance', '.bundle.json')).equals(readFileSync(join(tree.bundle, '.bundle.json'))), 'the bundle manifest travels along');
@@ -452,7 +452,7 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   assert.ok(page.includes("if (params.get('stats') === '1') $('fps').hidden = false;") && page.includes("if (params.get('saves') === '1') $('saves-btn').hidden = false;"),
     'the status line and the saves button are opt-in');
   assert.ok(page.includes("$('bar-fill').style.width = `${pct.toFixed(1)}%`;"), 'one bar for the three fetch stages and the boot');
-  assert.ok(page.includes("if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open) toggleFullscreen();"), 'F toggles fullscreen');
+  assert.ok(page.includes("if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();"), 'F toggles fullscreen (not while the EDIT FILE menu is up)');
   assert.ok(page.includes("stage.requestFullscreen().then(() => canvas.focus())"), 'fullscreen keeps the keyboard on the canvas');
   // the progress accounting: module and image from dist.json, archives + scripts from the index, streamed while the module is compiled
   for (const s of ["stages.module.total = sizeOf('boot.wasm');", "stages.image.total = sizeOf('isaac.segs.bin');",
@@ -497,7 +497,7 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
 
 test('ship.py ships the three page files and mirrors the runner\'s index policy', () => {
   const py = rd('scripts', 'recomp', 'assets', 'ship.py');
-  assert.ok(py.includes('PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs")'), 'the page and the pipeline it imports');
+  assert.ok(py.includes('PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs")'), 'the page, the pipeline it imports, the EDIT FILE menu');
   assert.ok(py.includes('MODULE_FILES = ("boot.mjs", "boot.wasm")') && py.includes('SEGS_NAME = "isaac.segs.bin"'));
   assert.ok(py.includes('SKIP_DIRS = {"packed", "mods"}') && py.includes('SKIP_EXT = re.compile(r"\\.(exe|dll|so|ogv)$", re.IGNORECASE)'), 'the index policy of run_web.mjs');
   const runner = rd('scripts', 'recomp', 'web', 'run_web.mjs');

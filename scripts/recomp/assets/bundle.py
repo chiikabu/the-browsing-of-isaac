@@ -80,6 +80,10 @@ RULES: tuple[Rule, ...] = (
          "`require` can reach from them (json, mobdebug, socket) and its licence text"),
     Rule("save-path-note", KEEP, ("savedatapath.txt",), "scripts + save path",
          "one fopen hit at boot in every run (the engine reads it; the saves then go to ./Documents/My Games/...)"),
+    Rule("page-assets", KEEP, ("page-assets/*",), "page assets",
+         "round 52: the shipping page's EDIT FILE menu -- the patched save-select sheet, the seed paper, the cursor, "
+         "the Team Meat font and seven menu sounds, extracted from the archives by page_assets.py (menu.json has the "
+         "crop rectangles); the page fetches them, the engine never opens them"),
     Rule("repentance-archive", DROP, ("resources/packed/repentance.a",), "repentance.a",
          "this exe never names it (whole-.text census, round 26; not in the 0xbfae60 mount list); 0 opens; "
          "unregistered by both drivers"),
@@ -303,6 +307,11 @@ def cmd_build(args) -> int:
     print_table(rows, original, tree, bundle)
     print("built %s: %d files (%d hard-linked, %d copied), manifest %s, %.1f s" % (
         out, len(files), how["link"], how["copy"], MANIFEST_NAME, time.time() - t0))
+    # round 52: the page's EDIT FILE assets (the patched sheet into afterbirthp.a
+    # -- the bundle's own copy, the instance stays pristine -- and the menu's
+    # art, font and sounds beside it); the manifest is updated by the step
+    import page_assets
+    page_assets.build(out)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump({"manifest": manifest, "rows": rows,

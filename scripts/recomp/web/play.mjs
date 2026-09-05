@@ -18,6 +18,7 @@
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
+import { createEditFileMenu } from './menu_overlay.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 if (!params.has('ISAAC_YIELD')) {
@@ -50,7 +51,7 @@ const toggleFullscreen = () => {
   else if (stage.requestFullscreen) stage.requestFullscreen().then(() => canvas.focus()).catch(() => {});
 };
 window.addEventListener('keydown', (ev) => {
-  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open) toggleFullscreen();
+  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();
 });
 const mb = (n) => (n / 1048576).toFixed(1);
 const fmtBytes = (n) => n >= 1048576 ? `${mb(n)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`;
@@ -212,6 +213,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
       const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;
       setStatus(line + machine);                       // the overlay's line, until the first frame hides the overlay
       const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;   // the header's, live during play
+      editMenu.setFps(fps);                                                          // the in-game FPS VIEWER, when on
     }, 1000);
   };
   if (AUTOPLAY) { start(); return; }
@@ -265,6 +267,74 @@ $('reload-btn').addEventListener('click', () => location.reload());
 $('dismiss-btn').addEventListener('click', () => { $('error').hidden = true; });
 window.addEventListener('error', (ev) => showError('A script error', ev.message));
 window.addEventListener('unhandledrejection', (ev) => showError('The pipeline failed', String(ev.reason && ev.reason.message || ev.reason)));
+
+// ---- the EDIT FILE menu (round 52) -----------------------------------------------------
+// The save-select screen's DELETE FILE strip reads EDIT FILE (page_assets.py
+// patched the sheet in the bundle's afterbirthp.a); confirming on a file in
+// that mode asks the host gate, which calls window.isaacEditFile(slot): the
+// menu opens over the game with the game's own art, font and sounds
+// (menu_overlay.mjs). Export and import work the saves store for that file's
+// persistentgamedata / gamestate; Delete hands the flow back to the engine.
+const slotPattern = (slot) => new RegExp(`(^|/)(rep_)?(persistentgamedata|gamestate)${slot + 1}\\.dat$`, 'i');
+const renumber = (name, slot) => name.replace(/(persistentgamedata|gamestate)\d(\.dat)$/i, (m, a, b) => `${a}${slot + 1}${b}`);
+async function exportSlot(slot) {
+  const db = await openStore();
+  if (!db) throw new Error('NO SAVE STORE HERE');
+  const items = (await readAllSaves(db)).filter((it) => slotPattern(slot).test(entryName(it.key, it.src)));
+  if (!items.length) throw new Error('NO SAVE IN THIS FILE');
+  const meta = { format: 'isaac-recomp-saves/1', exported: new Date().toISOString(), slot: slot + 1,
+    files: items.map((it) => ({ key: it.key, src: it.src, name: entryName(it.key, it.src) })) };
+  const entries = items.map((it) => ({ name: entryName(it.key, it.src), bytes: it.bytes }));
+  entries.push({ name: 'isaac-saves.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 1)) });
+  download(zipStore(entries), `isaac-file${slot + 1}-${stamp()}.zip`);
+  return `EXPORTED ${items.length} FILE${items.length === 1 ? '' : 'S'}`;
+}
+async function importSlot(slot) {
+  const input = $('import-file');
+  const file = await new Promise((resolve) => {
+    const onChange = () => { input.removeEventListener('change', onChange); resolve(input.files && input.files[0]); input.value = ''; };
+    input.addEventListener('change', onChange);
+    input.click();
+  });
+  if (!file) throw new Error('NO FILE CHOSEN');
+  const db = await openStore();
+  if (!db) throw new Error('NO SAVE STORE HERE');
+  const existing = (await readAllSaves(db)).filter((it) => slotPattern(slot).test(entryName(it.key, it.src)));
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const items = [];
+  if (buf.length > 4 && buf[0] === 0x50 && buf[1] === 0x4b) {
+    const entries = await unzip(buf.buffer);
+    const metaEntry = entries.find((e) => e.name === 'isaac-saves.json');
+    const meta = metaEntry ? JSON.parse(new TextDecoder().decode(metaEntry.bytes)) : null;
+    const byName = new Map(((meta && meta.files) || []).map((f) => [f.name, f]));
+    for (const e of entries) {
+      if (e.name === 'isaac-saves.json' || !/(persistentgamedata|gamestate)\d\.dat$/i.test(e.name)) continue;
+      const f = byName.get(e.name);
+      // whatever file number the export carried, it lands in THIS file's slot
+      items.push({ key: renumber(f && f.key ? f.key : e.name, slot), src: renumber(f && f.src ? f.src : e.name, slot), bytes: e.bytes });
+    }
+  } else {
+    // a bare .dat: this file's persistentgamedata (or gamestate, by its name)
+    const kind = /gamestate/i.test(file.name) ? 'gamestate' : 'persistentgamedata';
+    const hit = existing.find((it) => new RegExp(`${kind}${slot + 1}\\.dat$`, 'i').test(entryName(it.key, it.src)));
+    items.push({ key: hit ? hit.key : `c:/isaac/documents/my games/binding of isaac repentance+/${kind}${slot + 1}.dat`, src: hit ? hit.src : '', bytes: buf });
+  }
+  if (!items.length) throw new Error('NOTHING TO IMPORT');
+  await writeSaves(db, items, false);
+  setTimeout(() => location.reload(), 1500);               // the engine holds the old data: a reload applies the import
+  return 'IMPORTED. RELOADING...';
+}
+const editMenu = createEditFileMenu({
+  stage: $('stage'), canvas, assetsUrl: `${ROOT}/instance/page-assets`,
+  audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
+  injectKey: (name, down) => { if (typeof window.isaacInjectKey === 'function') window.isaacInjectKey(name, down); },
+  log: (line) => console.log(line),
+  actions: { export: exportSlot, import: importSlot },
+});
+window.isaacEditFile = (slot) => { editMenu.open(slot); };
+window.isaacEditFileDelete = -1;
+window.isaacKeyCapture = (ev, down) => editMenu.onKey(ev, down);
+window.isaacEditFileMenu = editMenu;                      // the drivers look at it
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
 let lastFrame = 0, lastT = performance.now(), firstFrameSeen = false, finished = false;

@@ -98,6 +98,10 @@ PATCHES: dict[int, tuple[str, str]] = {
 # function, its first block is re-decoded from 0xa2b5c8, and both targets
 # get a case in its re-entry switch.
 BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    # Round 52: the save-select screen's EDIT FILE menu (see the marker text).
+    ("0x009d9d59",
+     '  RECOMP_VA(0x9d9d59u);\n  u43f80_4 = ((uint32_t)0x0u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u43f80_4);\n  RECOMP_VA(0x9d9d5bu);\n  u44180_4 = ((uint32_t)0xb7fb20u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u44180_4);\n  RECOMP_VA(0x9d9d60u);\n  u5280_4 = ((uint32_t)0x2u);\n  MEMW32(EDI, u5280_4);\n',
+     '  RECOMP_VA(0x9d9d59u);\n  /* LIFT-PATCH 0x009d9d59 (round 52): the EDIT FILE menu. The confirm on a\n     file in delete mode is about to play "DeleteConfirmationAppear" and set\n     state 2; the page\'s menu opens instead (isaac_editfile_gate), and the\n     engine\'s own prompt runs only once that menu chose Delete. Skipping is\n     the exit the other branches take, with nothing pushed and no register\n     changed; the node build has no page, so the gate always says go. */\n  if (!isaac_editfile_gate(EDI)) {\n    goto L_009da447;\n  }\n  u43f80_4 = ((uint32_t)0x0u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u43f80_4);\n  RECOMP_VA(0x9d9d5bu);\n  u44180_4 = ((uint32_t)0xb7fb20u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u44180_4);\n  RECOMP_VA(0x9d9d60u);\n  u5280_4 = ((uint32_t)0x2u);\n  MEMW32(EDI, u5280_4);\n'),
     ("0x00a2b5c2",
      """  RECOMP_VA(0xa2b5c2u);
 L_00a2b5c2: ;

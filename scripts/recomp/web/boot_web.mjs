@@ -254,6 +254,9 @@ let inputsDelivered = 0;
 // here and are delivered ahead of the scripted timeline. Keys map through the
 // same table by event.code (KeyA -> a, ArrowUp -> up, Enter, Space, ...).
 const live = [];
+// round 52: the page presses a key for the player (the EDIT FILE menu's Delete
+// hands the flow back to the engine with a confirm), by the key table's name
+window.isaacInjectKey = (name, down) => { const k = KEYS[String(name).toLowerCase()]; if (k) live.push([1, k[0], k[1] | (k[2] << 8), down ? 1 : 0]); };
 const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
   ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave',
@@ -269,6 +272,8 @@ function keyName(ev) {
 }
 const canvasEl = document.getElementById('canvas');
 function onKey(ev, down) {
+  // round 52: a page menu that is up takes the keys (the engine sees none of them)
+  if (typeof window.isaacKeyCapture === 'function' && window.isaacKeyCapture(ev, down)) { ev.preventDefault(); return; }
   const k = keyName(ev);
   if (!k || !KEYS[k]) return;
   if (ev.repeat) { ev.preventDefault(); return; }

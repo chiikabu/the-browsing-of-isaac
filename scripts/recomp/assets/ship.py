@@ -55,7 +55,7 @@ MANIFEST_NAME = "dist.json"
 MANIFEST_FORMAT = "isaac-recomp-dist/1"
 INDEX_NAME = "instance_index.json"
 INSTANCE_DIR = "instance"
-PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs")
+PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs")
 MODULE_FILES = ("boot.mjs", "boot.wasm")
 SEGS_NAME = "isaac.segs.bin"
 MIN_COMPRESS = 1_000_000          # "above 1 MB": a sibling is considered from here
@@ -77,6 +77,7 @@ DEFAULTS = {
 # mods/, and dot files; the archives under resources/packed/ are in (the page seeds six of them
 # eagerly by name and registers the rest lazily).
 SKIP_DIRS = {"packed", "mods"}
+PAGE_DIRS = {"page-assets"}   # round 52: the page's own files in the bundle, not the engine's -- out of the index too
 SKIP_EXT = re.compile(r"\.(exe|dll|so|ogv)$", re.IGNORECASE)
 
 
@@ -99,7 +100,8 @@ def instance_index(instance_root: str, exclude: set[str] | None = None) -> list[
     for dp, dn, fn in os.walk(root):
         rel_dir = os.path.relpath(dp, root).replace("\\", "/")
         rel_dir = "" if rel_dir == "." else rel_dir
-        dn[:] = sorted(d for d in dn if (rel_dir + "/" + d if rel_dir else d) not in SKIP_DIRS)
+        dn[:] = sorted(d for d in dn if (rel_dir + "/" + d if rel_dir else d) not in SKIP_DIRS
+                       and (rel_dir + "/" + d if rel_dir else d) not in PAGE_DIRS)
         for f in sorted(fn):
             if SKIP_EXT.search(f) or f.startswith("."):
                 continue

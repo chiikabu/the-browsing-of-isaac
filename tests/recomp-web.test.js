@@ -238,3 +238,21 @@ test('round 51: the loading overlay really hides on the first frame, and the liv
   assert.ok(play.includes("const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;"), 'the corner line (?stats=1) carries the status during play, the machine in its tooltip');
   assert.ok(!play.includes("$('fps').textContent = fps > 0 ?"), 'one writer for the header line');
 });
+
+test('round 52: the EDIT FILE menu -- the page takes the keys while it is up, presses confirm for Delete, and ships with the page', () => {
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes("if (typeof window.isaacKeyCapture === 'function' && window.isaacKeyCapture(ev, down)) { ev.preventDefault(); return; }"), 'a page menu takes the keys');
+  assert.ok(b.includes("window.isaacInjectKey = (name, down) => { const k = KEYS[String(name).toLowerCase()]; if (k) live.push([1, k[0], k[1] | (k[2] << 8), down ? 1 : 0]); };"), 'the page can press a key (by the key table name, any case)');
+  const p = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(p.includes("import { createEditFileMenu } from './menu_overlay.mjs';"), 'the menu module');
+  assert.ok(p.includes("window.isaacEditFile = (slot) => { editMenu.open(slot); };") && p.includes("window.isaacKeyCapture = (ev, down) => editMenu.onKey(ev, down);"), 'the host gate reaches the menu; the menu takes the keys');
+  assert.ok(p.includes("assetsUrl: `${ROOT}/instance/page-assets`"), 'the assets come from the dist');
+  const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
+  assert.ok(m.includes("window.isaacEditFileDelete = state.slot;") && m.includes("injectKey('enter', true);"), 'Delete names the slot and presses confirm: the engine prompt');
+  assert.ok(m.includes("['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', `FPS VIEWER: ${state.fpsOn ? 'ON' : 'OFF'}`, 'BACK']"), 'the entries');
+  assert.ok(m.includes("localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0');"), 'the fps viewer is remembered');
+  const pa = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'page_assets.py'), 'utf8');
+  assert.ok(pa.includes('render_text(font, atlas, "EDIT FILE", ink)') && pa.includes('items.append({"h1": e.h1, "h2": e.h2, "data": patched})'), 'the sheet is reset in the font and repacked into afterbirthp.a');
+  const bp = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'bundle.py'), 'utf8');
+  assert.ok(bp.includes('Rule("page-assets", KEEP, ("page-assets/*",), "page assets",') && bp.includes('page_assets.build(out)'), 'the bundle carries the page assets');
+});

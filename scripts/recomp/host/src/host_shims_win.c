@@ -640,6 +640,28 @@ uint32_t isaac_frames_presented(void) { return g_frames_presented; }
  * second): the game ticks along slowly like the desktop game does
  * unfocused, the engine's wall-clock delta stays small, and a tab brought
  * back after an hour does not replay the hour. */
+/* Round 52: the save-select screen's EDIT FILE menu. The engine's
+ * Menu_Save::Update (0x009d9c60) is about to show its "ARE YOU SURE?" prompt
+ * for the file the cursor is on (state 1 -> 2 at 0x9d9d59); the page's menu
+ * opens instead -- export, import, delete, the fps viewer -- and the engine's
+ * own prompt runs only when that menu chose Delete: the page then sets
+ * window.isaacEditFileDelete to the slot and presses confirm again, and the
+ * gate lets the transition through. Without a page (node, a page without
+ * the menu) the engine's flow is untouched. */
+EM_JS(int, isaac_editfile_js, (int slot), {
+    if (typeof window === "undefined" || typeof window.isaacEditFile !== "function") return 1;
+    if (window.isaacEditFileDelete === slot) { window.isaacEditFileDelete = -1; return 1; }
+    try { window.isaacEditFile(slot); } catch (e) { return 1; }
+    return 0;
+});
+int isaac_editfile_gate(uint32_t menu_va) {
+    int slot;
+    if (!isaac_is_guest_va(menu_va) || !isaac_is_guest_va(menu_va + 7u)) return 1;
+    slot = (int)*(const uint32_t *)isaac_g(menu_va + 4u);      /* this[1]: the file the cursor is on, 0..2 */
+    if (slot < 0 || slot > 2) return 1;
+    return isaac_editfile_js(slot);
+}
+
 EM_ASYNC_JS(void, isaac_yield_js, (void), {
     var now = performance.now();
     var work = Module.isaacYieldResumed ? now - Module.isaacYieldResumed : 1e9;

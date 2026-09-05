@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-51: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-52: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,17 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 52: EDIT FILE** (§21.66). The save-select screen's DELETE FILE
+  strip reads EDIT FILE (the sheet reset in the Team Meat font, repacked
+  into the bundle's `afterbirthp.a` by `page_assets.py`, run by `bundle.py
+  build`); confirming on a file in that mode opens the page's menu -- EXPORT
+  FILE, IMPORT FILE, DELETE FILE, FPS VIEWER, BACK -- drawn with the game's
+  paper, font, cursor and sounds (`page-assets/`, `menu_overlay.mjs`) and
+  driven by the game's keys. The hook is a block patch at 0x9d9d59 in
+  `Menu_Save::Update` asking `isaac_editfile_gate`; Delete hands the flow
+  back to the engine's own prompt. `drive_editfile.mjs <dist-url> <out>`
+  proves it on the shipping page. The bundle's `afterbirthp.a` is a compact
+  repack (442 MB for the instance's 604, every entry verified).
 - **Round 51: the page is the game, the memory map, a leaf not worth it**
   (§21.65). The loading panel had never hidden (`#overlay`'s own `display:
   flex` outranked the `hidden` attribute; a global `[hidden] { display:

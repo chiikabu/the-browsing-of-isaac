@@ -5837,3 +5837,82 @@ query string, no gesture) and reports the first frame's time, whether the
 loader is gone and the chrome absent, the canvas box, the frame counter two
 seconds apart, the audio state, and a screenshot -- the check the pane
 could not run.
+
+### 21.66 Round 52: EDIT FILE -- a menu of the page, in the game's own hand
+
+The request: the save-select screen's DELETE FILE button becomes EDIT FILE,
+opening a menu -- export, import, delete -- styled and controlled like the
+game's menus, with the game's fonts, art and sounds, and an FPS viewer
+option. The screen is the engine's (sprites from `saveselectmenu.png`,
+logic in `Menu_Save::Update`, 0x009d9c60), so the feature is three
+pieces: the art, the hook, the menu.
+
+**The art.** "DELETE FILE" is not a string, it is paint on the sheet (crop
+16,192 272x48, drawn by the anm2's Idle at 119,234). Its letters are the
+Team Meat 16-bold bitmap font's -- rendering "DELETE FILE" with
+`teammeatfont16bold.fnt` over the strip's paper colour reproduces the strip
+-- so `page_assets.py` resets the strip's text between the skulls to "EDIT
+FILE" set in that font, tinted with the strip's own ink. The sheet lives in
+`afterbirthp.a`, the last archive the engine mounts (its index shadows the
+base archives, and a loose file never wins: the resolver tries the archive
+index before a root's loose map, §19.2), so the patched sheet goes into the
+bundle's `afterbirthp.a` by a byte-for-byte repack with that one entry
+replaced (`archive.py`'s writer; 10,228 entries, 10,227 passed through).
+The repack is compact -- 442 MB where the instance's copy is 604 MB, every
+entry verified byte-for-byte and the mount checksum recomputed -- and the
+bundle's archive becomes its own file (the instance stays pristine; the node
+build never sees the patched art; the bundle manifest is updated and
+`bundle.py check` passes). Beside it, `page-assets/` carries what the page
+draws and plays: the sheet (its prompt paper, cursor and skulls), the seed
+paper (a blank note the size of the engine's prompt), the font, and seven
+menu sounds pulled from the archive by the engine's own path hash
+(`resources/sfx/V2/Menu_NoteAppear.wav` and friends, `sounds.xml` ids 282-284,
+17-18, 569, 571), with `menu.json` naming the anm2's crop rectangles.
+`bundle.py build` runs the step; `ship.py` keeps the directory out of the
+game's file index.
+
+**The hook.** In `Menu_Save::Update`, a confirm with the cursor on a file in
+delete mode (state 1) sets state 2 and plays "DeleteConfirmationAppear" --
+the "ARE YOU SURE? YES NO" note -- at 0x9d9d59. A block patch asks
+`isaac_editfile_gate(this)` first: without a page (node, a page without the
+menu) it says go and nothing changes (the explorer census is identical);
+with the page it calls `window.isaacEditFile(slot)` and skips to the
+function's common exit, nothing pushed, no register touched, the engine left
+in delete mode. When the menu's own DELETE is chosen, the page names the
+slot in `window.isaacEditFileDelete` and presses confirm for the player
+(`window.isaacInjectKey`, the pipeline's key table); the gate consumes the
+name, lets the transition through, and the game's own prompt and deletion
+run untouched. While the menu is up the pipeline hands every key to
+`window.isaacKeyCapture` and the engine sees none.
+
+**The menu.** `menu_overlay.mjs` draws one canvas over the game's (480x270
+at 2x, pixelated): the seed paper where the engine draws its prompt (the
+prompt paper's crop rectangle, 240x144 at 114,59), "FILE n" and the
+entries -- EXPORT FILE, IMPORT FILE, DELETE FILE, FPS VIEWER: ON/OFF, BACK
+-- in the font from a BMFont v3 parser (the atlas tinted with the strip's
+ink, the unselected entries lighter), the sheet's cursor beside the
+selection, and the engine's sounds through the page's AudioContext: note
+appear on open, menu scroll on a move, the light flip on a choice, paper
+out on back, the rip on delete. Up/Down or W/S move, Enter/Space/E choose,
+Escape/Backspace go back. Export zips the file's `persistentgamedata` and
+`gamestate` (and their `rep_` forms) from the saves store; import takes a
+zip from that export or a bare `.dat`, renumbers it into the chosen file's
+slot and reloads (the engine holds the old data in memory). The FPS viewer
+is a small paper in the top-left corner with the frame rate in the same
+font, fed by the status line each second, remembered in `localStorage`. The
+game's own Options menu is engine-drawn and engine-driven; adding an item
+there is engine work of another size, so the toggle lives in this menu (and
+`?stats=1` still shows the full status line).
+
+**Proof.** `drive_editfile.mjs` reaches the menu as a player does on the
+shipping page -- title, Enter to the save select, Down onto EDIT FILE, Enter
+into file-choosing mode, Enter on file 1 -- and checks that the page's menu
+opened instead of the engine's prompt, that BACK closes it and the next
+confirm reopens it, that FPS VIEWER toggles and is remembered and shows
+while playing, that DELETE closes the menu with the named slot consumed by
+the gate (the engine's own prompt then on screen, Backspace leaving it), and
+that no page error occurred; it saves screenshots of the menu, the viewer
+and the engine's prompt. The pins: the block patch and the gate
+(recomp-fastpath), the key capture, the injected key, the entries, the
+remembered toggle, the sheet reset and the bundle rule (recomp-web), the
+menu module in the shipped page set (recomp-ship).
