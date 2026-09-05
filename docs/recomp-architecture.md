@@ -5435,3 +5435,43 @@ original function, and a 100 KB routine is a graph TurboFan holds for
 hundreds of MB) and a working code cache (§21.55), which would remove the
 tier-up from a returning player's run start entirely. Both are lifter or
 browser work, recorded in the frontier as the next memory rounds.
+
+### 21.58 Round 43: the giant functions, split
+
+**The cause, exactly.** Round 42 left the run-start transient with V8:
+`v8/main/malloc` -- zone memory -- 1.1 GB three seconds into the first
+run. It is not the optimiser: two compilation threads give the same
+figure and disabling tier-up (`--no-wasm-tier-up`) gives 2.5 GB. It is the
+baseline compiler meeting the giant lifted functions for the first time.
+V8 compiles a wasm function lazily on its first call, and Liftoff keeps a
+register/stack snapshot at every jump target, sized by the function's
+locals; the lifter emits one C function per x86 routine with every p-code
+temporary as a local, and the game's largest routine, `sub_005d4380`, is
+1.57 MB of wasm -- 338,000 lines of C, 5,042 labels, thousands of
+temporaries. Eleven functions are above 256 KB. That product is the
+gigabyte, and it is a property of the module: the same on a Chromebook.
+
+**The pass (`scripts/recomp/lift/split_giants.py`).** A build-time text
+pass on the lifted C, run after every other lift patch (the re-entry
+guard and the entry-first goto are absorbed), idempotent, marked
+`/* LIFT-SPLIT */`. A function over 60,000 lines becomes parts of about
+25,000 lines cut at block labels:
+- each part `static void sub_X__pK(CpuState *s, uint32_t nb)` carries the
+  function's prologue (the x86 registers and flags loaded from the
+  CpuState) and only the temporaries it uses, enters through a switch over
+  its own labels, and keeps every goto inside itself;
+- a goto into another part becomes `spill the registers; sub_X__next =
+  target; sub_X__pend = 1; return;`;
+- the trampoline `sub_X(s)` starts at the entry (or at `g_reentry_eip`,
+  consumed) and loops: route `nb` to its part by a switch over every label,
+  call it, return if nothing is pending, else take the next target. A loop
+  that crosses a cut re-enters through the loop, never a nested call, so
+  the native stack cannot grow; an x86 `ret`, a parked tail jump or a trap
+  returns with nothing pending.
+
+**Measured.** Ten functions in six TUs are split (sub_005d4380 into 14 parts, sub_005b39d0 into 7, eight more into 3-4); the six TUs compile in 56 s where the whole-function versions took minutes. The node explorer's deterministic run (epoch 1700000000, 2,000 frames) is frame-identical to round 41's -- 465 menu frames, run start at frame 322, the same rooms in the same order, 2 runs, 1 death, main 0 -- so the parts execute exactly what the whole functions did. In the browser (4x throttle, real GPU, a cold start) the run-start transient is gone: the renderer's allocators read 639 MB at the run start and 631 MB three seconds in with no `v8` line at all (1,895 MB and `v8/main/malloc` 1,107 MB before); with tier-up disabled, 448 MB (2,503 before); the working-set timeline peaks at 1.22 GB where it peaked at 2.4-2.9 GB, and settles at 1.05-1.08 GB. Play stays at 58-60 fps median; the shipping dist rebuilt on the module starts cold at 58.2 fps with a 1.12 GB peak. One surprise for the record: Binaryen's link-time inliner puts the `noinline` parts back into their trampoline (the wasm has one 1.77 MB `sub_005d4380` again, the parts survive only in the object), and the cost still vanished -- the compilers pay for the shape of the control flow, not for the byte count, and LLVM compiling each part on its own leaves a shape V8 handles in a fraction of the memory.
+
+**Tests.** `tests/recomp-split.test.js` runs the pass on a fixture (a
+guard inside the declarations, an entry-first goto, 64-bit temporaries
+after the guard, jumps both ways across the cut): the parts, the spill,
+the routing, the untouched neighbour, idempotence, `--check`. The node explorer's deterministic 2,000-frame run before and after is the correctness proof (frame-identical census and room sequence, main 0), the browser play test passes, the test family is 170/170, selftest 356/0.

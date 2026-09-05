@@ -271,6 +271,12 @@ def main():
         patched = (set(apply_lift_patches(lift_dir)) | set(apply_purge_patches(lift_dir))
                    | set(apply_wrap_patches(lift_dir)) | set(apply_block_patches(lift_dir))
                    | set(apply_entry_first(lift_dir)))
+        # Round 43: giant functions become trampolined parts AFTER every other
+        # text patch (the re-entry guard and the entry-first goto are absorbed
+        # into the trampoline); the browser's baseline compiler paid quadratically
+        # for a 338,000-line function.
+        from split_giants import apply_split_giants  # noqa: E402
+        patched |= set(apply_split_giants(lift_dir))
         print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)

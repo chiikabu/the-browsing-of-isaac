@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-04, recomp rounds 26-41: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget)
+# Handoff — read this first (2026-09-04, recomp rounds 26-43: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,7 +181,12 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
-- **Round 42: the run-start transient is TurboFan** (§21.57).
+- **Round 43: the giant functions, split** (§21.58). The transient was
+  the baseline compiler on 338,000-line lifted functions (quadratic in
+  labels x locals; 1.1 GB with tier-up, 2.5 GB without).
+  `split_giants.py` rewrites functions over 60,000 lines into trampolined
+  ~25,000-line parts at build time (10 functions, 6 TUs). Run-start V8 transient gone (allocators 631 MB at +3 s, was 1,895; Liftoff-only 448, was 2,503), renderer peak 1.22 GB (was 2.4-2.9), steady 1.05 GB; explorer run frame-identical to round 41; 58-60 fps; the six TUs compile in 56 s.
+- **Round 42: the run-start transient is V8's compiler** (§21.57).
   `drive_perf.mjs memdump=1` (memory-infra dumps) attributes what is left
   of the run-start spike after rounds 38-41 to `v8/main/malloc` -- the
   optimiser's compile zones while hundreds of big lifted functions tier up
