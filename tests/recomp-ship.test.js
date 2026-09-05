@@ -507,3 +507,9 @@ test('round 45: the dist server re-reads dist.json when it changes, so a rebuilt
   assert.ok(s.includes('if (st.mtimeMs === manifestMtime) return;'), 'the manifest is re-read on an mtime change');
   assert.ok(/createServer\([^\n]*=>[^\n]*\n  refreshManifest\(\);/.test(s), 'every request checks it first');
 });
+
+test('round 46: the shipping page shows a frame-rate readout once the engine runs', () => {
+  const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(page.includes("setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}`"), 'fps and the median of the last ten seconds in the status line');
+  assert.ok(page.includes('const f = window.isaacFrame || 0, t = performance.now();'), 'sampled from the host frame counter');
+});

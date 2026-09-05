@@ -164,6 +164,21 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     setStatus('starting the engine -- it reads its archives as 1 MB slices before the first frame (a few hundred MB the first time; the browser cache keeps them)');
     streamingEl.hidden = false;
     resolve();
+    // Round 46: a frame-rate readout in the status line once the engine runs --
+    // the host's frame counter sampled each second, the median of the last
+    // ten -- so a test on the target machine reports numbers without tooling.
+    let last = window.isaacFrame || 0, lastT = performance.now(), first = true;
+    const recent = [];
+    setInterval(() => {
+      const f = window.isaacFrame || 0, t = performance.now();
+      if (f <= 0) return;
+      const fps = (f - last) * 1000 / Math.max(1, t - lastT);
+      last = f; lastT = t;
+      recent.push(fps); if (recent.length > 10) recent.shift();
+      const med = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
+      if (first) { first = false; render(); }
+      setStatus(`${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}` + (document.hidden ? ' -- paused while hidden' : ''));
+    }, 1000);
   };
   if (AUTOPLAY) { start(); return; }
   setStatus('ready');
