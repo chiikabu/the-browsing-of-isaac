@@ -6002,3 +6002,60 @@ re-rolling per stage as they should. 21/21.
 What the goal's list still lacks a driver for: the wasm code cache on a
 warm start (unverifiable in the browsers here, §21.60), and a real
 Chromebook (the user's device: `play.html?stats=1`).
+
+### 21.69 Round 55: the cold start -- a boot trail fetched ahead by a Worker, and the browser's own base64
+
+**The figure.** On the shipping page at a 4x CPU throttle (`drive_boot.mjs`,
+new: the same page opened twice in a persistent profile, the first visit
+cold, the second with what the first left behind), the engine reads 442
+archive windows -- 440 MB of afterbirthp.a, front to back at mount and then
+the title screen's resources -- before its 300th frame, every one a
+synchronous base64 XMLHttpRequest decoded on the main thread, and frame 300
+comes at 44-51 s (three cold runs before this round's decoder: 51.1, 44.5
+and 49.2 s; the spread is the machine's). Nothing else on the page is in
+that league: the first frame is at 1.9-2.7 s.
+
+**A negative first.** A synchronous XHR can carry the raw bytes as an
+8-bit text (`overrideMimeType('text/plain; charset=x-user-defined')`, the
+server padding one byte), which skips the base64: measured, frame 300 came
+at 70-75 s against 50 -- Chrome's decoding of that charset for a 1 MB body
+is slower than atob. Reverted; the comment on `fetchSync` records it.
+
+**The trail.** The page keeps the windows the boot read up to frame 300
+(`isaac-boot-trail` in localStorage, 441 entries) and fetches them ahead on
+the next visit. The first cut never wrote it: the trigger sat in
+`cfg.isaacPresent`, which fires only for frames the page keeps, and the
+served page keeps none (`isaacWantsFrame` says no to every frame there since
+round 25), so `presented` stayed at 0. The host's frame counter, reported for
+every frame, is the trigger now (`isaacWantsFrame`, and the pread path as a
+fallback), and `pagehide` writes a short visit's trail.
+
+**Who fetches.** A pump on the main thread -- six fetches in flight, each
+`.then` needing a turn of this thread's event loop -- managed 106 of the 442
+windows before frame 300 (51.1 s cold, 43.0 warm): the loop turns once a
+frame, between long stretches of the engine and its synchronous reads. The
+fetching moved into a Worker (a Blob of this origin: its loop is free, it
+pulls at the network's speed and transfers each window, no copy; a
+consumed or dropped window is acked back and the Worker keeps 128 MB in
+flight or delivered): 138 of 442 (44.5 s cold, 40.1-41.8 warm). The
+deliveries still land only when this thread yields, and the boot's
+stretches between yields consume more than the budget delivers -- the
+reads before the first frame, and the mount pass, see none of it. The
+trail and the Worker stay (they are the shape round 56 needs); the gain is
+the 3-4 s it is.
+
+**The decoder.** `bench_decode.mjs` (new), one 1 MiB window at a 4x
+throttle, medians of eight: the synchronous XHR 16.3 ms, the legacy decode
+(atob and a charCodeAt loop) 16.7 ms, `Uint8Array.fromBase64` 3.1 ms and the
+same bytes; a main-thread `fetch` of the raw bytes 96 ms (its body arrives
+in chunks, each a task on the throttled thread -- the reason it cannot
+replace the synchronous XHR). `fetchSync` decodes with the native decoder
+where there is one (Chrome 140+, Firefox 133+, Safari 18.2+; the loop stays
+for the rest), and it leaves no 1 MB binary string for the collector: frame
+300 at 37.9 s cold and 33.8 s warm (138 hits) in the same run shape.
+
+**Next (round 56).** The reads themselves: `isaac_fs_lazy_pread_js` becomes a
+JSPI import, so a read that the Worker has to fetch suspends the wasm stack
+until the Worker answers with the raw bytes, and the Worker reads ahead
+along the archive (the mount pass is sequential) and along the trail; no
+base64, no synchronous XHR, and no waiting for this thread to yield.

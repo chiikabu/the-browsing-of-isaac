@@ -34,15 +34,25 @@ function log(line) {
 // leading UTF-8 BOM from text responses whatever the charset label (the
 // x-user-defined trick lost three bytes of every BOM-prefixed .anm2/.fs),
 // so the runner serves ?b64=1 as base64 and the bytes are decoded here.
+// Round 55 tried 8-bit text instead (charset x-user-defined behind one pad
+// byte, charCodeAt & 0xff): 442 windows to frame 300 took 70-75 s at a 4x
+// throttle against 50 s with base64 -- the x-user-defined string is two-byte
+// and the decode loop loses more than atob costs. Base64 stays.
+// Round 55: the browser's own base64 decoder where it has one (Chrome 140+,
+// Firefox 133+, Safari 18.2+): one 1 MiB archive window decodes in 3 ms at a
+// 4x CPU throttle against 17 ms for atob and a charCodeAt loop, and leaves no
+// 1 MB binary string behind for the collector. The loop stays for the rest.
+const decodeBase64 = (typeof Uint8Array.fromBase64 === 'function')
+  ? (txt) => Uint8Array.fromBase64(txt)
+  : (txt) => { const bin = atob(txt), out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; };
 function fetchSync(url) {
-  const x = new XMLHttpRequest();
   if (hooks.url) url = hooks.url(url);
-  x.open('GET', url + (url.includes('?') ? '&' : '?') + 'b64=1', false);
+  const sep = url.includes('?') ? '&' : '?';
+  const x = new XMLHttpRequest();
+  x.open('GET', url + sep + 'b64=1', false);
   x.send(null);
   if (x.status !== 200) throw new Error(`${url}: HTTP ${x.status}`);
-  const bin = atob(x.responseText), out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  return decodeBase64(x.responseText);
 }
 // The boot stages (memory image, index, the eagerly seeded archives, the Lua) go through
 // fetchBytes: the synchronous fetch by default, an asynchronous one with byte-level progress
@@ -67,6 +77,7 @@ const lazyByFile = new Map();                              // src -> bytes (roun
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
 const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
 window.isaacLazyStats = () => ({ reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
+  prefetched, prefetchHits, prefetchMisses, prefetchMB: +(prefetchBytes / 1048576).toFixed(1), trailKept, trailLen: trail.length, trailWritten,
   top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
   try {
@@ -152,9 +163,97 @@ let preads = 0, preadBytes = 0;
 // up -- on a 4 GB machine, the difference between playing and a dead tab.
 const dropBody = (bytes) => { try { const b = bytes.buffer; if (b && typeof b.transfer === 'function' && !b.detached) b.transfer(0); } catch (e) { /* older browser: the GC frees it */ } };
 const windowsSeen = new Set();
+// ---- round 55: the boot trail, fetched ahead ---------------------------------------
+// The engine's first seconds read a few hundred archive windows one at a time,
+// each a synchronous XMLHttpRequest with a base64 body (a synchronous request
+// cannot ask for bytes). The order is much the same every boot, so the page
+// keeps the trail of the windows it read up to its 300th frame (localStorage,
+// this origin) and on the next visit fetches them ahead, in parallel, while
+// the module compiles: a pread that finds its window in the cache copies it
+// and drops it; one that misses goes the old way. First visits pay as before.
+const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, PREFETCH_PARALLEL = 4, PREFETCH_BUDGET = 128 << 20;
+const preadCache = new Map();                             // `${src}@${off}@${len}` -> Uint8Array
+const trail = [];                                         // [src, off, len] in read order, until written
+let prefetched = 0, prefetchHits = 0, prefetchMisses = 0, prefetchBytes = 0, trailKept = 0, trailWritten = false;
+// The fetching is a Worker's: a fetch driven from this thread completes only
+// when this thread's event loop turns, and during the boot it turns once a
+// frame between long stretches of the engine and its synchronous reads, so a
+// pump on this thread managed 106 of 442 windows before frame 300 at a 4x
+// throttle. The Worker's loop is free: it pulls the trail at the network's
+// speed and hands each window over (transferred, not copied); the messages
+// land whenever this thread yields. Flow control: PREFETCH_BUDGET bytes may be
+// delivered and not yet consumed; a consumed (or dropped) window is acked
+// back and the Worker pulls the next.
+const PREFETCH_WORKER = `
+let jobs = [], i = 0, inflight = 0, outstanding = 0, budget = 0, parallel = 4;
+const skip = new Set();
+function pump() {
+  while (inflight < parallel && i < jobs.length && outstanding < budget) {
+    const [key, url, len] = jobs[i++];
+    if (skip.has(key)) continue;
+    inflight += 1; outstanding += len;
+    fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
+      if (buf && buf.byteLength === len) postMessage({ key, len, buf }, [buf]);
+      else outstanding -= len;
+    }).catch(() => { outstanding -= len; }).finally(() => {
+      inflight -= 1; pump();
+      if (i >= jobs.length && inflight === 0) postMessage({ done: true });
+    });
+  }
+}
+onmessage = (e) => {
+  const d = e.data;
+  if (d.jobs) { jobs = d.jobs; budget = d.budget; parallel = d.parallel; pump(); }
+  else if (d.ack) { outstanding -= d.ack; pump(); }
+  else if (d.skip) skip.add(d.skip);
+};
+`;
+let prefetchWorker = null;
+const preadConsumed = new Set();                          // windows already read: a late fetch of one is dropped
+function startTrailPrefetch() {
+  let list;
+  try { list = JSON.parse(localStorage.getItem(TRAIL_KEY) || 'null'); } catch (e) { list = null; }
+  if (!Array.isArray(list) || !list.length || typeof Worker === 'undefined' || typeof Blob === 'undefined') return;
+  const jobs = list.map(([src, off, len]) => {
+    let url = `/instance/${src}?off=${off}&len=${len}`;
+    if (hooks.url) url = hooks.url(url);
+    return [`${src}@${off}@${len}`, new URL(url, location.href).href, len];
+  });
+  let w;
+  try { w = new Worker(URL.createObjectURL(new Blob([PREFETCH_WORKER], { type: 'text/javascript' }))); } catch (e) { return; }
+  trailKept = list.length;
+  prefetchWorker = w;
+  const stop = () => { try { w.terminate(); } catch (e) { /* gone */ } if (prefetchWorker === w) prefetchWorker = null; };
+  w.onmessage = (e) => {
+    const d = e.data;
+    if (d.done) { stop(); return; }
+    if (d.buf && !preadCache.has(d.key) && !preadConsumed.has(d.key)) { preadCache.set(d.key, new Uint8Array(d.buf)); prefetched += 1; prefetchBytes += d.len; }
+    else w.postMessage({ ack: d.len });
+  };
+  w.onerror = stop;
+  w.postMessage({ jobs, budget: PREFETCH_BUDGET, parallel: PREFETCH_PARALLEL });
+}
+function writeTrail() {
+  if (trailWritten) return;
+  trailWritten = true;
+  try { localStorage.setItem(TRAIL_KEY, JSON.stringify(trail)); } catch (e) { /* no storage: the next visit is cold too */ }
+}
+if (typeof localStorage !== 'undefined') {
+  startTrailPrefetch();
+  window.addEventListener('pagehide', () => { writeTrail(); if (prefetchWorker) prefetchWorker.terminate(); });   // a short visit still leaves its trail
+}
 cfg.isaacLazyPread = (src, dst, off, len) => {
   try {
-    const bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);
+    if (!trailWritten && trail.length < TRAIL_MAX) trail.push([src, off, len]);
+    if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();
+    const key = `${src}@${off}@${len}`;
+    let bytes = preadCache.get(key);
+    if (bytes && bytes.length === len) { preadCache.delete(key); prefetchHits += 1; if (prefetchWorker) prefetchWorker.postMessage({ ack: len }); }
+    else {
+      if (trailKept) { prefetchMisses += 1; if (prefetchWorker) prefetchWorker.postMessage({ skip: key }); }
+      bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);
+    }
+    if (trailKept) preadConsumed.add(key);
     m.HEAPU8.set(bytes, dst);
     windowsSeen.add(`${src}@${off}`);
     preads += 1; preadBytes += bytes.length; lazyByFile.set(src, (lazyByFile.get(src) || 0) + bytes.length);
@@ -181,6 +280,7 @@ let wantedFrame = 0;                                      // the host's frame nu
 const interactive = params.get('ISAAC_YIELD') === '1';
 cfg.isaacWantsFrame = (n) => {
   window.isaacFrame = n;
+  if (n >= 300 && !trailWritten) writeTrail();            // round 55: the boot's windows, kept for the next visit
   const want = interactive ? (keepEvery ? n % keepEvery === 0 : false)
     : (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
   if (want) wantedFrame = n;

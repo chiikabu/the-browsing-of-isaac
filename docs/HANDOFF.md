@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-54: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-55: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,17 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 55: the cold start** (§21.69). 442 archive windows (440 MB) are
+  read synchronously before frame 300: 44-51 s at a 4x throttle. A boot
+  trail (localStorage, written at frame 300 by the host frame counter -- the
+  present hook never fires on the served page) is fetched ahead by a Worker
+  on the next visit, and the synchronous read decodes with
+  `Uint8Array.fromBase64` (3 ms a window against 17): 37.9 s cold, 33.8 s
+  warm (138 of 442 windows hit; deliveries land only when the main thread
+  yields). `drive_boot.mjs <url> <out> cpu=4 visits=2` and
+  `bench_decode.mjs <origin>` are the drivers. Negative: x-user-defined
+  sync text (70-75 s against 50). Next: the reads under JSPI, answered by
+  the Worker with raw bytes and read-ahead.
 - **Round 54: three edge hunts, nothing found** (§21.68). A 600 s browser
   soak at full speed (60 fps median, renderer working set flat at ~1,075
   MB, GPU ~503 MB, no errors); the tab hidden for 330 s and back (22/22;

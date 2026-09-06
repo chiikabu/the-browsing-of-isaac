@@ -276,3 +276,16 @@ test('round 54: the floor sweep driver seeds the console, walks every stage and 
   assert.ok(d.includes("await bcdp.send('SystemInfo.getProcessInfo');"), 'the process memory per floor');
   assert.ok(d.includes("'the renderer working set stays within 400 MB of the first floor across the sweep'"), 'the memory check');
 });
+
+test('round 55: the boot trail is kept and fetched ahead on the next visit; a pread that hits the cache makes no request', () => {
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes("const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, PREFETCH_PARALLEL = 4, PREFETCH_BUDGET = 128 << 20;"), 'the trail, its cap, the parallelism and the byte budget');
+  assert.ok(b.includes("fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ key, len, buf }, [buf]);"), 'the Worker fetches bytes, not base64, and transfers each window');
+  assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([PREFETCH_WORKER], { type: 'text/javascript' })));"), 'the fetching is a Worker of this origin');
+  assert.ok(b.includes("if (bytes && bytes.length === len) { preadCache.delete(key); prefetchHits += 1; if (prefetchWorker) prefetchWorker.postMessage({ ack: len }); }"), 'a hit is copied once, dropped, and acked back to the Worker');
+  assert.ok(b.includes("bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);"), 'a miss goes the old way');
+  assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (prefetchWorker) prefetchWorker.terminate(); });"), 'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
+  assert.ok(b.includes('prefetched, prefetchHits, prefetchMisses, prefetchMB:'), 'the figures reach isaacLazyStats');
+  assert.ok(b.includes("const decodeBase64 = (typeof Uint8Array.fromBase64 === 'function')") && b.includes("  return decodeBase64(x.responseText);"), 'the synchronous read decodes with the native decoder where there is one');
+  assert.ok(b.includes("if (trailKept) preadConsumed.add(key);") && b.includes("if (trailKept) { prefetchMisses += 1; if (prefetchWorker) prefetchWorker.postMessage({ skip: key }); }") && b.includes("else w.postMessage({ ack: d.len });"), 'a window read the old way is skipped by the Worker, and a late one is dropped and acked');
+});
