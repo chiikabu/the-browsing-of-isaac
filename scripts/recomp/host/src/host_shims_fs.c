@@ -677,6 +677,19 @@ static int fs_find_open(const char *key) {
             g_find_ids[sid][cnt++] = i;
     }
     if (!cnt) return -2;
+    if (fs_trace()) {
+        /* what the scan will actually hand back, which is the only way to tell a
+         * file that is missing from one the caller chose to ignore */
+        char names[512]; size_t at = 0; names[0] = 0;
+        for (uint32_t j = 0; j < cnt && at + 2 < sizeof names; ++j) {
+            const char *k = g_fs[g_find_ids[sid][j]].key;
+            const char *b = strrchr(k, '/');
+            int w = snprintf(names + at, sizeof names - at, "%s%s", at ? " " : "", b ? b + 1 : k);
+            if (w < 0) break;
+            at += (size_t)w;
+        }
+        isaac_log("[isaac][fs] scan '%s' -> %u entries: %s", key, cnt, names);
+    }
     g_find_used[sid] = 1;
     g_find_dir[sid] = 0; g_find_cur[sid] = 0; g_find_n[sid] = cnt;
     return (int)sid;

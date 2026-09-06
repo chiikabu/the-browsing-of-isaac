@@ -244,8 +244,11 @@ test('round 52: the EDIT FILE menu -- the page takes the keys while it is up, pr
   assert.ok(b.includes("if (typeof window.isaacKeyCapture === 'function' && window.isaacKeyCapture(ev, down)) { ev.preventDefault(); return; }"), 'a page menu takes the keys');
   assert.ok(b.includes("window.isaacInjectKey = (name, down) => { const k = KEYS[String(name).toLowerCase()]; if (k) live.push([1, k[0], k[1] | (k[2] << 8), down ? 1 : 0]); };"), 'the page can press a key (by the key table name, any case)');
   const p = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  assert.ok(p.includes("import { createEditFileMenu } from './menu_overlay.mjs';"), 'the menu module');
-  assert.ok(p.includes("window.isaacEditFile = (slot) => { editMenu.open(slot); };") && p.includes("window.isaacKeyCapture = (ev, down) => editMenu.onKey(ev, down);"), 'the host gate reaches the menu; the menu takes the keys');
+  assert.ok(p.includes("import { createEditFileMenu, createPaperMenu } from './menu_overlay.mjs';"),
+    'the menu module, and the paper menu the mods menus are drawn on (round 76)');
+  assert.ok(p.includes("window.isaacEditFile = (slot) => { editMenu.open(slot); };")
+    && p.includes("window.isaacKeyCapture = (ev, down) => (modsMenu.isOpen() ? modsMenu.onKey(ev, down) : editMenu.onKey(ev, down));"),
+    'the host gate reaches the menu; whichever menu is up takes the keys');
   assert.ok(p.includes("assetsUrl: `${ROOT}/instance/page-assets`"), 'the assets come from the dist');
   const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
   assert.ok(m.includes("window.isaacEditFileDelete = state.slot;") && m.includes("injectKey('enter', true);"), 'Delete names the slot and presses confirm: the engine prompt');
@@ -283,12 +286,13 @@ test('round 55/56: the boot trail, and every archive window read by a Worker wit
   assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });"),
     'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
   assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' })));"), 'the reader is a Worker of this origin');
-  assert.ok(b.includes("fetch(url, init).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
+  assert.ok(b.includes("fetch(url, init).then((r) => (r.ok ? r.arrayBuffer() : null))")
+    && b.includes('let xorKey = null;') && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
   // round 70: a portable chunk holds many windows, and the range rides in the
   // fragment because a fragment never reaches the server
   assert.ok(b.includes("const h = url.indexOf('#r=');") && b.includes("init = { headers: { Range: 'bytes=' + want0 + '-' + want1 } };")
-    && b.includes("if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = buf.slice(want0, want1 + 1);"),
-    'a fragment range becomes a Range header, and a host that ignores it is cut to size here');
+    && b.includes('if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = unscramble(buf, at >= 0 ? at - want0 : -1).slice(want0, want1 + 1);'),
+    'a fragment range becomes a Range header, and a host that ignores it is put back and cut to size here');
   assert.ok(b.includes("return new Promise((resolve) => {") && b.includes("const wantUrl = reader ? windowUrl(src, off, len) : null;")
     && b.includes("reader.postMessage({ want: id, key, url: wantUrl, len, ahead });"), 'a read is a promise the Worker resolves (the wasm stack suspends: JSPI)');
   // round 70: a provider that has the bytes but no URL for them (the single-file

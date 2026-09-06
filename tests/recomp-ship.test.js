@@ -485,8 +485,13 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   assert.ok(page.includes("const entryName = (key, src) => (src || key.replace(/^c:\\/isaac\\//i, '')).replace(/^\\/+/, '');"),
     'a save travels under its seed path, else its key without the fake cwd root (the node driver\'s rule)');
   // defaults: a live page (ISAAC_YIELD=1) with no frame budget, persist on
-  assert.ok(page.includes("if (!params.has('ISAAC_YIELD')) {") && page.includes("params.set('ISAAC_YIELD', '1');") && page.includes('history.replaceState(null'),
-    'ISAAC_YIELD=1 is written into the query before the pipeline reads it');
+  // round 76: the default reaches the pipeline through the hooks, and the address
+  // bar is left as the player found it
+  assert.ok(page.includes("if (!params.has('ISAAC_YIELD')) { params.set('ISAAC_YIELD', '1'); pageDefaults.ISAAC_YIELD = '1'; }")
+    && page.includes('hooks.params = pageDefaults;') && !page.includes('history.replaceState(null'),
+    'the live-page default is applied without being written into the URL');
+  assert.ok(pipe.includes('for (const [k, v] of Object.entries((hooks && hooks.params) || {})) {') && pipe.includes("if (!params.has(k)) params.set(k, String(v));"),
+    'and the pipeline takes it, with a real query still winning');
   assert.ok(!/params\.set\('frames'/.test(page), 'no frames= is set: the pipeline takes an unlimited budget under ISAAC_YIELD=1');
   assert.ok(pipe.includes("cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');"), 'which it does');
   // the error panel shows the log tail only when something went wrong; a normal end is not an error

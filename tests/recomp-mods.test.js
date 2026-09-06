@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { safeRel, modId, stripRoots, readMetadata, planMod, seedMods,
-         GUEST_ROOT, IMPORT_DIR, IMPORT_MARK, MODS_DB, IMPORT_METADATA } from '../scripts/recomp/web/mods.mjs';
+import { safeRel, modId, stripRoots, readMetadata, planMod, seedMods, disableTarget,
+         GUEST_ROOT, USER_ROOT, GUEST_ROOTS, IMPORT_DIR, IMPORT_MARK, MODS_DB, IMPORT_METADATA } from '../scripts/recomp/web/mods.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = (f) => readFileSync(join(root, 'scripts', 'recomp', 'web', f), 'utf8');
@@ -142,15 +142,20 @@ test('seeding builds every path itself, under mods/ and nowhere else', async () 
   void db;
   const r = await seedMods(fake, seed, null);
   const paths = seen.map((s) => s[0]);
-  assert.ok(paths.every((p) => p.startsWith(GUEST_ROOT)), 'nothing was seeded outside mods/');
-  assert.ok(paths.includes(`${GUEST_ROOT}${IMPORT_DIR}/metadata.xml`), 'the import row is seeded first');
-  assert.ok(paths.includes(`${GUEST_ROOT}fiendfolio/main.lua`) && paths.includes(`${GUEST_ROOT}fiendfolio/content/a.xml`));
+  assert.ok(paths.every((p) => GUEST_ROOTS.some((root) => p.startsWith(root))), 'nothing was seeded outside a mods root');
+  // both roots, because the resource layer mounts one and the mod manager scans
+  // the other (round 76)
+  for (const root of GUEST_ROOTS) {
+    assert.ok(paths.includes(`${root}${IMPORT_DIR}/metadata.xml`), `the import row is seeded under ${root}`);
+    assert.ok(paths.includes(`${root}fiendfolio/main.lua`) && paths.includes(`${root}fiendfolio/content/a.xml`), `the mod is seeded under ${root}`);
+  }
   assert.ok(!paths.some((p) => p.includes('ghost')), 'a file with no mod row behind it is not seeded');
   assert.ok(!paths.some((p) => p.includes('..')), 'nor a key that climbed out of its own mod');
-  assert.ok(paths.includes(`${GUEST_ROOT}fiendfolio/disable.it`), 'the state the game wrote comes back');
-  assert.ok(!paths.includes(IMPORT_MARK), 'except the import row, which is never off');
+  // a disable.it is never seeded back: the flag it stands for lives in the index,
+  // and a mod that is off is left out entirely
+  assert.ok(!paths.some((p) => /disable\.it$/.test(p)), 'no disable.it is seeded');
   assert.equal(r.mods, 1);
-  assert.equal(r.state, 1);
+  assert.equal(r.off, 0);
 });
 
 test('the import row is a mod, and the toggle on it is the button', () => {
@@ -158,9 +163,17 @@ test('the import row is a mod, and the toggle on it is the button', () => {
   // leading space is what keeps it at the top of a sorted list
   assert.equal(IMPORT_DIR, ' import mod');
   assert.equal(IMPORT_MARK, 'c:/isaac/mods/ import mod/disable.it');
+  assert.equal(USER_ROOT, 'c:/isaac/documents/my games/binding of isaac repentance+/mods/');
+  // a disable.it under either root names the mod it belongs to, and the sentinel's
+  // is not one of them
+  assert.equal(disableTarget(`${GUEST_ROOT}fiendfolio/disable.it`), 'fiendfolio');
+  assert.equal(disableTarget(`${USER_ROOT}fiendfolio/disable.it`), 'fiendfolio');
+  assert.equal(disableTarget(IMPORT_MARK), null);
+  assert.equal(disableTarget(`${GUEST_ROOT}fiendfolio/main.lua`), null);
+  assert.equal(disableTarget('c:/isaac/documents/my games/binding of isaac repentance+/options.ini'), null);
   assert.match(IMPORT_METADATA, /<name>IMPORT MOD<\/name>/);
   const b = src('boot_web.mjs');
-  assert.ok(b.includes("if (key === IMPORT_MARK) {"), 'the pipeline claims that write');
+  assert.ok(b.includes('if (isImportMark(key)) {'), 'the pipeline claims that write');
   assert.ok(b.includes('if (hooks.onModImport) hooks.onModImport();'), 'and asks the page for its menu');
   assert.ok(b.includes("await stageOk('seed mods', async () => {"), 'mods are seeded as a stage of their own');
   assert.ok(b.includes("if (!modsOn) { log('  mods=0: no mods, and no import row'); return 0; }"), '?mods=0 leaves it all out');
@@ -183,16 +196,19 @@ test('a mod too big to be seeded is refused at the import, not at the next boot'
   // log nobody reads: the import would say it worked and the game would not change
   const m = src('mods.mjs');
   assert.ok(m.includes('if (mod.bytes > SEED_BUDGET) {'), 'checked where the person is looking');
-  assert.ok(m.includes('so this one would be kept and never loaded'), 'and said in those terms');
-  assert.ok(m.includes('if (total > SEED_BUDGET) notes.push('), 'a total that has gone past it is said too');
+  assert.ok(m.includes('the game is given ${mib(SEED_BUDGET)} for mods'), 'and said in those terms');
+  assert.ok(m.includes("if (mods.reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push("), 'a total that has gone past it is said too');
 });
 
 test('mods and saves are separate databases, and a write under mods/ never reaches the saves', () => {
   assert.equal(MODS_DB, 'isaac-mods');
   const b = src('boot_web.mjs');
   assert.ok(b.includes("const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';"), 'the save store is untouched');
-  assert.ok(b.includes('function modKeyTaken(key, take) {') && b.includes("if (!modsOn || !String(key).startsWith(GUEST_ROOT)) return false;"),
-    'anything under mods/ is claimed before the save path sees it');
+  assert.ok(b.includes('function modKeyTaken(key, take) {') && b.includes('if (!modsOn || !underMods(key)) return false;'),
+    'anything under either mods root is claimed before the save path sees it');
+  // round 76: a disable.it is a flag, not a file to keep
+  assert.ok(b.includes('const off = disableTarget(key);') && b.includes('if (modDb) setModEnabled(modDb, off, !take)'),
+    "the engine's own toggle flips the flag the page keeps");
   assert.ok(b.includes('cfg.isaacPersist = (key, src, ptr, len) => {\n  if (modKeyTaken(key, () => m.HEAPU8.slice(ptr, ptr + len))) return 1;'),
     'on the write');
   assert.ok(b.includes('cfg.isaacUnlink = (key, src) => {\n  if (modKeyTaken(key, null)) return 1;'), 'and on the delete');

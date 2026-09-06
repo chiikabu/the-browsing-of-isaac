@@ -13,22 +13,22 @@
 //   onLog(line)       the stage markers and the error triggers
 //   beforeMain(m)     awaited right before main: the Play click (a user gesture,
 //                     so the AudioContext the AL shim creates starts running)
-// Defaults: ISAAC_YIELD=1 (live page, JSPI) and no frame budget -- the query
-// is normalised before boot_web.mjs reads it. ?frames=N ends the run after N
+// Defaults: ISAAC_YIELD=1 (live page, JSPI) and no frame budget, handed to the
+// pipeline as hooks.params rather than written into the URL. ?frames=N ends the run after N
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
-import { createEditFileMenu } from './menu_overlay.mjs';
+import { createEditFileMenu, createPaperMenu } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu } from './mods.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
-if (!params.has('ISAAC_YIELD')) {
-  // the pipeline's defaults follow the query: ISAAC_YIELD=1 selects the live
-  // page and, with no frames=, an unlimited budget
-  params.set('ISAAC_YIELD', '1');
-  history.replaceState(null, '', `${location.pathname}?${params}${location.hash}`);
-}
+// The pipeline's defaults: ISAAC_YIELD=1 selects the live page and, with no
+// frames=, an unlimited budget. Applied through hooks.params (round 76) rather
+// than by rewriting the address bar, which used to leave ?ISAAC_YIELD=1 in a
+// URL nobody asked for.
+const pageDefaults = {};
+if (!params.has('ISAAC_YIELD')) { params.set('ISAAC_YIELD', '1'); pageDefaults.ISAAC_YIELD = '1'; }
 const AUTOPLAY = params.get('autoplay') !== '0';   // the page starts on its own; autoplay=0 keeps the Play button (a gesture before any audio)
 const PERSIST = params.get('persist') !== '0';
 
@@ -135,6 +135,7 @@ else setStatus(manifest ? 'loading\u2026' : 'no dist.json: sizes unknown');
 // ---- the hooks -----------------------------------------------------------------
 let streamed = 0, streamedRequests = 0;
 const hooks = {};
+hooks.params = pageDefaults;
 // a single-file build answers with bytes, not URLs: the reader Worker would have
 // nothing to fetch, so it is not started
 hooks.noReader = !!(portable && !portable.urlFor);
@@ -144,6 +145,14 @@ if (portable && portable.ready) { try { await portable.ready; } catch { /* fall 
 // the reads once the engine runs, when there is no Worker to make them
 hooks.preadBytes = portable ? (rel, off, len) => portable.bytesFor(rel, off, len) : null;
 hooks.trail = (portable && portable.trail) || null;
+hooks.chunkKey = (portable && portable.key) || null;
+// round 77: a chunked build says which chunk it is on, because a payload in
+// three dozen files is a progress bar nobody can read otherwise
+if (portable && portable.chunks) {
+  window.__isaacPortableData.onChunk = (got, total) => {
+    setStatus(`loading\u2026 chunk ${got} of ${total}`);
+  };
+}
 const partsOf = (url) => {
   const [path, query] = url.split('?');
   const q = new URLSearchParams(query || '');
@@ -398,7 +407,7 @@ const editMenu = createEditFileMenu({
 });
 window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;
-window.isaacKeyCapture = (ev, down) => editMenu.onKey(ev, down);
+window.isaacKeyCapture = (ev, down) => (modsMenu.isOpen() ? modsMenu.onKey(ev, down) : editMenu.onKey(ev, down));
 window.isaacEditFileMenu = editMenu;                      // the drivers look at it
 
 // ---- mods (round 74) ---------------------------------------------------------------
@@ -406,9 +415,20 @@ window.isaacEditFileMenu = editMenu;                      // the drivers look at
 // by the pipeline with nothing in it but a name. Enter on that row makes the game
 // write a disable.it into its folder; the pipeline claims that write instead of
 // storing it and calls this. So the button is the game's, and the menu is ours.
-const modsMenu = createModsMenu({
+// Drawn on the game's own paper, in the game's own font, with the game's own
+// cursor and menu sounds (menu_overlay.mjs) -- the browser's chrome has no place
+// on top of the game. The catalogue the browser reads is a URL the build carries
+// or the query names; without one the MOD BROWSER row is not offered.
+const modsPaper = createPaperMenu({
+  stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`,
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
+  audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
   log: (line) => console.log(line),
-  onClose: () => canvas.focus(),
+});
+const modsMenu = createModsMenu({
+  paper: modsPaper,
+  log: (line) => console.log(line),
+  catalogueBase: params.get('catalogue') || (typeof window !== 'undefined' ? window.isaacModCatalogue : null) || null,
 });
 hooks.onModImport = () => { modsMenu.open(); };
 window.isaacModsMenu = modsMenu;                          // the drivers look at it too

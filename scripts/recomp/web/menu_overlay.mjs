@@ -53,30 +53,15 @@ function tintAtlas(img, ink) {
   return c;
 }
 
-export function createEditFileMenu(opts) {
-  // opts: { stage, canvas, assetsUrl, readAsset(name), audioContext(), actions: { export(slot), import(slot), delete(slot) }, injectKey(name, down), log }
-  // readAsset (round 70) is how a build with no server hands over its own files
-  const { stage, canvas, assetsUrl, readAsset, actions, injectKey } = opts;
+// ---- the shared half: the game's own art, font and sounds -------------------
+// Both menus below draw with these. opts: { assetsUrl, readAsset(name), log,
+// audioContext() }. readAsset (round 70) is how a build with no server hands
+// over its own files.
+function menuAssets(opts) {
+  const { assetsUrl, readAsset } = opts;
   const log = opts.log || (() => {});
-  const state = { open: false, slot: 0, cursor: 0, ready: false, loading: null, message: null, fps: null, fpsOn: false, closing: false };
   const A = { menu: null, sheet: null, paper: null, cursor: null, font: null, atlas: null, sounds: new Map() };
-  try { state.fpsOn = localStorage.getItem('isaac-fps-viewer') === '1'; } catch (e) { /* no storage */ }
-
-  const overlay = document.createElement('canvas');
-  overlay.id = 'menu-overlay';
-  overlay.width = GAME_W * SCALE; overlay.height = GAME_H * SCALE;
-  overlay.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges;';
-  overlay.hidden = true;
-  stage.appendChild(overlay);
-  const g = overlay.getContext('2d');
-  g.imageSmoothingEnabled = false;
-
-  const fpsEl = document.createElement('canvas');
-  fpsEl.id = 'fps-viewer';
-  fpsEl.width = 120 * SCALE; fpsEl.height = 28 * SCALE;
-  fpsEl.style.cssText = 'position:absolute;left:1%;top:1.5%;width:12.5%;height:auto;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges;';
-  fpsEl.hidden = true;
-  stage.appendChild(fpsEl);
+  const st = { ready: false, loading: null };
 
   const fetchAsset = async (name, kind) => {
     let blob = null;
@@ -99,8 +84,8 @@ export function createEditFileMenu(opts) {
     return img;
   };
   const load = () => {
-    if (state.loading) return state.loading;
-    state.loading = (async () => {
+    if (st.loading) return st.loading;
+    st.loading = (async () => {
       A.menu = await fetchAsset('menu.json', 'json');
       [A.sheet, A.paper, A.cursor, A.atlasImg] = await Promise.all([
         fetchAsset(A.menu.sheet, 'image'), fetchAsset(A.menu.paper, 'image'), fetchAsset(A.menu.cursor, 'image'), fetchAsset(A.menu.font.png, 'image')]);
@@ -108,7 +93,7 @@ export function createEditFileMenu(opts) {
       A.atlas = tintAtlas(A.atlasImg, A.menu.colours.ink);
       A.atlasLight = tintAtlas(A.atlasImg, [140, 120, 120]);
       A.atlasWhite = tintAtlas(A.atlasImg, [255, 255, 255]);
-      state.ready = true;
+      st.ready = true;
       // the sounds decode lazily on the first open (the AudioContext exists once the engine runs)
       const ctx = opts.audioContext && opts.audioContext();
       if (ctx) {
@@ -116,8 +101,8 @@ export function createEditFileMenu(opts) {
           try { A.sounds.set(role, await ctx.decodeAudioData(await fetchAsset(file, 'buffer'))); } catch (e) { log(`[menu] sound ${file}: ${e.message}`); }
         }
       }
-    })().catch((e) => { log(`[menu] assets: ${e.message}`); state.loading = null; throw e; });
-    return state.loading;
+    })().catch((e) => { log(`[menu] assets: ${e.message}`); st.loading = null; throw e; });
+    return st.loading;
   };
   const play = (role) => {
     try {
@@ -126,7 +111,6 @@ export function createEditFileMenu(opts) {
       const src = ctx.createBufferSource(); src.buffer = buf; src.connect(ctx.destination); src.start();
     } catch (e) { /* sound is decoration */ }
   };
-
   // text in the font at game scale: returns the width drawn (game px)
   const measure = (text) => { let w = 0, prev = null; for (const ch of text) { const c = A.font.chars.get(ch.codePointAt(0)); if (!c) { w += 6; prev = null; continue; } if (prev !== null) w += A.font.kern.get(prev * 4294967296 + ch.codePointAt(0)) || 0; w += c.xa; prev = ch.codePointAt(0); } return w; };
   const drawText = (ctx, text, x, y, atlas) => {
@@ -140,6 +124,52 @@ export function createEditFileMenu(opts) {
     }
     return cx - x;
   };
+  // a line clipped to a width, with an ellipsis where it was cut
+  const clip = (text, width) => {
+    if (measure(text) <= width) return text;
+    let t = text;
+    while (t.length > 1 && measure(t + '...') > width) t = t.slice(0, -1);
+    return t + '...';
+  };
+  const surface = (stage, id, w, h) => {
+    const el = document.createElement('canvas');
+    el.id = id;
+    el.width = w; el.height = h;
+    el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges;';
+    el.hidden = true;
+    stage.appendChild(el);
+    const ctx = el.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    return { el, ctx };
+  };
+  return { A, load, play, measure, drawText, clip, surface, isReady: () => st.ready };
+}
+
+export function createEditFileMenu(opts) {
+  // opts: { stage, canvas, assetsUrl, readAsset(name), audioContext(), actions: { export(slot), import(slot), delete(slot) }, injectKey(name, down), log }
+  // readAsset (round 70) is how a build with no server hands over its own files
+  const { stage, canvas, assetsUrl, readAsset, actions, injectKey } = opts;
+  const log = opts.log || (() => {});
+  const state = { open: false, slot: 0, cursor: 0, message: null, fps: null, fpsOn: false, closing: false };
+  const M = menuAssets(opts);
+  const { A, load, play, measure, drawText } = M;
+  try { state.fpsOn = localStorage.getItem('isaac-fps-viewer') === '1'; } catch (e) { /* no storage */ }
+
+  const overlay = document.createElement('canvas');
+  overlay.id = 'menu-overlay';
+  overlay.width = GAME_W * SCALE; overlay.height = GAME_H * SCALE;
+  overlay.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges;';
+  overlay.hidden = true;
+  stage.appendChild(overlay);
+  const g = overlay.getContext('2d');
+  g.imageSmoothingEnabled = false;
+
+  const fpsEl = document.createElement('canvas');
+  fpsEl.id = 'fps-viewer';
+  fpsEl.width = 120 * SCALE; fpsEl.height = 28 * SCALE;
+  fpsEl.style.cssText = 'position:absolute;left:1%;top:1.5%;width:12.5%;height:auto;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges;';
+  fpsEl.hidden = true;
+  stage.appendChild(fpsEl);
 
   const items = () => ['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK'];
   // the FPS readout is a key, not a setting: N flips it (play.mjs), this browser remembers it
@@ -147,12 +177,12 @@ export function createEditFileMenu(opts) {
     state.fpsOn = !state.fpsOn;
     try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }
     fpsEl.hidden = !state.fpsOn;
-    if (state.fpsOn && !state.ready) load().then(() => { fpsEl.hidden = !state.fpsOn; drawFps(); }).catch(() => {});
+    if (state.fpsOn && !M.isReady()) load().then(() => { fpsEl.hidden = !state.fpsOn; drawFps(); }).catch(() => {});
     else if (state.fpsOn) drawFps();
     return state.fpsOn;
   };
   const draw = () => {
-    if (!state.open || !state.ready) return;
+    if (!state.open || !M.isReady()) return;
     const R = A.menu.rects, [px0, py0] = R.prompt_at, [sx, sy, sw, sh0] = R.prompt_paper;
     // the seed paper (blank) where the engine draws its own prompt, the prompt
     // paper's width and a little taller: a title and five entries
@@ -174,7 +204,7 @@ export function createEditFileMenu(opts) {
     if (state.message) drawText(g, state.message, px + (sw - measure(state.message)) / 2, py + sh - 24, A.atlas);
   };
   const drawFps = () => {
-    if (!state.ready) return;
+    if (!M.isReady()) return;
     const gg = fpsEl.getContext('2d');
     gg.imageSmoothingEnabled = false;
     gg.clearRect(0, 0, fpsEl.width, fpsEl.height);
@@ -244,8 +274,124 @@ export function createEditFileMenu(opts) {
     isOpen: () => state.open,
     message: () => state.message,
     fpsViewer: () => state.fpsOn,
-    setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!state.ready) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
+    setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!M.isReady()) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
     preload: load,
     element: overlay,
+  };
+}
+
+// ---- a paper menu of arbitrary rows (round 76) --------------------------------
+// The mods menus use this. opts: { stage, assetsUrl, readAsset, audioContext,
+// log }. open(model, { onKey }) takes a function returning the model, so the
+// caller can change what it shows and call redraw().
+export function createPaperMenu(opts) {
+  const M = menuAssets(opts);
+  const { A, load, play, measure, drawText, clip } = M;
+  const log = opts.log || (() => {});
+  const { el: overlay, ctx: g } = M.surface(opts.stage, 'paper-menu', GAME_W * SCALE, GAME_H * SCALE);
+  const st = { open: false, cursor: 0, top: 0, model: null, get: null, onKey: null };
+
+  // Everything below is in game pixels (480x270) and comes off the font: a row
+  // is one line of it, and the panel is the header, the rows and the two lines
+  // under them. PAD is the paper's own torn margin, which nothing is drawn in.
+  // The paper is a torn sheet with a soft edge, so the margin the text keeps is
+  // wider than the rect it is drawn into -- SIDE at the sides, TAIL under the
+  // last line, both found by looking at it.
+  const PANEL_W = 392, PAD = 16, SIDE = 26, TAIL = 30, MAX_ROWS = 7;
+  const metrics = () => {
+    const lh = Math.max(12, (A.font && A.font.lineHeight) || 16);
+    const head = PAD + lh + 4;
+    const foot = lh * 2 + TAIL;
+    return { lh, head, foot };
+  };
+  const rowsOf = () => (st.model && st.model.rows) || [];
+  const visible = () => {
+    const { lh } = metrics();
+    return Math.max(1, Math.min(MAX_ROWS, rowsOf().length, Math.floor((GAME_H - 24 - metrics().head - metrics().foot) / lh)));
+  };
+
+  const draw = () => {
+    if (!st.open || !M.isReady()) return;
+    const rows = rowsOf(), { lh, head, foot } = metrics();
+    const hasSearch = !!(st.model && st.model.search !== undefined && st.model.search !== null);
+    const span = visible();
+    const panelH = head + (hasSearch ? lh : 0) + span * lh + foot + PAD;
+    const px = Math.round((GAME_W - PANEL_W) / 2), py = Math.round((GAME_H - panelH) / 2);
+    g.clearRect(0, 0, overlay.width, overlay.height);
+    g.drawImage(A.paper, 0, 0, A.paper.width, A.paper.height, px * SCALE, py * SCALE, PANEL_W * SCALE, panelH * SCALE);
+
+    const title = (st.model && st.model.title) || '';
+    drawText(g, title, px + (PANEL_W - measure(title)) / 2, py + PAD, A.atlas);
+    const n = rows.length;
+    if (n > span) {
+      const more = `${st.cursor + 1}/${n}`;
+      drawText(g, more, px + PANEL_W - SIDE - measure(more), py + PAD, A.atlasLight);
+    }
+
+    let top = py + head;
+    if (hasSearch) {
+      const q = st.model.search ? `> ${st.model.search}` : `> ${st.model.searchHint || ''}`;
+      drawText(g, clip(q, PANEL_W - SIDE * 2), px + SIDE, top, st.model.search ? A.atlas : A.atlasLight);
+      top += lh;
+    }
+    // the window of rows around the cursor
+    if (st.cursor < st.top) st.top = st.cursor;
+    if (st.cursor >= st.top + span) st.top = st.cursor - span + 1;
+    if (st.top > Math.max(0, n - span)) st.top = Math.max(0, n - span);
+    if (st.top < 0) st.top = 0;
+    const [cx, cy, cw, ch] = A.menu.rects.cursor;
+    const textX = px + SIDE + 10;
+    for (let i = st.top; i < Math.min(n, st.top + span); i++) {
+      const row = rows[i], y = top + (i - st.top) * lh;
+      const noteW = row.note ? measure(row.note) : 0;
+      const label = clip(row.label, PANEL_W - SIDE * 2 - 14 - (noteW ? noteW + 10 : 0));
+      drawText(g, label, textX, y, i === st.cursor ? A.atlas : (row.dim ? A.atlasLight : A.atlas));
+      if (row.note) drawText(g, row.note, px + PANEL_W - SIDE - noteW, y, A.atlasLight);
+      if (i === st.cursor) g.drawImage(A.sheet, cx, cy, cw, ch, (textX - cw - 3) * SCALE, (y + (lh - ch) / 2 - 2) * SCALE, cw * SCALE, ch * SCALE);
+    }
+    const msg = st.model && st.model.message;
+    const footY = py + panelH - TAIL - lh;
+    if (msg) drawText(g, clip(msg, PANEL_W - SIDE * 2), px + SIDE, footY - lh, A.atlas);
+    const hint = st.model && st.model.footer;
+    if (hint) drawText(g, clip(hint, PANEL_W - SIDE * 2), px + SIDE, footY, A.atlasLight);
+  };
+
+  const redraw = () => { st.model = st.get ? st.get() : st.model; draw(); };
+
+  const open = async (get, o) => {
+    st.get = get; st.onKey = (o && o.onKey) || null;
+    st.cursor = 0; st.top = 0; st.open = true;
+    try { await load(); } catch (e) { st.open = false; log(`[mods] the menu art: ${e.message}`); return; }
+    if (!st.open) return;
+    overlay.hidden = false;
+    play('open');
+    redraw();
+  };
+  const close = (sound) => {
+    if (!st.open) return;
+    st.open = false; overlay.hidden = true;
+    if (sound) play(sound);
+  };
+  const onKey = (ev, down) => {
+    if (!st.open) return false;
+    if (!down) return true;                      // the menu owns the keys while it is up
+    const rows = rowsOf(), n = rows.length;
+    const code = ev.code;
+    if (st.onKey && st.onKey(code, ev.key)) return true;
+    if (code === 'ArrowUp' || code === 'KeyW') { if (n) { st.cursor = (st.cursor + n - 1) % n; play('move'); redraw(); } }
+    else if (code === 'ArrowDown' || code === 'KeyS') { if (n) { st.cursor = (st.cursor + 1) % n; play('move'); redraw(); } }
+    else if (code === 'Enter' || code === 'Space') {
+      const row = rows[st.cursor];
+      if (row && row.action) { play('select'); Promise.resolve(row.action()).then(redraw, redraw); }
+    } else if (code === 'Escape' || code === 'Backspace') { close('back'); }
+    return true;
+  };
+  return {
+    open, close, onKey, redraw,
+    isOpen: () => st.open,
+    currentRow: () => rowsOf()[st.cursor] || null,
+    cursor: () => st.cursor,
+    element: () => overlay,
+    preload: load,
   };
 }

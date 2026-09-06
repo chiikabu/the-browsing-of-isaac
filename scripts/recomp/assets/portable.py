@@ -50,6 +50,117 @@ SCRIPT_BYTES = 48 << 20        # one inline script's worth of base64
 WINDOW = MIB                   # the engine's window, and the range granularity
 
 
+def keystream_key(seed: bytes) -> bytes:
+    """A 256-byte table from a build seed. Not a cipher: a way to stop a chunk on
+    a CDN from announcing what it is."""
+    import hashlib
+    out = bytearray()
+    h = seed
+    while len(out) < 256:
+        h = hashlib.sha256(h).digest()
+        out += h
+    return bytes(out[:256])
+
+
+def scramble(data: bytes, pos: int, key: bytes) -> bytes:
+    """XOR `data`, which starts at `pos` in its stream. Reversible from any
+    offset, which a range read needs."""
+    if not key:
+        return data
+    out = bytearray(data)
+    for i in range(len(out)):
+        at = pos + i
+        out[i] ^= key[at & 0xFF] ^ ((at >> 8) & 0xFF)
+    return bytes(out)
+
+
+def minify_js(src: str) -> str:
+    """Comments and the whitespace between tokens, gone. Nothing renamed.
+
+    A mode stack rather than a regex or a counter: `//` inside a string is not a
+    comment, a `/` after a value is division and after an operator is a regular
+    expression, and a template substitution may contain an object literal, a
+    string with a brace in it, or another template. Counting braces gets that
+    wrong; a stack does not.
+    """
+    ID = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$")
+    VALUE_END = ID | set(")]}\"'`")          # after one of these, `/` is division
+    out = []
+    stack = []                                # 'tpl' = inside a template, 'sub' = inside its ${}
+    i, n = 0, len(src)
+    prev = ""
+
+    def emit(text, last=None):
+        out.append(text)
+        return last if last is not None else (text[-1] if text else prev)
+
+    while i < n:
+        c = src[i]
+        # inside a template literal, everything is verbatim until ` or ${
+        if stack and stack[-1] == "tpl":
+            if c == "\\":
+                prev = emit(src[i:i + 2], "`"); i += 2; continue
+            if c == "`":
+                stack.pop(); prev = emit(c, "`"); i += 1; continue
+            if c == "$" and src[i + 1:i + 2] == "{":
+                stack.append("sub"); prev = emit("${", "{"); i += 2; continue
+            prev = emit(c, "`"); i += 1; continue
+        two = src[i:i + 2]
+        if two == "//":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if two == "/*":
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c in "\"'":
+            j = i + 1
+            while j < n:
+                if src[j] == "\\":
+                    j += 2; continue
+                if src[j] == c:
+                    break
+                j += 1
+            prev = emit(src[i:j + 1], c); i = j + 1; continue
+        if c == "`":
+            stack.append("tpl"); prev = emit(c, "`"); i += 1; continue
+        if c == "}" and stack and stack[-1] == "sub":
+            stack.pop(); prev = emit("}", "}"); i += 1; continue
+        if c == "/":
+            if prev in VALUE_END:
+                prev = emit(c); i += 1; continue
+            j, cls = i + 1, False
+            while j < n:
+                if src[j] == "\\":
+                    j += 2; continue
+                if src[j] == "[":
+                    cls = True
+                elif src[j] == "]":
+                    cls = False
+                elif src[j] == "/" and not cls:
+                    break
+                elif src[j] == "\n":
+                    break
+                j += 1
+            while j + 1 < n and src[j + 1] in "gimsuyd":
+                j += 1
+            prev = emit(src[i:j + 1], "/"); i = j + 1; continue
+        if c in " \t\r\n":
+            j = i
+            while j < n and src[j] in " \t\r\n":
+                j += 1
+            nxt = src[j] if j < n else ""
+            if prev in ID and nxt in ID:
+                out.append(" ")
+            elif "\n" in src[i:j] and prev and nxt and prev not in "{(,;=+-*/%&|!?:<>~^[" and nxt not in "})],;.=+*/%&|?:<>":
+                out.append("\n")
+            i = j
+            continue
+        prev = emit(c); i += 1
+    return "".join(out)
+
+
 def human(n: int) -> str:
     return "%.1f MB" % (n / 1048576.0) if n >= 1048576 else "%.1f KB" % (n / 1024.0)
 
@@ -152,6 +263,29 @@ PROVIDER_JS = r"""
   var P = window.__isaacPortableData;
   var S = P.streams;                                  // one per byte run: {tag,size,gz}
   var cache = new Map(), inline = P.blobs || null, ranges = true;
+  // round 77: the chunks are XORed with a seekable keystream so a file on a CDN
+  // is not a recognisable archive. Reversible from any offset, which is what a
+  // range read needs. The key is in this page, as it has to be.
+  var KEY = P.key ? (function () {
+    var b = atob(P.key), a = new Uint8Array(b.length);
+    for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
+    return a;
+  })() : null;
+  function unscramble(bytes, pos) {
+    if (!KEY) return bytes;
+    for (var i = 0; i < bytes.length; i++) {
+      var at = pos + i;
+      bytes[i] ^= KEY[at & 255] ^ ((at >> 8) & 255);
+    }
+    return bytes;
+  }
+  var loaded = Object.create(null), loadedN = 0;
+  function note(s, i) {
+    var k = s + ':' + i;
+    if (loaded[k]) return;
+    loaded[k] = 1; loadedN += 1;
+    if (P.onChunk) { try { P.onChunk(loadedN, P.chunks || 0); } catch (e) { /* the readout is decoration */ } }
+  }
   function decode(b) {
     return (typeof Uint8Array.fromBase64 === 'function')
       ? Uint8Array.fromBase64(b)
@@ -174,9 +308,11 @@ PROVIDER_JS = r"""
     if (hit) return hit;
     var r = await fetch(name(s, i));
     if (!r.ok) throw new Error('piece ' + key + ': HTTP ' + r.status);
+    note(s, i);
+    var raw = unscramble(new Uint8Array(await r.arrayBuffer()), i * S[s].size);
     var u = S[s].gz
-      ? new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
-      : new Uint8Array(await r.arrayBuffer());
+      ? new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+      : raw;
     cache.set(key, u);
     if (cache.size > 6) cache.delete(cache.keys().next().value);
     return u;
@@ -188,12 +324,14 @@ PROVIDER_JS = r"""
     var r = await fetch(name(p.s, p.i), { headers: { Range: 'bytes=' + p.within + '-' + (p.within + p.take - 1) } });
     if (!r.ok) throw new Error('range ' + p.s + ':' + p.i + ': HTTP ' + r.status);
     var u = new Uint8Array(await r.arrayBuffer());
+    note(p.s, p.i);
     if (r.status !== 206 || u.length !== p.take) {
       ranges = false;                                  // this host does not do ranges
+      u = unscramble(u, p.i * S[p.s].size);
       cache.set(p.s + ':' + p.i, u);
       return u.subarray(p.within, p.within + p.take);
     }
-    return u;
+    return unscramble(u, p.i * S[p.s].size + p.within);
   }
   async function gather(parts) {
     var total = parts.reduce(function (n, p) { return n + p.take; }, 0);
@@ -237,6 +375,9 @@ PROVIDER_JS = r"""
     status: P.status,
     ready: probeRanges(),
     ranges: function () { return ranges; },
+    key: KEY,
+    chunks: P.chunks || 0,
+    loaded: function () { return loadedN; },
     // a window inside one raw chunk is a URL with the range in its fragment; the
     // reader Worker strips it and sends a Range header (boot_web.mjs)
     urlFor: P.base ? function (rel, off, len) {
@@ -244,7 +385,10 @@ PROVIDER_JS = r"""
       var parts = locate(rel, off, len);
       if (!parts || parts.length !== 1 || S[parts[0].s].gz) return null;
       var p = parts[0];
-      return name(p.s, p.i) + '#r=' + p.within + '-' + (p.within + p.take - 1);
+      // the range rides in the fragment, which no server sees; `@pos` after it is
+      // where those bytes start in the stream, which is what unscrambles them
+      return name(p.s, p.i) + '#r=' + p.within + '-' + (p.within + p.take - 1)
+        + '@' + (p.i * S[p.s].size + p.within);
     } : null,
     bytesFor: P.base
       ? function (rel, off, len) { var p = locate(rel, off, len); return p ? gather(p) : null; }
@@ -316,21 +460,27 @@ def cmd_chunks(args) -> int:
     b_size = ((b_len + b_pieces - 1) // b_pieces + WINDOW - 1) // WINDOW * WINDOW
     written = [0]
 
-    def emit_for(tag, gz):
+    key = b"" if args.plain else keystream_key(
+        ("isaac-portable/%d/%d/%d" % (a_len, b_len, args.chunks)).encode("ascii"))
+
+    def emit_for(tag, gz, size):
         def emit(i, b):
             body = gzip.compress(b, 9, mtime=0) if gz else b
+            body = scramble(body, i * size, key)
             with open(os.path.join(data_dir, "%s%d.bin" % (tag, i)), "wb") as f:
                 f.write(body)
             written[0] += len(body)
         return emit
 
-    n_a = cut(whole, a_size, emit_for("a", True))
-    n_b = cut(windowed, b_size, emit_for("b", False))
+    n_a = cut(whole, a_size, emit_for("a", True, a_size))
+    n_b = cut(windowed, b_size, emit_for("b", False, b_size))
     streams = [{"tag": "a", "size": a_size, "gz": True, "n": n_a},
                {"tag": "b", "size": b_size, "gz": False, "n": n_b}]
     data = {"streams": streams, "files": table, "base": args.base or "./c",
             "index": index_for(args.dist, files), "manifest": manifest_for(args.dist, files),
-            "status": "loading…"}
+            "chunks": n_a + n_b, "status": "loading…"}
+    if key:
+        data["key"] = base64.b64encode(key).decode("ascii")
     # the boot trail is small and boot_web.mjs asks for it by name: inline it so the
     # page needs nothing beside itself
     trail = os.path.join(args.dist, "boot-trail.json")
@@ -339,6 +489,11 @@ def cmd_chunks(args) -> int:
     head = ('<script>window.__isaacPortableData = ' + json.dumps(data, separators=(",", ":")) + ';</script>\n'
             '<script>' + PROVIDER_JS + '</script>')
     mods = {rel: read(os.path.join(args.dist, rel)).decode("utf-8") for rel in MODULES}
+    if not args.plain:
+        before = sum(len(v) for v in mods.values())
+        mods = {k: minify_js(v) for k, v in mods.items()}
+        after = sum(len(v) for v in mods.values())
+        print("  modules minified: %s -> %s" % (human(before), human(after)))
     tail = ('\n<script>window.__isaacModules = ' + json.dumps(mods) + ';</script>\n'
             '<script>' + MODULE_LOADER_JS + '</script>')
     html = page_source(args.dist).replace('<script type="module" src="./play.mjs"></script>', "")
@@ -352,6 +507,8 @@ def cmd_chunks(args) -> int:
     print("  page %s (%s) -- the modules and the boot trail are in it, nothing else is needed"
           % (os.path.join(out_dir, "index.html"), human(len(html.encode("utf-8")))))
     print("  base URL: %s" % data["base"])
+    print("  %s" % ("plain: the chunks are the payload as it is"
+                    if args.plain else "the chunks are scrambled and the page is minified"))
     if max(a_size, b_size) > 20 * MIB:
         print("  note: jsDelivr refuses a file over 20 MB; --chunks %d keeps every piece under it"
               % ((raw + 20 * MIB - 1) // (20 * MIB) + 2))
@@ -418,6 +575,8 @@ def main(argv=None) -> int:
     p.add_argument("--chunks", type=int, default=12, help="how many files the payload becomes (default 12)")
     p.add_argument("--base", help="where the chunks will be served from (default ./c)")
     p.add_argument("--skip", nargs="*", help="archive file names to leave out")
+    p.add_argument("--plain", action="store_true",
+                   help="leave the chunks as they are and the page readable (the default scrambles both)")
     p.set_defaults(fn=cmd_chunks)
     p = sub.add_parser("offline")
     p.add_argument("dist"); p.add_argument("out")

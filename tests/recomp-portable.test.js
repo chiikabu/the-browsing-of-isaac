@@ -10,6 +10,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,7 +51,7 @@ test('a window is a byte range inside a large chunk, and the payload is a dozen 
   assert.match(portable, /if \(!len \|\| !ranges\) return null;/, 'no range support, no URL: the bytes path serves it');
   assert.match(portable, /if \(!parts \|\| parts\.length !== 1 \|\| S\[parts\[0\]\.s\]\.gz\) return null;/,
     'a window that straddles two chunks, or lands in a compressed one, is not a range');
-  assert.match(portable, /return name\(p\.s, p\.i\) \+ '#r=' \+ p\.within \+ '-' \+ \(p\.within \+ p\.take - 1\);/,
+  assert.match(portable, /return name\(p\.s, p\.i\) \+ '#r=' \+ p\.within \+ '-' \+ \(p\.within \+ p\.take - 1\)/,
     'the range rides in the fragment, which no server ever sees');
   // windowed archives are padded up to the window so a read never crosses a cut
   assert.match(portable, /def lay_out\(part: list\[dict\], table: dict, stream: int, align: int = 1\) -> int:/);
@@ -107,4 +109,111 @@ test('the inline loader builds each module after everything it imports', () => {
   // and the list the payload carries is the list the loader builds
   const modules = /MODULES = \(([^)]+)\)/.exec(portable)[1].split(',').map((s) => s.trim().replace(/"/g, ''));
   assert.deepEqual(new Set(modules), new Set(order), 'every inlined module is built, and nothing else is');
+});
+
+// ---- round 77: the payload stops announcing what it is -----------------------
+const python = ['python3', 'python'].find((p) => {
+  try { return spawnSync(p, ['-c', 'import sys; print(sys.version_info[0])'], { encoding: 'utf8' }).stdout.trim() === '3'; }
+  catch { return false; }
+});
+const runPy = (code) => {
+  const r = spawnSync(python, ['-c', code], { encoding: 'utf8', cwd: root });
+  if (r.status !== 0) throw new Error(r.stderr || 'python failed');
+  return r.stdout.trim();
+};
+
+test('round 77: the keystream is reversible from any offset', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  // a window is fetched as a byte range and put back where it lands, so the
+  // stream has to be seekable: unscrambling bytes [k, k+n) needs only k
+  const out = runPy([
+    'import sys; sys.path.insert(0, "scripts/recomp/assets"); import portable as P',
+    'key = P.keystream_key(b"pin")',
+    'data = bytes((i * 37 + 11) & 0xff for i in range(5000))',
+    'whole = P.scramble(data, 0, key)',
+    'print(whole != data)',
+    // any slice unscrambles on its own, from its own offset
+    'print(all(P.scramble(whole[a:b], a, key) == data[a:b] for a, b in ((0, 100), (256, 300), (999, 4096), (4096, 5000))))',
+    // and the key changes the bytes
+    'print(P.scramble(data, 0, P.keystream_key(b"other")) != whole)',
+    // no key, no change
+    'print(P.scramble(data, 0, b"") == data)',
+  ].join('\n'));
+  assert.deepEqual(out.split(/\r?\n/), ['True', 'True', 'True', 'True']);
+});
+
+test('round 77: the minifier walks the source rather than pattern-matching it', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  // the three things a regex-based stripper gets wrong: `//` inside a string, a
+  // regular expression that looks like division, and a template literal that may
+  // contain any of it
+  const out = runPy([
+    'import sys, json; sys.path.insert(0, "scripts/recomp/assets"); import portable as P',
+    'src = open("scripts/recomp/web/zip.mjs", encoding="utf-8").read()',
+    'm = P.minify_js(src)',
+    'print(len(m) < len(src))',
+    'print("//" not in m.split("export")[0])',
+    'cases = ["const u = \'https://x/y\';", "const r = /a\\\\/b/g;", "const t = `a ${x} // b`;", "const d = a / b; // gone"]',
+    'print(json.dumps([P.minify_js(c) for c in cases]))',
+  ].join('\n')).split(/\r?\n/);
+  assert.equal(out[0], 'True', 'it does shrink the source');
+  assert.equal(out[1], 'True', 'and the comments are gone');
+  const kept = JSON.parse(out[2]);
+  assert.ok(kept[0].includes("'https://x/y'"), 'a URL inside a string is not a comment');
+  assert.ok(kept[1].includes('/a\\/b/g'), 'a regular expression survives');
+  assert.ok(kept[2].includes('`a ${x} // b`'), 'a template literal is passed through whole');
+  assert.ok(kept[3].includes('a/b') && !kept[3].includes('gone'), 'division is division, and the comment goes');
+});
+
+test('round 77: both sides of the seam agree what the keystream is called', () => {
+  // the job messages already carry `key` -- the cache key of the window wanted --
+  // so a handler that greeted every one of those as a new keystream answered no
+  // reads at all, and the game stopped at its first frame
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes('if (d.xorKey) { xorKey = new Uint8Array(d.xorKey); return; }'), 'the Worker takes it under its own name');
+  assert.ok(b.includes("w.postMessage({ xorKey: hooks.chunkKey });"), 'and the page sends it under that name');
+  assert.ok(!/if \(d\.key\)/.test(b), 'nothing keys off the field a job already uses');
+  assert.match(portable, /if \(!xorKey \|\| pos < 0\) return buf;|if \(!KEY\) return bytes;/);
+  // the position rides beside the range, because that is what unscrambles it
+  assert.match(portable, /\+ '@' \+ \(p\.i \* S\[p\.s\]\.size \+ p\.within\)/);
+  assert.ok(b.includes("const frag = url.slice(h + 3), cut = frag.indexOf('@');"), 'the Worker reads it back');
+});
+
+test('round 77: the loading screen says which chunk it is on', () => {
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(play.includes('window.__isaacPortableData.onChunk = (got, total) => {'), 'the page listens');
+  assert.match(portable, /if \(P\.onChunk\) \{ try \{ P\.onChunk\(loadedN, P\.chunks \|\| 0\); \}/, 'the provider counts');
+  assert.match(portable, /"chunks": n_a \+ n_b,/, 'and the page is told how many there are');
+});
+
+test('round 77: every page module parses, before and after minifying', async (t) => {
+  // A backtick in a comment inside the reader Worker -- which is one big template
+  // literal -- ended that template early, and the pipeline module stopped parsing
+  // at all. The page failed with "Unexpected identifier" and no first frame, and
+  // nothing in the suite noticed, because nothing was reading the file as code.
+  // `node --check` parses a file without running it, and needs no flag the
+  // family does not already pass
+  const parses = (file) => spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  const names = ['boot.mjs', 'boot_web.mjs', 'play.mjs', 'mods.mjs', 'zip.mjs', 'menu_overlay.mjs'];
+  const web = join(root, 'scripts', 'recomp', 'web');
+  for (const name of names) {
+    const file = join(web, name);
+    if (name === 'boot.mjs') continue;                 // the build's output, not in this tree
+    const src = readFileSync(file, 'utf8');
+    const first = parses(file);
+    assert.equal(first.status, 0, `${name} parses: ${first.stderr}`);
+    if (!python) continue;
+    // through a file rather than stdout: the sources are UTF-8 and a pipe on
+    // Windows is not, and a mangled byte would look like a minifier bug
+    const tmp = join(tmpdir(), `isaac-min-${name}`);
+    runPy([
+      'import io, sys; sys.path.insert(0, "scripts/recomp/assets"); import portable as P',
+      `src = io.open("scripts/recomp/web/${name}", encoding="utf-8").read()`,
+      `io.open(${JSON.stringify(tmp.replace(/\\/g, '/'))}, "w", encoding="utf-8", newline="").write(P.minify_js(src))`,
+    ].join('\n'));
+    const min = readFileSync(tmp, 'utf8');
+    assert.ok(min.length < src.length, `${name} does shrink`);
+    const after = parses(tmp);
+    assert.equal(after.status, 0, `${name} still parses minified: ${after.stderr}`);
+  }
 });

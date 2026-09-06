@@ -6989,3 +6989,90 @@ frame 300 21,280 -> **16,553 ms**; at 50 Mbit/s, frame 300 55,742 -> **54,589
 ms**, so the 5.4 MB the archives gained is paid back inside the first visit even
 on a capped link, and costs nothing on any visit after it. Windows 174 (172 MB)
 -> 177 (175.9 MB).
+
+### 21.90 Round 76: the mods menu is the game's, and the flag is the page's
+
+**What was broken.** Round 74 put an IMPORT MOD row in the game's own mods list
+and it worked. Turning a mod *off* did not. The engine greys the row and writes
+a `disable.it` into the mod's folder, and at the next start it loads the mod
+anyway.
+
+It took the fs layer's own trace to see why, and two wrong theories on the way:
+
+* the scan does hand the file back. `scan 'c:/isaac/mods/toggleprobe' -> 3
+  entries: main.lua metadata.xml disable.it`, and the mod loaded regardless.
+* the engine looks in two places. `GetFileAttributesA('//mods/')` finds the
+  resource layer's mods root, and `FindFirstFileA('./Documents/My Games/Binding
+  of Isaac Repentance+//mods')` **missed** -- that is the mod manager, looking
+  somewhere the page had never seeded. Seeding both roots made the manager see
+  the file. The mod still loaded.
+
+Nothing else is written when a mod is toggled: the whole save store is identical
+across the keypress. So `disable.it` is written and never read, and no
+arrangement of files can make the engine honour it.
+
+**So the page keeps the flag.** A `disable.it` write is read for what it means,
+recorded in the mods index, and the file itself is not kept. A mod that is off is
+simply not seeded, which the engine cannot argue with, and the write that turns
+it off is still the engine's own menu doing the engine's own thing.
+
+**And the menu is drawn like the game's.** `menu_overlay.mjs` grew a
+`createPaperMenu`: the same prompt paper out of the save-select sheet, the same
+Team Meat font, the same cursor and menu sounds the EDIT FILE menu has used since
+round 52, with a list that scrolls, a note down the right-hand side, a search
+line and a footer of hints. The half of that file that loads the art is now
+`menuAssets` and both menus share it. The only DOM left in the mods menu is two
+`<input type=file>` elements, because a file picker cannot be opened from a
+canvas.
+
+Round 76 also: a mod that is already installed is refused rather than merged
+over, and the page stopped rewriting the address bar. `history.replaceState` had
+been putting `?ISAAC_YIELD=1` into the URL on every visit; the default reaches
+the pipeline as `hooks.params` now and a real query still wins.
+
+**Checks.** `drive_mods.mjs` **20 of 20** through the engine: the row, the menu,
+the import, the duplicate refused, the reload, the engine's own `LOADED MOD`
+line, the toggle, a reload that does *not* load it, the removal, and a witness in
+the save store checked byte for byte throughout.
+
+### 21.91 Round 77: the payload stops announcing what it is
+
+**The chunks.** A chunked build put 33 files on a CDN with a KAGE archive's magic
+at the front of most of them. Each stream is XORed with a seekable keystream now
+-- `key[pos & 255] ^ (pos >> 8)` -- so a chunk is noise. Seekable is the whole
+requirement: a window is fetched as a byte range and has to be put back from
+wherever it lands, which is why the position rides in the URL fragment beside the
+range (`#r=a-b@pos`). This is obscurity and not secrecy: the key is in the page,
+because the page has to read its own payload.
+
+**The bug that cost an hour.** The reader Worker takes the key in a message, and
+the first version called the field `key` -- which is what a job message already
+calls the cache key of the window it wants. Every read was greeted as a new
+keystream and answered with nothing, and the game stopped at its first frame. It
+is `xorKey` now, and a test says so.
+
+**The page.** The inlined modules are minified: 269.9 KB to 221.1 KB. The
+minifier walks the source rather than pattern-matching it, because `//` inside a
+string is not a comment, a `/` after a value is division and after an operator is
+a regular expression, and a template literal may contain any of it. Nothing is
+renamed: a mangler that does not parse JavaScript is a bug waiting for a template
+literal.
+
+**And it says where it is.** Three dozen files is a progress bar nobody can read,
+so the provider counts the chunks it has and the status line reads `loading...
+chunk 7 of 33`.
+
+`--plain` turns both off.
+
+### 21.92 Round 77b: a mod browser, on the same CDN
+
+`scripts/recomp/assets/modpack.py` turns a folder of mods into a catalogue and
+the parts that back it: `catalogue.json` beside `m/<id>.<n>.bin`, every part
+under jsDelivr's 20 MB ceiling. Nothing is in the build. The page fetches the
+catalogue when the browser is opened and a mod's parts only when it is asked for,
+joins them, unzips the result and stores it exactly as an imported zip.
+
+On a real folder of 33 mods: **32 mods, 89.8 MB in 34 parts, largest part
+19.00 MB.** The 33rd is a 371 MB music pack, left out and reported, because the
+page can only seed 96 MB into the guest arena and a mod it could never load has
+no business on a CDN.

@@ -8,7 +8,7 @@
 // module printed), isaacFrames (the last frames the host's SwapBuffers shim
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
-import { openModDb, seedMods, putModState, GUEST_ROOT, IMPORT_MARK } from './mods.mjs';
+import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget } from './mods.mjs';
 
 const logEl = document.getElementById('log');
 // Round 34: the shipping page (play.mjs) sets window.isaacPageHooks before importing this module:
@@ -61,6 +61,12 @@ function fetchSync(url) {
 const fetchBytes = hooks.fetchBytes || (async (url) => fetchSync(url));
 
 const params = new URLSearchParams(location.search);
+// Round 76: defaults the page wants applied, without them appearing in the URL.
+// A query the player never typed does not belong in a link they might copy, and
+// a real query still wins over a default.
+for (const [k, v] of Object.entries((hooks && hooks.params) || {})) {
+  if (!params.has(k)) params.set(k, String(v));
+}
 const cfg = {
   canvas: document.getElementById('canvas'),
   print: log,
@@ -145,10 +151,19 @@ cfg.isaacUnlink = (key, src) => {
 // that is not stored at all is the sentinel's: the mods menu writes a disable.it
 // into mods/importmod/ when Enter selects that row, and that write IS the button.
 function modKeyTaken(key, take) {
-  if (!modsOn || !String(key).startsWith(GUEST_ROOT)) return false;
-  if (key === IMPORT_MARK) {
+  if (!modsOn || !underMods(key)) return false;
+  if (isImportMark(key)) {
     log('  IMPORT MOD chosen in the game');
     try { if (hooks.onModImport) hooks.onModImport(); } catch (e) { log(`  the import menu failed to open: ${e.message}`); }
+    return true;
+  }
+  // A disable.it is the engine saying "turn this mod off". It will not read the
+  // file back at the next start, so the meaning is kept and the file is not: a
+  // mod that is off is left unseeded, which the engine cannot argue with.
+  const off = disableTarget(key);
+  if (off) {
+    log(`  ${off} turned ${take ? 'off' : 'on'} in the game's list`);
+    if (modDb) setModEnabled(modDb, off, !take).catch((e) => log(`  mod flag FAILED: ${e.message}`));
     return true;
   }
   const bytes = take ? take() : null;
@@ -212,21 +227,38 @@ let trailShipped = false;                                 // the trail came with
 const READER_WORKER = `
 const cache = new Map(), inflight = new Map(), done = new Set();
 let jobs = [], ji = 0, budget = 0, held = 0, inflightBytes = 0, parallel = 4, prefetched = 0, ahead = 0;
+// Round 77: the chunked build's keystream. Named xorKey rather than key, because
+// a job message already carries a field of that name -- the cache key of the
+// window it wants -- and a handler that greeted every one of those as a new
+// keystream answered no reads at all. No backticks in here: this whole worker is
+// a template literal, and one would end it.
+let xorKey = null;
+function unscramble(buf, pos) {
+  if (!xorKey || pos < 0) return buf;
+  const b = new Uint8Array(buf);
+  for (let i = 0; i < b.length; i++) { const at = pos + i; b[i] ^= xorKey[at & 255] ^ ((at >> 8) & 255); }
+  return b.buffer;
+}
 function start(key, url, len, why, want) {
   inflight.set(key, want | 0); held += len; inflightBytes += len;
   // round 70: a portable build points several windows at one large chunk and puts
   // the byte range in the fragment, which no server ever sees. A host that ignores
   // Range sends the whole chunk, so the body is cut to size here.
-  let init, want0 = -1, want1 = -1;
+  let init, want0 = -1, want1 = -1, at = -1;
   const h = url.indexOf('#r=');
   if (h >= 0) {
-    const r = url.slice(h + 3).split('-');
+    const frag = url.slice(h + 3), cut = frag.indexOf('@');
+    const r = (cut < 0 ? frag : frag.slice(0, cut)).split('-');
     want0 = +r[0]; want1 = +r[1];
+    if (cut >= 0) at = +frag.slice(cut + 1);        // where these bytes start in the stream
     url = url.slice(0, h);
     init = { headers: { Range: 'bytes=' + want0 + '-' + want1 } };
   }
   fetch(url, init).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
-    if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = buf.slice(want0, want1 + 1);
+    // a host that ignored the Range sent the whole chunk: put it back from the
+    // chunk's own start, then cut out the window
+    if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = unscramble(buf, at >= 0 ? at - want0 : -1).slice(want0, want1 + 1);
+    else if (buf && at >= 0) buf = unscramble(buf, at);
     const w = inflight.get(key); inflight.delete(key); held -= len; inflightBytes -= len;
     if (w) { done.add(key); postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []); }
     else if (buf && !done.has(key)) { cache.set(key, buf); held += buf.byteLength; if (why === 'trail') prefetched += 1; else ahead += 1; }
@@ -243,6 +275,7 @@ function pump() {
 }
 onmessage = (e) => {
   const d = e.data;
+  if (d.xorKey) { xorKey = new Uint8Array(d.xorKey); return; }
   if (d.jobs) { jobs = d.jobs; budget = d.budget; parallel = d.parallel; pump(); return; }
   if (d.clear) { cache.clear(); held = inflightBytes; budget = d.budget; jobs = []; ji = 0; return; }
   if (!d.want) return;
@@ -294,6 +327,9 @@ function startReader() {
   const jobs = list.map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len]);
   let w;
   try { w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' }))); } catch (e) { return; }
+  // round 77: a chunked build's payload is scrambled, and a window is a range the
+  // Worker fetches, so the Worker is where it has to be put back
+  if (hooks.chunkKey) w.postMessage({ xorKey: hooks.chunkKey });
   trailKept = list.length;
   reader = w;
   w.onmessage = (e) => {
@@ -712,7 +748,8 @@ try {
     };
     const r = await seedMods(modDb, seed, log);
     log(`  ${r.mods} mod(s), ${r.files} file(s), ${(r.bytes / 1048576).toFixed(2)} MB`
-      + (r.state ? `, ${r.state} state file(s)` : '') + (r.skipped ? `, ${r.skipped} skipped` : ''));
+      + (r.off ? `, ${r.off} off` : '') + (r.state ? `, ${r.state} state file(s)` : '')
+      + (r.skipped ? `, ${r.skipped} skipped` : ''));
     return r.files;
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there

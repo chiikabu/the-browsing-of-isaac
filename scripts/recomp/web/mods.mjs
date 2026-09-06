@@ -1,50 +1,73 @@
-// mods.mjs -- mods imported from this device, kept in the browser (round 74).
+// mods.mjs -- mods imported from this device, kept in the browser (round 74),
+// with the enabled state owned by the page (round 76).
 //
 // The game looks for mods in `mods/` beside its executable and scans that
-// directory itself (FindFirstFileA over the shim's own table, host_shims_fs.c).
-// Nothing in that scan cares where the bytes came from, so a mod seeded before
-// main is a mod on disk as far as the engine is concerned -- which is the whole
-// trick here. No patching, no menu surgery.
+// directory itself (FindFirstFileA/W over the shim's own table,
+// host_shims_fs.c). Nothing in that scan cares where the bytes came from, so a
+// mod seeded before main is a mod on disk as far as the engine is concerned --
+// which is the whole trick here. No patching, no menu surgery.
 //
-// Three pieces:
+// Four pieces:
 //
 //   the store    a database of its own, `isaac-mods`. The saves live in
 //                `isaac-saves` and the two never touch: importing, removing or
 //                resetting mods cannot reach a save file, and a corrupt or
-//                half-written mod cannot make the save store unreadable. Files
-//                the game writes under mods/ (the `disable.it` that marks a mod
-//                off) are routed here too, so the save store stays saves.
+//                half-written mod cannot make the save store unreadable.
 //
 //   the import   a .zip or a folder. Both are read in the browser: zips through
 //                DecompressionStream, folders through the directory picker. The
 //                bytes are copied into the store, so deleting the file afterwards
 //                changes nothing -- the mod is in the browser now, not on disk.
-//                RAR and 7z are named and refused rather than half-read; see
-//                importFrom() for what to do with one.
+//                RAR and 7z are named and refused rather than half-read.
+//
+//   the browser  a catalogue on a CDN, searched and installed from the menu.
+//                Nothing is bundled: the page fetches the catalogue when it is
+//                opened, and a mod only when it is asked for.
+//                scripts/recomp/assets/modpack.py builds both from a folder.
 //
 //   the button   a mod of our own, `mods/ import mod/`, listed as IMPORT MOD.
 //                It shows up in the game's own mods list like any other, and the
 //                menu's Enter toggles it -- which writes a `disable.it` into its
 //                folder. That write comes back to the page through the FS shim's
-//                persist hook, and the page opens this menu instead of storing
-//                it. So the row is real, the key is the game's own, and the
-//                engine is none the wiser.
+//                persist hook, and the page opens this menu instead.
 //
-// A mod is only read at startup, by the game as by Steam, so a fresh import asks
-// for a reload rather than pretending it landed live.
+// On enabled and disabled: the engine writes `disable.it` when a mod is toggled
+// off in its own list and greys the row, but it does not read that file back at
+// the next start -- measured, with the fs layer tracing, under both of the mods
+// roots it scans: the listing hands back `main.lua metadata.xml disable.it` and
+// the mod loads anyway. So the page keeps the flag itself. A disable.it write
+// flips it, an unlink flips it back, and a mod that is off is simply not seeded,
+// which the engine cannot argue with.
 
 import { unzip, archiveKind } from './zip.mjs';
 
 export const MODS_DB = 'isaac-mods', F_STORE = 'files', M_STORE = 'mods', S_STORE = 'state';
+// The two places the engine looks. `c:/isaac/mods/` is what the resource layer
+// mounts and lists; the Documents one is where the mod manager scans.
 export const GUEST_ROOT = 'c:/isaac/mods/';       // fs_key() normalises to this
+export const USER_ROOT = 'c:/isaac/documents/my games/binding of isaac repentance+/mods/';
+export const GUEST_ROOTS = [GUEST_ROOT, USER_ROOT];
+export const underMods = (key) => GUEST_ROOTS.find((r) => String(key).startsWith(r)) || null;
 // The game's mods list prints the folder name, not the <name> in the metadata,
 // so the folder is what has to read right -- and the list is sorted by it, which
 // is why the name starts with a space: the import row stays at the top however
-// many mods are installed. fs_key() lowercases and collapses separators and
-// leaves everything else, spaces included, exactly as it found them.
+// many mods are installed.
 export const IMPORT_DIR = ' import mod';
-export const IMPORT_MARK = `${GUEST_ROOT}${IMPORT_DIR}/disable.it`;
+export const IMPORT_MARKS = GUEST_ROOTS.map((r) => `${r}${IMPORT_DIR}/disable.it`);
+export const IMPORT_MARK = IMPORT_MARKS[0];
+export const isImportMark = (key) => IMPORT_MARKS.includes(String(key));
 export const SEED_BUDGET = 96 << 20;              // what the guest arena can spare for mods
+
+// A disable.it under a mods root names the mod it belongs to, or null.
+export function disableTarget(key) {
+  const root = underMods(key);
+  if (!root || isImportMark(key)) return null;
+  const rel = String(key).slice(root.length);
+  const cut = rel.lastIndexOf('/');
+  if (cut < 0 || rel.slice(cut + 1).toLowerCase() !== 'disable.it') return null;
+  const id = rel.slice(0, cut);
+  return id.includes('/') ? null : id;
+}
 
 // The sentinel is a mod with nothing in it but a name. The game lists it, the
 // menu selects it, and Enter on it is the import.
@@ -52,7 +75,7 @@ export const IMPORT_METADATA = `<?xml version="1.0" encoding="UTF-8"?>
 <metadata>
   <name>IMPORT MOD</name>
   <directory>${IMPORT_DIR}</directory>
-  <description>Add a mod from this device: a .zip or a folder.</description>
+  <description>Add a mod from this device, or from the browser.</description>
   <version>1</version>
 </metadata>
 `;
@@ -66,7 +89,7 @@ export function openModDb() {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(F_STORE)) db.createObjectStore(F_STORE);   // '<id>/<rel>' -> {bytes}
-      if (!db.objectStoreNames.contains(M_STORE)) db.createObjectStore(M_STORE);   // '<id>'       -> {id,name,files,bytes,added}
+      if (!db.objectStoreNames.contains(M_STORE)) db.createObjectStore(M_STORE);   // '<id>'       -> {id,name,files,bytes,added,enabled}
       if (!db.objectStoreNames.contains(S_STORE)) db.createObjectStore(S_STORE);   // fs key       -> {bytes}
     };
     req.onsuccess = () => resolve(req.result);
@@ -86,14 +109,23 @@ const all = (db, store) => new Promise((resolve, reject) => {
   req.onerror = () => reject(req.error);
 });
 
-export const listMods = (db) => all(db, M_STORE).then((r) => r.map((x) => x.value).sort((a, b) => a.name.localeCompare(b.name)));
+// a mod written before round 76 has no `enabled`, and an absent flag means on
+const withDefaults = (m) => Object.assign({}, m, { enabled: m.enabled !== false });
+export const listMods = (db) => all(db, M_STORE).then((r) => r.map((x) => withDefaults(x.value)).sort((a, b) => a.name.localeCompare(b.name)));
 export const listModFiles = (db) => all(db, F_STORE);
 export const listModState = (db) => all(db, S_STORE);
 
+export const getMod = (db, id) => new Promise((resolve) => {
+  try {
+    const req = db.transaction(M_STORE, 'readonly').objectStore(M_STORE).get(id);
+    req.onsuccess = () => resolve(req.result ? withDefaults(req.result) : null);
+    req.onerror = () => resolve(null);
+  } catch { resolve(null); }
+});
+
 // Importing over a mod that is already there replaces it. The old files go
 // first, in the same transaction: a version that dropped a file would otherwise
-// leave it behind for the seed to find, and the mod would load with a file its
-// author removed.
+// leave it behind for the seed to find.
 export function putMod(db, mod, files) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction([F_STORE, M_STORE], 'readwrite');
@@ -112,10 +144,9 @@ export function putMod(db, mod, files) {
 export function deleteMod(db, id) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction([F_STORE, M_STORE, S_STORE], 'readwrite');
-    const range = IDBKeyRange.bound(`${id}/`, `${id}/\uffff`);
-    tx.objectStore(F_STORE).delete(range);
+    tx.objectStore(F_STORE).delete(IDBKeyRange.bound(`${id}/`, `${id}/\uffff`));
     tx.objectStore(M_STORE).delete(id);
-    tx.objectStore(S_STORE).delete(IDBKeyRange.bound(`${GUEST_ROOT}${id}/`, `${GUEST_ROOT}${id}/\uffff`));
+    for (const r of GUEST_ROOTS) tx.objectStore(S_STORE).delete(IDBKeyRange.bound(`${r}${id}/`, `${r}${id}/\uffff`));
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
   });
@@ -130,11 +161,26 @@ export function putModState(db, key, bytes) {
   });
 }
 
+// The flag the engine will not keep for us.
+export function setModEnabled(db, id, enabled) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(M_STORE, 'readwrite'), st = tx.objectStore(M_STORE);
+    const req = st.get(id);
+    req.onsuccess = () => {
+      const m = req.result;
+      if (!m) return;
+      m.enabled = !!enabled;
+      st.put(m, id);
+    };
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 // ---- what a mod may be called ------------------------------------------------
 
 // A path out of an archive is not to be trusted: `..`, a drive letter or a
 // leading slash would all seed outside mods/, and one of those lands on a save.
-// Anything that is not a plain relative path is dropped, not repaired.
 export function safeRel(p) {
   const s = String(p == null ? '' : p).replace(/\\/g, '/').replace(/^\/+/, '');
   if (!s || s.length > 240) return null;
@@ -215,7 +261,7 @@ export function planMod(rawEntries, fallback) {
     added = true;
   }
   const bytes = files.reduce((n, f) => n + f.bytes.length, 0);
-  return { mod: { id, name, files: files.length, bytes, added: Date.now() }, files, dropped, madeMetadata: added };
+  return { mod: { id, name, files: files.length, bytes, added: Date.now(), enabled: true }, files, dropped, madeMetadata: added };
 }
 
 // ---- reading what the picker handed over -------------------------------------
@@ -248,31 +294,68 @@ export async function importFrom(fileList) {
   return { entries, fallback: f.name.replace(/\.[^.]+$/, '') };
 }
 
+// ---- the browser: a catalogue on a CDN ---------------------------------------
+
+// modpack.py writes `catalogue.json` and the parts beside it. Nothing is in the
+// build: the catalogue is fetched when the browser is opened, and a mod's parts
+// only when it is asked for.
+export async function fetchCatalogue(base) {
+  if (!base) throw new Error('no catalogue is configured for this build');
+  const r = await fetch(`${String(base).replace(/\/$/, '')}/catalogue.json`, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`the catalogue answered ${r.status}`);
+  const j = await r.json();
+  if (!j || !Array.isArray(j.mods)) throw new Error('that is not a catalogue');
+  return j;
+}
+
+// The parts of one mod, joined back into the zip they were cut from. Each part
+// is under jsDelivr's 20 MB ceiling, which is why there is more than one.
+export async function fetchMod(base, entry, onProgress) {
+  const root = String(base).replace(/\/$/, '');
+  const parts = [];
+  for (let i = 0; i < entry.parts; i++) {
+    const r = await fetch(`${root}/m/${entry.id}.${i}.bin`);
+    if (!r.ok) throw new Error(`part ${i + 1} of ${entry.parts} answered ${r.status}`);
+    parts.push(new Uint8Array(await r.arrayBuffer()));
+    if (onProgress) onProgress(i + 1, entry.parts);
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+
 // ---- seeding, before the game looks ------------------------------------------
 
 // `seed(path, bytes)` is the pipeline's isaac_fs_seed. Every path is built here,
-// under GUEST_ROOT, from an id and a relative name that have both already been
+// under a mods root, from an id and a relative name that have both already been
 // through safeRel/modId -- so nothing a mod carries can decide where it lands.
+// A mod that is off is not seeded at all: the engine will not keep that flag for
+// us, so the page keeps it by leaving the mod out.
 export async function seedMods(db, seed, log, opts) {
   const o = opts || {};
-  const out = { mods: 0, files: 0, bytes: 0, skipped: 0, state: 0 };
+  const out = { mods: 0, files: 0, bytes: 0, skipped: 0, state: 0, off: 0 };
   if (o.sentinel !== false) {
-    if (seed(`${GUEST_ROOT}${IMPORT_DIR}/metadata.xml`, new TextEncoder().encode(IMPORT_METADATA))) out.files += 1;
+    const meta = new TextEncoder().encode(IMPORT_METADATA);
+    for (const root of GUEST_ROOTS) if (seed(`${root}${IMPORT_DIR}/metadata.xml`, meta)) out.files += 1;
   }
   if (!db) return out;
   const index = await listMods(db);
-  const known = new Set(index.map((x) => x.id));
+  const on = index.filter((m) => m.enabled !== false);
+  const known = new Set(on.map((x) => x.id));
+  out.off = index.length - on.length;
   const byId = new Map();
   for (const { key, value } of await listModFiles(db)) {
     const cut = String(key).indexOf('/');
     if (cut <= 0) continue;
     const id = key.slice(0, cut), rel = safeRel(key.slice(cut + 1));
-    if (!rel || !known.has(id) || id === IMPORT_DIR) { out.skipped += 1; continue; }
+    if (!rel || !known.has(id) || RESERVED.has(id)) { out.skipped += 1; continue; }
     if (!byId.has(id)) byId.set(id, []);
     byId.get(id).push({ rel, bytes: value.bytes });
   }
   const budget = o.budget == null ? SEED_BUDGET : o.budget;
-  for (const mod of index) {
+  for (const mod of on) {
     const files = byId.get(mod.id) || [];
     if (!files.length) continue;
     const size = files.reduce((n, f) => n + f.bytes.length, 0);
@@ -282,152 +365,197 @@ export async function seedMods(db, seed, log, opts) {
       continue;
     }
     let n = 0;
-    for (const f of files) if (seed(`${GUEST_ROOT}${mod.id}/${f.rel}`, f.bytes)) n += 1;
+    for (const f of files) for (const root of GUEST_ROOTS) if (seed(`${root}${mod.id}/${f.rel}`, f.bytes)) n += 1;
     out.mods += 1; out.files += n; out.bytes += size;
     log && log(`  ${mod.name} (${mod.id}): ${n} file(s), ${(size / 1048576).toFixed(2)} MB`);
   }
-  // whatever the game wrote under mods/ last time -- the disable.it that marks a
-  // mod off -- but only for a mod that is still installed
+  // whatever the game wrote under mods/ last time, for a mod that is installed
+  // and on. A disable.it is never seeded back: the flag it stands for lives in
+  // the index, and a mod that is off is absent rather than marked.
   for (const { key, value } of await listModState(db)) {
-    const k = String(key);
-    if (!k.startsWith(GUEST_ROOT) || k === IMPORT_MARK) continue;
-    const id = k.slice(GUEST_ROOT.length).split('/')[0];
-    if (!known.has(id)) continue;
-    if (seed(k, value.bytes)) out.state += 1;
+    const k = String(key), root = underMods(k);
+    if (!root || isImportMark(k) || disableTarget(k)) continue;
+    const rel = k.slice(root.length);
+    if (!known.has(rel.split('/')[0])) continue;
+    for (const r of GUEST_ROOTS) if (seed(r + rel, value.bytes)) out.state += 1;
   }
   return out;
 }
 
-// ---- the menu ----------------------------------------------------------------
+// ---- the menu, drawn like the game's own -------------------------------------
 
-const MENU_CSS = `
-.isaac-mods-body { min-width: 26em; }
-.isaac-mods-list { max-height: 40vh; overflow: auto; margin: 8px 0; }
-.isaac-mods-list td.a { text-align: right; white-space: nowrap; }
-.isaac-mods-empty { padding: 6px 0; }
-`;
+const mib = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
+// opts: { paper, log, catalogueBase }
+// `paper` is createPaperMenu(...) from menu_overlay.mjs: the game's own paper,
+// font, cursor and sounds. The two file inputs are the only DOM here, because a
+// file picker cannot be opened from a canvas.
 export function createModsMenu(opts) {
   const o = opts || {};
   const log = o.log || (() => {});
-  const doc = o.document || document;
-  let db = null, dlg = null, els = null, busy = false;
+  const paper = o.paper;
+  let db = null, mods = [], catalogue = null, message = null, dirty = false, busy = false;
+  let view = 'installed';                      // or 'browse'
+  let search = '';
 
-  function build() {
-    if (dlg) return dlg;
-    const style = doc.createElement('style');
-    style.textContent = MENU_CSS;
-    doc.head.appendChild(style);
-    dlg = doc.createElement('dialog');
-    dlg.id = 'mods';
-    dlg.innerHTML = `<form method="dialog" class="isaac-mods-body">
-      <h3>Mods</h3>
-      <div class="note">Imported here, they stay in this browser: the file you chose can go.</div>
-      <div class="isaac-mods-list"><table><tbody id="mods-rows"></tbody></table></div>
-      <div class="row">
-        <button id="mods-zip" type="button">Import .zip&hellip;</button>
-        <button id="mods-dir" type="button">Import folder&hellip;</button>
-      </div>
-      <div id="mods-status" class="note"></div>
-      <div class="row">
-        <button id="mods-reload" type="button" hidden>Reload to apply</button>
-        <button id="mods-close" type="button">Close</button>
-      </div>
-      <input id="mods-file" type="file" accept=".zip,application/zip" hidden>
-      <input id="mods-folder" type="file" webkitdirectory directory multiple hidden>
-    </form>`;
-    doc.body.appendChild(dlg);
-    const $ = (id) => dlg.querySelector('#' + id);
-    els = { rows: $('mods-rows'), status: $('mods-status'), reload: $('mods-reload'),
-            file: $('mods-file'), folder: $('mods-folder') };
-    $('mods-close').addEventListener('click', () => close());
-    $('mods-zip').addEventListener('click', () => els.file.click());
-    $('mods-dir').addEventListener('click', () => els.folder.click());
-    els.file.addEventListener('change', () => take(els.file));
-    els.folder.addEventListener('change', () => take(els.folder));
-    els.reload.addEventListener('click', () => location.reload());
-    dlg.addEventListener('close', () => { if (o.onClose) o.onClose(); });
-    return dlg;
-  }
+  const hiddenInput = (id, setup) => {
+    const el = document.createElement('input');
+    el.type = 'file'; el.id = id; el.hidden = true;
+    setup(el);
+    document.body.appendChild(el);
+    return el;
+  };
+  const fileInput = hiddenInput('mods-file', (el) => { el.accept = '.zip,application/zip'; });
+  const dirInput = hiddenInput('mods-folder', (el) => {
+    el.setAttribute('webkitdirectory', ''); el.setAttribute('directory', ''); el.multiple = true;
+  });
 
-  function say(text, dirty) {
-    els.status.textContent = text;
-    if (dirty) els.reload.hidden = false;
+  const say = (text, changed) => {
+    message = text ? String(text).toUpperCase().slice(0, 64) : null;
+    if (changed) dirty = true;
     log(`[mods] ${text}`);
-  }
+    paper.redraw();
+  };
 
   async function refresh() {
-    const rows = [];
-    let mods = [];
     try { db = db || await openModDb(); mods = db ? await listMods(db) : []; }
-    catch (e) { say(`the mod store is unavailable: ${e.message}`); }
-    for (const mod of mods) {
-      const tr = doc.createElement('tr');
-      const size = mod.bytes >= 1048576 ? `${(mod.bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(mod.bytes / 1024))} KB`;
-      tr.innerHTML = `<td></td><td class="n">${mod.files}</td><td class="n">${size}</td><td class="a"><button type="button" data-id="">Remove</button></td>`;
-      tr.children[0].textContent = mod.name;
-      const btn = tr.querySelector('button');
-      btn.dataset.id = mod.id;
-      btn.addEventListener('click', () => remove(mod));
-      rows.push(tr);
-    }
-    els.rows.replaceChildren(...rows);
-    if (!rows.length) {
-      const tr = doc.createElement('tr');
-      tr.innerHTML = '<td class="isaac-mods-empty note">no mods yet</td>';
-      els.rows.replaceChildren(tr);
-    }
+    catch (e) { mods = []; say(`the mod store is unavailable: ${e.message}`); }
   }
 
-  async function remove(mod) {
-    if (busy) return;
-    busy = true;
-    try {
-      await deleteMod(db, mod.id);
-      say(`${mod.name} removed`, true);
-      await refresh();
-    } catch (e) { say(`could not remove ${mod.name}: ${e.message}`); }
-    busy = false;
+  async function install(entries, fallback) {
+    const { mod, files, dropped, madeMetadata } = planMod(entries, fallback);
+    if (mod.bytes > SEED_BUDGET) {
+      throw new Error(`${mod.name} is ${mib(mod.bytes)}; the game is given ${mib(SEED_BUDGET)} for mods`);
+    }
+    db = db || await openModDb();
+    if (!db) throw new Error('this browser keeps no database, so a mod could not be kept');
+    const already = await getMod(db, mod.id);
+    if (already) throw new Error(`${already.name} is already installed`);
+    await putMod(db, mod, files);
+    const notes = [];
+    if (madeMetadata) notes.push('metadata written');
+    if (dropped.length) notes.push(`${dropped.length} path(s) dropped`);
+    await refresh();
+    if (mods.reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push(`over the ${mib(SEED_BUDGET)} budget`);
+    say(`${mod.name}: ${files.length} file(s)${notes.length ? ', ' + notes.join(', ') : ''}`, true);
   }
 
   async function take(input) {
     if (busy) return;
     busy = true;
-    const chosen = input.files;
     try {
-      say('reading\u2026');
-      const { entries, fallback } = await importFrom(chosen);
-      const { mod, files, dropped, madeMetadata } = planMod(entries, fallback);
-      const mib = (n) => `${(n / 1048576).toFixed(1)} MB`;
-      if (mod.bytes > SEED_BUDGET) {
-        throw new Error(`${mod.name} is ${mib(mod.bytes)}; the game is given ${mib(SEED_BUDGET)} for mods, `
-          + 'so this one would be kept and never loaded');
-      }
-      db = db || await openModDb();
-      if (!db) throw new Error('this browser keeps no database, so a mod could not be kept');
-      await putMod(db, mod, files);
-      const notes = [];
-      if (madeMetadata) notes.push('no metadata.xml, so one was written');
-      if (dropped.length) notes.push(`${dropped.length} path(s) outside the mod were dropped`);
-      const total = (await listMods(db)).reduce((n, x) => n + x.bytes, 0);
-      if (total > SEED_BUDGET) notes.push(`${mib(total)} of mods now, over the ${mib(SEED_BUDGET)} the game is given: `
-        + 'the ones past it are skipped at the next boot');
-      say(`${mod.name}: ${files.length} file(s), ${(mod.bytes / 1048576).toFixed(2)} MB`
-        + (notes.length ? ` (${notes.join('; ')})` : ''), true);
-      await refresh();
-    } catch (e) {
-      say(`import failed: ${e.message}`);
-    }
+      say('reading...');
+      const { entries, fallback } = await importFrom(input.files);
+      await install(entries, fallback);
+    } catch (e) { say(`import failed: ${e.message}`); }
     input.value = '';
     busy = false;
   }
 
-  function open() {
-    build();
-    els.status.textContent = '';
-    refresh();
-    if (!dlg.open) dlg.showModal();
+  async function toggle(mod) {
+    if (busy) return;
+    busy = true;
+    try {
+      await setModEnabled(db, mod.id, !mod.enabled);
+      await refresh();
+      say(`${mod.name} ${mod.enabled ? 'off' : 'on'}`, true);
+    } catch (e) { say(`could not change ${mod.name}: ${e.message}`); }
+    busy = false;
   }
-  function close() { if (dlg && dlg.open) dlg.close(); }
-  return { open, close, isOpen: () => !!(dlg && dlg.open), refresh, element: () => dlg };
+
+  async function remove(mod) {
+    if (busy) return;
+    busy = true;
+    try { await deleteMod(db, mod.id); await refresh(); say(`${mod.name} removed`, true); }
+    catch (e) { say(`could not remove ${mod.name}: ${e.message}`); }
+    busy = false;
+  }
+
+  async function openBrowse() {
+    view = 'browse'; search = ''; message = null;
+    paper.redraw();
+    if (catalogue) return;
+    try {
+      say('fetching the catalogue...');
+      catalogue = await fetchCatalogue(o.catalogueBase);
+      say(`${catalogue.mods.length} mod(s) to choose from`);
+    } catch (e) { say(`catalogue: ${e.message}`); }
+  }
+
+  async function add(entry) {
+    if (busy) return;
+    busy = true;
+    try {
+      db = db || await openModDb();
+      if (db && await getMod(db, entry.id)) throw new Error('already installed');
+      const zip = await fetchMod(o.catalogueBase, entry, (i, n) => {
+        message = `${entry.name}: ${i} OF ${n}`.toUpperCase().slice(0, 44);
+        paper.redraw();
+      });
+      await install(await unzip(zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength)), entry.name);
+    } catch (e) { say(`${entry.name}: ${e.message}`); }
+    busy = false;
+  }
+
+  // ---- what the paper shows
+  function model() {
+    if (view === 'browse') {
+      const have = new Set(mods.map((m) => m.id));
+      const q = search.trim().toLowerCase();
+      const list = ((catalogue && catalogue.mods) || []).filter((m) =>
+        !q || m.name.toLowerCase().includes(q) || (m.description || '').toLowerCase().includes(q));
+      const rows = list.map((m) => ({
+        label: m.name,
+        note: have.has(m.id) ? 'INSTALLED' : (m.bytes > SEED_BUDGET ? 'TOO BIG' : mib(m.bytes)),
+        dim: have.has(m.id) || m.bytes > SEED_BUDGET,
+        action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),
+      }));
+      rows.push({ label: 'BACK', action: () => { view = 'installed'; search = ''; message = null; paper.redraw(); } });
+      return { title: 'MOD BROWSER', rows, search, searchHint: 'TYPE TO SEARCH',
+               footer: 'ENTER ADD   ESC BACK', message };
+    }
+    const rows = mods.map((m) => ({
+      label: m.name,
+      note: m.enabled ? mib(m.bytes) : 'OFF',
+      dim: !m.enabled,
+      action: () => toggle(m),
+      remove: () => remove(m),
+    }));
+    rows.push({ label: 'IMPORT A .ZIP', action: () => fileInput.click() });
+    rows.push({ label: 'IMPORT A FOLDER', action: () => dirInput.click() });
+    if (o.catalogueBase) rows.push({ label: 'MOD BROWSER', action: () => openBrowse() });
+    rows.push({ label: 'BACK', action: () => paper.close('back') });
+    return { title: 'MODS', rows,
+             footer: dirty ? 'ENTER TOGGLE   X REMOVE   R RELOAD' : 'ENTER TOGGLE   X REMOVE   ESC BACK',
+             message: message || (mods.length ? null : 'NO MODS YET') };
+  }
+
+  fileInput.addEventListener('change', () => take(fileInput));
+  dirInput.addEventListener('change', () => take(dirInput));
+
+  const open = async () => {
+    view = 'installed'; search = ''; message = null;
+    await refresh();
+    await paper.open(model, {
+      onKey: (code, key) => {
+        if (code === 'KeyR' && dirty) { location.reload(); return true; }
+        if (view === 'browse') {
+          if (code === 'Backspace') { search = search.slice(0, -1); paper.redraw(); return true; }
+          if (key && key.length === 1 && /[ -~]/.test(key)) { search += key; paper.redraw(); return true; }
+        }
+        // X and not Delete: the page is handed the keys the input shim forwards,
+        // and Delete is not one of them, so a row bound to it never went
+        if (code === 'KeyX' && view === 'installed') {
+          const row = paper.currentRow();
+          if (row && row.remove) { row.remove(); return true; }
+        }
+        return false;
+      },
+    });
+  };
+  return {
+    open, close: () => paper.close('back'), isOpen: () => paper.isOpen(), refresh,
+    onKey: (ev, down) => paper.onKey(ev, down), element: () => paper.element(),
+    state: () => ({ view, dirty, message, mods: mods.map((m) => ({ id: m.id, name: m.name, enabled: m.enabled })) }),
+  };
 }
