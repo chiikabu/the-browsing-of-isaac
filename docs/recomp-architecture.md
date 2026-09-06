@@ -6059,3 +6059,47 @@ JSPI import, so a read that the Worker has to fetch suspends the wasm stack
 until the Worker answers with the raw bytes, and the Worker reads ahead
 along the archive (the mount pass is sequential) and along the trail; no
 base64, no synchronous XHR, and no waiting for this thread to yield.
+
+### 21.70 Round 56: every archive window read by a Worker, the wasm stack suspended meanwhile
+
+**The read is a JSPI import.** `isaac_fs_lazy_pread_js` joins
+`JSPI_IMPORTS` (build_boot.py), so when the page's hook returns a promise
+the engine's stack is parked mid-read -- as the yield parks it once a
+frame -- while this thread's event loop runs; a number is still the answer
+at once (the node profile, `?reader=0`). Nothing else in the engine's
+stack is JavaScript at that point (the audio is push-only: the engine
+queues WebAudio buffers, no callback calls into the module), so the
+suspension is safe wherever a windowed read happens: the mount, the
+title's loading, a level's resources, a music stream.
+
+**The reader.** A Worker of this origin (a Blob, `READER_WORKER` in
+boot_web.mjs) answers every window: its loop is free, so it fetches the
+raw bytes -- no base64, no synchronous XHR, no 1 MB strings for the
+collector -- and transfers them; the page copies them into the heap and
+resolves the read. It fetches ahead: along a file read forward by up to
+four windows, and along the trail the last visit left (round 55, the
+trail now lives in the Worker's cache rather than this thread's), 128 MB
+at most held or in flight, six fetches at a time; a read the Worker has
+in flight attaches to it, a read it has to fetch is a *wait*. A Worker
+that dies hands the pending read and the rest to the synchronous path.
+
+**Measured** (`drive_boot.mjs`, the shipping page at a 4x throttle, frame
+300 = the title screen up and loaded): 27.6 s cold and 23.6 s warm,
+against 40.0 s for the same module with `?reader=0`; the engine waited
+3.2 s (268 waits, cold) and 1.0 s (136 waits, warm) for windows in all,
+and hit 174 (cold, the read-ahead) and 306 (warm, the trail) of its 442.
+The boot's window order is scattered, not sequential -- the driver prints
+the first ones: the head of each archive, the table at its end, then
+entries wherever the resources are -- so the forward read-ahead adds
+little (183 windows ahead, 27.1 s), and a cold visit's remaining waits are
+the price of not knowing the order; a trail shipped with the dist would
+give a first visit the warm figure, which is 4 s here. Frame 600 follows
+frame 300 by 5.0 s in every run: the rest of the cold start -- 21 s at 4x,
+about 5 at full speed -- is the engine's own loading work between the
+first frame (2.2 s) and the title, which the next round profiles
+(`profile_play.mjs phase=start`).
+
+**Also.** The node profile's link had been missing `isaac_editfile_gate`
+since round 52 (the gate lived under `ISAAC_WEB`; the lifted block patch
+calls it in every profile): a stub outside the web profile returns the
+engine's own prompt. Checked on the round's module: edges 22 ok / 0 fail, EDIT FILE PASS 11/11, page 1 ok / 0 fail, floors PASS 21/21, the node explorer census md5 unchanged (r43 pin).

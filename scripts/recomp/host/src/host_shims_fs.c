@@ -266,7 +266,10 @@ EM_JS(int, isaac_fs_lazy_pread_js, (const char *src, uint8_t *dst, uint32_t off,
     var s = "";
     for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
     var n = Module.isaacLazyPread(s, dst, off, len);
-    return (typeof n === "number") ? n : -1;
+    /* Round 56: a promise suspends the wasm stack (this is a JSPI import,
+     * build_boot.py JSPI_IMPORTS) until the page's reader Worker has put the
+     * bytes in place; a number is the answer at once. */
+    return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;
 });
 #else
 static int isaac_fs_lazy_pread_avail(void) { return 0; }

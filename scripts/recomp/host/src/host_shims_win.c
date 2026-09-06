@@ -712,6 +712,12 @@ int isaac_web_yield_enabled(void) {
     return v;
 }
 #endif
+#ifndef ISAAC_WEB
+/* No page to hand the menu to (the node profile, the selftest): the engine's
+ * own DELETE FILE prompt, as in the binary. The lifted block patch at
+ * 0x009d9d59 calls this in every profile. */
+int isaac_editfile_gate(uint32_t menu_va) { (void)menu_va; return 1; }
+#endif
 /* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
 void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
 #ifdef ISAAC_WEB

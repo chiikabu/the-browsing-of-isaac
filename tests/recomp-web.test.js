@@ -165,7 +165,7 @@ test('round 37: the web GL wrappers answer from the host cache, the present drai
     'round 49: the animation-frame wait races a 250 ms timer (a visible page can get no frames: an occluded embedded view)');
   assert.ok(yieldBody.includes('Module.isaacYieldNoRaf = (Module.isaacYieldNoRaf | 0) + 1;'), 'the fallback ticks are counted');
   const bb = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'build_boot.py'), 'utf8');
-  assert.ok(bb.includes('"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js"'), 'the yield import suspends the wasm stack');
+  assert.ok(bb.includes('"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js"'), 'the yield import suspends the wasm stack, and so does the window read (round 56)');
 });
 
 test('round 40: the module is served cacheably and instantiated from the fetch itself, so V8 keeps its optimised code across visits', () => {
@@ -277,15 +277,18 @@ test('round 54: the floor sweep driver seeds the console, walks every stage and 
   assert.ok(d.includes("'the renderer working set stays within 400 MB of the first floor across the sweep'"), 'the memory check');
 });
 
-test('round 55: the boot trail is kept and fetched ahead on the next visit; a pread that hits the cache makes no request', () => {
+test('round 55/56: the boot trail, and every archive window read by a Worker with the wasm stack suspended', () => {
   const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  assert.ok(b.includes("const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, PREFETCH_PARALLEL = 4, PREFETCH_BUDGET = 128 << 20;"), 'the trail, its cap, the parallelism and the byte budget');
-  assert.ok(b.includes("fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ key, len, buf }, [buf]);"), 'the Worker fetches bytes, not base64, and transfers each window');
-  assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([PREFETCH_WORKER], { type: 'text/javascript' })));"), 'the fetching is a Worker of this origin');
-  assert.ok(b.includes("if (bytes && bytes.length === len) { preadCache.delete(key); prefetchHits += 1; if (prefetchWorker) prefetchWorker.postMessage({ ack: len }); }"), 'a hit is copied once, dropped, and acked back to the Worker');
-  assert.ok(b.includes("bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);"), 'a miss goes the old way');
-  assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (prefetchWorker) prefetchWorker.terminate(); });"), 'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
-  assert.ok(b.includes('prefetched, prefetchHits, prefetchMisses, prefetchMB:'), 'the figures reach isaacLazyStats');
+  assert.ok(b.includes("const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;"), 'the trail, its cap, the parallelism, the byte budget and the read-ahead');
+  assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });"),
+    'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
+  assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' })));"), 'the reader is a Worker of this origin');
+  assert.ok(b.includes("fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
+  assert.ok(b.includes("return new Promise((resolve) => {") && b.includes("reader.postMessage({ want: id, key, url: windowUrl(src, off, len), len, ahead });"), 'a read is a promise the Worker resolves (the wasm stack suspends: JSPI)');
+  assert.ok(b.includes("const forward = off > last && off - last <= READ_AHEAD * FS_WINDOW;") && b.includes("if (o >= size) break;"), 'read-ahead follows a file read forward and stops at its end');
+  assert.ok(b.includes("params.get('reader') === '0'") && b.includes("return finishRead(src, off, dst, fetchSync(`/instance/${src}?off=${off}&len=${len}`));"), '?reader=0 and no Worker keep the synchronous read');
   assert.ok(b.includes("const decodeBase64 = (typeof Uint8Array.fromBase64 === 'function')") && b.includes("  return decodeBase64(x.responseText);"), 'the synchronous read decodes with the native decoder where there is one');
-  assert.ok(b.includes("if (trailKept) preadConsumed.add(key);") && b.includes("if (trailKept) { prefetchMisses += 1; if (prefetchWorker) prefetchWorker.postMessage({ skip: key }); }") && b.includes("else w.postMessage({ ack: d.len });"), 'a window read the old way is skipped by the Worker, and a late one is dropped and acked');
+  assert.ok(b.includes('prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs:'), 'the figures reach isaacLazyStats');
+  const c = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_fs.c'), 'utf8');
+  assert.ok(c.includes('return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;'), 'the C side hands a promise through to JSPI');
 });

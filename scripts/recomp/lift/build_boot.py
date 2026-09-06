@@ -224,8 +224,10 @@ def main():
         SJLJ_CFLAGS = ["-sSUPPORT_LONGJMP=wasm"]
         HOST_CFLAGS = HOST_CFLAGS + SJLJ_CFLAGS
         LUA_LIB = LUA_LIB_WASM_SJLJ
+        # Round 56: the archive window read may answer with a promise (the
+        # page's reader Worker), so it suspends the stack like the yield does.
         LDFLAGS += ["-sJSPI", "-sJSPI_EXPORTS=isaac_run_main,isaac_run_boot",
-                    "-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js", "-sSUPPORT_LONGJMP=wasm"]
+                    "-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js", "-sSUPPORT_LONGJMP=wasm"]
         LDFLAGS += ["-sENVIRONMENT=web", "-sFORCE_FILESYSTEM=1",
                     "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP32,FS,ENV",
                     "-sMAX_WEBGL_VERSION=2", "-sMIN_WEBGL_VERSION=2",

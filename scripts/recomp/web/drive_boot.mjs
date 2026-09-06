@@ -44,9 +44,10 @@ for (let v = 1; v <= visits; v++) {
   const lazy = s.lazy || {};
   const stored = await page.evaluate(() => { try { const t = localStorage.getItem('isaac-boot-trail'); return t ? JSON.parse(t).length : 0; } catch (e) { return -1; } });
   const r = { visit: v, firstFrameMs: first, frame300Ms: f300, frame600Ms: f600, windows: lazy.windows, windowMB: lazy.windowBytes != null ? +(lazy.windowBytes / 1048576).toFixed(1) : null,
-    prefetched: lazy.prefetched, prefetchHits: lazy.prefetchHits, prefetchMisses: lazy.prefetchMisses, trailKept: lazy.trailKept, trailWritten: lazy.trailWritten, trailLen: lazy.trailLen, storedTrail: stored, errors: errors.length };
+    prefetched: lazy.prefetched, prefetchHits: lazy.prefetchHits, prefetchMisses: lazy.prefetchMisses, aheadFetched: lazy.aheadFetched, readerWaits: lazy.readerWaits, readerWaitMs: lazy.readerWaitMs, reader: lazy.reader, trailKept: lazy.trailKept, trailWritten: lazy.trailWritten, trailLen: lazy.trailLen, storedTrail: stored, errors: errors.length };
   results.push(r);
-  console.log(`[boot] visit ${v} (${v === 1 ? 'cold' : 'warm'}): first frame ${first} ms, frame 300 at ${f300} ms, frame 600 at ${f600} ms; windows ${r.windows} (${r.windowMB} MB), prefetched ${r.prefetched}, hits ${r.prefetchHits}, misses ${r.prefetchMisses}, trail kept ${r.trailKept}, written ${r.trailWritten} (${r.trailLen} entries, ${stored} stored)${errors.length ? '; ERRORS ' + errors[0].slice(0, 80) : ''}`);
+  if (Array.isArray(lazy.trail)) console.log(`[boot]   the first windows: ${lazy.trail.slice(0, 40).join(' ')}`);
+  console.log(`[boot] visit ${v} (${v === 1 ? 'cold' : 'warm'}): first frame ${first} ms, frame 300 at ${f300} ms, frame 600 at ${f600} ms; windows ${r.windows} (${r.windowMB} MB), prefetched ${r.prefetched}, hits ${r.prefetchHits}, misses ${r.prefetchMisses}, ahead ${r.aheadFetched}, waits ${r.readerWaits} (${r.readerWaitMs} ms), reader ${r.reader}, trail kept ${r.trailKept}, written ${r.trailWritten} (${r.trailLen} entries, ${stored} stored)${errors.length ? '; ERRORS ' + errors[0].slice(0, 80) : ''}`);
   await ctx.close();
 }
 writeFileSync(join(OUT, 'boot.json'), JSON.stringify({ url: URL, cpu, results }, null, 1));

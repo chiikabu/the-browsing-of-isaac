@@ -77,7 +77,7 @@ const lazyByFile = new Map();                              // src -> bytes (roun
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
 const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
 window.isaacLazyStats = () => ({ reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
-  prefetched, prefetchHits, prefetchMisses, prefetchMB: +(prefetchBytes / 1048576).toFixed(1), trailKept, trailLen: trail.length, trailWritten,
+  prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs: Math.round(readerWaitMs), reader: !!reader, trailKept, trailLen: trail.length, trailWritten,
   top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
   try {
@@ -163,108 +163,147 @@ let preads = 0, preadBytes = 0;
 // up -- on a 4 GB machine, the difference between playing and a dead tab.
 const dropBody = (bytes) => { try { const b = bytes.buffer; if (b && typeof b.transfer === 'function' && !b.detached) b.transfer(0); } catch (e) { /* older browser: the GC frees it */ } };
 const windowsSeen = new Set();
-// ---- round 55: the boot trail, fetched ahead ---------------------------------------
-// The engine's first seconds read a few hundred archive windows one at a time,
-// each a synchronous XMLHttpRequest with a base64 body (a synchronous request
-// cannot ask for bytes). The order is much the same every boot, so the page
-// keeps the trail of the windows it read up to its 300th frame (localStorage,
-// this origin) and on the next visit fetches them ahead, in parallel, while
-// the module compiles: a pread that finds its window in the cache copies it
-// and drops it; one that misses goes the old way. First visits pay as before.
-const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, PREFETCH_PARALLEL = 4, PREFETCH_BUDGET = 128 << 20;
-const preadCache = new Map();                             // `${src}@${off}@${len}` -> Uint8Array
+// ---- round 55: the boot trail; round 56: the reader Worker -----------------------
+// Round 55: the page keeps the trail of the windows the boot read up to its
+// 300th frame (localStorage, this origin) and the next visit fetches them
+// ahead. Round 56: a Worker reads every window (below).
+const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;
+const FS_WINDOW = 1 << 20;                                // the host's window (FS_WIN in host_shims_fs.c)
 const trail = [];                                         // [src, off, len] in read order, until written
-let prefetched = 0, prefetchHits = 0, prefetchMisses = 0, prefetchBytes = 0, trailKept = 0, trailWritten = false;
-// The fetching is a Worker's: a fetch driven from this thread completes only
-// when this thread's event loop turns, and during the boot it turns once a
-// frame between long stretches of the engine and its synchronous reads, so a
-// pump on this thread managed 106 of 442 windows before frame 300 at a 4x
-// throttle. The Worker's loop is free: it pulls the trail at the network's
-// speed and hands each window over (transferred, not copied); the messages
-// land whenever this thread yields. Flow control: PREFETCH_BUDGET bytes may be
-// delivered and not yet consumed; a consumed (or dropped) window is acked
-// back and the Worker pulls the next.
-const PREFETCH_WORKER = `
-let jobs = [], i = 0, inflight = 0, outstanding = 0, budget = 0, parallel = 4;
-const skip = new Set();
+let prefetched = 0, prefetchHits = 0, prefetchMisses = 0, trailKept = 0, trailWritten = false;
+let aheadFetched = 0, readerWaits = 0, readerWaitMs = 0;  // windows read ahead along a file; reads fetched on demand, and the time the engine sat suspended for them
+// Round 56: the windows are read by a Worker. isaac_fs_lazy_pread_js is a
+// JSPI import (build_boot.py), so the promise the hook below returns parks
+// the wasm stack mid-read while this thread's loop runs, and the Worker --
+// its own loop free, no base64, no synchronous XHR -- answers with the raw
+// bytes, transferred. It fetches ahead: along the file when the reads are
+// sequential (the mount pass reads each archive front to back), and along
+// the trail the last visit left (round 55), READER_BUDGET bytes at most held
+// or in flight. Round 55's pump delivered 138 of the boot's 442 windows
+// because a delivery needs this thread to yield; a suspended read is one.
+// ?reader=0 keeps the synchronous reads (the A/B, and the fallback where
+// there is no Worker).
+const READER_WORKER = `
+const cache = new Map(), inflight = new Map(), done = new Set();
+let jobs = [], ji = 0, budget = 0, held = 0, parallel = 4, prefetched = 0, ahead = 0;
+function start(key, url, len, why, want) {
+  inflight.set(key, want | 0); held += len;
+  fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
+    const w = inflight.get(key); inflight.delete(key); held -= len;
+    if (w) { done.add(key); postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []); }
+    else if (buf && !done.has(key)) { cache.set(key, buf); held += buf.byteLength; if (why === 'trail') prefetched += 1; else ahead += 1; }
+  }).catch(() => {
+    const w = inflight.get(key); inflight.delete(key); held -= len;
+    if (w) postMessage({ want: w, buf: null, hit: false, pf: prefetched, ah: ahead });
+  }).finally(pump);
+}
 function pump() {
-  while (inflight < parallel && i < jobs.length && outstanding < budget) {
-    const [key, url, len] = jobs[i++];
-    if (skip.has(key)) continue;
-    inflight += 1; outstanding += len;
-    fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
-      if (buf && buf.byteLength === len) postMessage({ key, len, buf }, [buf]);
-      else outstanding -= len;
-    }).catch(() => { outstanding -= len; }).finally(() => {
-      inflight -= 1; pump();
-      if (i >= jobs.length && inflight === 0) postMessage({ done: true });
-    });
+  while (inflight.size < parallel && ji < jobs.length && held < budget) {
+    const [key, url, len] = jobs[ji++];
+    if (!cache.has(key) && !inflight.has(key) && !done.has(key)) start(key, url, len, 'trail', 0);
   }
 }
 onmessage = (e) => {
   const d = e.data;
-  if (d.jobs) { jobs = d.jobs; budget = d.budget; parallel = d.parallel; pump(); }
-  else if (d.ack) { outstanding -= d.ack; pump(); }
-  else if (d.skip) skip.add(d.skip);
+  if (d.jobs) { jobs = d.jobs; budget = d.budget; parallel = d.parallel; pump(); return; }
+  if (!d.want) return;
+  const buf = cache.get(d.key);
+  if (buf) { cache.delete(d.key); held -= buf.byteLength; done.add(d.key); postMessage({ want: d.want, buf, hit: true, pf: prefetched, ah: ahead }, [buf]); }
+  else if (inflight.has(d.key)) inflight.set(d.key, d.want);
+  else start(d.key, d.url, d.len, 'want', d.want);
+  for (const [k, u, l] of d.ahead || []) if (held < budget && !cache.has(k) && !inflight.has(k) && !done.has(k)) start(k, u, l, 'ahead', 0);
+  pump();
 };
 `;
-let prefetchWorker = null;
-const preadConsumed = new Set();                          // windows already read: a late fetch of one is dropped
-function startTrailPrefetch() {
-  let list;
+let reader = null, wantId = 0;
+const pendingReads = new Map();                           // id -> { src, off, len, dst, resolve, t0 }
+const lazySizes = new Map();                              // src -> bytes (the instance index): read-ahead stops at a file's end
+const lastRead = new Map();                               // src -> the last window offset: read-ahead follows a sequential file
+const windowUrl = (src, off, len) => {
+  let url = `/instance/${src}?off=${off}&len=${len}`;
+  if (hooks.url) url = hooks.url(url);
+  return new URL(url, location.href).href;
+};
+function finishRead(src, off, dst, bytes) {
+  m.HEAPU8.set(bytes, dst);
+  windowsSeen.add(`${src}@${off}`);
+  preads += 1; preadBytes += bytes.length; lazyByFile.set(src, (lazyByFile.get(src) || 0) + bytes.length);
+  const n = bytes.length;
+  dropBody(bytes);
+  return n;
+}
+function failRead(src, off, len, why) { log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${why}`); return -1; }
+function startReader() {
+  if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || params.get('reader') === '0') return;
+  let list = null;
   try { list = JSON.parse(localStorage.getItem(TRAIL_KEY) || 'null'); } catch (e) { list = null; }
-  if (!Array.isArray(list) || !list.length || typeof Worker === 'undefined' || typeof Blob === 'undefined') return;
-  const jobs = list.map(([src, off, len]) => {
-    let url = `/instance/${src}?off=${off}&len=${len}`;
-    if (hooks.url) url = hooks.url(url);
-    return [`${src}@${off}@${len}`, new URL(url, location.href).href, len];
-  });
+  if (!Array.isArray(list)) list = [];
+  const jobs = list.map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len]);
   let w;
-  try { w = new Worker(URL.createObjectURL(new Blob([PREFETCH_WORKER], { type: 'text/javascript' }))); } catch (e) { return; }
+  try { w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' }))); } catch (e) { return; }
   trailKept = list.length;
-  prefetchWorker = w;
-  const stop = () => { try { w.terminate(); } catch (e) { /* gone */ } if (prefetchWorker === w) prefetchWorker = null; };
+  reader = w;
   w.onmessage = (e) => {
     const d = e.data;
-    if (d.done) { stop(); return; }
-    if (d.buf && !preadCache.has(d.key) && !preadConsumed.has(d.key)) { preadCache.set(d.key, new Uint8Array(d.buf)); prefetched += 1; prefetchBytes += d.len; }
-    else w.postMessage({ ack: d.len });
+    if (!d.want) return;
+    const p = pendingReads.get(d.want);
+    if (!p) return;
+    pendingReads.delete(d.want);
+    prefetched = d.pf; aheadFetched = d.ah;
+    if (d.hit) prefetchHits += 1; else { prefetchMisses += 1; readerWaits += 1; readerWaitMs += performance.now() - p.t0; }
+    p.resolve(d.buf ? finishRead(p.src, p.off, p.dst, new Uint8Array(d.buf)) : failRead(p.src, p.off, p.len, 'the reader had no bytes'));
   };
-  w.onerror = stop;
-  w.postMessage({ jobs, budget: PREFETCH_BUDGET, parallel: PREFETCH_PARALLEL });
+  w.onerror = (e) => {
+    // the Worker is gone: the read that waits, and every read after it, goes the synchronous way
+    reader = null;
+    log(`  reader Worker failed (${(e && e.message) || e}); synchronous reads from here`);
+    for (const [id, p] of pendingReads) {
+      pendingReads.delete(id);
+      try { p.resolve(finishRead(p.src, p.off, p.dst, fetchSync(`/instance/${p.src}?off=${p.off}&len=${p.len}`))); } catch (err) { p.resolve(failRead(p.src, p.off, p.len, err.message)); }
+    }
+    try { w.terminate(); } catch (e2) { /* gone */ }
+  };
+  w.postMessage({ jobs, budget: READER_BUDGET, parallel: READER_PARALLEL });
 }
 function writeTrail() {
   if (trailWritten) return;
   trailWritten = true;
   try { localStorage.setItem(TRAIL_KEY, JSON.stringify(trail)); } catch (e) { /* no storage: the next visit is cold too */ }
 }
-if (typeof localStorage !== 'undefined') {
-  startTrailPrefetch();
-  window.addEventListener('pagehide', () => { writeTrail(); if (prefetchWorker) prefetchWorker.terminate(); });   // a short visit still leaves its trail
-}
+startReader();
+window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });   // a short visit still leaves its trail
 cfg.isaacLazyPread = (src, dst, off, len) => {
   try {
     if (!trailWritten && trail.length < TRAIL_MAX) trail.push([src, off, len]);
     if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();
-    const key = `${src}@${off}@${len}`;
-    let bytes = preadCache.get(key);
-    if (bytes && bytes.length === len) { preadCache.delete(key); prefetchHits += 1; if (prefetchWorker) prefetchWorker.postMessage({ ack: len }); }
-    else {
-      if (trailKept) { prefetchMisses += 1; if (prefetchWorker) prefetchWorker.postMessage({ skip: key }); }
-      bytes = fetchSync(`/instance/${src}?off=${off}&len=${len}`);
-    }
-    if (trailKept) preadConsumed.add(key);
-    m.HEAPU8.set(bytes, dst);
-    windowsSeen.add(`${src}@${off}`);
-    preads += 1; preadBytes += bytes.length; lazyByFile.set(src, (lazyByFile.get(src) || 0) + bytes.length);
-    const n = bytes.length;
-    dropBody(bytes);
     if (preadTrail.length < 60) preadTrail.push(`${src.replace(/^.*\//, '')}@${(off / 1048576).toFixed(0)}`);
     if (preadStacks.length < 3 && preads > 6) preadStacks.push((new Error().stack || '').split('\n').slice(1, 16).map((l) => l.trim().replace(/^at /, '').replace(/ \(.*$/, '')).join(' < '));
-    return n;
+    if (reader) {
+      const key = `${src}@${off}@${len}`, ahead = [];
+      // forward through the file, by up to READ_AHEAD windows (the mount pass
+      // reads each entry's start in offset order; an entry of a few MB skips
+      // windows): the next READ_AHEAD windows are asked for ahead of the engine
+      const last = lastRead.has(src) ? lastRead.get(src) : -FS_WINDOW;
+      const forward = off > last && off - last <= READ_AHEAD * FS_WINDOW;
+      lastRead.set(src, off);
+      if (forward && len === FS_WINDOW) {
+        const size = lazySizes.get(src) || 0;
+        for (let k = 1; k <= READ_AHEAD; k++) {
+          const o = off + k * FS_WINDOW;
+          if (o >= size) break;
+          const l = Math.min(FS_WINDOW, size - o);
+          ahead.push([`${src}@${o}@${l}`, windowUrl(src, o, l), l]);
+        }
+      }
+      return new Promise((resolve) => {
+        const id = ++wantId;
+        pendingReads.set(id, { src, off, len, dst, resolve, t0: performance.now() });
+        reader.postMessage({ want: id, key, url: windowUrl(src, off, len), len, ahead });
+      });
+    }
+    return finishRead(src, off, dst, fetchSync(`/instance/${src}?off=${off}&len=${len}`));
   } catch (e) {
-    log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${e.message}`);
-    return -1;
+    return failRead(src, off, len, e.message);
   }
 };
 let presented = 0;
@@ -533,6 +572,7 @@ try {
   await stageOk('register instance tree lazily', () => {
     let files = 0, bytes = 0;
     for (const { p: rel, s: size } of index) {
+      lazySizes.set(rel, size);                           // round 56: the reader's read-ahead stops at the end of a file
       // packed/ is seeded eagerly above -- except the two archives the game
       // opens only once it is playing (music 182 MB, videos 93 MB), which get
       // the same lazy treatment as the tree so they cost nothing until asked

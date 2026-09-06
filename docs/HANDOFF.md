@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-55: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-56: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 56: the archive reads are a Worker's** (§21.70). The lazy read
+  is a JSPI import: a promise parks the engine mid-read while a Worker of
+  this origin fetches the raw bytes (no base64, no synchronous XHR) and
+  transfers them; read-ahead along a file and along the boot trail. Frame
+  300 at a 4x throttle: 27.6 s cold, 23.6 s warm, against 40.0 s with
+  `?reader=0`; the engine waits 1-3 s for windows in all now. The rest of
+  the cold start is loading work (`profile_play.mjs phase=start` next).
+  The node profile links again (the EDIT FILE gate stub). edges 22 ok / 0 fail, EDIT FILE PASS 11/11, page 1 ok / 0 fail, floors PASS 21/21, the node explorer census md5 unchanged (r43 pin).
 - **Round 55: the cold start** (§21.69). 442 archive windows (440 MB) are
   read synchronously before frame 300: 44-51 s at a 4x throttle. A boot
   trail (localStorage, written at frame 300 by the host frame counter -- the

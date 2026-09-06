@@ -33,7 +33,7 @@ test('build_boot.py: the web profile links with JSPI and Wasm-EH setjmp/longjmp;
   const src = readFileSync(join(lift, 'build_boot.py'), 'utf8');
   const webBlock = src.slice(src.indexOf('    if args.web:'), src.indexOf('    if args.fast:'));
   assert.ok(webBlock.length > 0, 'the web profile block exists before the fast profile block');
-  for (const flag of ['"-sJSPI"', '"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js"', '"-sSUPPORT_LONGJMP=wasm"'])
+  for (const flag of ['"-sJSPI"', '"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js"', '"-sSUPPORT_LONGJMP=wasm"'])
     assert.ok(webBlock.includes(flag), `web LDFLAGS carry ${flag}`);
   // JSPI_EXPORTS names wasm exports: 'isaac_run_main', never '_isaac_run_main'
   const m = webBlock.match(/"-sJSPI_EXPORTS=([A-Za-z0-9_,]+)"/);
