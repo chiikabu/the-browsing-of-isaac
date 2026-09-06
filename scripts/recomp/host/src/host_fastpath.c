@@ -579,6 +579,13 @@ uint32_t isaac_fastpath_mismatches(void) { return g_mismatches; }
 #define FP_CENSUS_MAX 16
 static uint32_t g_fp_va[FP_CENSUS_MAX], g_fp_lifted[FP_CENSUS_MAX], g_fp_verified[FP_CENSUS_MAX];
 static unsigned g_fp_n;
+/* Round 64: what the archive inflater decodes -- calls, bytes in and out,
+ * streams finished (a DONE) -- reported with the fastpath census: the
+ * question of how much of the archive a boot really opens. */
+static uint64_t g_tinfl_calls, g_tinfl_in, g_tinfl_out, g_tinfl_done;
+void isaac_tinfl_volume(uint64_t *calls, uint64_t *in, uint64_t *out, uint64_t *done) {
+    if (calls) *calls = g_tinfl_calls; if (in) *in = g_tinfl_in; if (out) *out = g_tinfl_out; if (done) *done = g_tinfl_done;
+}
 void isaac_fastpath_count(uint32_t va, int kind) {
     unsigned i = 0;
     for (; i < g_fp_n; ++i) if (g_fp_va[i] == va) break;
@@ -586,6 +593,9 @@ void isaac_fastpath_count(uint32_t va, int kind) {
     if (kind == 2) ++g_fp_verified[i]; else ++g_fp_lifted[i];
 }
 void isaac_fastpath_report(void) {
+    if (g_tinfl_calls)
+        isaac_log("[isaac][fastpath] archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished",
+                  (unsigned long long)g_tinfl_calls, g_tinfl_in / 1048576.0, g_tinfl_out / 1048576.0, (unsigned long long)g_tinfl_done);
     if (!g_fp_n && !g_mismatches) return;
     static const char *const modes[] = { "lifted (ISAAC_FASTPATH=0)", "host", "verify (ISAAC_FASTPATH_VERIFY=1)" };
     isaac_log("[isaac][fastpath] ---- mode %s: %u mismatch(es) ----", modes[fastpath_mode()], g_mismatches);
@@ -1246,6 +1256,7 @@ common_exit:
     TF_U32(4) = num_bits; TF_U32(0x38) = bit_buf; TF_U32(0x20) = dist; TF_U32(0x24) = counter; TF_U32(0x28) = num_extra; TF_U32(0x3c) = dist_from_out_buf_start;
     isaac_w32(in_size_va, (uint32_t)(in_cur - in_next));
     isaac_w32(out_size_va, (uint32_t)(out_cur - out_next));
+    ++g_tinfl_calls; g_tinfl_in += (uint64_t)(in_cur - in_next); g_tinfl_out += (uint64_t)(out_cur - out_next); if (status == 0) ++g_tinfl_done;
     if ((flags & 9u) && (status >= 0)) {
         const uint8_t *ptr = out_next;
         uint32_t buf_len = (uint32_t)(out_cur - out_next);

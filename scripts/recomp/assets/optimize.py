@@ -449,6 +449,72 @@ def cmd_sfx(args) -> int:
     return 0
 
 
+def catalogue_order(arc: "ar.Archive", entry_name: str, attrs: tuple[str, ...], prefix: str) -> list[str]:
+    """The paths an xml catalogue names, in document order, duplicates dropped. The engine
+    preloads its sound catalogue in exactly this order (round 64: the boot trail's window
+    sequence over afterbirthp.a is this sequence with the host's 32 windows absorbing the
+    repeats), so it is also the order the archive should be laid out in."""
+    e = arc.find(entry_name)
+    if e is None:
+        return []
+    txt = arc.decode(e).decode("utf-8", "replace")
+    seen, out = set(), []
+    for m in re.finditer(r'\b(%s)="([^"]+)"' % "|".join(attrs), txt):
+        p = prefix + m.group(2)
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
+def boot_order(catalogue_archive: str) -> list[str]:
+    """The order the boot opens entries in: the sound catalogue first (the preload), then the
+    music catalogue. Read from the archive that carries sounds.xml / music.xml."""
+    with ar.Archive(catalogue_archive) as c:
+        order = catalogue_order(c, "sounds.xml", ("path",), "sfx/")
+        order += catalogue_order(c, "music.xml", ("path", "intro", "layer", "layerintro"), "music/")
+    return order
+
+
+def cmd_layout(args) -> int:
+    """Round 64: lay an archive out in the boot's own read order.
+
+    The engine preloads its whole sound catalogue before the title screen, in sounds.xml
+    document order, and the port serves archives through 1 MiB windows fetched over HTTP.
+    In the shipped table order those samples are scattered: reading them in catalogue order
+    walks the file back and forth, so a window is fetched, evicted and fetched again. Laying
+    the catalogue's entries out in catalogue order turns that walk into one forward sweep --
+    every window fetched once, and each fetch adjacent to the last, which is what the reader
+    Worker's read-ahead is built for. Payload bytes, keys, sizes and checksums are unchanged;
+    only the order of the payloads (and so the table's offsets) differs."""
+    t0 = time.time()
+    order = boot_order(args.catalogue or args.archive)
+    if not order:
+        print("no catalogue in %s: nothing to order by" % (args.catalogue or args.archive))
+        return 1
+    with ar.Archive(args.archive) as a:
+        entries = ar.entry_order(a.entries, order)
+        named = {ar.key_of(ar.resource_key(p)) for p in order}
+        led = sum(1 for e in a.entries if e.key in named)
+        items = [{"h1": e.h1, "h2": e.h2, "src": a, "entry": e} for e in entries]
+        r = ar.write_archive(args.out, a.version, items)
+    # verify: same keys, same decoded bytes, same stored checksum, for every entry
+    bad = 0
+    with ar.Archive(args.archive) as a, ar.Archive(args.out) as b:
+        if set(a.by_key) != set(b.by_key) or a.count != b.count:
+            print("FAILED: the entry set changed")
+            return 1
+        for e in a.entries:
+            f = b.by_key[e.key]
+            if e.size != f.size or e.x != f.x or a.raw(e) != b.raw(f):
+                bad += 1
+                if bad < 5:
+                    print("  entry %s differs" % e.tag)
+    print("laid out %s -> %s: %d entries (%d named by the catalogue, laid out first), %d bytes, %d verify failures, %.1f s" % (
+        args.archive, args.out, r["entries"], led, r["size"], bad, time.time() - t0))
+    return 1 if bad else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -461,6 +527,10 @@ def main(argv=None) -> int:
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=6); p.add_argument("--json")
     p.add_argument("--source", help="archive to take the pristine music bytes from (by key); the rest passes through from `archive`")
     p.set_defaults(fn=cmd_music)
+    p = sub.add_parser("layout", help="lay an archive out in the boot's read order (round 64)")
+    p.add_argument("archive"); p.add_argument("out")
+    p.add_argument("--catalogue", help="archive carrying sounds.xml / music.xml (default: the archive itself)")
+    p.set_defaults(fn=cmd_layout)
     p = sub.add_parser("sfx"); p.add_argument("archive", nargs="+"); p.add_argument("--sounds", required=True)
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=8); p.add_argument("--sample", type=int, default=0)
     p.set_defaults(fn=cmd_sfx)

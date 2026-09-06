@@ -279,6 +279,12 @@ test('round 62: the keystream XOR goes sixteen bytes at a time where the build h
   assert.ok(st.includes('isaac_fast_keystream_xor(holder, buf, 40u);') && st.includes('eight words of the new block taken'), 'forty bytes across the refill');
 });
 
+test('round 64: the archive inflater reports what it decoded', () => {
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  assert.ok(fp.includes('++g_tinfl_calls; g_tinfl_in += (uint64_t)(in_cur - in_next); g_tinfl_out += (uint64_t)(out_cur - out_next); if (status == 0) ++g_tinfl_done;'), 'counted at the exit');
+  assert.ok(fp.includes('archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished'), 'reported with the census, in every mode');
+});
+
 test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
   const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
   assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');

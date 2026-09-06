@@ -6362,3 +6362,84 @@ and after (noise), the edge drives 22 of 22 and the EDIT FILE menu 11 of
 again. What stays is the knowledge: the per-draw cost of this port is
 already the engine's own draw order, and `bufferSubData` at 1.1-1.8 % of
 a frame is its floor.
+
+### 21.78 Round 64: the archive laid out in the order the boot reads it
+
+**What the boot actually decodes.** Round 63 left the first visit's 300 MB
+of archive windows as the open question, so the archive inflater was made
+to report its own volume (`isaac_fast_tinfl`, counted at `common_exit:`;
+the line prints with the fastpath census in every mode). To the 300th
+frame it runs **36,571 calls, 22.7 MB in, 35.6 MB out, 287 streams
+finished** -- nothing. The boot's archive traffic is not deflate: it is
+the sound catalogue, 218 MB of PCM that `afterbirthp.a` holds as *stored*
+pieces, memcpy'd and XORed with the ISAAC keystream (21.40). There is no
+decode to make cheaper. What is left is where those bytes sit.
+
+**The read order was already known -- from the archive, not a guess.** The
+engine preloads its whole sound catalogue before the title screen, and it
+does so in `sounds.xml` document order. That is checkable rather than
+assumed: predict the 1 MiB window sequence by walking the catalogue in
+document order over the entry table, simulate the host's 32-slot LRU per
+file (21.55), and it reproduces the recorded boot trail exactly -- same
+windows, same order, and the LRU accounts for every read the trail does
+not contain. The trail is not an opaque recording; it is this sequence.
+
+**And the shipped layout fights it.** In table order those samples are
+scattered through the archive. Walking them in catalogue order steps
+backwards 246 times, and 226 windows' worth of samples cost **457 window
+fetches**: a window is fetched, evicted by the 31 that follow it, and
+fetched again. `optimize.py layout <archive> <out>` (round 64, on
+`archive.py entry_order` / `repack --order <file>`) rewrites the archive
+with the catalogue's entries laid out first, in catalogue order. Payload
+bytes, keys, sizes and mount checksums are untouched -- only the order of
+the payloads, and so the table's offsets -- and the command verifies that
+for every entry before it reports. The walk becomes one forward sweep:
+
+| archive | fetches before | after | backward steps before / after |
+|---|---|---|---|
+| afterbirthp.a | 457 | **297** | 246 / 0 |
+| afterbirth.a | 59 | **57** | 38 / 0 |
+| sfx.a | 20 | **12** | 36 / 0 |
+
+**The measured boot.** Rebuilt (`bundle.py build`; `page_assets.py`'s EDIT
+FILE repack walks `ar.entries`, so it keeps the layout; `ship.py build
+--trail`) and re-recorded, the whole boot to frame 600 fetches **305
+windows, 303.1 MB, against 442 and 440 MB** -- 137 MB less on a first
+visit, a third of it gone -- and every fetch is forward-adjacent, which is
+what the reader Worker's read-ahead was built for. Measured as an A/B on
+one machine and one module, the old archives against the laid-out ones,
+each with its own shipped trail, first visit in a fresh profile at a 4x
+CPU throttle:
+
+| | windows | transferred | reader misses | reader waits | frame 300 |
+|---|---|---|---|---|---|
+| 200 Mbit/s, shipped layout | 442 | 440 MB | 136 | 1,908 ms | 34.0 s |
+| 200 Mbit/s, laid out | **305** | **303.1 MB** | **8** | **412 ms** | 33.4 s |
+| 50 Mbit/s, shipped layout | 442 | 440 MB | 142 | 14,918 ms | 80.5 s |
+| 50 Mbit/s, laid out | **305** | **303.1 MB** | **9** | **3,904 ms** | 78.1 s |
+
+Read that honestly: the **transfer** is a third smaller and the prefetch
+now hits (136-142 misses become 8-9), but the *time* to the title screen
+moves only 0.6-2.4 s, because round 55's trail already hid most of the
+read latency behind the boot's own CPU work. What this round buys is
+bandwidth -- a data cap, a CDN bill, a cleared cache -- not seconds. On
+localhost frame 300 is unchanged (22.1 s at 4x), as it must be.
+
+**What it cost.** Nothing at run time: the game reads the same bytes
+through the same code. The engine's own checksum pass over the laid-out
+archives (`ISAAC_ARCHIVE_VERIFY=1`, which un-skips the mount's per-entry
+fold) reports no failure; the audio census is intact (198 buffer uploads,
+12.3 MB of PCM over 1,500 explored frames); the page check, the EDIT FILE
+menu (11 of 11), the floor sweep (21 of 21, 16 floors) and the save round
+trip pass on the laid-out dist. The `archive.py` selftest covers `--order`
+for versions 0 and 2 -- same keys, sizes and checksums, the listed paths'
+offsets ascending from the first payload, the unlisted ones after in table
+order -- and `tests/recomp-assets.test.js` pins the same through the CLI.
+
+**What is left.** The 297 windows are 219 of samples plus ~78 the title
+screen scatters over. Ordering those too needs the boot's real entry
+access order rather than a catalogue -- an `ISAAC_FS_READ_TRACE` run names
+every `fread` by file and offset, and the entry table turns an offset back
+into an entry -- which would make the first visit a contiguous prefix of
+the file that a range reader could fetch in a few large pieces instead of
+300 window-sized ones.

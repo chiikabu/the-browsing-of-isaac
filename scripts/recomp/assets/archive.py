@@ -774,9 +774,25 @@ def cmd_pack(args) -> int:
     return 0
 
 
+def entry_order(entries, order_paths):
+    """Round 64: the entries the listed paths name, in that order, then the rest in table
+    order. Payloads are written in table order, so this IS the file layout: a reader that
+    opens the entries in the listed order then sweeps the file forward, and a windowed
+    reader (host_shims_fs.c) or an HTTP range reader fetches each window once."""
+    pos = {}
+    for i, p in enumerate(order_paths):
+        pos.setdefault(key_of(resource_key(p)), i)
+    lead, rest = [], []
+    for e in entries:
+        (lead if e.key in pos else rest).append(e)
+    lead.sort(key=lambda e: pos[e.key])
+    return lead + rest
+
+
 def cmd_repack(args) -> int:
     """Rebuild an archive keeping its table order. Entries are passed through byte-for-byte unless
-    replaced (--replace DIR with --names, or --replace-json {tag|path: file}) or the version changes."""
+    replaced (--replace DIR with --names, or --replace-json {tag|path: file}) or the version changes.
+    --order <file> lays the named paths out first, in that order (round 64)."""
     names = load_candidates(args.names) if args.names else {}
     replacements: dict[tuple[int, int], str] = {}
     if args.replace_json:
@@ -807,7 +823,11 @@ def cmd_repack(args) -> int:
     dropped = 0
     with Archive(args.archive) as a:
         version = a.version if args.version is None else args.version
-        for e in a.entries:
+        entries = a.entries
+        if getattr(args, "order", None):
+            order_paths = [ln.strip() for ln in open(args.order, encoding="utf-8") if ln.strip() and not ln.startswith("#")]
+            entries = entry_order(entries, order_paths)
+        for e in entries:
             if e.key in drop:
                 dropped += 1
                 continue
@@ -909,9 +929,33 @@ def _selftest() -> int:
             # unchanged repack is byte-identical
             out2 = os.path.join(td, "t%d-2.a" % version)
             ns = argparse.Namespace(archive=out, out=out2, names=None, replace=None, replace_json=None,
-                                    version=None, level=9, mode="auto", drop_shadowed_by=None)
+                                    version=None, level=9, mode="auto", drop_shadowed_by=None, order=None)
             cmd_repack(ns)
             assert open(out, "rb").read() == open(out2, "rb").read()
+            # round 64: --order lays the named entries out first, in that order, and changes
+            # nothing else -- same keys, same decoded bytes, same checksums, offsets ascending
+            # in the requested order (the file layout IS the table order).
+            want = ["music/c.ogg", "sfx/b.wav", "gfx/a.png"]
+            of = os.path.join(td, "order%d.txt" % version)
+            with open(of, "w", encoding="utf-8") as f:
+                f.write("# a comment line is ignored\n" + "\n".join(want) + "\nnot/here.bin\n")
+            out3 = os.path.join(td, "t%d-3.a" % version)
+            ns = argparse.Namespace(archive=out, out=out3, names=None, replace=None, replace_json=None,
+                                    version=None, level=9, mode="auto", drop_shadowed_by=None, order=of)
+            cmd_repack(ns)
+            with Archive(out) as a, Archive(out3) as b:
+                assert set(a.by_key) == set(b.by_key) and a.count == b.count
+                for rel in files:
+                    e, f2 = a.find(rel), b.find(rel)
+                    assert b.decode(f2) == files[rel] and f2.size == e.size and f2.x == e.x, rel
+                offs = [b.find(w).offset for w in want]
+                assert offs == sorted(offs), offs
+                assert b.entries[0].key == key_of(resource_key(want[0])), "the first payload is the first listed path"
+                rest = [e.offset for e in b.entries[len(want):]]
+                assert rest == sorted(rest) and min(rest) > max(offs), "the unlisted entries follow, in table order"
+            # entry_order alone: an empty order list leaves the table untouched
+            with Archive(out) as a:
+                assert [e.key for e in entry_order(a.entries, [])] == [e.key for e in a.entries]
         # stored-mode round trip
         big = bytes(rnd.getrandbits(8) for _ in range(5000))
         payload = miniz_encode(big, 0x12345678, mode="stored")
@@ -950,6 +994,7 @@ def main(argv=None) -> int:
     p.add_argument("--version", type=int, choices=(0, 2)); p.add_argument("--level", type=int, default=9)
     p.add_argument("--mode", default="auto", choices=("auto", "deflate", "stored"))
     p.add_argument("--drop-shadowed-by", nargs="*", help="archives mounted later: drop entries they override")
+    p.add_argument("--order", help="text file listing paths to lay out first, in that order")
     p.set_defaults(fn=cmd_repack)
     p = sub.add_parser("names", help="resolve entry names from candidate path lists")
     p.add_argument("archive"); p.add_argument("candidates", nargs="+"); p.add_argument("-v", "--verbose", action="store_true")

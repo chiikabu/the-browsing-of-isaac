@@ -129,6 +129,57 @@ test('mount checksum: python and the JS reference agree, and the stale-tail quir
   }
 });
 
+test('round 64: repack --order lays the named entries out first, and changes nothing else', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-layout-'));
+  try {
+    const src = join(dir, 'src');
+    const files = {
+      'gfx/ui/a.png': randomBytes(600, 7),
+      'sfx/one.wav': randomBytes(0x401, 8),
+      'sfx/two.wav': randomBytes(0x801, 9),
+      'music/loop.ogg': Buffer.from('OggS'.repeat(900)),
+      'xml/z.xml': Buffer.from('<z/>'),
+    };
+    for (const [rel, data] of Object.entries(files)) {
+      mkdirSync(dirname(join(src, rel)), { recursive: true });
+      writeFileSync(join(src, rel), data);
+    }
+    for (const version of [0, 2]) {
+      const a = join(dir, `t${version}.a`);
+      run(['pack', src, a, '--version', String(version)]);
+      const want = ['sfx/two.wav', 'music/loop.ogg', 'sfx/one.wav'];
+      const order = join(dir, `order${version}.txt`);
+      writeFileSync(order, '# the boot order\n' + want.join('\n') + '\nnot/in/the/archive.bin\n');
+      const b = join(dir, `t${version}-laid.a`);
+      run(['repack', a, b, '--order', order]);
+      // the entry set, the sizes and the checksums are untouched: only the offsets moved
+      const before = run(['list', a]).split(/\r?\n/).filter((l) => l.includes('size='));
+      const after = run(['list', b]).split(/\r?\n/).filter((l) => l.includes('size='));
+      assert.equal(after.length, before.length);
+      const strip = (l) => l.replace(/^\s*\d+ /, '').replace(/off=\s*\d+/, 'off=');   // the row index and the offset are what a layout moves
+      assert.deepEqual(new Set(after.map(strip)), new Set(before.map(strip)), 'same keys, sizes and checksums');
+      assert.match(run(['verify', b]), new RegExp(`${Object.keys(files).length}/\\s*${Object.keys(files).length} matched`));
+      // and the payloads sit in the requested order, ahead of everything else
+      const ex = join(dir, `ex${version}`);
+      const names = join(dir, 'names.txt');
+      writeFileSync(names, Object.keys(files).join('\n') + '\n');
+      run(['extract', b, ex, '--names', names]);
+      for (const [rel, data] of Object.entries(files)) assert.ok(readFileSync(join(ex, rel)).equals(data), rel);
+      const offOf = (rel) => {
+        const h1 = djb2('resources/' + rel).toString(16).padStart(8, '0');
+        const h2 = fnv1a('resources/' + rel).toString(16).padStart(8, '0');
+        const line = run(['list', b]).split(/\r?\n/).find((l) => l.includes(`${h1} ${h2}`));
+        return Number(/off=\s*(\d+)/.exec(line)[1]);
+      };
+      const offs = want.map(offOf);
+      assert.deepEqual(offs, [...offs].sort((x, y) => x - y), 'the listed paths are laid out in the listed order');
+      assert.ok(offs[0] === 14, 'the first listed path is the first payload in the file');
+      for (const rel of ['gfx/ui/a.png', 'xml/z.xml']) assert.ok(offOf(rel) > offs[2], `${rel} follows the listed ones`);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('pack -> verify -> extract -> repack reproduces the archive byte for byte (versions 0 and 2)', (t) => {
   if (!python) { t.skip('no python 3 on PATH'); return; }
   const dir = mkdtempSync(join(tmpdir(), 'isaac-assets-'));

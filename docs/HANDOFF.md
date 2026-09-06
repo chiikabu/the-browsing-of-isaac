@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-63: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-64: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,17 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 64: the archive laid out in the order the boot reads it** (§21.78).
+  The boot's inflater decodes 35.6 MB to frame 300 -- the traffic is the
+  sound catalogue's 218 MB of *stored* PCM. The engine preloads it in
+  `sounds.xml` order, which reproduces the recorded trail exactly; the
+  shipped archive scatters it, so the walk steps backwards 246 times and
+  costs 457 window fetches. `optimize.py layout` rewrites the archive in
+  that order (bytes, keys, sizes and checksums verified unchanged): a first
+  visit fetches **305 windows / 303 MB instead of 442 / 440 MB**, every one
+  forward-adjacent, and the reader's misses fall from 136-142 to 8-9. The
+  time to the title screen moves 0.6-2.4 s only: the trail already hid the
+  latency, so this is a bandwidth win, not a seconds win.
 - **Round 63: quad draws batched, and unbatched again** (§21.77).
   Consecutive same-state quad draws merged into one draw: built, pixel-
   identical, and pointless -- of 50,515 draws 3 merged; the engine binds a
@@ -490,6 +501,7 @@ check it, and run either driver from it (`ISAAC_INSTANCE_DIR=<dir>` on the
 node driver, `instance=<dir>` on the web runner; the cwd rule still applies):
 
 ```
+python scripts/recomp/assets/optimize.py layout <packed>/afterbirthp.a <tmp>/afterbirthp.a --catalogue <packed>/afterbirthp.a   # round 64, then the same for afterbirth.a and sfx.a, moved back over <packed>
 python scripts/recomp/assets/bundle.py build .scratch/game-instance-opt .scratch/game-bundle --original .scratch/game-instance --strict
 python scripts/recomp/assets/bundle.py check .scratch/game-bundle
 cd .scratch/game-bundle && ISAAC_INSTANCE_DIR=C:/Users/Luca/Desktop/isaac/.scratch/game-bundle ISAAC_EPOCH=1700000000 ISAAC_MAX_FRAMES=3000     ISAAC_INPUT="420:Enter,470:Enter,520:Enter,580:Enter,640:Enter,700:Enter,760:Enter,900:d:150,1150:w:150"     node ../../output/recomp/lift/boot-fast/boot_integration.mjs ../../output/recomp/host/isaac.segs.bin main
