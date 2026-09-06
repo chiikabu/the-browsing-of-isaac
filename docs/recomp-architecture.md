@@ -6327,3 +6327,38 @@ every finite run reports (0x501, pending at a present around the title):
 live program, four times in 121 frames. The host forwards program names
 untouched, so it is the engine's own call, as on the desktop, where the
 same error is raised and never read: reproduced, not fixed.
+
+### 21.77 Round 63: quad draws batched, and unbatched again
+
+**The idea.** The engine draws every sprite as its own quad through the
+client-array path -- a few attribute uploads, the pointers, a draw -- so
+consecutive quad draws with no forwarded GL call between them, the same
+attribute layout and one interleaved array each could go up as one ring
+upload, one set of pointers and one draw over the static quad indices of
+round 53, the pixels unchanged because one draw's primitives are
+rasterised in order. It was built (`batch_add` / `batch_flush` in
+`host_gl_clientarrays.c`, every entry point of `host_gl_webgl.c` flushing
+on entry unless it is the draw, a query or a filtered state call that
+does not forward), with a census naming the entry point that flushed each
+batch, and the explorer's 1,500 frames hashed batch on and off.
+
+**What the census said, three times.** First `glGetAttribLocation`
+flushed every batch: the engine looks its attribute locations up before
+every draw, the lookups are answered from the round-37 cache and change
+nothing, so queries were made to keep the batch. Then
+`glDisableVertexAttribArray`: the engine enables its arrays before every
+draw and disables them after, a real state flip between any two draws;
+since only a draw consumes that state, the enables were recorded and
+applied at the draw. And then the truth of the workload: of 50,515 quad
+draws, 3 merged. 37,761 batches were flushed by `glBindTexture` -- the
+engine binds a different sheet between three consecutive draws in four
+-- 5,990 by a `glUniform2fv` that changes per draw, the rest by the
+clear, the program, the blend function and the present. There is
+nothing to batch without changing what the engine binds, which is not
+this port's business. The pixels hashed identically on and off (frames
+500, 1,000 and 1,499), the play profiles read 19.8-20.4 ms a frame before
+and after (noise), the edge drives 22 of 22 and the EDIT FILE menu 11 of
+11 on the batched module. Reverted; the dist serves the round-62 code
+again. What stays is the knowledge: the per-draw cost of this port is
+already the engine's own draw order, and `bufferSubData` at 1.1-1.8 % of
+a frame is its floor.

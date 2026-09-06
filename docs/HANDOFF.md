@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-62: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-63: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,11 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 63: quad draws batched, and unbatched again** (§21.77).
+  Consecutive same-state quad draws merged into one draw: built, pixel-
+  identical, and pointless -- of 50,515 draws 3 merged; the engine binds a
+  different sheet between three draws in four (37,761 flushes by
+  glBindTexture) and sends a per-draw uniform (5,990). Reverted; recorded.
 - **Round 62: the keystream in v128** (§21.76). One `v128.xor` per sixteen
   bytes where the build has SIMD, the refill exactly where the scalar
   loop puts it; the selftest (SIMD too, forty bytes across the refill)
