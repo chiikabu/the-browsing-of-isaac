@@ -92,6 +92,7 @@
 #include "isaac_host.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef __EMSCRIPTEN__
@@ -104,6 +105,7 @@ typedef long GLsizeiptr; typedef void GLvoid;
 #define GL_ARRAY_BUFFER 0x8892
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893
 #define GL_STREAM_DRAW 0x88E0
+#define GL_STATIC_DRAW 0x88E4
 #define GL_UNSIGNED_BYTE 0x1401
 #define GL_UNSIGNED_SHORT 0x1403
 #define GL_UNSIGNED_INT 0x1405
@@ -153,6 +155,84 @@ typedef struct { GLuint buf; uint32_t cap, head, orphans, gen; } gl_ring;   /* g
 static uint8_t g_idx_last[IDX_KEEP];
 static uint32_t g_idx_len, g_idx_at, g_idx_gen, g_idx_reuse;
 static int g_idx_valid;
+
+/* Round 53: the canonical quad index buffer. The engine draws its sprites as
+ * quads through the client-array path, and a draw's index block is almost
+ * always the standard pattern -- six indices per quad over four vertices, the
+ * same six offsets repeated with +4 per quad -- so every such block is a
+ * prefix of one fixed sequence. One static ELEMENT_ARRAY_BUFFER holding that
+ * sequence serves all of them at offset 0: no upload, no ring space, no
+ * compare. The six offsets are learnt from the first block whose offsets are
+ * all below 4 (the engine's winding, whatever it is); a block that is not the
+ * pattern goes through the ring as before. ISAAC_GL_QUAD_IBO=0 turns it off
+ * (the A/B); the census counts the draws each way. */
+#define QUAD_IBO_MIN_QUADS 4096u
+static GLuint g_quad_ibo[2];              /* [0] GL_UNSIGNED_SHORT, [1] GL_UNSIGNED_INT */
+static uint32_t g_quad_quads[2];          /* quads the buffer holds */
+static uint32_t g_quad_pat[6];
+static int g_quad_pat_set, g_quad_mode = -1;
+static uint32_t g_quad_draws, g_quad_other;
+static GLuint g_bound_ibo;                /* what ELEMENT_ARRAY_BUFFER holds: the ring's or the quad buffer */
+
+static int quad_mode(void) {
+    if (g_quad_mode < 0) { const char *e = getenv("ISAAC_GL_QUAD_IBO"); g_quad_mode = (e && *e == '0') ? 0 : 1; }
+    return g_quad_mode;
+}
+static uint32_t idx_at(const uint8_t *src, uint32_t type, uint32_t i) {
+    if (type == GL_UNSIGNED_SHORT) { uint16_t v; memcpy(&v, src + i * 2u, 2); return v; }
+    { uint32_t v; memcpy(&v, src + i * 4u, 4); return v; }
+}
+/* the block is the canonical pattern's prefix (the pattern is learnt from the first block whose six offsets are all below 4) */
+static int is_quad_block(const uint8_t *src, int count, uint32_t type) {
+    int q, i;
+    if (count < 6 || (count % 6) != 0 || (type != GL_UNSIGNED_SHORT && type != GL_UNSIGNED_INT)) return 0;
+    if (!g_quad_pat_set) {
+        uint32_t p[6];
+        for (i = 0; i < 6; ++i) { p[i] = idx_at(src, type, (uint32_t)i); if (p[i] > 3u) return 0; }
+        memcpy(g_quad_pat, p, sizeof p);
+        g_quad_pat_set = 1;
+    }
+    for (q = 0; q < count / 6; ++q)
+        for (i = 0; i < 6; ++i)
+            if (idx_at(src, type, (uint32_t)(q * 6 + i)) != g_quad_pat[i] + 4u * (uint32_t)q) return 0;
+    return 1;
+}
+/* the static buffer for `type` holds at least `quads` quads (grown by doubling, bound on return) */
+static int quad_ibo_ready(uint32_t type, uint32_t quads) {
+    int k = type == GL_UNSIGNED_INT ? 1 : 0;
+    uint32_t limit = k ? (1u << 24) : 65536u / 4u;          /* the index type's reach (16 M quads is plenty) */
+    if (quads > limit) return 0;
+    if (!g_quad_ibo[k] || g_quad_quads[k] < quads) {
+        uint32_t n = g_quad_quads[k] ? g_quad_quads[k] * 2u : QUAD_IBO_MIN_QUADS, q, bytes;
+        uint8_t *buf;
+        while (n < quads) n *= 2u;
+        if (n > limit) n = limit;
+        bytes = n * 6u * (k ? 4u : 2u);
+        buf = (uint8_t *)malloc(bytes);
+        if (!buf) return 0;
+        for (q = 0; q < n; ++q) {
+            int i;
+            for (i = 0; i < 6; ++i) {
+                uint32_t v = g_quad_pat[i] + 4u * q;
+                if (k) memcpy(buf + (q * 6u + (uint32_t)i) * 4u, &v, 4);
+                else { uint16_t s = (uint16_t)v; memcpy(buf + (q * 6u + (uint32_t)i) * 2u, &s, 2); }
+            }
+        }
+        if (!g_quad_ibo[k]) glGenBuffers(1, &g_quad_ibo[k]);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_ibo[k]);
+        g_bound_ibo = g_quad_ibo[k];
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)bytes, buf, GL_STATIC_DRAW);
+        free(buf);
+        g_quad_quads[k] = n;
+    }
+    if (g_bound_ibo != g_quad_ibo[k]) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_ibo[k]); g_bound_ibo = g_quad_ibo[k]; }
+    return 1;
+}
+void isaac_gl_quad_census(uint32_t *quad_draws, uint32_t *other_blocks, uint32_t *pattern) {
+    if (quad_draws) *quad_draws = g_quad_draws;
+    if (other_blocks) *other_blocks = g_quad_other;
+    if (pattern) memcpy(pattern, g_quad_pat, sizeof g_quad_pat);
+}
 static gl_ring g_vring, g_iring;
 #define RING_VERTEX_BYTES (4u << 20)
 #define RING_INDEX_BYTES  (1u << 20)
@@ -346,11 +426,19 @@ void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
     uint32_t ibytes = (uint32_t)count * type_size(type);
     uint32_t iat;
     const uint8_t *isrc = (const uint8_t *)isaac_g(indices_va);
+    if (quad_mode() && is_quad_block(isrc, count, type) && quad_ibo_ready(type, (uint32_t)count / 6u)) {
+        glDrawElements(mode, count, type, (const void *)0);   /* the static quad indices, from the start */
+        ++g_draws; ++g_quad_draws;
+        return;
+    }
+    if (g_quad_pat_set) ++g_quad_other;
     if (g_idx_valid && ibytes == g_idx_len && ibytes <= IDX_KEEP && g_idx_gen == g_iring.gen && g_iring.buf
         && memcmp(isrc, g_idx_last, ibytes) == 0) {
         iat = g_idx_at; ++g_idx_reuse;               /* the same indices: already in the ring */
+        if (g_bound_ibo != g_iring.buf) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_iring.buf); g_bound_ibo = g_iring.buf; }
     } else {
         iat = ring_put(GL_ELEMENT_ARRAY_BUFFER, &g_iring, RING_INDEX_BYTES, isrc, ibytes);
+        g_bound_ibo = g_iring.buf;                   /* ring_put bound it */
         g_index_bytes += ibytes;
         if (ibytes <= IDX_KEEP) { memcpy(g_idx_last, isrc, ibytes); g_idx_len = ibytes; g_idx_at = iat; g_idx_gen = g_iring.gen; g_idx_valid = 1; }
         else g_idx_valid = 0;
@@ -385,10 +473,12 @@ void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count,
 void isaac_gl_report(void) {
     isaac_log("[isaac][gl] client-array emulation: %llu draws, %llu indices "
               "scanned, %llu vertex bytes staged, %llu index bytes staged; "
-              "rings orphaned %u / %u times (vertex %u KB, index %u KB); %u identical index blocks reused",
+              "rings orphaned %u / %u times (vertex %u KB, index %u KB); %u identical index blocks reused; "
+              "%u draws on the static quad index buffer (pattern %u %u %u %u %u %u), %u index blocks not the pattern",
               (unsigned long long)g_draws,
               (unsigned long long)g_indices_scanned,
               (unsigned long long)g_vertex_bytes,
               (unsigned long long)g_index_bytes,
-              g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10, g_idx_reuse);
+              g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10, g_idx_reuse,
+              g_quad_draws, g_quad_pat[0], g_quad_pat[1], g_quad_pat[2], g_quad_pat[3], g_quad_pat[4], g_quad_pat[5], g_quad_other);
 }

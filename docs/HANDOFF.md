@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-52: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-53: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,13 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 53: one static index buffer for every quad** (§21.67). The
+  engine's draws are quads in one fixed index pattern (0 2 1 1 2 3 stepping
+  by four), so the client-array emulation draws them from one static
+  ELEMENT_ARRAY_BUFFER: 90,760 of 90,760 draws over 3,000 browser frames, 0
+  index bytes uploaded (`ISAAC_GL_QUAD_IBO=0` is the A/B; interleaved 6x
+  profiles off 28.5 / 30.9 against on 27.2 / 26.1 ms a frame, bufferSubData 3.5 / 3.4 % against 3.1 / 2.7 % (the machine was in a slow hour; the pairs are what count)). A 20,000-frame node soak: heap peak
+  352.7 MiB, touched span 355.2 MiB, no growth with play.
 - **Round 52: EDIT FILE** (§21.66). The save-select screen's DELETE FILE
   strip reads EDIT FILE (the sheet reset in the Team Meat font, repacked
   into the bundle's `afterbirthp.a` by `page_assets.py`, run by `bundle.py

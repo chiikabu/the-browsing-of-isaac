@@ -353,6 +353,7 @@ int  isaac_fast_imdct_r_loop_ok(uint32_t lim, uint32_t e_va, uint32_t d0, uint32
 void isaac_fast_inverse_mdct(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);   /* round 50 */
 int  isaac_fast_inverse_mdct_ok(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);
 int  isaac_editfile_gate(uint32_t menu_va);   /* round 52 */
+void isaac_gl_quad_census(uint32_t *quad_draws, uint32_t *other_blocks, uint32_t *pattern);   /* round 53 */
 
 #ifdef __cplusplus
 }

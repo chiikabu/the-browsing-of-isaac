@@ -249,10 +249,21 @@ test('round 52: the EDIT FILE menu -- the page takes the keys while it is up, pr
   assert.ok(p.includes("assetsUrl: `${ROOT}/instance/page-assets`"), 'the assets come from the dist');
   const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
   assert.ok(m.includes("window.isaacEditFileDelete = state.slot;") && m.includes("injectKey('enter', true);"), 'Delete names the slot and presses confirm: the engine prompt');
-  assert.ok(m.includes("['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', `FPS VIEWER: ${state.fpsOn ? 'ON' : 'OFF'}`, 'BACK']"), 'the entries');
-  assert.ok(m.includes("localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0');"), 'the fps viewer is remembered');
+  assert.ok(m.includes("['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK']"), 'the entries');
+  assert.ok(m.includes("localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0');") && m.includes('const toggleFps = () => {'), 'the fps readout is a toggle this browser remembers');
+  assert.ok(p.includes("if (ev.code === 'KeyM' && !ev.repeat") && p.includes('window.isaacEditFileMenu.toggleFps();'), 'M flips the FPS readout (unbound in the game, unlike Q)');
+  assert.ok(!p.includes('page-settings.json'), 'no page setting in the saves store');
   const pa = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'page_assets.py'), 'utf8');
   assert.ok(pa.includes('render_text(font, atlas, "EDIT FILE", ink)') && pa.includes('items.append({"h1": e.h1, "h2": e.h2, "data": patched})'), 'the sheet is reset in the font and repacked into afterbirthp.a');
   const bp = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'bundle.py'), 'utf8');
   assert.ok(bp.includes('Rule("page-assets", KEEP, ("page-assets/*",), "page assets",') && bp.includes('page_assets.build(out)'), 'the bundle carries the page assets');
+});
+
+test('round 53: draws in the standard quad pattern take one static index buffer, no upload', () => {
+  const ca = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_gl_clientarrays.c'), 'utf8');
+  assert.ok(ca.includes('if (quad_mode() && is_quad_block(isrc, count, type) && quad_ibo_ready(type, (uint32_t)count / 6u)) {'), 'the quad path comes before the ring');
+  assert.ok(ca.includes('glDrawElements(mode, count, type, (const void *)0);   /* the static quad indices, from the start */'), 'drawn from offset 0 of the static buffer');
+  assert.ok(ca.includes('if (g_bound_ibo != g_iring.buf) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_iring.buf); g_bound_ibo = g_iring.buf; }'), 'a reused ring block rebinds the ring after a quad draw');
+  assert.ok(ca.includes('getenv("ISAAC_GL_QUAD_IBO")'), 'ISAAC_GL_QUAD_IBO=0 is the A/B');
+  assert.ok(ca.includes('%u draws on the static quad index buffer (pattern %u %u %u %u %u %u), %u index blocks not the pattern'), 'the census');
 });

@@ -24,6 +24,12 @@ uint32_t isaac_frames_presented(void);   /* host_shims_win.c frame counter */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* the client-array emulation's entry points (host_gl_clientarrays.c; GL types spelt out) -- round 53 */
+void isaac_gl_reset_state(void);
+void isaac_gl_enable_vertex_attrib_array(unsigned index);
+void isaac_gl_disable_vertex_attrib_array(unsigned index);
+void isaac_gl_vertex_attrib_pointer(unsigned index, int size, unsigned type, unsigned char normalized, int stride, uint32_t pointer_va);
+void isaac_gl_draw_elements(unsigned mode, int count, unsigned type, uint32_t indices_va);
 
 /* Upstream Lua 5.3.3 is linked into the selftest when present (see
  * build_selftest.py: it adds -I third_party/lua-5.3.3/src and liblua.a).

@@ -5930,3 +5930,36 @@ and the engine's prompt. The pins: the block patch and the gate
 (recomp-fastpath), the key capture, the injected key, the entries, the
 remembered toggle, the sheet reset and the bundle rule (recomp-web), the
 menu module in the shipped page set (recomp-ship).
+
+### 21.67 Round 53: one index buffer for every quad, and a memory soak
+
+**The static quad index buffer.** The per-frame GL census (20,000 explorer
+frames): 37 `glDrawElements` a frame, each preceded by two uploads into the
+client-array rings -- the vertices and the indices -- and round 48 had found
+that half the index blocks repeat the previous one. The rest of the story is
+that they all repeat one thing: the engine draws its sprites as quads, six
+indices per quad over four vertices, the same six offsets (0 2 1 1 2 3)
+stepping by four -- so every block is a prefix of a single fixed sequence.
+`host_gl_clientarrays.c` now learns those six offsets from the first block
+it sees, keeps one static `ELEMENT_ARRAY_BUFFER` holding the sequence (4,096
+quads to start, doubled as needed, per index type), and draws any such block
+from its offset 0: no upload, no ring space, no compare. A block that is not
+the pattern still goes through the ring (the ring's binding is restored
+before a reused block draws). The browser census over 3,000 frames: 90,760
+draws, every one on the static buffer, 0 index bytes staged, 0 blocks off
+the pattern -- the index ring never fills in play. `ISAAC_GL_QUAD_IBO=0`
+turns it off, which is how it was measured: the same module served twice,
+interleaved 6x profiles, off 28.5 / 30.9 against on 27.2 / 26.1 ms a frame, bufferSubData 3.5 / 3.4 % against 3.1 / 2.7 % (the machine was in a slow hour; the pairs are what count). The emulation
+needs a GL context, so the selftest does not cover it; the census line is
+the proof, and the web pins hold the path, the rebinding and the switch.
+
+**The soak.** 20,000 explorer frames in node (3 runs, 2 deaths, 7 room
+transitions; the explorer never found a trapdoor, so no floor changes):
+peak live 352.7 MiB, touched span 355.2 MiB -- the same as after 2,000
+frames. The guest heap does not grow with play; a floor change is covered by
+the edge suite's console `stage 2`, whose browser memory timeline stayed
+flat in rounds 47-51.
+
+**Round 52 corrections on request** (the EDIT FILE strip erased by its ink
+from the pristine sheet and set a pixel heavier; the FPS readout as plain
+text; then Q, then M to flip it, nothing in the saves store) are in 21.66.
