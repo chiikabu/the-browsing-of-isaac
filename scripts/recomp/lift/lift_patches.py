@@ -584,6 +584,39 @@ WRAP_PATCHES: dict[int, str] = {
     # (buf, len); ret 8. XORs len bytes with the r[] words and calls isaac()
     # when r[255] is taken. Its byte loop runs over every stored piece of the
     # DLC archives (a 3,000-frame run decodes ~280 MB of PCM through it).
+    # The archive stream's inflate_fast (round 57): ecx = lenbits, edx =
+    # distbits, stack = (lcode, dcode, st, in), plain ret, the result in eax.
+    # The verify mode snapshots the whole ring window, the state and the
+    # input struct, and compares eax as well.
+    0x00adb9c0: """void sub_00adb9c0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00adb9c0: host archive inflate_fast (host_fastpath.c) */
+  RECOMP_VA(0xadb9c0u);
+  uint32_t lenbits = s->ECX, distbits = s->EDX, lcode = MEMR32(s->ESP + 4u), dcode = MEMR32(s->ESP + 8u),
+           st = MEMR32(s->ESP + 12u), in = MEMR32(s->ESP + 16u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_inflate_ring_ok(lenbits, distbits, lcode, dcode, st, in)) { isaac_fastpath_count(0xadb9c0u, 1); sub_00adb9c0__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t base = MEMR32(st + 0x28u), wlen = MEMR32(st + 0x2cu) - base, total = wlen + 0x38u + 0x1cu;
+    uint8_t *snap = (uint8_t *)malloc(total), *host = (uint8_t *)malloc(total);
+    if (!snap || !host) { free(snap); free(host); isaac_fastpath_count(0xadb9c0u, 1); sub_00adb9c0__lifted(s); return; }
+    memcpy(snap, RECOMP_PTR(base), wlen); memcpy(snap + wlen, RECOMP_PTR(st), 0x38u); memcpy(snap + wlen + 0x38u, RECOMP_PTR(in), 0x1cu);
+    int hr = isaac_fast_inflate_ring(lenbits, distbits, lcode, dcode, st, in);
+    memcpy(host, RECOMP_PTR(base), wlen); memcpy(host + wlen, RECOMP_PTR(st), 0x38u); memcpy(host + wlen + 0x38u, RECOMP_PTR(in), 0x1cu);
+    memcpy(RECOMP_PTR(base), snap, wlen); memcpy(RECOMP_PTR(st), snap + wlen, 0x38u); memcpy(RECOMP_PTR(in), snap + wlen + 0x38u, 0x1cu);
+    sub_00adb9c0__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xadb9c0u, 2);
+    if ((int)s->EAX != hr || !isaac_fast_verify_equal(host, base, wlen) || !isaac_fast_verify_equal(host + wlen, st, 0x38u)
+        || !isaac_fast_verify_equal(host + wlen + 0x38u, in, 0x1cu))
+      isaac_fastpath_mismatch("inflate_ring", (uint32_t)hr, s->EAX);
+    free(snap); free(host);
+    return;
+  }
+  s->EAX = (uint32_t)isaac_fast_inflate_ring(lenbits, distbits, lcode, dcode, st, in);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
     0x00a89d70: """void sub_00a89d70(CpuState *restrict s) {
   /* LIFT-PATCH wrap 0x00a89d70: host archive keystream XOR (host_fastpath.c) */
   RECOMP_VA(0xa89d70u);

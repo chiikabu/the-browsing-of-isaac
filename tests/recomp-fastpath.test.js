@@ -232,6 +232,24 @@ test('round 50: the whole inverse_mdct has a host fastpath with the verify mode'
   assert.ok(fp.includes('imdct_ld654_loop(n >> 5, buffer, n2 - 1, A, n);'), 'the last stage');
 });
 
+test('round 57: the archive inflate_fast has a host fastpath with the verify mode, and the keystream XOR goes by words', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
+  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH wrap 0x00adb9c0: host archive inflate_fast (host_fastpath.c)'), 'the wrapper for 0x00adb9c0');
+  assert.ok(lp.includes('isaac_fastpath_mismatch("inflate_ring", (uint32_t)hr, s->EAX);') && lp.includes('memcpy(snap, RECOMP_PTR(base), wlen);'),
+    'the verify mode compares the whole ring window, the state, the input struct and eax');
+  assert.ok(lp.includes('  s->EAX = (uint32_t)isaac_fast_inflate_ring(lenbits, distbits, lcode, dcode, st, in);\n  s->EIP = MEMR32(s->ESP);\n  s->ESP += 4u;\n}'), 'the host path returns in eax with a plain ret');
+  assert.ok(fp.includes('int isaac_fast_inflate_ring(uint32_t lenbits, uint32_t distbits, uint32_t lcode, uint32_t dcode, uint32_t st, uint32_t in) {'), 'the host inflate_fast');
+  assert.ok(fp.includes('isaac_w32(in + 0x18u, 0xba9ec0u);') && fp.includes('isaac_w32(in + 0x18u, 0xba9edcu);'), "the engine's own error strings");
+  assert.ok(fp.includes('if (left < 0x102u) return 0;') && fp.includes('if (avail < 10u || !isaac_fast_guest_range(next, avail)) return 0;'),
+    'the gate asks of the first iteration what the loop asks of the rest');
+  assert.ok(rt.includes('int  isaac_fast_inflate_ring_ok(') && rt.includes('int  isaac_fast_inflate_ring('), 'declared for the lifted TUs');
+  assert.ok(st.includes("wraps to its end (one byte from the end, the rest from the start)"), 'the selftest exercises the ring');
+  assert.ok(fp.includes('static inline uint32_t keystream_word(uint32_t ctx, uint32_t *c) {') && fp.includes('memcpy(&v, p + k, 4u);'), 'the keystream XOR takes a word at a time');
+});
+
 test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
   const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
   assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');

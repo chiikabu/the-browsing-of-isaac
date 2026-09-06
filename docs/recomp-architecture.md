@@ -6103,3 +6103,53 @@ first frame (2.2 s) and the title, which the next round profiles
 since round 52 (the gate lived under `ISAAC_WEB`; the lifted block patch
 calls it in every profile): a stub outside the web profile returns the
 engine's own prompt. Checked on the round's module: edges 22 ok / 0 fail, EDIT FILE PASS 11/11, page 1 ok / 0 fail, floors PASS 21/21, the node explorer census md5 unchanged (r43 pin).
+
+### 21.71 Round 57: the loading work profiled -- the keystream by words, the archive inflate_fast on the host
+
+**The profile.** `profile_play.mjs phase=start` (new: from the first
+presented frame to frame `until`, 300 by default) at the 4x throttle,
+24.8 s sampled over 305 frames: 25 % idle (the reader's waits, 3 s, and
+the yields' vsync waits), 32 % lifted code, 23 % host C. By self time:
+`isaac_fast_keystream_xor` 11.8 % -- a host fastpath already, but a byte
+loop, and every archive byte passes through it -- then `sub_00a85710`
+9.5 % (1,784 instructions, a 54-way state switch: miniz's
+`tinfl_decompress`, the archive stream's inflater; the next round's),
+`sub_00adb9c0` 5.8 % (376 instructions: zlib's `inflate_fast` reshaped for
+a ring-buffer output, the PNG side), `isaac_fast_premultiply` 2.5 %,
+memcpy 2.3 %, `isaac_fast_adler32` 2.1 %, the page's 1 MB window copies
+1.7 %, then a long tail. The mount's checksum pass is not in it (skipped
+since round 26, §21.40); what remains is the title's resources being
+decoded.
+
+**The keystream by words.** The guest is little-endian, so XORing the
+32-bit word at the buffer with r[idx] is the four byte XORs, least
+significant byte first, of the loop it replaces; a trailing partial word
+still takes (and drops the rest of) a fresh word. 11.8 % to 6.1 %
+(2.9 s to 1.4 s over the window).
+
+**inflate_fast on the host.** The 376 instructions transcribed from the
+disassembly (`pequery body`): 8-byte code entries {op, bits, -, val}, a
+20-bit prefill (a length code and its extra bits at once), second-level
+tables relative to the entry that points at them, the state's window
+ring (base, end, the reader's position -- the byte before it is the last
+free one -- and out), wrap-around distance copies, the whole bytes left
+in the bit buffer handed back to the input at the exit (the buffer itself
+never masked), and the three exits: 0, 1 (end of block), -3 with the
+engine's own message strings. The gate declines under 258 bytes of room
+or 10 of input (the loop's own continuation terms, which the lifted body
+does not check on its first iteration). Selftest: a hand-made table
+(literals, a length-3 copy, end of block; a copy from before the ring's
+start that wraps to its end; the input-ran-low exit; an invalid code;
+the three declines), 381 checks. Verify mode on the explorer's 2,000
+frames: 93,653 calls, every one byte-exact (the window, the state, the
+input struct and eax); the keystream's 263,385 the same; 0 mismatches;
+the explorer census md5 unchanged. And the honest figure: the host
+inflate_fast takes the same time as the lifted body did (6.3 % of a
+shorter window) -- the lifted decoder was already C, and a C decoder does
+the same work; the gains of this kind come from an algorithm changed
+(the keystream) or from code the lifter emits badly, not from
+transcription itself.
+
+**Measured.** Frame 300 at the 4x throttle: 24.0 s cold (27.1-27.6 s
+last round), 22.3 s warm (22.1-23.6), no page errors. The profile after:
+keystream 6.1 %, inflate_fast 6.3 %, tinfl 10.2 %, idle 25.5 %.

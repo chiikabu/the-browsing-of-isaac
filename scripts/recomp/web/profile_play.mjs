@@ -26,7 +26,11 @@ const SECONDS = Number(opt.seconds || '10');
 // phase=boot (round 45): profile from the navigation to the first presented
 // frame instead of the play window -- where the cold start's seconds go.
 const PHASE = opt.phase || 'play';
-if (!URL) { console.log('usage: node profile_play.mjs <url> <out-dir> [cpu=4] [gl=hw|swiftshader] [seconds=10]'); process.exit(2); }
+// phase=start (round 57): from the first presented frame to frame `until`
+// (default 300, the title screen up and its resources loaded) -- where the
+// cold start's seconds go once the archive reads are the Worker's.
+const UNTIL = Number(opt.until || '300');
+if (!URL) { console.log('usage: node profile_play.mjs <url> <out-dir> [cpu=4] [gl=hw|swiftshader] [seconds=10] [phase=play|boot|start] [until=300]'); process.exit(2); }
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const glArgs = GL === 'swiftshader'
@@ -97,6 +101,17 @@ try {
     const r = await cdp.send('Profiler.stop');
     profile = r.profile; framesInProfile = 1;
     console.log(`[profile] boot: first frame at ${now()} ms`);
+    throw new Error('__boot_done__');
+  }
+  if (PHASE === 'start') {
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.setSamplingInterval', { interval: 1000 });
+    const f0 = (await state()).f;
+    await cdp.send('Profiler.start');
+    for (;;) { const s = await state(); if (s.f >= UNTIL) break; if (s.done || now() > 600000) throw new Error(`no frame ${UNTIL}`); await sleep(100); }
+    const r = await cdp.send('Profiler.stop');
+    profile = r.profile; framesInProfile = (await state()).f - f0;
+    console.log(`[profile] start: first frame at frame ${f0}, frame ${UNTIL} at ${now()} ms, ${framesInProfile} frames in the profile`);
     throw new Error('__boot_done__');
   }
   await traceReport(cdp);

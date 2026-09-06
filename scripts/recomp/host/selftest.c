@@ -710,6 +710,52 @@ int main(int argc, char **argv) {
         isaac_w32(ctx, 5u);
         isaac_fast_keystream_xor(holder, buf, 0u);
         check(isaac_r32(ctx) == 5u && isaac_fast_keystream_ok(holder, buf, 0u), "keystream: a zero-length XOR consumes nothing");
+        /* Round 57: the archive stream's inflate_fast (0x00adb9c0) on a
+         * hand-made table -- code 0 = 'a' (1 bit), 01 = length 3 (2 bits),
+         * 11 = end of block; distances 0 = 1, 1 = 2 (1 bit each) -- and a
+         * 1 KB ring window. Bits are taken least significant first. */
+        {
+            extern int isaac_fast_inflate_ring_ok(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+            extern int isaac_fast_inflate_ring(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+            uint32_t win = ISAAC_STACK_TOP_VA - 0x3d000u, ist = win + 0x400u, in = win + 0x500u, lc = win + 0x600u, dc = win + 0x700u, ib = win + 0x800u;
+#define ENT(va, op, nb, val) do { *(uint8_t *)isaac_g(va) = (uint8_t)(op); *(uint8_t *)isaac_g((va) + 1u) = (uint8_t)(nb); isaac_w16((va) + 2u, 0u); isaac_w32((va) + 4u, (val)); } while (0)
+#define INFLATE_RESET(byte0, avail) do { memset(isaac_g(win), 0, 0x400u); memset(isaac_g(ib), 0, 16u); *(uint8_t *)isaac_g(ib) = (uint8_t)(byte0); \
+            isaac_w32(ist + 0x1cu, 0u); isaac_w32(ist + 0x20u, 0u); isaac_w32(ist + 0x28u, win); isaac_w32(ist + 0x2cu, win + 0x400u); \
+            isaac_w32(ist + 0x30u, win); isaac_w32(ist + 0x34u, win); \
+            isaac_w32(in, ib); isaac_w32(in + 4u, (avail)); isaac_w32(in + 8u, 100u); isaac_w32(in + 0x18u, 0u); } while (0)
+            ENT(lc, 0, 1, 'a'); ENT(lc + 8u, 0x10, 2, 3u); ENT(lc + 16u, 0, 1, 'a'); ENT(lc + 24u, 0x60, 2, 0u);
+            ENT(dc, 0x10, 1, 1u); ENT(dc + 8u, 0x10, 1, 2u);
+            INFLATE_RESET(0x64u, 16u);                      /* 0, 0, 01, 0, 11: a a <3,1> eob */
+            check(isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in), "inflate: a guest window, tables and input are accepted");
+            int r = isaac_fast_inflate_ring(2u, 1u, lc, dc, ist, in);
+            check(r == 1 && memcmp(isaac_g(win), "aaaaa", 5) == 0 && isaac_r32(ist + 0x34u) == win + 5u,
+                  "inflate: two literals, a length-3 distance-1 copy, end of block -> 1");
+            check(isaac_r32(ist + 0x1cu) == 1u && isaac_r32(ist + 0x20u) == 0u && isaac_r32(in) == ib + 1u && isaac_r32(in + 4u) == 15u && isaac_r32(in + 8u) == 101u,
+                  "inflate: the whole bytes left in the bit buffer go back to the input (bits 1, next +1, avail 15, total +1)");
+            INFLATE_RESET(0x3au, 16u); *(uint8_t *)isaac_g(win + 0x3ffu) = 'z';   /* 0, 01, 1, 11: a <3,2> eob */
+            r = isaac_fast_inflate_ring(2u, 1u, lc, dc, ist, in);
+            check(r == 1 && memcmp(isaac_g(win), "azaz", 4) == 0 && isaac_r32(ist + 0x34u) == win + 4u && isaac_r32(ist + 0x1cu) == 2u,
+                  "inflate: a distance past the window's start wraps to its end (one byte from the end, the rest from the start)");
+            INFLATE_RESET(0x64u, 12u);
+            r = isaac_fast_inflate_ring(2u, 1u, lc, dc, ist, in);
+            check(r == 0 && isaac_r32(ist + 0x34u) == win + 1u && isaac_r32(ist + 0x1cu) == 7u && isaac_r32(ist + 0x20u) == 0x32u
+                  && isaac_r32(in) == ib + 1u && isaac_r32(in + 4u) == 11u,
+                  "inflate: fewer than 10 input bytes after a symbol -> 0, the position and the bit buffer kept");
+            ENT(lc, 0x40, 1, 0u);
+            INFLATE_RESET(0x00u, 16u);
+            r = isaac_fast_inflate_ring(2u, 1u, lc, dc, ist, in);
+            check(r == -3 && isaac_r32(in + 0x18u) == 0xba9ec0u && isaac_r32(in) == ib + 1u && isaac_r32(ist + 0x1cu) == 7u,
+                  "inflate: an invalid literal/length code -> -3 with the engine's own message");
+            ENT(lc, 0, 1, 'a');
+            INFLATE_RESET(0x64u, 16u);
+            check(!isaac_fast_inflate_ring_ok(16u, 1u, lc, dc, ist, in), "inflate: more than 15 index bits is left to the lifted body");
+            isaac_w32(in + 4u, 9u);
+            check(!isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in), "inflate: fewer than 10 input bytes is left to the lifted body");
+            isaac_w32(in + 4u, 16u); isaac_w32(ist + 0x30u, win + 100u);
+            check(!isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in), "inflate: under 258 bytes of room before the reader is left to the lifted body");
+#undef INFLATE_RESET
+#undef ENT
+        }
         /* ArchivedFile::read: window at +0x81c, pos +0xc1c, fill +0xc20, eof +0xc28, stream position +0x18 */
         uint32_t af = ISAAC_STACK_TOP_VA - 0x3d000u, dst = ISAAC_STACK_TOP_VA - 0x3c000u, take = 0xdeadu;
         memset(isaac_g(af), 0, 0xc2cu);

@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-56: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-57: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 57: the loading work profiled** (§21.71). `profile_play.mjs
+  phase=start` (first frame to frame 300, at 4x): 25 % idle, then the
+  keystream XOR 11.8 %, miniz tinfl 9.5 %, zlib inflate_fast 5.8 %. The
+  keystream goes a word at a time (2.9 s to 1.4 s); inflate_fast
+  (0x00adb9c0, the ring-buffer variant) is on the host, verified over
+  93,653 calls with 0 mismatches -- and no faster than the lifted body
+  (it was C already). Frame 300 at 4x: 24.0 s cold, 22.3 s warm. Selftest
+  381. Next: tinfl (0x00a85710, miniz 1.x, 10 %).
 - **Round 56: the archive reads are a Worker's** (§21.70). The lazy read
   is a JSPI import: a promise parks the engine mid-read while a Worker of
   this origin fetches the raw bytes (no base64, no synchronous XHR) and

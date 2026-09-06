@@ -680,21 +680,32 @@ int isaac_fast_keystream_ok(uint32_t self_va, uint32_t buf_va, uint32_t len) {
     if (!isaac_is_guest_va(ctx) || isaac_r32(ctx) > 0xffu) return 0;
     return 1;
 }
+/* Round 57: a word at a time. The guest is little-endian, so XORing the
+ * 32-bit word at p[k] with r[idx] is the four byte XORs, least significant
+ * byte first, of the byte loop this replaces (11.8 % of the boot's frames 1-300
+ * at a 4x throttle as a byte loop: every archive byte passes through here).
+ * A trailing partial word still takes (and drops the rest of) a fresh word. */
+static inline uint32_t keystream_word(uint32_t ctx, uint32_t *c) {
+    uint32_t idx = c[0];
+    uint32_t w = c[idx + 1u];
+    c[0] = idx + 1u;
+    if (idx + 1u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }
+    return w;
+}
 void isaac_fast_keystream_xor(uint32_t self_va, uint32_t buf_va, uint32_t len) {
     uint32_t ctx = isaac_r32(self_va);
     uint32_t *c = (uint32_t *)isaac_g(ctx);
     uint8_t *p = (uint8_t *)isaac_g(buf_va);
-    uint32_t w = 0u;
-    for (uint32_t k = 0; k < len; k++) {
-        if ((k & 3u) == 0u) {
-            uint32_t idx = c[0];
-            w = c[idx + 1u];
-            c[0] = idx + 1u;
-            if (idx + 1u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }
-        } else {
-            w >>= 8;
-        }
-        p[k] ^= (uint8_t)w;
+    uint32_t k = 0u;
+    for (; k + 4u <= len; k += 4u) {
+        uint32_t w = keystream_word(ctx, c), v;
+        memcpy(&v, p + k, 4u);
+        v ^= w;
+        memcpy(p + k, &v, 4u);
+    }
+    if (k < len) {
+        uint32_t w = keystream_word(ctx, c);
+        for (; k < len; k++) { p[k] ^= (uint8_t)w; w >>= 8; }
     }
 }
 
@@ -802,3 +813,117 @@ void isaac_probe_str(uint32_t tag, const char *label, uint32_t p) {
       buf[k] = 0; }
     isaac_log("[isaac][probe] sub_%08x %s: 0x%08x \"%s\"", tag, label, p, buf);
 }
+
+/* ---- the archive stream's inflate_fast (0x00adb9c0), round 57 ------------
+ * zlib's inffast.c reshaped for a ring-buffer output: 5.8 % of the boot's
+ * frames 1-300 at a 4x throttle as lifted code, 23 % of a run start (§21.37).
+ * Register args ecx = lenbits, edx = distbits; stack: lcode, dcode, st, in;
+ * plain ret, the result in eax. A code entry is 8 bytes {u8 op, u8 bits,
+ * u16 -, u32 val}: op 0 = a literal (val); op & 0x10 = a length or a
+ * distance, val plus (op & 15) extra bits; op & 0x40 = invalid (with 0x20 =
+ * end of block); else a second-level table (op) index bits wide at this
+ * entry + val. The mask table at 0x00b5f660 is (1 << n) - 1, computed here.
+ *   st: +0x1c bits, +0x20 hold, +0x28 window base, +0x2c window end,
+ *       +0x30 the reader's position (the byte before it is the last free
+ *       one), +0x34 out
+ *   in: +0 next, +4 avail, +8 total, +0x18 msg
+ * Returns 0 (under 258 bytes of room or 10 of input left), 1 (end of block),
+ * -3 (a bad code; msg set). An iteration takes up to 7 input bytes and
+ * writes up to 258, unchecked: the loop goes on only with 10 and 258 to
+ * spare, and `ok` asks the same of the first iteration before taking a
+ * call (the lifted body does not; the engine evidently always obliges). The
+ * whole bytes still in the bit buffer go back to the input at the end; the
+ * buffer itself is kept as it is (this variant never masks it). */
+#define INFLATE_MASK(n) ((1u << (n)) - 1u)
+#define M8(va) (*(uint8_t *)isaac_g(va))
+int isaac_fast_inflate_ring_ok(uint32_t lenbits, uint32_t distbits, uint32_t lcode, uint32_t dcode, uint32_t st, uint32_t in) {
+    if (lenbits > 15u || distbits > 15u) return 0;
+    if (!isaac_fast_guest_range(st, 0x38u) || !isaac_fast_guest_range(in, 0x1cu)) return 0;
+    uint32_t base = isaac_r32(st + 0x28u), end = isaac_r32(st + 0x2cu), rd = isaac_r32(st + 0x30u), out = isaac_r32(st + 0x34u);
+    if (end <= base || !isaac_fast_guest_range(base, end - base)) return 0;
+    if (out < base || out >= end || rd < base || rd > end) return 0;
+    uint32_t left = out < rd ? rd - out - 1u : end - out;
+    if (left < 0x102u) return 0;
+    uint32_t next = isaac_r32(in), avail = isaac_r32(in + 4u);
+    if (avail < 10u || !isaac_fast_guest_range(next, avail)) return 0;
+    if (!isaac_fast_guest_range(lcode, 8u << lenbits) || !isaac_fast_guest_range(dcode, 8u << distbits)) return 0;
+    return 1;
+}
+int isaac_fast_inflate_ring(uint32_t lenbits, uint32_t distbits, uint32_t lcode, uint32_t dcode, uint32_t st, uint32_t in) {
+    uint32_t next = isaac_r32(in), left_in = isaac_r32(in + 4u), avail0 = left_in;
+    uint32_t out = isaac_r32(st + 0x34u), hold = isaac_r32(st + 0x20u), bits = isaac_r32(st + 0x1cu);
+    uint32_t base = isaac_r32(st + 0x28u), end = isaac_r32(st + 0x2cu), rd = isaac_r32(st + 0x30u);
+    uint32_t left = out < rd ? rd - out - 1u : end - out;
+    uint32_t lmask = INFLATE_MASK(lenbits), dmask = INFLATE_MASK(distbits);
+    uint32_t here, op, n, len, dist;
+    int ret = 0;
+    for (;;) {
+        while (bits < 20u) { hold |= (uint32_t)M8(next) << bits; next++; bits += 8u; left_in--; }
+        here = lcode + (hold & lmask) * 8u;
+        op = M8(here); n = M8(here + 1u); hold >>= n; bits -= n;
+        for (;;) {
+            if (op == 0u) { M8(out) = M8(here + 4u); out++; left--; goto next_symbol; }
+            if (op & 0x10u) break;
+            if (op & 0x40u) goto bad_length;
+            here += ((hold & INFLATE_MASK(op)) + isaac_r32(here + 4u)) * 8u;
+            op = M8(here); n = M8(here + 1u); hold >>= n; bits -= n;
+        }
+        n = op & 0xfu;
+        len = (hold & INFLATE_MASK(n)) + isaac_r32(here + 4u); hold >>= n; bits -= n;
+        while (bits < 15u) { hold |= (uint32_t)M8(next) << bits; next++; bits += 8u; left_in--; }
+        here = dcode + (hold & dmask) * 8u;
+        op = M8(here); n = M8(here + 1u); hold >>= n; bits -= n;
+        for (;;) {
+            if (op & 0x10u) break;
+            if (op & 0x40u) goto bad_distance;
+            here += ((hold & INFLATE_MASK(op)) + isaac_r32(here + 4u)) * 8u;
+            op = M8(here); n = M8(here + 1u); hold >>= n; bits -= n;
+        }
+        n = op & 0xfu;
+        while (bits < n) { hold |= (uint32_t)M8(next) << bits; next++; bits += 8u; left_in--; }
+        dist = (hold & INFLATE_MASK(n)) + isaac_r32(here + 4u); hold >>= n; bits -= n;
+        left -= len;
+        {
+            uint32_t from = out - dist;
+            if (from < base) {                            /* behind the window's start: the ring wraps */
+                uint32_t wsz = end - base;
+                do { from += wsz; } while (from < base);
+                uint32_t avail = end - from;
+                if (len > avail) {
+                    uint32_t rest = len - avail;
+                    do { M8(out) = M8(from); out++; from++; } while (--avail);
+                    from = base;
+                    do { M8(out) = M8(from); out++; from++; } while (--rest);
+                    goto next_symbol;
+                }
+            }
+            do { M8(out) = M8(from); out++; from++; } while (--len);   /* byte by byte: an overlap repeats */
+        }
+    next_symbol:
+        if (left >= 0x102u && left_in >= 10u) continue;
+        break;
+    }
+    goto done;
+bad_length:
+    if (op & 0x20u) { ret = 1; goto done; }
+    isaac_w32(in + 0x18u, 0xba9ec0u);                    /* "invalid literal/length code" */
+    ret = -3;
+    goto done;
+bad_distance:
+    isaac_w32(in + 0x18u, 0xba9edcu);                    /* "invalid distance code" */
+    ret = -3;
+done:
+    {
+        uint32_t consumed = avail0 - left_in, back = bits >> 3;
+        if (back >= consumed) back = consumed;
+        next -= back; bits -= back * 8u;
+        isaac_w32(st + 0x20u, hold); isaac_w32(st + 0x1cu, bits);
+        isaac_w32(in + 4u, left_in + back);
+        isaac_w32(in + 8u, isaac_r32(in + 8u) + (next - isaac_r32(in)));
+        isaac_w32(in, next);
+        isaac_w32(st + 0x34u, out);
+    }
+    return ret;
+}
+#undef M8
+#undef INFLATE_MASK
