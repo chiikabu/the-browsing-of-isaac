@@ -119,7 +119,7 @@ void recomp_stall_tick(void);
 void recomp_mem_fault(uint32_t addr, unsigned bytes, int write);
 /* Everything the guest may legitimately touch lives below the host base. */
 #ifndef RECOMP_GUEST_LIMIT
-#define RECOMP_GUEST_LIMIT 0x24000000u   /* = ISAAC_HOST_BASE_VA (isaac_host.h), round 24f */
+#define RECOMP_GUEST_LIMIT 0x1c000000u   /* = ISAAC_HOST_BASE_VA (isaac_host.h), round 24f */
 #endif
 #define RECOMP_CHECK(a, n, w)                                            \
   do {                                                                   \

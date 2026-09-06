@@ -125,10 +125,10 @@ LDFLAGS = [
     # 0x24000000 and this is 832 MiB instead of 1088. Override with
     # --initial-memory. MAXIMUM_MEMORY lifts the 2 GiB growth ceiling wasm32
     # gets by default.
-    "-sINITIAL_MEMORY=872415232",
+    "-sINITIAL_MEMORY=738197504",
     "-sMAXIMUM_MEMORY=4294967296",
     "-sALLOW_MEMORY_GROWTH=1",
-    "-sGLOBAL_BASE=603979776",
+    "-sGLOBAL_BASE=469762048",
     "-sSTACK_SIZE=1048576",
     "-sASSERTIONS=1",
     "-sENVIRONMENT=node",

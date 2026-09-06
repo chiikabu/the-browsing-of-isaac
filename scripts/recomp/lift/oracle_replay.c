@@ -33,7 +33,7 @@
 /* The oracle's guest stack: top 0x20001000, entry ESP = 0x20000FFC (the
  * return-address slot), stack args at ESP+4, ESP+8, ... left to right. */
 #define ORACLE_ESP 0x20000ffcu
-#define GUEST_HI   0x24000000ull
+#define GUEST_HI   0x1c000000ull
 
 static uint16_t *g_map;
 static int g_unresolved;

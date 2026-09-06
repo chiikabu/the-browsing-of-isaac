@@ -243,7 +243,7 @@ let inputsDelivered = 0;
 // HEAP32/HEAPU8 directly. The module exports those two views only; a Float32
 // view is kept over the same buffer and renewed if the heap grows (growth
 // swaps the buffer). Shared by the explorer and the console driver.
-const GUEST_LO = 0x00400000, GUEST_HI = 0x24000000;
+const GUEST_LO = 0x00400000, GUEST_HI = 0x1c000000;
 const HEAP_LO = 0x00d00000, HEAP_HI = 0x00d00000 + 768 * 1048576;   // the guest arena (isaac_host.h)
 let f32 = new Float32Array(m.HEAPU8.buffer);
 const mem = {

@@ -6687,3 +6687,40 @@ visual changed.
 failures; the browser's master output still carries the music (title window
 100 % above the RMS threshold, `drive_audio.mjs` exit 0); page, EDIT FILE
 11 of 11, saves 15 of 15, floors 21 of 21, edges 22 of 22, family 4,054.
+
+### 21.83 Round 69: the arena follows the catalogue down
+
+**A consequence, not an idea.** Round 66 sized the guest arena at 512 MiB
+against a high-water mark of 350.1 MiB. Round 67 halved the sound
+catalogue, and since the catalogue *is* the high-water mark, it fell to
+**249.4 MiB** -- the same figure after 900, 1,500 and 6,000 frames, on
+three separate runs. That left 262 MiB of slack in an arena that is
+committed the moment the wasm memory is created, so it is resident bytes
+on every machine that opens the page.
+
+The arena is **384 MiB** now, 134 MiB of headroom over the measured peak,
+and the map moved down by another 0x08000000: heap `0x00d00000..0x18d00000`,
+stack top `0x19ff0000`, TEB `0x1a000000`, shims `0x1b000000`, guest limit
+and guard `0x1bf00000`, host base `0x1c000000` (`-sGLOBAL_BASE` 469,762,048).
+`-sINITIAL_MEMORY` follows: **704 MiB, from 832** -- and 1,088 two rounds
+ago. `r69_shrink.py` reads the current values out of `isaac_host.h` rather
+than carrying them, so the next move is one argument.
+
+The two things round 66 learned still apply and were done again without
+being rediscovered: the generated shim table bakes each token's address
+(`gen_shims.py`), and the lifted objects rebuild themselves off
+`build_boot.py`'s header fingerprint because `RECOMP_GUEST_LIMIT` moved.
+
+**Measured.** The wasm memory is 704 MiB, exactly, because it is a link
+flag. On the shipping page with a real GPU, after three forced collections:
+the renderer's working set is **854 MB and its private bytes 1,088 MB**,
+against 977 and 1,227 at 512 MiB and roughly 1.0 GB and 1.5 GB before round
+66. Two rounds have taken 384 MiB of committed memory off every machine
+that opens the page. The GPU process is unchanged at 379 MB -- it holds
+textures.
+
+**Checks.** Selftest 391 and 0 failures; a 1,500-frame explored run with
+the engine's own per-entry checksum pass reports the arena at 384 MiB, the
+same 249.4 MiB high-water mark and **0 allocation failures** over 3.2
+million allocations; page, EDIT FILE 11 of 11, saves 15 of 15, floors 21 of
+21 at 59-60 fps, family 4,054.

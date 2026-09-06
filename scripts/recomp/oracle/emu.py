@@ -67,7 +67,7 @@ STACK_TOP_GAP = 0x2000           # caller-frame room above initial ESP
 # basic_string) with 0x00deadbe before calling the lifted function, on EVERY
 # vector.  Keeping scratch out of that page removes the collision without
 # touching the lifter's files.  Must stay below the harness's
-# GUEST_HI = 0x24000000 or addresses are rejected as out of range (round 66
+# GUEST_HI = 0x1c000000 or addresses are rejected as out of range (round 66
 # moved both down with the guest map).
 HEAP_BASE = int(os.environ.get("ISAAC_ORACLE_HEAP_BASE", "0x21000000"), 0)
 HEAP_SIZE = 0x02000000           # address-space window reserved for scratch

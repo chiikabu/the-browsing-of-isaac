@@ -104,7 +104,7 @@ extern "C" {
  * whole sound catalogue -- 1,557 WAV samples, 269 MB of PCM once the DLC
  * archives are mounted -- and the old arena ran out at 201 MB live.
  *
- * Round 66 took it back to 512 MiB on the engine's own evidence. The arena is
+ * Round 66 took it to 512 MiB and round 69 to 384 on the engine's own evidence. The arena is
  * committed with the wasm memory, so its size is resident bytes on every
  * machine that opens the page, and the high-water report in host_shims_heap.c
  * peaks at 350.1 MiB -- the same figure after 900, 4,000 and 6,000 frames,
@@ -113,29 +113,29 @@ extern "C" {
  * to 832. The host base (-sGLOBAL_BASE) is 0x24000000; build_boot.py /
  * build_selftest.py carry the same number, recomp_rt.h's RECOMP_GUEST_LIMIT
  * matches it, and INITIAL_MEMORY clears it. */
-#define ISAAC_SHIM_BASE       0x23000000u       /* one 16-byte slot per import */
+#define ISAAC_SHIM_BASE       0x1b000000u       /* one 16-byte slot per import */
 #define ISAAC_SHIM_STRIDE     16u
-#define ISAAC_TEB_VA          0x22000000u       /* fake TEB                    */
-#define ISAAC_PEB_VA          0x22001000u
-#define ISAAC_TLS_ARRAY_VA    0x22002000u       /* TEB+0x2c expansion slots */
-#define ISAAC_TLS_BLOCK_VA    0x22003000u       /* TLS block copy, index 0   */
+#define ISAAC_TEB_VA          0x1a000000u       /* fake TEB                    */
+#define ISAAC_PEB_VA          0x1a001000u
+#define ISAAC_TLS_ARRAY_VA    0x1a002000u       /* TEB+0x2c expansion slots */
+#define ISAAC_TLS_BLOCK_VA    0x1a003000u       /* TLS block copy, index 0   */
 #define ISAAC_TLS_BLOCK_SIZE  0x400u
 #define ISAAC_HEAP_VA         0x00d00000u       /* VirtualAlloc arena          */
-#define ISAAC_HEAP_SIZE       0x20000000u       /* 512 MiB                     */
-#define ISAAC_STACK_TOP_VA    0x21ff0000u       /* guest stack grows down      */
+#define ISAAC_HEAP_SIZE       0x18000000u       /* 384 MiB                     */
+#define ISAAC_STACK_TOP_VA    0x19ff0000u       /* guest stack grows down      */
 #define ISAAC_STACK_SIZE      0x00100000u       /* PE StackReserve, measured   */
 
 /* Module handles and kernel-object handles. Guest-side, because the guest holds
  * them, but in ranges nothing else uses so a stray handle is recognisable. */
-#define ISAAC_MODULE_BASE     0x22010000u       /* HMODULE tokens, stride 0x1000 */
+#define ISAAC_MODULE_BASE     0x1a010000u       /* HMODULE tokens, stride 0x1000 */
 #define ISAAC_MODULE_STRIDE   0x1000u
-#define ISAAC_HANDLE_BASE     0x22030000u       /* kernel objects, stride 16     */
+#define ISAAC_HANDLE_BASE     0x1a030000u       /* kernel objects, stride 16     */
 #define ISAAC_HANDLE_STRIDE   16u
 
-#define ISAAC_GUEST_LIMIT_VA  0x23f00000u       /* nothing guest above this    */
-#define ISAAC_GUARD_VA        0x23f00000u
+#define ISAAC_GUEST_LIMIT_VA  0x1bf00000u       /* nothing guest above this    */
+#define ISAAC_GUARD_VA        0x1bf00000u
 #define ISAAC_GUARD_SIZE      0x00100000u
-#define ISAAC_HOST_BASE_VA    0x24000000u       /* -sGLOBAL_BASE=603979776     */
+#define ISAAC_HOST_BASE_VA    0x1c000000u       /* -sGLOBAL_BASE=469762048     */
 
 /* True if `va` is somewhere the guest is allowed to touch. Host code uses this
  * to reject a guest-supplied pointer before dereferencing it. */

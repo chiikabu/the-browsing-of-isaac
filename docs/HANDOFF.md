@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-68: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-69: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,12 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 69: the arena follows the catalogue down** (§21.83).
+  Halving the sound catalogue took the guest heap's high-water mark from
+  350.1 MiB to 249.4, so the arena went 512 -> **384 MiB** and
+  `-sINITIAL_MEMORY` 832 -> **704** (1,088 three rounds ago). The map moved
+  down another 0x08000000; `r69_shrink.py` reads the current values, so the
+  next move is one argument. The renderer's private bytes fall to **1,088 MB** (1,227 at 512 MiB, ~1.5 GB before round 66); peak live is still 249.4 MiB with 0 allocation failures.
 - **Round 68: the music at q2, and the textures the engine will not take** (§21.82).
   Music re-encoded from the pristine archives at q2 (167 of 179 tracks):
   bundle 619.3 -> **581.7 MB**, off the total download rather than the boot.

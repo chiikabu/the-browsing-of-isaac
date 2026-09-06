@@ -29,14 +29,15 @@ test('the guest address space: heap, stack, TEB, shims, guard, host base are ord
   const shim = def(h, 'ISAAC_SHIM_BASE'), limit = def(h, 'ISAAC_GUEST_LIMIT_VA');
   const guard = def(h, 'ISAAC_GUARD_VA'), guardSize = def(h, 'ISAAC_GUARD_SIZE');
   const hostBase = def(h, 'ISAAC_HOST_BASE_VA');
-  assert.equal(heapSize, 0x20000000, 'the guest heap is 512 MiB');
-  // Round 66: the arena is committed the moment the wasm memory is, so its size is
+  assert.equal(heapSize, 0x18000000, 'the guest heap is 384 MiB');
+  // Round 66 took the arena to 512 MiB and round 69 to 384. It is committed the moment the
+  // wasm memory is, so its size is
   // paid in resident bytes on every machine. The engine's own high-water report
-  // (host_shims_heap.c, printed at exit) peaks at 351 MiB -- the sound catalogue is
+  // (host_shims_heap.c, printed at exit) peaks at 250 MiB -- the sound catalogue is
   // nearly all of it and it is preloaded at boot, so a 6,000-frame explored run
   // peaks no higher than a 900-frame one. What is left is deliberate headroom.
-  assert.ok(heapSize >= 415 * 1048576, 'the arena keeps headroom over the measured 351 MiB high-water mark');
-  assert.ok(heapSize <= 702 * 1048576, 'the headroom is deliberate, not a forgotten ceiling');
+  assert.ok(heapSize >= 314 * 1048576, 'the arena keeps headroom over the measured 250 MiB high-water mark');
+  assert.ok(heapSize <= 500 * 1048576, 'the headroom is deliberate, not a forgotten ceiling');
   assert.ok(heapVa + heapSize <= stackTop - def(h, 'ISAAC_STACK_SIZE'), 'the heap ends below the guest stack');
   assert.ok(stackTop <= teb && teb < def(h, 'ISAAC_MODULE_BASE') && def(h, 'ISAAC_HANDLE_BASE') < shim,
     'stack, TEB, module tokens, handles, shims in that order');
