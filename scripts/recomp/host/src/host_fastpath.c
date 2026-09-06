@@ -927,3 +927,334 @@ done:
 }
 #undef M8
 #undef INFLATE_MASK
+
+/* ---- miniz tinfl_decompress (0x00a85710), round 58 -------------------------
+ * The archive stream's inflater: 9.5 % of the boot's frames 1-300 at a 4x
+ * throttle as lifted code (1,784 instructions, a 54-way state switch). It is
+ * miniz 1.x's tinfl_decompress, compiled with ecx = r, edx = pIn_buf_next and
+ * the stack (pIn_buf_size, pOut_buf_start, pOut_buf_next, pOut_buf_size,
+ * flags); plain ret, the status in eax. This is that function, from the
+ * public source, with the 1.x details the disassembly shows: a 32-bit bit
+ * buffer; TINFL_GET_BYTE hands a 0 when the input is gone and the caller did
+ * not say more is coming (state 38 / 40 in the stored-block copy is the one
+ * place it fails instead); no put-back of whole bytes at the exit and no mask
+ * on the bit buffer; the distance check of state 37 is dist >
+ * dist_from_out_buf_start alone; no code_len == 0 checks in the fast loop;
+ * the byte-align skip at the end only when a zlib trailer follows (the
+ * verify mode caught the unconditional one: 234 of 39,902 calls).
+ * The struct is the 1.x layout: +0x00 m_state, +4 m_num_bits, +8 m_zhdr0,
+ * +0xc m_zhdr1, +0x10 m_z_adler32, +0x14 m_final, +0x18 m_type, +0x1c
+ * m_check_adler32, +0x20 m_dist, +0x24 m_counter, +0x28 m_num_extra, +0x2c
+ * m_table_sizes[3], +0x38 m_bit_buf, +0x3c m_dist_from_out_buf_start, +0x40
+ * m_tables[3] of 0xda0 each (m_code_size[288], m_look_up[1024] i16 at +0x120,
+ * m_tree[576] i16 at +0x920), +0x2920 m_raw_header[4], +0x2924
+ * m_len_codes[457]; 0x2aed bytes. Statuses: -3 bad param, -2 adler mismatch,
+ * -1 failed, 0 done, 1 needs more input, 2 has more output. The coroutine
+ * states are the source's, so a call may resume the lifted body's work and
+ * vice versa; the verify mode compares the whole struct, the output window,
+ * both sizes and the status on the game's own streams. */
+#define TF_LOOKUP_BITS 10
+#define TF_LOOKUP_SIZE 1024
+#define TF_U32(off) (*(uint32_t *)(R + (off)))
+#define TF_TABLE(t) (R + 0x40u + (t) * 0xda0u)
+#define TF_CODE_SIZE(t) ((uint8_t *)TF_TABLE(t))
+#define TF_LOOKUP(t) ((int16_t *)(TF_TABLE(t) + 0x120u))
+#define TF_TREE(t) ((int16_t *)(TF_TABLE(t) + 0x920u))
+#define TF_RAW_HEADER (R + 0x2920u)
+#define TF_LEN_CODES (R + 0x2924u)
+#define TF_CR_RETURN(state_index, result) do { status = (result); TF_U32(0) = (state_index); goto common_exit; case state_index:; } while (0)
+#define TF_CR_RETURN_FOREVER(state_index, result) do { for (;;) { TF_CR_RETURN(state_index, result); } } while (0)
+#define TF_GET_BYTE(state_index, c) do { \
+    if (in_cur >= in_end) { \
+        for (;;) { \
+            if (flags & 2u) { TF_CR_RETURN(state_index, 1); if (in_cur < in_end) { c = *in_cur++; break; } } \
+            else { c = 0; break; } \
+        } \
+    } else c = *in_cur++; } while (0)
+#define TF_NEED_BITS(state_index, n) do { uint32_t c; TF_GET_BYTE(state_index, c); bit_buf |= (c << num_bits); num_bits += 8; } while (num_bits < (uint32_t)(n))
+#define TF_SKIP_BITS(state_index, n) do { if (num_bits < (uint32_t)(n)) { TF_NEED_BITS(state_index, n); } bit_buf >>= (n); num_bits -= (n); } while (0)
+#define TF_GET_BITS(state_index, b, n) do { if (num_bits < (uint32_t)(n)) { TF_NEED_BITS(state_index, n); } b = bit_buf & ((1u << (n)) - 1u); bit_buf >>= (n); num_bits -= (n); } while (0)
+#define TF_HUFF_BITBUF_FILL(state_index, pLookUp, pTree) do { \
+    temp = (pLookUp)[bit_buf & (TF_LOOKUP_SIZE - 1)]; \
+    if (temp >= 0) { code_len = (uint32_t)temp >> 9; if ((code_len) && (num_bits >= code_len)) break; } \
+    else if (num_bits > TF_LOOKUP_BITS) { \
+        code_len = TF_LOOKUP_BITS; \
+        do { temp = (pTree)[~temp + ((bit_buf >> code_len++) & 1)]; } while ((temp < 0) && (num_bits >= (code_len + 1))); \
+        if (temp >= 0) break; \
+    } \
+    TF_GET_BYTE(state_index, c); bit_buf |= (c << num_bits); num_bits += 8; } while (num_bits < 15)
+#define TF_HUFF_DECODE(state_index, sym, pLookUp, pTree) do { \
+    int temp; uint32_t code_len, c; \
+    if (num_bits < 15) { \
+        if ((in_end - in_cur) < 2) { TF_HUFF_BITBUF_FILL(state_index, pLookUp, pTree); } \
+        else { bit_buf |= ((uint32_t)in_cur[0] << num_bits) | ((uint32_t)in_cur[1] << (num_bits + 8)); in_cur += 2; num_bits += 16; } \
+    } \
+    if ((temp = (pLookUp)[bit_buf & (TF_LOOKUP_SIZE - 1)]) >= 0) code_len = (uint32_t)temp >> 9, temp &= 511; \
+    else { code_len = TF_LOOKUP_BITS; do { temp = (pTree)[~temp + ((bit_buf >> code_len++) & 1)]; } while (temp < 0); } \
+    sym = (uint32_t)temp; bit_buf >>= code_len; num_bits -= code_len; } while (0)
+
+int isaac_fast_tinfl_ok(uint32_t r, uint32_t in_next, uint32_t in_size_va, uint32_t out_start, uint32_t out_next, uint32_t out_size_va, uint32_t flags) {
+    if (!isaac_fast_guest_range(r, 0x2aedu) || !isaac_fast_guest_range(in_size_va, 4u) || !isaac_fast_guest_range(out_size_va, 4u)) return 0;
+    uint32_t in_size = isaac_r32(in_size_va), out_size = isaac_r32(out_size_va);
+    if (in_size > 0x7fffffffu || out_size > 0x7fffffffu) return 0;
+    if (in_size && !isaac_fast_guest_range(in_next, in_size)) return 0;
+    if (out_next < out_start) return 0;                                  /* the original's bad-param exit: the lifted body's */
+    if (flags & 4u) { if (out_size && !isaac_fast_guest_range(out_next, out_size)) return 0; }
+    else {
+        uint32_t span = (out_next - out_start) + out_size;               /* the ring: [out_start, out_start + span) */
+        if (span == 0u || (span & (span - 1u)) || !isaac_fast_guest_range(out_start, span)) return 0;
+    }
+    return 1;
+}
+int isaac_fast_tinfl(uint32_t r_va, uint32_t in_next_va, uint32_t in_size_va, uint32_t out_start_va, uint32_t out_next_va, uint32_t out_size_va, uint32_t flags) {
+    static const uint16_t s_length_base[31] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0, 0 };
+    static const uint8_t s_length_extra[31] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0, 0, 0 };
+    static const uint16_t s_dist_base[32] = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577, 0, 0 };
+    static const uint8_t s_dist_extra[32] = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13 };
+    static const uint8_t s_length_dezigzag[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+    static const uint16_t s_min_table_sizes[3] = { 257, 1, 4 };
+    uint8_t *R = (uint8_t *)isaac_g(r_va);
+    int status = -1;
+    uint32_t num_bits, dist, counter, num_extra, bit_buf;
+    const uint8_t *in_next = (const uint8_t *)isaac_g(in_next_va), *in_cur = in_next, *const in_end = in_next + isaac_r32(in_size_va);
+    uint8_t *out_start = (uint8_t *)isaac_g(out_start_va), *out_next = (uint8_t *)isaac_g(out_next_va), *out_cur = out_next;
+    uint8_t *const out_end = out_next_va ? out_next + isaac_r32(out_size_va) : NULL;
+    uint32_t out_buf_size_mask = (flags & 4u) ? 0xffffffffu : ((uint32_t)(out_next - out_start) + isaac_r32(out_size_va)) - 1u, dist_from_out_buf_start;
+    if (((out_buf_size_mask + 1u) & out_buf_size_mask) || (out_next < out_start)) {
+        isaac_w32(in_size_va, 0u); isaac_w32(out_size_va, 0u);
+        return -3;
+    }
+    num_bits = TF_U32(4); bit_buf = TF_U32(0x38); dist = TF_U32(0x20); counter = TF_U32(0x24); num_extra = TF_U32(0x28); dist_from_out_buf_start = TF_U32(0x3c);
+    switch (TF_U32(0)) {
+    case 0:
+        bit_buf = num_bits = dist = counter = num_extra = TF_U32(8) = TF_U32(0xc) = 0;
+        TF_U32(0x10) = TF_U32(0x1c) = 1;
+        if (flags & 1u) {
+            TF_GET_BYTE(1, TF_U32(8));
+            TF_GET_BYTE(2, TF_U32(0xc));
+            counter = (((TF_U32(8) * 256u + TF_U32(0xc)) % 31u != 0u) || (TF_U32(0xc) & 32u) || ((TF_U32(8) & 15u) != 8u));
+            if (!(flags & 4u))
+                counter |= (((1u << (8u + (TF_U32(8) >> 4))) > 32768u) || ((out_buf_size_mask + 1u) < (uint32_t)(1u << (8u + (TF_U32(8) >> 4)))));
+            if (counter) { TF_CR_RETURN_FOREVER(36, -1); }
+        }
+        do {
+            TF_GET_BITS(3, TF_U32(0x14), 3);
+            TF_U32(0x18) = TF_U32(0x14) >> 1;
+            if (TF_U32(0x18) == 0u) {
+                TF_SKIP_BITS(5, num_bits & 7u);
+                for (counter = 0; counter < 4u; ++counter) {
+                    if (num_bits) TF_GET_BITS(6, TF_RAW_HEADER[counter], 8);
+                    else TF_GET_BYTE(7, TF_RAW_HEADER[counter]);
+                }
+                if ((counter = ((uint32_t)TF_RAW_HEADER[0] | ((uint32_t)TF_RAW_HEADER[1] << 8))) != (uint32_t)(0xFFFFu ^ ((uint32_t)TF_RAW_HEADER[2] | ((uint32_t)TF_RAW_HEADER[3] << 8)))) {
+                    TF_CR_RETURN_FOREVER(39, -1);
+                }
+                while ((counter) && (num_bits)) {
+                    TF_GET_BITS(51, dist, 8);
+                    while (out_cur >= out_end) { TF_CR_RETURN(52, 2); }
+                    *out_cur++ = (uint8_t)dist;
+                    counter--;
+                }
+                while (counter) {
+                    uint32_t n;
+                    while (out_cur >= out_end) { TF_CR_RETURN(9, 2); }
+                    while (in_cur >= in_end) {
+                        if (flags & 2u) { TF_CR_RETURN(38, 1); }
+                        else { TF_CR_RETURN_FOREVER(40, -1); }
+                    }
+                    n = (uint32_t)(out_end - out_cur); if ((uint32_t)(in_end - in_cur) < n) n = (uint32_t)(in_end - in_cur); if (counter < n) n = counter;
+                    memcpy(out_cur, in_cur, n);
+                    in_cur += n; out_cur += n; counter -= n;
+                }
+            } else if (TF_U32(0x18) == 3u) {
+                TF_CR_RETURN_FOREVER(10, -1);
+            } else {
+                if (TF_U32(0x18) == 1u) {
+                    uint8_t *p = TF_CODE_SIZE(0);
+                    uint32_t i;
+                    TF_U32(0x2c) = 288u; TF_U32(0x30) = 32u;
+                    memset(TF_CODE_SIZE(1), 5, 32);
+                    for (i = 0; i <= 143u; ++i) *p++ = 8;
+                    for (; i <= 255u; ++i) *p++ = 9;
+                    for (; i <= 279u; ++i) *p++ = 7;
+                    for (; i <= 287u; ++i) *p++ = 8;
+                } else {
+                    for (counter = 0; counter < 3u; counter++) {
+                        TF_GET_BITS(11, TF_U32(0x2c + counter * 4u), (uint32_t)"\05\05\04"[counter]);
+                        TF_U32(0x2c + counter * 4u) += s_min_table_sizes[counter];
+                    }
+                    memset(TF_CODE_SIZE(2), 0, 288);
+                    for (counter = 0; counter < TF_U32(0x34); counter++) {
+                        uint32_t sz;
+                        TF_GET_BITS(14, sz, 3);
+                        TF_CODE_SIZE(2)[s_length_dezigzag[counter]] = (uint8_t)sz;
+                    }
+                    TF_U32(0x34) = 19u;
+                }
+                for (; (int32_t)TF_U32(0x18) >= 0; TF_U32(0x18)--) {
+                    int tree_next, tree_cur;
+                    int16_t *pLookUp, *pTree;
+                    uint8_t *pCode_size;
+                    uint32_t i, j, used_syms, total, sym_index, next_code[17], total_syms[16], t;
+                    t = TF_U32(0x18);
+                    pLookUp = TF_LOOKUP(t); pTree = TF_TREE(t); pCode_size = TF_CODE_SIZE(t);
+                    memset(total_syms, 0, sizeof(total_syms));
+                    memset(pLookUp, 0, 2048); memset(pTree, 0, 1152);
+                    for (i = 0; i < TF_U32(0x2c + t * 4u); ++i) total_syms[pCode_size[i]]++;
+                    used_syms = 0, total = 0;
+                    next_code[0] = next_code[1] = 0;
+                    for (i = 1; i <= 15u; ++i) { used_syms += total_syms[i]; next_code[i + 1] = (total = ((total + total_syms[i]) << 1)); }
+                    if ((65536u != total) && (used_syms > 1u)) { TF_CR_RETURN_FOREVER(35, -1); }
+                    for (tree_next = -1, sym_index = 0; sym_index < TF_U32(0x2c + t * 4u); ++sym_index) {
+                        uint32_t rev_code = 0, l, cur_code, code_size = pCode_size[sym_index];
+                        if (!code_size) continue;
+                        cur_code = next_code[code_size]++;
+                        for (l = code_size; l > 0; l--, cur_code >>= 1) rev_code = (rev_code << 1) | (cur_code & 1u);
+                        if (code_size <= TF_LOOKUP_BITS) {
+                            int16_t k = (int16_t)((code_size << 9) | sym_index);
+                            while (rev_code < TF_LOOKUP_SIZE) { pLookUp[rev_code] = k; rev_code += (1u << code_size); }
+                            continue;
+                        }
+                        if (0 == (tree_cur = pLookUp[rev_code & (TF_LOOKUP_SIZE - 1)])) {
+                            pLookUp[rev_code & (TF_LOOKUP_SIZE - 1)] = (int16_t)tree_next;
+                            tree_cur = tree_next;
+                            tree_next -= 2;
+                        }
+                        rev_code >>= (TF_LOOKUP_BITS - 1);
+                        for (j = code_size; j > (TF_LOOKUP_BITS + 1); j--) {
+                            tree_cur -= ((rev_code >>= 1) & 1u);
+                            if (!pTree[-tree_cur - 1]) { pTree[-tree_cur - 1] = (int16_t)tree_next; tree_cur = tree_next; tree_next -= 2; }
+                            else tree_cur = pTree[-tree_cur - 1];
+                        }
+                        tree_cur -= ((rev_code >>= 1) & 1u);
+                        pTree[-tree_cur - 1] = (int16_t)sym_index;
+                    }
+                    if (t == 2u) {
+                        for (counter = 0; counter < (TF_U32(0x2c) + TF_U32(0x30));) {
+                            uint32_t sz;
+                            TF_HUFF_DECODE(16, dist, TF_LOOKUP(2), TF_TREE(2));
+                            if (dist < 16u) { TF_LEN_CODES[counter++] = (uint8_t)dist; continue; }
+                            if ((dist == 16u) && (!counter)) { TF_CR_RETURN_FOREVER(17, -1); }
+                            num_extra = (uint32_t)"\02\03\07"[dist - 16u];
+                            TF_GET_BITS(18, sz, num_extra);
+                            sz += (uint32_t)"\03\03\013"[dist - 16u];
+                            memset(TF_LEN_CODES + counter, (dist == 16u) ? TF_LEN_CODES[counter - 1u] : 0, sz);
+                            counter += sz;
+                        }
+                        if ((TF_U32(0x2c) + TF_U32(0x30)) != counter) { TF_CR_RETURN_FOREVER(21, -1); }
+                        memcpy(TF_CODE_SIZE(0), TF_LEN_CODES, TF_U32(0x2c));
+                        memcpy(TF_CODE_SIZE(1), TF_LEN_CODES + TF_U32(0x2c), TF_U32(0x30));
+                    }
+                }
+                for (;;) {
+                    uint8_t *pSrc;
+                    for (;;) {
+                        if (((in_end - in_cur) < 4) || ((out_end - out_cur) < 2)) {
+                            TF_HUFF_DECODE(23, counter, TF_LOOKUP(0), TF_TREE(0));
+                            if (counter >= 256u) break;
+                            while (out_cur >= out_end) { TF_CR_RETURN(24, 2); }
+                            *out_cur++ = (uint8_t)counter;
+                        } else {
+                            int sym2;
+                            uint32_t code_len;
+                            if (num_bits < 15u) { bit_buf |= (((uint32_t)in_cur[0] | ((uint32_t)in_cur[1] << 8)) << num_bits); in_cur += 2; num_bits += 16; }
+                            if ((sym2 = TF_LOOKUP(0)[bit_buf & (TF_LOOKUP_SIZE - 1)]) >= 0) code_len = (uint32_t)sym2 >> 9;
+                            else { code_len = TF_LOOKUP_BITS; do { sym2 = TF_TREE(0)[~sym2 + ((bit_buf >> code_len++) & 1)]; } while (sym2 < 0); }
+                            counter = (uint32_t)sym2;
+                            bit_buf >>= code_len; num_bits -= code_len;
+                            if (counter & 256u) break;
+                            if (num_bits < 15u) { bit_buf |= (((uint32_t)in_cur[0] | ((uint32_t)in_cur[1] << 8)) << num_bits); in_cur += 2; num_bits += 16; }
+                            if ((sym2 = TF_LOOKUP(0)[bit_buf & (TF_LOOKUP_SIZE - 1)]) >= 0) code_len = (uint32_t)sym2 >> 9;
+                            else { code_len = TF_LOOKUP_BITS; do { sym2 = TF_TREE(0)[~sym2 + ((bit_buf >> code_len++) & 1)]; } while (sym2 < 0); }
+                            bit_buf >>= code_len; num_bits -= code_len;
+                            out_cur[0] = (uint8_t)counter;
+                            if (sym2 & 256) { out_cur++; counter = (uint32_t)sym2; break; }
+                            out_cur[1] = (uint8_t)sym2;
+                            out_cur += 2;
+                        }
+                    }
+                    if ((counter &= 511u) == 256u) break;
+                    num_extra = s_length_extra[counter - 257u];
+                    counter = s_length_base[counter - 257u];
+                    if (num_extra) { uint32_t extra_bits; TF_GET_BITS(25, extra_bits, num_extra); counter += extra_bits; }
+                    TF_HUFF_DECODE(26, dist, TF_LOOKUP(1), TF_TREE(1));
+                    num_extra = s_dist_extra[dist];
+                    dist = s_dist_base[dist];
+                    if (num_extra) { uint32_t extra_bits; TF_GET_BITS(27, extra_bits, num_extra); dist += extra_bits; }
+                    dist_from_out_buf_start = (uint32_t)(out_cur - out_start);
+                    if ((dist > dist_from_out_buf_start) && (flags & 4u)) { TF_CR_RETURN_FOREVER(37, -1); }
+                    pSrc = out_start + ((dist_from_out_buf_start - dist) & out_buf_size_mask);
+                    if (((out_cur > pSrc ? out_cur : pSrc) + counter) > out_end) {
+                        while (counter--) {
+                            while (out_cur >= out_end) { TF_CR_RETURN(53, 2); }
+                            *out_cur++ = out_start[(dist_from_out_buf_start++ - dist) & out_buf_size_mask];
+                        }
+                        continue;
+                    }
+                    else if ((counter >= 9u) && (counter <= dist)) {
+                        const uint8_t *pSrc_end = pSrc + (counter & ~7u);
+                        do { memcpy(out_cur, pSrc, 8); out_cur += 8; } while ((pSrc += 8) < pSrc_end);
+                        if ((counter &= 7u) < 3u) {
+                            if (counter) { out_cur[0] = pSrc[0]; if (counter > 1u) out_cur[1] = pSrc[1]; out_cur += counter; }
+                            continue;
+                        }
+                    }
+                    do { out_cur[0] = pSrc[0]; out_cur[1] = pSrc[1]; out_cur[2] = pSrc[2]; out_cur += 3; pSrc += 3; } while ((int32_t)(counter -= 3u) > 2);
+                    if ((int32_t)counter > 0) { out_cur[0] = pSrc[0]; if ((int32_t)counter > 1) out_cur[1] = pSrc[1]; out_cur += counter; }
+                }
+            }
+        } while (!(TF_U32(0x14) & 1u));
+        if (flags & 1u) {                                   /* 1.x: the byte-align skip only ahead of the zlib trailer */
+            TF_SKIP_BITS(32, num_bits & 7u);
+            for (counter = 0; counter < 4u; ++counter) {
+                uint32_t sz;
+                if (num_bits) TF_GET_BITS(41, sz, 8);
+                else TF_GET_BYTE(42, sz);
+                TF_U32(0x10) = (TF_U32(0x10) << 8) | sz;
+            }
+        }
+        TF_CR_RETURN_FOREVER(34, 0);
+    default:
+        break;                                            /* an unknown state falls out of the switch: failed */
+    }
+common_exit:
+    TF_U32(4) = num_bits; TF_U32(0x38) = bit_buf; TF_U32(0x20) = dist; TF_U32(0x24) = counter; TF_U32(0x28) = num_extra; TF_U32(0x3c) = dist_from_out_buf_start;
+    isaac_w32(in_size_va, (uint32_t)(in_cur - in_next));
+    isaac_w32(out_size_va, (uint32_t)(out_cur - out_next));
+    if ((flags & 9u) && (status >= 0)) {
+        const uint8_t *ptr = out_next;
+        uint32_t buf_len = (uint32_t)(out_cur - out_next);
+        uint32_t i, s1 = TF_U32(0x1c) & 0xffffu, s2 = TF_U32(0x1c) >> 16;
+        uint32_t block_len = buf_len % 5552u;
+        while (buf_len) {
+            for (i = 0; i + 7u < block_len; i += 8u, ptr += 8) {
+                s1 += ptr[0], s2 += s1; s1 += ptr[1], s2 += s1; s1 += ptr[2], s2 += s1; s1 += ptr[3], s2 += s1;
+                s1 += ptr[4], s2 += s1; s1 += ptr[5], s2 += s1; s1 += ptr[6], s2 += s1; s1 += ptr[7], s2 += s1;
+            }
+            for (; i < block_len; ++i) s1 += *ptr++, s2 += s1;
+            s1 %= 65521u, s2 %= 65521u;
+            buf_len -= block_len;
+            block_len = 5552u;
+        }
+        TF_U32(0x1c) = (s2 << 16) + s1;
+        if ((status == 0) && (flags & 1u) && (TF_U32(0x1c) != TF_U32(0x10))) status = -2;
+    }
+    return status;
+}
+#undef TF_HUFF_DECODE
+#undef TF_HUFF_BITBUF_FILL
+#undef TF_GET_BITS
+#undef TF_SKIP_BITS
+#undef TF_NEED_BITS
+#undef TF_GET_BYTE
+#undef TF_CR_RETURN_FOREVER
+#undef TF_CR_RETURN
+#undef TF_LEN_CODES
+#undef TF_RAW_HEADER
+#undef TF_TREE
+#undef TF_LOOKUP
+#undef TF_CODE_SIZE
+#undef TF_TABLE
+#undef TF_U32
+#undef TF_LOOKUP_SIZE
+#undef TF_LOOKUP_BITS

@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-57: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-58: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 58: tinfl on the host, the host at -O3** (§21.72). `sub_00a85710`
+  is miniz 1.x's `tinfl_decompress` (the archive stream's inflater, 10 %
+  of the loading window): ported from the public source with the 1.x
+  details the disassembly settles, coroutine states kept; selftest on
+  zlib-made streams (391 checks), verify mode 39,902 calls byte-exact
+  after one caught divergence (the byte-align skip). The host TUs go -O3
+  in the fast profile (they were -O1): play frame 21.0 to 19.8 ms at 4x,
+  the host share 25 % to 14 %. Frame 300 at 4x: 22.3 s cold, 18.9 s warm.
 - **Round 57: the loading work profiled** (§21.71). `profile_play.mjs
   phase=start` (first frame to frame 300, at 4x): 25 % idle, then the
   keystream XOR 11.8 %, miniz tinfl 9.5 %, zlib inflate_fast 5.8 %. The

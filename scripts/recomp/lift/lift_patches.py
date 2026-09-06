@@ -588,6 +588,42 @@ WRAP_PATCHES: dict[int, str] = {
     # distbits, stack = (lcode, dcode, st, in), plain ret, the result in eax.
     # The verify mode snapshots the whole ring window, the state and the
     # input struct, and compares eax as well.
+    # miniz tinfl_decompress (round 58): ecx = r, edx = pIn_buf_next, stack =
+    # (pIn_buf_size, pOut_buf_start, pOut_buf_next, pOut_buf_size, flags),
+    # plain ret (the caller drops 0x14), the status in eax. The verify mode
+    # snapshots the whole decompressor, the output window (the ring, or the
+    # buffer when the caller says it does not wrap), both sizes, and eax.
+    0x00a85710: """void sub_00a85710(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a85710: host miniz tinfl_decompress (host_fastpath.c) */
+  RECOMP_VA(0xa85710u);
+  uint32_t r = s->ECX, in_next = s->EDX, in_size = MEMR32(s->ESP + 4u), out_start = MEMR32(s->ESP + 8u),
+           out_next = MEMR32(s->ESP + 12u), out_size = MEMR32(s->ESP + 16u), flags = MEMR32(s->ESP + 20u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_tinfl_ok(r, in_next, in_size, out_start, out_next, out_size, flags)) { isaac_fastpath_count(0xa85710u, 1); sub_00a85710__lifted(s); return; }
+  if (mode == 2) {
+    uint32_t obase = (flags & 4u) ? out_next : out_start;
+    uint32_t olen = (flags & 4u) ? MEMR32(out_size) : (out_next - out_start) + MEMR32(out_size);
+    uint32_t total = 0x2aedu + olen + 8u;
+    uint8_t *snap = (uint8_t *)malloc(total), *host = (uint8_t *)malloc(total);
+    if (!snap || !host) { free(snap); free(host); isaac_fastpath_count(0xa85710u, 1); sub_00a85710__lifted(s); return; }
+    memcpy(snap, RECOMP_PTR(r), 0x2aedu); memcpy(snap + 0x2aedu, RECOMP_PTR(obase), olen); memcpy(snap + 0x2aedu + olen, RECOMP_PTR(in_size), 4u); memcpy(snap + 0x2aedu + olen + 4u, RECOMP_PTR(out_size), 4u);
+    int hr = isaac_fast_tinfl(r, in_next, in_size, out_start, out_next, out_size, flags);
+    memcpy(host, RECOMP_PTR(r), 0x2aedu); memcpy(host + 0x2aedu, RECOMP_PTR(obase), olen); memcpy(host + 0x2aedu + olen, RECOMP_PTR(in_size), 4u); memcpy(host + 0x2aedu + olen + 4u, RECOMP_PTR(out_size), 4u);
+    memcpy(RECOMP_PTR(r), snap, 0x2aedu); memcpy(RECOMP_PTR(obase), snap + 0x2aedu, olen); memcpy(RECOMP_PTR(in_size), snap + 0x2aedu + olen, 4u); memcpy(RECOMP_PTR(out_size), snap + 0x2aedu + olen + 4u, 4u);
+    sub_00a85710__lifted(s);
+    if (recomp_jmp_pending) recomp_run_pending(s);
+    isaac_fastpath_count(0xa85710u, 2);
+    if ((int)s->EAX != hr || !isaac_fast_verify_equal(host, r, 0x2aedu) || !isaac_fast_verify_equal(host + 0x2aedu, obase, olen)
+        || !isaac_fast_verify_equal(host + 0x2aedu + olen, in_size, 4u) || !isaac_fast_verify_equal(host + 0x2aedu + olen + 4u, out_size, 4u))
+      isaac_fastpath_mismatch("tinfl", (uint32_t)hr, s->EAX);
+    free(snap); free(host);
+    return;
+  }
+  s->EAX = (uint32_t)isaac_fast_tinfl(r, in_next, in_size, out_start, out_next, out_size, flags);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
     0x00adb9c0: """void sub_00adb9c0(CpuState *restrict s) {
   /* LIFT-PATCH wrap 0x00adb9c0: host archive inflate_fast (host_fastpath.c) */
   RECOMP_VA(0xadb9c0u);

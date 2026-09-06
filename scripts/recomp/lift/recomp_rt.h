@@ -74,6 +74,8 @@ int  isaac_fast_keystream_ok(uint32_t self_va, uint32_t buf_va, uint32_t len);
 void isaac_fast_keystream_xor(uint32_t self_va, uint32_t buf_va, uint32_t len);
 int  isaac_fast_inflate_ring_ok(uint32_t lenbits, uint32_t distbits, uint32_t lcode, uint32_t dcode, uint32_t st, uint32_t in);   /* round 57 */
 int  isaac_fast_inflate_ring(uint32_t lenbits, uint32_t distbits, uint32_t lcode, uint32_t dcode, uint32_t st, uint32_t in);
+int  isaac_fast_tinfl_ok(uint32_t r, uint32_t in_next, uint32_t in_size_va, uint32_t out_start, uint32_t out_next, uint32_t out_size_va, uint32_t flags);   /* round 58 */
+int  isaac_fast_tinfl(uint32_t r, uint32_t in_next, uint32_t in_size_va, uint32_t out_start, uint32_t out_next, uint32_t out_size_va, uint32_t flags);
 int  isaac_fast_read_plan(uint32_t self, uint32_t buf, uint32_t n, uint32_t *take);
 void isaac_fast_read_window(uint32_t self, uint32_t buf, uint32_t take);
 int  isaac_fast_mutex_init(uint32_t mutex);

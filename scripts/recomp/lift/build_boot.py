@@ -240,6 +240,10 @@ def main():
         # hundred frames practical at all.
         BOOT_OUT = OUT_LIFT / ("boot-web-fast" if args.web else "boot-fast")
         LIFT_CFLAGS = ["-O3", "-w", "-DRECOMP_MEM_CHECK=0"]
+        # Round 58: the host TUs at -O3 too. They were -O1 beside -O3 lifted
+        # code, and the host is a quarter to a third of the loading window
+        # (the decoders, the GL emulation) and of a play frame.
+        HOST_CFLAGS = ["-O3" if f == "-O1" else f for f in HOST_CFLAGS]
         lift_obj_suffix = ".fast.o"
         args.fast_link = False
 

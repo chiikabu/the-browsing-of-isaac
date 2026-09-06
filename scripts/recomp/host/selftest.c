@@ -756,6 +756,86 @@ int main(int argc, char **argv) {
 #undef INFLATE_RESET
 #undef ENT
         }
+        /* Round 58: miniz tinfl_decompress (0x00a85710) on raw deflate streams
+         * zlib made: a stored block, a fixed-Huffman block, a dynamic one over
+         * a 2880-byte text, decoded whole (flag 4: the buffer does not wrap), and
+         * a 512-byte-window stream decoded through a 512-byte ring the way the
+         * archive stream reader calls it (out_start == out_next, one window at
+         * a time, HAS_MORE_OUTPUT until DONE). */
+        {
+            extern int isaac_fast_tinfl_ok(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+            extern int isaac_fast_tinfl(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+            static const uint8_t tf_stored[33] = { 0x01, 0x1c, 0x00, 0xe3, 0xff, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x64, 0x20, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x2c, 0x20, 0x6b, 0x65, 0x70, 0x74, 0x20, 0x61, 0x73, 0x20, 0x69, 0x74, 0x20, 0x69, 0x73, 0x2e };
+            static const uint8_t tf_fixed[6] = { 0x4b, 0x4c, 0x24, 0x0e, 0x00, 0x00 };
+            static const uint8_t tf_dyn[63] = { 0xed, 0xca, 0xc1, 0x0d, 0xc0, 0x20, 0x0c, 0x03, 0xc0, 0x55, 0xbc, 0x5a, 0xa0, 0x06, 0x22, 0x55, 0x29, 0x0a, 0xe9, 0xfe, 0x1d, 0xa4, 0xbe, 0xf7, 0xd5, 0x22, 0x9a, 0xc7, 0xe5, 0x31, 0xf1, 0x0c, 0xf8, 0x31, 0xeb, 0xb0, 0x51, 0xcc, 0xe6, 0x59, 0x0b, 0xfb, 0x7e, 0x0f, 0x92, 0x9b, 0x51, 0x16, 0x9d, 0x28, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0xfd, 0x1f, 0xff, 0x0f };
+            static const uint8_t tf_ring[60] = { 0xed, 0xcc, 0xab, 0x0d, 0x00, 0x20, 0x0c, 0x40, 0xc1, 0x55, 0x3a, 0x07, 0xdb, 0x00, 0xe5, 0x67, 0x4a, 0x42, 0x48, 0xca, 0xf8, 0xec, 0x80, 0x42, 0x3c, 0x75, 0xee, 0xd6, 0xb0, 0x26, 0x3e, 0x4c, 0xa7, 0xcb, 0x2e, 0x67, 0x07, 0x89, 0x29, 0x6b, 0xa9, 0xad, 0xbf, 0x2a, 0x8b, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0x92, 0xf2, 0xa7, 0xf2, 0x02 };
+            static const char tf_text[] = "the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance the binding of isaac afterbirth plus repentance ";
+            static const char tf_ring_text[] = "ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ring window text: abcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefghabcdefgh ";
+            uint32_t tr = ISAAC_STACK_TOP_VA - 0x30000u, tin = tr + 0x3000u, tout = tr + 0x4000u, tsz = tr + 0x6000u;
+            int st;
+            /* the stored block */
+            memset(isaac_g(tr), 0xee, 0x2af0u); isaac_w32(tr, 0u);
+            memcpy(isaac_g(tin), tf_stored, sizeof(tf_stored)); isaac_w32(tsz, sizeof(tf_stored)); isaac_w32(tsz + 4u, 0x1000u);
+            check(isaac_fast_tinfl_ok(tr, tin, tsz, tout, tout, tsz + 4u, 4u), "tinfl: a guest decompressor, input and output are accepted");
+            st = isaac_fast_tinfl(tr, tin, tsz, tout, tout, tsz + 4u, 4u);
+            check(st == 0 && isaac_r32(tsz + 4u) == 28u && memcmp(isaac_g(tout), "Stored block, kept as it is.", 28) == 0 && isaac_r32(tsz) == sizeof(tf_stored),
+                  "tinfl: a stored block copies through (DONE, the input consumed whole)");
+            /* the fixed block */
+            isaac_w32(tr, 0u);
+            memcpy(isaac_g(tin), tf_fixed, sizeof(tf_fixed)); isaac_w32(tsz, sizeof(tf_fixed)); isaac_w32(tsz + 4u, 0x1000u);
+            st = isaac_fast_tinfl(tr, tin, tsz, tout, tout, tsz + 4u, 4u);
+            check(st == 0 && isaac_r32(tsz + 4u) == 40u && memcmp(isaac_g(tout), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 40) == 0,
+                  "tinfl: a fixed-Huffman block with a run decodes (DONE)");
+            /* the dynamic block, whole */
+            isaac_w32(tr, 0u);
+            memcpy(isaac_g(tin), tf_dyn, sizeof(tf_dyn)); isaac_w32(tsz, sizeof(tf_dyn)); isaac_w32(tsz + 4u, 0x1000u);
+            st = isaac_fast_tinfl(tr, tin, tsz, tout, tout, tsz + 4u, 4u);
+            check(st == 0 && isaac_r32(tsz + 4u) == sizeof(tf_text) - 1u && memcmp(isaac_g(tout), tf_text, sizeof(tf_text) - 1u) == 0 && isaac_r32(tsz) == sizeof(tf_dyn),
+                  "tinfl: a dynamic-Huffman block over a 2880-byte text decodes byte for byte (DONE)");
+            check(isaac_r32(tr) == 34u && isaac_r32(tr + 0x14u) == 5u, "tinfl: the decompressor rests in state 34 with the final block's header");
+            /* the same, one byte of input at a time: NEEDS_MORE_INPUT until the last */
+            isaac_w32(tr, 0u);
+            {
+                uint32_t off = 0u, produced = 0u; int ok = 1;
+                memset(isaac_g(tout), 0, 0x1000u);
+                while (off < sizeof(tf_dyn)) {
+                    isaac_w32(tsz, 1u); isaac_w32(tsz + 4u, 0x1000u - produced);
+                    st = isaac_fast_tinfl(tr, tin + off, tsz, tout, tout + produced, tsz + 4u, 4u | 2u);
+                    off += isaac_r32(tsz); produced += isaac_r32(tsz + 4u);
+                    if (st < 0 || st == 2) { ok = 0; break; }
+                    if (off < sizeof(tf_dyn) && st != 1) { ok = 0; break; }
+                }
+                check(ok && st == 0 && produced == sizeof(tf_text) - 1u && memcmp(isaac_g(tout), tf_text, sizeof(tf_text) - 1u) == 0,
+                      "tinfl: the same stream a byte at a time resumes at every state and ends DONE");
+            }
+            /* the 512-byte ring, the archive reader's way */
+            isaac_w32(tr, 0u);
+            {
+                uint32_t off = 0u, produced = 0u, in_left = sizeof(tf_ring); int ok = 1, rounds = 0;
+                uint8_t *assembled = (uint8_t *)malloc(sizeof(tf_ring_text));
+                memcpy(isaac_g(tin), tf_ring, sizeof(tf_ring));
+                memset(isaac_g(tout), 0, 0x200u);
+                for (;;) {
+                    isaac_w32(tsz, in_left); isaac_w32(tsz + 4u, 0x200u);
+                    st = isaac_fast_tinfl(tr, tin + off, tsz, tout, tout, tsz + 4u, 0u);
+                    off += isaac_r32(tsz); in_left -= isaac_r32(tsz);
+                    if (assembled && produced + isaac_r32(tsz + 4u) <= sizeof(tf_ring_text) - 1u) memcpy(assembled + produced, isaac_g(tout), isaac_r32(tsz + 4u));
+                    else ok = 0;
+                    produced += isaac_r32(tsz + 4u); rounds++;
+                    if (st == 0) break;
+                    if (st != 2 || rounds > 64) { ok = 0; break; }
+                }
+                check(ok && st == 0 && produced == sizeof(tf_ring_text) - 1u && assembled && memcmp(assembled, tf_ring_text, sizeof(tf_ring_text) - 1u) == 0,
+                      "tinfl: a 512-byte-window stream through a 512-byte ring (out_start == out_next) reassembles byte for byte over HAS_MORE_OUTPUT rounds");
+                free(assembled);
+            }
+            /* the gate */
+            isaac_w32(tsz + 4u, 0x300u);
+            check(!isaac_fast_tinfl_ok(tr, tin, tsz, tout, tout, tsz + 4u, 0u), "tinfl: a ring that is not a power of two is left to the lifted body");
+            check(!isaac_fast_tinfl_ok(tr, tin, tsz, tout + 4u, tout, tsz + 4u, 4u), "tinfl: out_next before out_start is left to the lifted body");
+            isaac_w32(tsz + 4u, 0x200u);
+            check(isaac_fast_tinfl_ok(tr, tin, tsz, tout, tout, tsz + 4u, 0u), "tinfl: a power-of-two ring is accepted");
+        }
         /* ArchivedFile::read: window at +0x81c, pos +0xc1c, fill +0xc20, eof +0xc28, stream position +0x18 */
         uint32_t af = ISAAC_STACK_TOP_VA - 0x3d000u, dst = ISAAC_STACK_TOP_VA - 0x3c000u, take = 0xdeadu;
         memset(isaac_g(af), 0, 0xc2cu);

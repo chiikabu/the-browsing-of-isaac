@@ -250,6 +250,24 @@ test('round 57: the archive inflate_fast has a host fastpath with the verify mod
   assert.ok(fp.includes('static inline uint32_t keystream_word(uint32_t ctx, uint32_t *c) {') && fp.includes('memcpy(&v, p + k, 4u);'), 'the keystream XOR takes a word at a time');
 });
 
+test('round 58: miniz tinfl_decompress has a host fastpath with the verify mode', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
+  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
+  assert.ok(lp.includes('LIFT-PATCH wrap 0x00a85710: host miniz tinfl_decompress (host_fastpath.c)'), 'the wrapper for 0x00a85710');
+  assert.ok(lp.includes('isaac_fastpath_mismatch("tinfl", (uint32_t)hr, s->EAX);') && lp.includes('memcpy(snap, RECOMP_PTR(r), 0x2aedu);'), 'the verify mode compares the decompressor, the window, both sizes and eax');
+  assert.ok(lp.includes('  s->EAX = (uint32_t)isaac_fast_tinfl(r, in_next, in_size, out_start, out_next, out_size, flags);\n  s->EIP = MEMR32(s->ESP);\n  s->ESP += 4u;\n}'), 'the host path returns in eax with a plain ret (the caller drops the arguments)');
+  assert.ok(fp.includes('int isaac_fast_tinfl(uint32_t r_va, uint32_t in_next_va, uint32_t in_size_va, uint32_t out_start_va, uint32_t out_next_va, uint32_t out_size_va, uint32_t flags) {'), 'the host tinfl');
+  for (const state of [1, 2, 3, 5, 6, 7, 9, 10, 11, 14, 16, 17, 18, 21, 23, 24, 25, 26, 27, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 51, 52, 53])
+    assert.ok(new RegExp(`TF_(CR_RETURN(_FOREVER)?|GET_BYTE|GET_BITS|SKIP_BITS|HUFF_DECODE)\\(${state},`).test(fp), `coroutine state ${state} is the source's`);
+  assert.ok(!/TF_[A-Z_]+\(54,/.test(fp), 'no state 54: the guest is miniz 1.x');
+  assert.ok(fp.includes('else { c = 0; break; }') && fp.includes('if ((dist > dist_from_out_buf_start) && (flags & 4u)) { TF_CR_RETURN_FOREVER(37, -1); }'), 'the 1.x details: a 0 byte past the input, the old distance test');
+  assert.ok(fp.includes('if (span == 0u || (span & (span - 1u)) || !isaac_fast_guest_range(out_start, span)) return 0;'), 'a ring that is not a power of two is left to the lifted body');
+  assert.ok(rt.includes('int  isaac_fast_tinfl_ok(') && rt.includes('int  isaac_fast_tinfl('), 'declared for the lifted TUs');
+  assert.ok(st.includes('reassembles byte for byte over HAS_MORE_OUTPUT rounds') && st.includes('resumes at every state and ends DONE'), 'the selftest decodes zlib-made streams whole, a byte at a time, and through a ring');
+});
+
 test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
   const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
   assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');

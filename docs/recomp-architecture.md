@@ -6153,3 +6153,48 @@ transcription itself.
 **Measured.** Frame 300 at the 4x throttle: 24.0 s cold (27.1-27.6 s
 last round), 22.3 s warm (22.1-23.6), no page errors. The profile after:
 keystream 6.1 %, inflate_fast 6.3 %, tinfl 10.2 %, idle 25.5 %.
+
+### 21.72 Round 58: miniz's tinfl_decompress on the host, and the host at -O3
+
+**The function.** `sub_00a85710` -- 1,784 instructions, a 54-way jump
+table on its first field, two callers (the archive stream reader
+0x00a89f80 and 0x00a614d0), three calls (memset, memcpy, the security
+cookie), no strings -- is miniz's `tinfl_decompress`, and the 1.x
+generation of it: the coroutine states are the public source's minus 54
+(a later stall check), the struct is the old `m_tables[3]` layout (0xda0
+a table: code sizes, the 1024-entry lookup at +0x120, the tree at +0x920;
+the raw header at +0x2920, the length codes at +0x2924), and the details
+the disassembly settles are 1.x's: `TINFL_GET_BYTE` hands a 0 when the
+input is gone and the caller did not say more is coming (state 38/40 in
+the stored-block copy is the one place it fails instead), no put-back of
+whole bytes at the exit and no mask on the bit buffer, the state-37
+distance test is `dist > dist_from_out_buf_start` alone, no `code_len ==
+0` checks in the fast loop, and the byte-align skip at the end only ahead
+of a zlib trailer. The archive reader calls it with a 1 KB ring (out_start
+== out_next, the size a power of two, no header parsing; flag 2 when more
+input follows), and an eleven-year-old compressor that never reaches
+past that ring.
+
+**The port** is the public source with those details and the guest's
+offsets, the coroutine kept (a call may resume the lifted body's work and
+vice versa). Selftest: zlib-made raw streams -- a stored block, a fixed
+block, a dynamic block over a 2,880-byte text, decoded whole and a byte at
+a time (every state resumed), and a 512-byte-window stream through a
+512-byte ring the reader's way, reassembled over seven HAS_MORE_OUTPUT
+rounds -- 391 checks. Verify mode caught the one divergence -- the
+unconditional byte-align skip, 234 of 39,902 calls, every one a DONE --
+and passes now: 39,902 calls byte-exact over the whole decompressor, the
+window, both sizes and eax; 0 mismatches; the explorer census md5
+unchanged.
+
+**The host at -O3.** The host TUs were compiled at -O1 beside -O3 lifted
+code -- since the first host layer, and never questioned. In the fast
+profile they are -O3 now (`build_boot.py`; the debug profile keeps -O1).
+The play profile at 4x, the same module before and after: 21.0 to 19.8
+ms a frame, the host share 25 % to 14 %. The loading window: 24.7 to 19.8
+s sampled to frame 300, the host tinfl 8.7 % of the shorter window (1.7 s
+against the lifted body's 2.4).
+
+**Measured.** Frame 300 at the 4x throttle: 22.3 s cold (24.0 last
+round), 18.9 s warm (22.3). Drives on this module: the saves round trip
+below is round 59's.
