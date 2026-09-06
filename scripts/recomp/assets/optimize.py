@@ -606,6 +606,70 @@ def cmd_halve_sfx(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# store (round 72)
+# ---------------------------------------------------------------------------
+
+STORE_MIN = 0x400 + 1        # the format needs a full non-final first piece
+
+
+def cmd_store(args) -> int:
+    """Re-encode the entries of a kind as stored bytes rather than deflate pieces.
+
+    A PNG or an OGG is already compressed: deflating it again saves a percent or two
+    of disk and costs the engine a full inflate pass over every byte at load. Stored
+    entries take the memcpy-and-XOR path instead, which is what the sound catalogue
+    already uses. The decoded bytes do not change, so neither do the mount checksums.
+    """
+    t0 = time.time()
+    kinds = set(args.kinds or ["png"])
+    moved = kept = small = 0
+    before = after = 0
+    with ar.Archive(args.archive) as a:
+        if a.version != 2:
+            print("%s is version %d: its entries are not deflate pieces, nothing to do" % (args.archive, a.version))
+            return 0
+        items = []
+        for e in a.entries:
+            data = a.decode(e)
+            k = sniff(data)
+            packed = a.raw_extent(e)[1]
+            if k in kinds and len(data) >= STORE_MIN:
+                items.append({"h1": e.h1, "h2": e.h2, "data": data, "mode": "stored"})
+                moved += 1
+                before += packed
+            else:
+                items.append({"h1": e.h1, "h2": e.h2, "src": a, "entry": e})
+                if k in kinds:
+                    small += 1
+                else:
+                    kept += 1
+        r = ar.write_archive(args.out, a.version, items)
+    # what it cost, and that nothing else moved
+    bad = 0
+    with ar.Archive(args.archive) as a, ar.Archive(args.out) as b:
+        if set(a.by_key) != set(b.by_key) or a.count != b.count:
+            print("FAILED: the entry set changed")
+            return 1
+        for e in a.entries:
+            f = b.by_key[e.key]
+            if e.size != f.size or e.x != f.x or a.decode(e) != b.decode(f):
+                bad += 1
+                if bad < 5:
+                    print("  entry %s differs" % e.tag)
+            if e.key in {x["h1"] for x in []}:
+                pass
+        for e in b.entries:
+            if sniff(b.decode(e)) in kinds and e.size >= STORE_MIN:
+                after += b.raw_extent(e)[1]
+    print("stored %s -> %s: %d entries of %s re-encoded (%d too small, %d left alone), "
+          "those entries %.1f -> %.1f MB (%+.1f MB), archive %d bytes, %d verify failures, %.0f s"
+          % (args.archive, args.out, moved, "/".join(sorted(kinds)), small, kept,
+             before / 1048576.0, after / 1048576.0, (after - before) / 1048576.0,
+             r["size"], bad, time.time() - t0))
+    return 1 if bad else 0
+
+
 def catalogue_order(arc: "ar.Archive", entry_name: str, attrs: tuple[str, ...], prefix: str) -> list[str]:
     """The paths an xml catalogue names, in document order, duplicates dropped. The engine
     preloads its sound catalogue in exactly this order (round 64: the boot trail's window
@@ -694,6 +758,10 @@ def main(argv=None) -> int:
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=6); p.add_argument("--json")
     p.add_argument("--source", help="archive to take the pristine music bytes from (by key); the rest passes through from `archive`")
     p.set_defaults(fn=cmd_music)
+    p = sub.add_parser("store", help="re-encode already-compressed entries as stored bytes (round 72)")
+    p.add_argument("archive"); p.add_argument("out")
+    p.add_argument("--kinds", nargs="*", default=["png"], help="sniffed kinds to store (default png)")
+    p.set_defaults(fn=cmd_store)
     p = sub.add_parser("halve-sfx", help="halve the sample rate of catalogued samples that carry no treble (round 67)")
     p.add_argument("archive"); p.add_argument("out")
     p.add_argument("--catalogue", help="archive carrying sounds.xml (default: the archive itself)")

@@ -539,12 +539,39 @@ uint32_t isaac_fast_adler32(uint32_t adler, uint32_t buf_va, uint32_t len) {
  * alpha 0xff = untouched, alpha 0 = pixel zeroed, otherwise each of R,G,B
  * replaced by table[(alpha << 8) | value] -- the 64 KB table lives in the
  * image (0x00c13640 when [0x00c798e4] & 8, else 0x00c23640). */
+/* Round 71: what the four-pixel test finds, so the shortcut can be judged. */
+static uint64_t g_pm_pixels, g_pm_opaque4, g_pm_clear4, g_pm_mixed4;
+void isaac_premultiply_census(uint64_t *pixels, uint64_t *opaque4, uint64_t *clear4, uint64_t *mixed4) {
+    if (pixels) *pixels = g_pm_pixels; if (opaque4) *opaque4 = g_pm_opaque4;
+    if (clear4) *clear4 = g_pm_clear4; if (mixed4) *mixed4 = g_pm_mixed4;
+}
 void isaac_fast_premultiply(uint32_t pixels_va, uint32_t count, uint32_t table_va) {
     if (!count || !isaac_is_guest_va(pixels_va + count * 4u - 1u) ||
         !isaac_is_guest_va(table_va + 0xffffu)) return;
     uint8_t *p = (uint8_t *)isaac_g(pixels_va);
     const uint8_t *t = (const uint8_t *)isaac_g(table_va);
-    for (uint32_t i = 0; i < count; i++, p += 4) {
+    uint32_t i = 0;
+    g_pm_pixels += count;
+#ifdef __wasm_simd128__
+    /* Sprite art is mostly solid or mostly empty: test four pixels' alpha together
+     * and skip or zero all four. The in-between pixels are a table gather, which no
+     * vector instruction helps with, so they take the scalar path below. */
+    for (; i + 4u <= count; i += 4u, p += 16) {
+        v128_t px = wasm_v128_load(p);
+        v128_t a = wasm_v128_and(px, wasm_i32x4_splat((int32_t)0xff000000));
+        if (wasm_i32x4_all_true(wasm_i32x4_eq(a, wasm_i32x4_splat((int32_t)0xff000000)))) { ++g_pm_opaque4; continue; }
+        if (!wasm_v128_any_true(a)) { wasm_v128_store(p, wasm_i32x4_splat(0)); ++g_pm_clear4; continue; }
+        ++g_pm_mixed4;
+        for (unsigned k = 0; k < 4u; ++k) {
+            uint8_t *q = p + k * 4u, al = q[3];
+            if (al == 0xffu) continue;
+            if (al == 0u) { q[0] = q[1] = q[2] = q[3] = 0; continue; }
+            uint32_t base = (uint32_t)al << 8;
+            q[0] = t[base | q[0]]; q[1] = t[base | q[1]]; q[2] = t[base | q[2]];
+        }
+    }
+#endif
+    for (; i < count; i++, p += 4) {
         uint8_t a = p[3];
         if (a == 0xffu) continue;
         if (a == 0u) { p[0] = p[1] = p[2] = p[3] = 0; continue; }
@@ -596,6 +623,10 @@ void isaac_fastpath_report(void) {
     if (g_tinfl_calls)
         isaac_log("[isaac][fastpath] archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished",
                   (unsigned long long)g_tinfl_calls, g_tinfl_in / 1048576.0, g_tinfl_out / 1048576.0, (unsigned long long)g_tinfl_done);
+    if (g_pm_pixels)
+        isaac_log("[isaac][fastpath] premultiply: %.1f M pixels, four at a time %llu opaque / %llu clear / %llu mixed",
+                  g_pm_pixels / 1e6, (unsigned long long)g_pm_opaque4, (unsigned long long)g_pm_clear4,
+                  (unsigned long long)g_pm_mixed4);
     if (!g_fp_n && !g_mismatches) return;
     static const char *const modes[] = { "lifted (ISAAC_FASTPATH=0)", "host", "verify (ISAAC_FASTPATH_VERIFY=1)" };
     isaac_log("[isaac][fastpath] ---- mode %s: %u mismatch(es) ----", modes[fastpath_mode()], g_mismatches);

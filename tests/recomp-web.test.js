@@ -283,8 +283,17 @@ test('round 55/56: the boot trail, and every archive window read by a Worker wit
   assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });"),
     'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
   assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' })));"), 'the reader is a Worker of this origin');
-  assert.ok(b.includes("fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
-  assert.ok(b.includes("return new Promise((resolve) => {") && b.includes("reader.postMessage({ want: id, key, url: windowUrl(src, off, len), len, ahead });"), 'a read is a promise the Worker resolves (the wasm stack suspends: JSPI)');
+  assert.ok(b.includes("fetch(url, init).then((r) => (r.ok ? r.arrayBuffer() : null))") && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
+  // round 70: a portable chunk holds many windows, and the range rides in the
+  // fragment because a fragment never reaches the server
+  assert.ok(b.includes("const h = url.indexOf('#r=');") && b.includes("init = { headers: { Range: 'bytes=' + want0 + '-' + want1 } };")
+    && b.includes("if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = buf.slice(want0, want1 + 1);"),
+    'a fragment range becomes a Range header, and a host that ignores it is cut to size here');
+  assert.ok(b.includes("return new Promise((resolve) => {") && b.includes("const wantUrl = reader ? windowUrl(src, off, len) : null;")
+    && b.includes("reader.postMessage({ want: id, key, url: wantUrl, len, ahead });"), 'a read is a promise the Worker resolves (the wasm stack suspends: JSPI)');
+  // round 70: a provider that has the bytes but no URL for them (the single-file
+  // build, or a window straddling two chunks) leaves the Worker out of it
+  assert.ok(b.includes("if (reader && wantUrl) {"), 'no URL, no Worker: the read falls through to the bytes path');
   assert.ok(b.includes("const forward = off > last && off - last <= READ_AHEAD * FS_WINDOW;") && b.includes("if (o >= size) break;"), 'read-ahead follows a file read forward and stops at its end');
   assert.ok(b.includes("params.get('reader') === '0'") && b.includes("return finishRead(src, off, dst, fetchSync(`/instance/${src}?off=${off}&len=${len}`));"), '?reader=0 and no Worker keep the synchronous read');
   assert.ok(b.includes("const decodeBase64 = (typeof Uint8Array.fromBase64 === 'function')") && b.includes("  return decodeBase64(x.responseText);"), 'the synchronous read decodes with the native decoder where there is one');

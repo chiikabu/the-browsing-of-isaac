@@ -6724,3 +6724,175 @@ the engine's own per-entry checksum pass reports the arena at 384 MiB, the
 same 249.4 MiB high-water mark and **0 allocation failures** over 3.2
 million allocations; page, EDIT FILE 11 of 11, saves 15 of 15, floors 21 of
 21 at 59-60 fps, family 4,054.
+
+### 21.84 Round 70: the page carries the game -- two portable builds
+
+**The shape of the problem.** The dist is a page plus 593 MB of files a
+server hands out in slices. Two things people actually want are neither:
+one file that plays with no network at all, and a page small enough to sit
+on a static host with the payload beside it. `scripts/recomp/assets/portable.py`
+builds both out of a finished dist, and neither touches the engine or the
+module -- the page takes its bytes from `window.isaacPortable` instead of a
+server (play.mjs).
+
+**The seam.** A provider answers a read either with a **URL** (the chunked
+build, so the reader Worker keeps fetching in parallel under JSPI) or with
+**bytes** (the single file, which has them inline). `hooks.noReader` turns
+the Worker off when there are no URLs to fetch; `hooks.preadBytes` is the
+read the engine makes once it is running; `hooks.trail` hands over the boot
+trail the dist would have shipped. With no provider every one of these is
+null and the served page is exactly what it was.
+
+**Two streams, because the payload is read two ways.** Part A is everything
+read whole -- the module, the memory image, the six eagerly seeded archives,
+the Lua -- and each piece is stored gzipped: 49 MB of module is 7 MB on the
+wire. Part B is the four archives the engine reads as 1 MiB windows, stored
+raw so a window costs a window. A window may not straddle a cut, so part B
+is laid out on window boundaries and the padding (under 3 MB) is written as
+zeroes.
+
+**What the measurements changed.** Four things were built the obvious way
+first and every one of them was wrong:
+
+* **one chunk per window**: correct, and 559 files. The first frame took
+  **23.2 s** because 49 MB of module arrived 1 MiB at a time, in order. The
+  chunks are coarse now (a dozen by default) and a read gathers its pieces
+  **six at a time**; a window inside a raw chunk is a `Range`, carried in
+  the URL fragment where no server ever sees it. A host that answers 200
+  instead of 206 is noticed on the first probe and never asked again.
+* **gzipping everything**: the windowed archives went through the reader,
+  which hands bytes straight to the engine. The page loaded and the game
+  died. Compression is part A only.
+* **one `<script>` for the inline payload**: 707.8 MB, which V8 will not
+  compile -- its source limit is about 512 MB and it says nothing when it
+  declines. The payload is spread over scripts of **48 MB**.
+* **keying the provider by the dist path**: play.mjs strips `instance/`
+  before it asks, so every lookup missed and fell through to a 404.
+
+**Checks.** The single file plays (307 frames, the title screen reached);
+the chunked build plays on a host that does ranges and on one that does
+not. `tests/recomp-portable.test.js` pins the seam, the chunk arithmetic,
+the key naming and the split payload.
+
+### 21.85 Round 71: the premultiply four pixels at a time, and a measurement of the machine
+
+**The change.** The engine premultiplies every texture it uploads: alpha
+0xff leaves a pixel alone, alpha 0 zeroes it, anything between goes through
+a 64 KB table. The table lookup is a gather no vector instruction helps
+with, but the decision above it is testable four pixels at a time -- sprite
+art is mostly solid or mostly empty. All opaque, skip sixteen bytes; all
+clear, store a zero vector; anything else, the scalar loop for those four.
+The same round took the inflater's per-copy counters back out: they had
+answered their question (the ring path is never taken; the bytes are 57 MB
+of literals and 4.8 M short matches) and an increment per literal is not
+free.
+
+**The census.** 53.6 M pixels over a boot, in 13.4 M groups of four:
+**870,372 all opaque, 5,538,579 all clear, 6,995,209 mixed**. So 48% of
+groups short-circuit and 52% pay for the test and then do the scalar work
+anyway, against a premultiply that is 3.6% of the loading window. The
+ceiling was always about 1.7%.
+
+**And a lesson about measuring.** The first A/B said the SIMD build was
+**12% slower** -- 19.0-19.2 s to frame 300 against 21.4-22.3 s -- which is
+four times the size of the whole premultiply and should have been read as
+impossible rather than as a result. Five `run_web.mjs` servers from earlier
+rounds were still resident. With them gone, three runs of the same build:
+**54.8, 54.5, 54.5 ms/frame at a 4x throttle, 23.6-24.4% idle**, against
+54.6 and 54.0 with 23.8-24.2% before the change. The premultiply is a wash,
+the counters coming out is a wash, and the first number was the machine.
+The code stays because it is correct and costs nothing; the figure to
+remember is that **a profile on this machine is only comparable against a
+machine in the same state**, and `Get-CimInstance Win32_Process` before a
+run is cheaper than a wrong conclusion.
+
+### 21.86 Round 72: the images stored rather than deflated, and put back
+
+**The idea.** A v2 archive entry is deflate pieces or stored bytes and the
+packer picks whichever is smaller. A PNG is already deflate-compressed, so
+it wins by a hair: 6,555 images in afterbirthp.a are 53.2 MB deflated
+against 56.8 MB stored. That 3.5 MB of disk costs a full inflate pass over
+56.5 MB on every boot, and the archive inflater is 22% of the loading
+window. Storing them should trade bytes for time.
+
+**Measured, and put back.** It bought **1.1%** of the inflater's work --
+108.0 MB out, down to 106.8 -- while the bundle grew **3.7 MB**. tinfl's
+own time did not move. The archives went back to what round 68 left; the
+`store` verb stays in `optimize.py`, off by default, because it is correct
+and someone will want to ask again on a different machine.
+
+### 21.87 Round 73: the two screens before the title are settings
+
+The build opens on a public-beta notice and a data-collection disclaimer,
+each waiting on a confirm. Neither is a screen the port added: both are
+flags the engine reads and writes itself, `AcceptedPublicBeta_v1.9.7.17`
+and `AcceptedDataCollectionDisclaimer` in options.ini. The drivers have set
+the first for rounds, which is how we knew where to look.
+
+So a first visit gets an options.ini with both accepted and everything else
+at the engine's own defaults -- **written only when the save store has
+none**, so a returning player's settings, and every save beside them, are
+left exactly as they are. Nothing is patched and no key is injected.
+
+On the disclaimer: there is nothing here to consent to. The Steam and Epic
+entry points are stubs that return without doing anything (`_EOS_Initialize@4`,
+`_EOS_Platform_Create@4`, `_EOS_Shutdown@0`, `SteamInternal_SteamAPI_Init`
+in the stub census) and no part of the host layer opens a socket.
+
+### 21.88 Round 74: mods from the device, in the game's own list
+
+**The trick is that there is no trick.** The game looks for mods in `mods/`
+beside its executable and scans that directory itself, through the FS
+shim's `FindFirstFileA` over its own table (host_shims_fs.c). Nothing in
+that scan asks where the bytes came from, so a mod seeded before `main` is
+a mod on disk as far as the engine is concerned. `isaac_fs_seed` creates
+the parent directories on the way, which is the part that makes it work.
+Confirmed on the first run: `LOADED MOD //mods/ import mod/content/`, from
+the engine's own log.
+
+**The button is a mod.** `mods/ import mod/` holds one file, a metadata.xml,
+and the game lists it like any other -- the mods screen prints the folder
+name, which is why the folder is named the way the row should read, and why
+it begins with a space: the list is sorted and the import row stays at the
+top however many mods are installed. Enter on a row toggles it, which makes
+the engine write a `disable.it` into that folder. That write comes back to
+the page through the FS shim's persist hook (round 31), where it is claimed
+rather than stored, and the page opens its own menu. No patch, no menu
+surgery, and the key is the engine's own.
+
+**The store is a separate database.** Mods live in `isaac-mods`; saves live
+in `isaac-saves` and the two never meet. Files the game writes under
+`mods/` -- the `disable.it` that marks a mod off -- are routed to the mods
+database too, so the save store stays saves and a mod that is later removed
+does not leave a phantom folder behind at the next boot. Importing,
+removing or resetting mods cannot reach a save file at all.
+
+**Reading what was chosen.** A .zip, through `DecompressionStream`, or a
+folder through the directory picker; the bytes are copied into the store,
+so deleting the file afterwards changes nothing. A download is
+`ModName/metadata.xml` rather than `metadata.xml`, so single roots are
+peeled off until the metadata is at the top -- a mod seeded one level too
+deep simply never loads, silently. A mod with no metadata.xml gets one
+written for it. **RAR and 7z are named and refused**: nothing in a browser
+can open either, and the message says to extract and choose the folder.
+
+**Every path is built here.** A path out of an archive is not trusted: `..`,
+a drive letter, an empty segment or a control character is dropped rather
+than repaired, and the seed builds `mods/<id>/<rel>` out of an id and a
+relative name that have both already been checked. `mods/` and
+`Documents/My Games/` are neighbours in one key space and `../..` twice
+over reaches a save file, so this is the check that matters.
+
+**Two other things this round.** The zip reader that lived inside play.mjs
+is `zip.mjs` now, imported by both menus rather than written twice. And the
+portable builds carry six modules instead of four, in dependency order --
+a blob URL resolves no relative import, so each module is built after
+everything it imports.
+
+**Checks.** `drive_mods.mjs` plays the whole thing through the engine --
+title, file select, Tab for the mods list, Enter on the import row, a zip
+built by the driver through the picker, a reload, and the engine's own
+`LOADED MOD` line for the imported mod -- then removes it again, with a
+witness in the save store checked byte for byte before and after: **17 of
+17**. `tests/recomp-mods.test.js` pins the path rules, the peeling, the
+metadata reader and the two databases: 12 tests.

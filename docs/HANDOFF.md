@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-69: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-74: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, portable builds, mods, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,59 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 74: mods from the device, in the game's own list** (§21.88).
+  The game scans `mods/` itself through the FS shim's `FindFirstFileA`, so a
+  mod seeded before `main` is a mod on disk: `LOADED MOD //mods/...` from the
+  engine's own log, no patch anywhere. The import row is itself a mod --
+  `mods/ import mod/`, one metadata.xml, listed by folder name, leading space
+  so a sorted list keeps it on top -- and Enter on it makes the engine write a
+  `disable.it` the page claims through the round-31 persist hook and answers
+  with its own menu. Mods live in **`isaac-mods`**, saves in `isaac-saves`,
+  and everything the game writes under `mods/` is routed to the first, so an
+  import cannot reach a save. A .zip (`DecompressionStream`) or a folder; the
+  bytes are copied, so the file can go. Single roots are peeled until
+  metadata.xml is at the top, a mod without one gets one, and **RAR and 7z are
+  named and refused** -- no browser can open either. Every seeded path is
+  built from an id and a relative name that were checked first: `..`, a drive
+  letter, an empty segment and control characters are dropped, because
+  `mods/` and `Documents/My Games/` share one key space.
+  `drive_mods.mjs` **17/17** through the engine (import, reload, the engine's
+  own load line, removal, a save witness byte-checked throughout);
+  `tests/recomp-mods.test.js` 12. The zip reader moved out of play.mjs into
+  `zip.mjs`, imported by both menus.
+- **Round 73: the two screens before the title are settings** (§21.87).
+  The public-beta notice and the data-collection disclaimer are
+  `AcceptedPublicBeta_v1.9.7.17` and `AcceptedDataCollectionDisclaimer` in
+  options.ini, not screens the port added. A first visit gets a default
+  options.ini with both accepted -- **only when the save store has none**, so
+  a returning player's settings and saves are untouched. Nothing is patched.
+  There is no telemetry to consent to: the Steam and Epic entry points are
+  stubs and nothing in the host layer opens a socket.
+- **Round 72: the images stored rather than deflated, and put back** (§21.86).
+  PNGs are already compressed and deflating them again wins by 3.5 MB while
+  costing a full inflate pass over 56.5 MB per boot. Storing them bought
+  **1.1%** of the inflater (108.0 -> 106.8 MB out) for **+3.7 MB** of bundle,
+  and tinfl's own time did not move. Reverted; `optimize.py store` stays, off.
+- **Round 71: the premultiply four pixels at a time** (§21.85).
+  A wash, and the interesting part is why the first answer said otherwise.
+  Census: 53.6 M pixels in 13.4 M groups -- 870,372 all opaque, 5,538,579 all
+  clear, 6,995,209 mixed -- so 52% pay for the test and do the scalar work
+  anyway, against a premultiply that is 3.6% of the loading window. The first
+  A/B claimed **12% slower**, four times the size of the thing being changed:
+  five `run_web.mjs` servers from earlier rounds were still resident. Clean,
+  three runs: **54.8/54.5/54.5 ms/frame at 4x, 23.6-24.4% idle** against
+  54.6/54.0 and 23.8-24.2% before. **Check the process list before profiling.**
+- **Round 70: the page carries the game -- two portable builds** (§21.84).
+  `portable.py` turns a finished dist into either one .html with the payload
+  inline, or a small page plus a dozen large files for a static host. The page
+  takes bytes from `window.isaacPortable` instead of a server; with no
+  provider nothing about the served dist changes. Part A (read whole) is
+  gzipped, part B (the 1 MiB windowed archives) is raw and laid out on window
+  boundaries so a window is one `Range`, carried in the URL fragment. Four
+  wrong first attempts are recorded in §21.84: one chunk per window (559
+  files, 23.2 s to the first frame), gzipping the windowed archives, a single
+  707.8 MB `<script>` (V8 stops near 512 MB and says nothing), and keying the
+  provider by the dist path rather than the engine's own name.
 - **Round 69: the arena follows the catalogue down** (§21.83).
   Halving the sound catalogue took the guest heap's high-water mark from
   350.1 MiB to 249.4, so the arena went 512 -> **384 MiB** and

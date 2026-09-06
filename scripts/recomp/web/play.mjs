@@ -19,6 +19,8 @@
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
 import { createEditFileMenu } from './menu_overlay.mjs';
+import { zipStore, unzip } from './zip.mjs';
+import { createModsMenu } from './mods.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 if (!params.has('ISAAC_YIELD')) {
@@ -88,9 +90,17 @@ function render() {
 }
 function setStatus(text) { statusEl.textContent = text; }
 
+// ---- the portable provider (round 70) ----------------------------------------
+// A build with no server sets window.isaacPortable before this module runs: it
+// carries the manifest and the index, and answers a window either with a URL (the
+// chunked build, so the reader Worker still fetches in parallel) or with bytes (the
+// single-file build, which has them inline). Absent, everything below is unchanged.
+const portable = (typeof window !== 'undefined' && window.isaacPortable) || null;
+
 // ---- manifest + index: the totals, the versions ------------------------------
 let manifest = null;
-try { manifest = await (await fetch(`${ROOT}/dist.json`, { cache: 'no-cache' })).json(); } catch { manifest = null; }
+if (portable) manifest = portable.manifest || null;
+else try { manifest = await (await fetch(`${ROOT}/dist.json`, { cache: 'no-cache' })).json(); } catch { manifest = null; }
 const fileInfo = new Map((manifest && manifest.files || []).map((f) => [f.path, f]));
 const sizeOf = (rel) => { const f = fileInfo.get(rel); return f ? f.size : 0; };
 const versionOf = (rel) => { const f = fileInfo.get(rel); return f && f.sha256 ? f.sha256.slice(0, 16) : null; };
@@ -103,7 +113,10 @@ function rewrite(url) {
   return `${ROOT}/${rel}${q ? '?' + q.replace(/&$/, '') : ''}`;
 }
 let indexBytes = null, index = [];
-try {
+if (portable) {
+  index = portable.index || [];
+  indexBytes = new TextEncoder().encode(JSON.stringify(index));
+} else try {
   indexBytes = new Uint8Array(await (await fetch(rewrite('/instance_index.json'), { cache: 'no-cache' })).arrayBuffer());
   index = JSON.parse(new TextDecoder().decode(indexBytes));
 } catch (e) { setStatus(`instance_index.json: ${e.message}`); }
@@ -115,22 +128,58 @@ stages.archives.total = EAGER_ARCHIVES.reduce((s, n) => s + (indexSize.get(`reso
 const stageFor = (rel) => rel === 'isaac.segs.bin' ? stages.image
   : rel.startsWith('instance/resources/packed/') || rel.startsWith('instance/resources/scripts/') ? stages.archives : null;
 render();
-if (location.protocol === 'file:') setStatus('this page needs a server (node scripts/recomp/web/serve_dist.mjs <dist>): the game reads its archives as byte slices');
+if (portable) setStatus(portable.status || 'loading\u2026');
+else if (location.protocol === 'file:') setStatus('this page needs a server (node scripts/recomp/web/serve_dist.mjs <dist>): the game reads its archives as byte slices');
 else setStatus(manifest ? 'loading\u2026' : 'no dist.json: sizes unknown');
 
 // ---- the hooks -----------------------------------------------------------------
 let streamed = 0, streamedRequests = 0;
 const hooks = {};
+// a single-file build answers with bytes, not URLs: the reader Worker would have
+// nothing to fetch, so it is not started
+hooks.noReader = !!(portable && !portable.urlFor);
+// a chunked build asks its host whether it does byte ranges before the first read:
+// without them a 1 MiB window would drag a whole chunk behind it
+if (portable && portable.ready) { try { await portable.ready; } catch { /* fall back to whole chunks */ } }
+// the reads once the engine runs, when there is no Worker to make them
+hooks.preadBytes = portable ? (rel, off, len) => portable.bytesFor(rel, off, len) : null;
+hooks.trail = (portable && portable.trail) || null;
+const partsOf = (url) => {
+  const [path, query] = url.split('?');
+  const q = new URLSearchParams(query || '');
+  const off = q.has('off') ? Number(q.get('off')) : 0;
+  const rel = path.replace(/^\//, '');
+  const inInstance = rel.startsWith('instance/');
+  return { rel: inInstance ? rel.slice('instance/'.length) : rel, inInstance,
+           off, len: q.has('len') ? Number(q.get('len')) : 0 };
+};
 hooks.url = (url) => {
   // the windowed reads once the game runs: count what the engine streams
   const m = /[?&]len=(\d+)/.exec(url);
   if (m) streamed += Number(m[1]); else { const rel = url.split('?')[0].replace(/^\/instance\//, ''); streamed += indexSize.get(rel) || 0; }
   streamedRequests += 1;
+  if (portable) {
+    // a portable build has no server behind it: for a window the provider either
+    // gives a URL or says null, and the caller reads the bytes instead. Anything
+    // else (there is only the shipped trail, which a portable build carries inline)
+    // keeps the served spelling so nothing downstream sees a surprise.
+    const { rel, off, len } = partsOf(url);
+    if (len) return (portable.urlFor && portable.urlFor(rel, off, len)) || null;
+  }
   return rewrite(url);
 };
 hooks.fetchBytes = async (url) => {
   const rel = url.split('?')[0].replace(/^\//, '');
   if (rel === 'instance_index.json' && indexBytes) return indexBytes;
+  if (portable) {
+    const q = partsOf(url);
+    const bytes = await portable.bytesFor(q.rel, q.off, q.len);
+    if (bytes) {
+      const st0 = stageFor(rel);
+      if (st0) { st0.received += bytes.length; render(); }
+      return bytes;
+    }
+  }
   const st = stageFor(rel);
   const res = await fetch(rewrite(url));
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -154,6 +203,17 @@ hooks.instantiateWasm = (info, receive) => {
   (async () => {
     const st = stages.module;
     st.received = 0; render();
+    if (portable) {
+      // no server to stream from: the bytes are inline or in a chunk, so the
+      // module is compiled from them directly (no instantiateStreaming, and so
+      // none of round 40's code-cache benefit -- a portable build pays that)
+      const bytes = await portable.bytesFor('boot.wasm', 0, 0);
+      st.received = bytes.length; st.done = true; render();
+      const { instance, module } = await WebAssembly.instantiate(bytes, info);
+      setStatus('loading\u2026');
+      receive(instance, module);
+      return;
+    }
     const res = await fetch(rewrite('/boot.wasm'));
     if (!res.ok) throw new Error(`boot.wasm: HTTP ${res.status}`);
     // Round 40: the fetch's own Response goes to instantiateStreaming. V8 keeps
@@ -329,6 +389,8 @@ async function importSlot(slot) {
 }
 const editMenu = createEditFileMenu({
   stage: $('stage'), canvas, assetsUrl: `${ROOT}/instance/page-assets`,
+  // round 70: with no server the overlay reads its own files out of the payload
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
   audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
   injectKey: (name, down) => { if (typeof window.isaacInjectKey === 'function') window.isaacInjectKey(name, down); },
   log: (line) => console.log(line),
@@ -338,6 +400,18 @@ window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;
 window.isaacKeyCapture = (ev, down) => editMenu.onKey(ev, down);
 window.isaacEditFileMenu = editMenu;                      // the drivers look at it
+
+// ---- mods (round 74) ---------------------------------------------------------------
+// The game's own mods list carries a row named IMPORT MOD, which is a mod seeded
+// by the pipeline with nothing in it but a name. Enter on that row makes the game
+// write a disable.it into its folder; the pipeline claims that write instead of
+// storing it and calls this. So the button is the game's, and the menu is ours.
+const modsMenu = createModsMenu({
+  log: (line) => console.log(line),
+  onClose: () => canvas.focus(),
+});
+hooks.onModImport = () => { modsMenu.open(); };
+window.isaacModsMenu = modsMenu;                          // the drivers look at it too
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
 let lastFrame = 0, lastT = performance.now(), firstFrameSeen = false, finished = false;
@@ -360,6 +434,44 @@ setInterval(() => {
     else showError('The run ended', `main returned 0 after ${done.presented} frames (the frames= budget). Reload to play again.`, true);
   }
 }, 500);
+
+// ---- the options the game opens with -------------------------------------------------
+// Round 73: the public-beta notice and the data-collection disclaimer are both
+// options.ini flags, so a first visit gets a file with them already accepted rather
+// than two confirm screens. Written only when the store has none: a returning
+// player's settings, and every save beside them, are left exactly as they are.
+const OPTIONS_KEY = 'c:/isaac/documents/my games/binding of isaac repentance+/options.ini';
+const DEFAULT_OPTIONS = ['[Options]', 'Language=0', 'MusicVolume=0.7000', 'MusicEnabled=1',
+  'SFXVolume=0.7000', 'MapOpacity=0.3000', 'Fullscreen=0', 'Filter=0', 'Exposure=1.0000',
+  'Gamma=1.0000', 'ControllerHotplug=1', 'PopUps=1', 'CameraStyle=1', 'ShowRecentItems=0',
+  'HudOffset=1.0000', 'TryImportSave=0', 'FoundHUD=0', 'EnableMods=1', 'RumbleEnabled=1',
+  'ChargeBars=0', 'BulletVisibility=0', 'TouchMode=1', 'AimLock=1', 'JacobEsauControls=0',
+  'AscentVoiceOver=1', 'OnlineHud=0', 'StreamerMode=0', 'OnlinePlayerVolume=6',
+  'OnlinePlayerOpacity=10', 'OnlineChatEnabled=1', 'OnlineChatFilterEnabled=1',
+  'MultiplayerColorSet=0', 'OnlineInputDelay=3', 'ItemInfoDisplayEnabled=0',
+  'AcceptedPublicBeta_v1.9.7.17=1',        // the beta notice
+  'AcceptedDataCollectionDisclaimer=1',    // the data-collection prompt; nothing here collects any
+  'EnableDebugConsole=0', 'MaxScale=99', 'MaxRenderScale=2', 'VSync=0', 'PauseOnFocusLost=1',
+  'SteamCloud=0', 'MouseControl=0', 'BossHpOnBottom=1', 'AnnouncerVoiceMode=0', 'ConsoleFont=0',
+  'FadedConsoleDisplay=0', 'SaveCommandHistory=1', 'WindowWidth=960', 'WindowHeight=540',
+  'WindowPosX=8', 'WindowPosY=32', 'UseExclusiveFullscreen=0', 'EnableEpicOverlay=0',
+  'EosCrossplay=0', ''].join('\r\n');
+async function seedDefaultOptions() {
+  let db = null;
+  try { db = await openStore(); } catch { return 'no store'; }
+  if (!db) return 'no store';
+  const have = await new Promise((resolve) => {
+    try {
+      const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).getKey(OPTIONS_KEY);
+      req.onsuccess = () => resolve(req.result !== undefined);
+      req.onerror = () => resolve(true);          // unsure: leave it alone
+    } catch { resolve(true); }
+  });
+  if (have) return 'kept';
+  const bytes = new TextEncoder().encode(DEFAULT_OPTIONS);
+  try { await writeSaves(db, [{ key: OPTIONS_KEY, src: null, bytes }], false); } catch { return 'write failed'; }
+  return 'written';
+}
 
 // ---- the saves menu ------------------------------------------------------------------
 function openStore() {
@@ -400,63 +512,6 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-
-// a store-only zip writer and a reader for stored / deflated entries
-const CRC = new Int32Array(256);
-for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; CRC[n] = c; }
-function crc32(bytes) { let c = -1; for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 0xff] ^ (c >>> 8); return (c ^ -1) >>> 0; }
-function zipStore(entries) {
-  const enc = new TextEncoder(), parts = [], central = [];
-  const d = new Date();
-  const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
-  const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
-  let offset = 0;
-  for (const { name, bytes } of entries) {
-    const n = enc.encode(name), crc = crc32(bytes);
-    const lh = new DataView(new ArrayBuffer(30));
-    lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
-    lh.setUint16(10, dosTime, true); lh.setUint16(12, dosDate, true); lh.setUint32(14, crc, true);
-    lh.setUint32(18, bytes.length, true); lh.setUint32(22, bytes.length, true); lh.setUint16(26, n.length, true); lh.setUint16(28, 0, true);
-    parts.push(new Uint8Array(lh.buffer), n, bytes);
-    const cd = new DataView(new ArrayBuffer(46));
-    cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0x0800, true); cd.setUint16(10, 0, true);
-    cd.setUint16(12, dosTime, true); cd.setUint16(14, dosDate, true); cd.setUint32(16, crc, true);
-    cd.setUint32(20, bytes.length, true); cd.setUint32(24, bytes.length, true); cd.setUint16(28, n.length, true);
-    cd.setUint16(30, 0, true); cd.setUint16(32, 0, true); cd.setUint16(34, 0, true); cd.setUint16(36, 0, true); cd.setUint32(38, 0, true); cd.setUint32(42, offset, true);
-    central.push(new Uint8Array(cd.buffer), n);
-    offset += 30 + n.length + bytes.length;
-  }
-  let cdLen = 0;
-  for (const c of central) cdLen += c.length;
-  const eocd = new DataView(new ArrayBuffer(22));
-  eocd.setUint32(0, 0x06054b50, true); eocd.setUint16(4, 0, true); eocd.setUint16(6, 0, true);
-  eocd.setUint16(8, entries.length, true); eocd.setUint16(10, entries.length, true); eocd.setUint32(12, cdLen, true); eocd.setUint32(16, offset, true); eocd.setUint16(20, 0, true);
-  return new Blob([...parts, ...central, new Uint8Array(eocd.buffer)], { type: 'application/zip' });
-}
-async function unzip(buf) {
-  const u8 = new Uint8Array(buf), dv = new DataView(buf);
-  let eocd = -1;
-  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  if (eocd < 0) throw new Error('not a zip file');
-  const count = dv.getUint16(eocd + 10, true);
-  let p = dv.getUint32(eocd + 16, true);
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error('bad central directory');
-    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
-    const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true), lho = dv.getUint32(p + 42, true);
-    const name = new TextDecoder().decode(u8.subarray(p + 46, p + 46 + nlen));
-    const start = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
-    const raw = u8.slice(start, start + csize);
-    let bytes;
-    if (method === 0) bytes = raw;
-    else if (method === 8) bytes = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
-    else throw new Error(`unsupported zip method ${method} for ${name}`);
-    if (!name.endsWith('/')) out.push({ name, bytes });
-    p += 46 + nlen + elen + clen;
-  }
-  return out;
-}
 
 const savesDialog = $('saves');
 async function refreshSaves() {
@@ -535,6 +590,13 @@ $('reset-saves').addEventListener('click', async () => {
     $('saves-reload').hidden = false;
   } catch (e) { $('saves-status').textContent = `reset failed: ${e.message}`; }
 });
+
+// ---- a first visit starts at the title, not at two confirm screens (round 73).
+// Before the pipeline, which restores the store into the engine's file system.
+try {
+  const seeded = await seedDefaultOptions();
+  if (seeded === 'written') console.log('[isaac] options.ini written with the opening prompts accepted');
+} catch (e) { console.warn('[isaac] default options not written:', e.message); }
 
 // ---- go: the pipeline runs to the end of main; this import resolves when it does
 setStatus('loading\u2026');

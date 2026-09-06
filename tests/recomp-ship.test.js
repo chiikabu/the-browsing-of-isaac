@@ -143,10 +143,10 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     // the tree: the page, the module, the image, the bundle under instance/, the index, the manifest, the siblings
     const got = walk(dist).sort();
     const bundleFiles = walk(tree.bundle).map((p) => `instance/${p}`);
-    const expected = ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'boot.mjs', 'boot.wasm', 'isaac.segs.bin', 'instance_index.json', 'dist.json', ...bundleFiles,
+    const expected = ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs', 'boot.mjs', 'boot.wasm', 'isaac.segs.bin', 'instance_index.json', 'dist.json', ...bundleFiles,
       'boot.wasm.gz', 'instance/resources/packed/sfx.a.gz', ...(hasBr ? ['boot.wasm.br', 'instance/resources/packed/sfx.a.br'] : [])].sort();
     assert.deepEqual(got, expected);
-    for (const f of ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs']) assert.ok(readFileSync(join(dist, f)).equals(readFileSync(join(web, f))), `${f} is the page's file`);
+    for (const f of ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs']) assert.ok(readFileSync(join(dist, f)).equals(readFileSync(join(web, f))), `${f} is the page's file`);
     assert.ok(readFileSync(join(dist, 'boot.wasm')).equals(tree.modFiles['boot.wasm']), 'the module is copied');
     assert.ok(readFileSync(join(dist, 'isaac.segs.bin')).equals(tree.segsBytes), 'the image is copied');
     assert.ok(readFileSync(join(dist, 'instance', '.bundle.json')).equals(readFileSync(join(tree.bundle, '.bundle.json'))), 'the bundle manifest travels along');
@@ -475,9 +475,13 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
   const store = pipe.match(/const SAVE_DB = '([^']+)', SAVE_STORE = '([^']+)';/);
   assert.ok(page.includes(`const SAVE_DB = '${store[1]}', SAVE_STORE = '${store[2]}';`), 'the same IndexedDB names');
   for (const s of ["$('export-zip').addEventListener('click'", "$('export-json').addEventListener('click'", "$('import-file').addEventListener('change'",
-    "$('reset-saves').addEventListener('click'", 'function zipStore(entries) {', 'async function unzip(buf) {', "format: 'isaac-recomp-saves/1'",
+    "$('reset-saves').addEventListener('click'", "import { zipStore, unzip } from './zip.mjs';", "format: 'isaac-recomp-saves/1'",
     "st.put({ src: it.src, bytes: it.bytes }, it.key);", 'if (clear) st.clear();'])
     assert.ok(page.includes(s), `saves: ${s}`);
+  // round 74: the zip reader is a module of its own, because the mods menu reads
+  // zips too and one reader is better than two
+  const zip = rd('scripts', 'recomp', 'web', 'zip.mjs');
+  assert.ok(zip.includes('export function zipStore(entries) {') && zip.includes('export async function unzip(buf) {'), 'and it is there');
   assert.ok(page.includes("const entryName = (key, src) => (src || key.replace(/^c:\\/isaac\\//i, '')).replace(/^\\/+/, '');"),
     'a save travels under its seed path, else its key without the fake cwd root (the node driver\'s rule)');
   // defaults: a live page (ISAAC_YIELD=1) with no frame budget, persist on
@@ -497,7 +501,8 @@ test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks 
 
 test('ship.py ships the three page files and mirrors the runner\'s index policy', () => {
   const py = rd('scripts', 'recomp', 'assets', 'ship.py');
-  assert.ok(py.includes('PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs")'), 'the page, the pipeline it imports, the EDIT FILE menu');
+  assert.ok(py.includes('PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs")'),
+    'the page, the pipeline it imports, the EDIT FILE menu, the zip reader and the mods menu');
   assert.ok(py.includes('MODULE_FILES = ("boot.mjs", "boot.wasm")') && py.includes('SEGS_NAME = "isaac.segs.bin"'));
   assert.ok(py.includes('SKIP_DIRS = {"packed", "mods"}') && py.includes('SKIP_EXT = re.compile(r"\\.(exe|dll|so|ogv)$", re.IGNORECASE)'), 'the index policy of run_web.mjs');
   const runner = rd('scripts', 'recomp', 'web', 'run_web.mjs');

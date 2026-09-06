@@ -8,6 +8,7 @@
 // module printed), isaacFrames (the last frames the host's SwapBuffers shim
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
+import { openModDb, seedMods, putModState, GUEST_ROOT, IMPORT_MARK } from './mods.mjs';
 
 const logEl = document.getElementById('log');
 // Round 34: the shipping page (play.mjs) sets window.isaacPageHooks before importing this module:
@@ -105,6 +106,12 @@ cfg.isaacLazyRead = (src, dst, len) => {
 // and are seeded back before main at the next boot. `persist=0` on the URL
 // turns the store off (a fresh profile every load).
 const persistOn = params.get('persist') !== '0';
+// Round 74: mods keep their own database. A file the game writes under mods/ is
+// mod state, not a save, and routing it here is what lets the mods menu reset or
+// remove anything it likes without a save file being in reach. `mods=0` leaves
+// the whole feature out (the drivers that measure a bare boot).
+const modsOn = params.get('mods') !== '0';
+let modDb = null;
 const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';
 function openSaveDb() {
   return new Promise((resolve, reject) => {
@@ -118,6 +125,7 @@ function openSaveDb() {
 let saveDb = null, persisted = 0, unlinked = 0;
 const persistPending = [];
 cfg.isaacPersist = (key, src, ptr, len) => {
+  if (modKeyTaken(key, () => m.HEAPU8.slice(ptr, ptr + len))) return 1;
   if (!persistOn) return 0;
   const bytes = m.HEAPU8.slice(ptr, ptr + len);      // a copy: the guest buffer is freed after the call
   persistPending.push({ key, src, bytes });
@@ -126,12 +134,27 @@ cfg.isaacPersist = (key, src, ptr, len) => {
   return 1;
 };
 cfg.isaacUnlink = (key, src) => {
+  if (modKeyTaken(key, null)) return 1;
   if (!persistOn) return 0;
   persistPending.push({ key, src, bytes: null });
   unlinked += 1;
   flushSaves();
   return 1;
 };
+// Anything the game writes under mods/ belongs to the mods store. The one file
+// that is not stored at all is the sentinel's: the mods menu writes a disable.it
+// into mods/importmod/ when Enter selects that row, and that write IS the button.
+function modKeyTaken(key, take) {
+  if (!modsOn || !String(key).startsWith(GUEST_ROOT)) return false;
+  if (key === IMPORT_MARK) {
+    log('  IMPORT MOD chosen in the game');
+    try { if (hooks.onModImport) hooks.onModImport(); } catch (e) { log(`  the import menu failed to open: ${e.message}`); }
+    return true;
+  }
+  const bytes = take ? take() : null;
+  if (modDb) putModState(modDb, key, bytes).catch((e) => log(`  mod state write FAILED: ${e.message}`));
+  return true;
+}
 function flushSaves() {
   if (!saveDb || !persistPending.length) return;
   const tx = saveDb.transaction(SAVE_STORE, 'readwrite'), st = tx.objectStore(SAVE_STORE);
@@ -191,7 +214,19 @@ const cache = new Map(), inflight = new Map(), done = new Set();
 let jobs = [], ji = 0, budget = 0, held = 0, inflightBytes = 0, parallel = 4, prefetched = 0, ahead = 0;
 function start(key, url, len, why, want) {
   inflight.set(key, want | 0); held += len; inflightBytes += len;
-  fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
+  // round 70: a portable build points several windows at one large chunk and puts
+  // the byte range in the fragment, which no server ever sees. A host that ignores
+  // Range sends the whole chunk, so the body is cut to size here.
+  let init, want0 = -1, want1 = -1;
+  const h = url.indexOf('#r=');
+  if (h >= 0) {
+    const r = url.slice(h + 3).split('-');
+    want0 = +r[0]; want1 = +r[1];
+    url = url.slice(0, h);
+    init = { headers: { Range: 'bytes=' + want0 + '-' + want1 } };
+  }
+  fetch(url, init).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
+    if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = buf.slice(want0, want1 + 1);
     const w = inflight.get(key); inflight.delete(key); held -= len; inflightBytes -= len;
     if (w) { done.add(key); postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []); }
     else if (buf && !done.has(key)) { cache.set(key, buf); held += buf.byteLength; if (why === 'trail') prefetched += 1; else ahead += 1; }
@@ -235,7 +270,9 @@ const lastRead = new Map();                               // src -> the last win
 const windowUrl = (src, off, len) => {
   let url = `/instance/${src}?off=${off}&len=${len}`;
   if (hooks.url) url = hooks.url(url);
-  return new URL(url, location.href).href;
+  // round 70: a portable build answers null when it has no URL for a window -- the
+  // caller reads the bytes instead of asking a server that is not there
+  return url === null ? null : new URL(url, location.href).href;
 };
 function finishRead(src, off, dst, bytes) {
   m.HEAPU8.set(bytes, dst);
@@ -247,6 +284,9 @@ function finishRead(src, off, dst, bytes) {
 }
 function failRead(src, off, len, why) { log(`  lazy pread FAILED for ${src} at ${off}+${len}: ${why}`); return -1; }
 function startReader() {
+  // round 70: a portable build with the payload inline hands out no URLs, so the
+  // Worker has nothing to fetch -- the page says so and the reads stay on the thread
+  if (hooks.noReader) return;
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || params.get('reader') === '0') return;
   let list = null;
   try { list = JSON.parse(localStorage.getItem(TRAIL_KEY) || 'null'); } catch (e) { list = null; }
@@ -284,6 +324,16 @@ function startReader() {
     // (?trail=0 declines it: the A/B)
     let url = TRAIL_SHIPPED;
     if (hooks.url) url = hooks.url(url);
+    // round 70: a portable build carries the trail in the page, so there is
+    // nothing to fetch for it
+    if (hooks.trail) {
+      const jobs = hooks.trail
+        .map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len])
+        .filter(([, u]) => u);
+      trailKept = jobs.length; trailShipped = true;
+      armTrail(jobs);
+      return;
+    }
     fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {
       if (!Array.isArray(shipped) || !shipped.length || reader !== w) return;
       trailKept = shipped.length; trailShipped = true;
@@ -304,7 +354,8 @@ cfg.isaacLazyPread = (src, dst, off, len) => {
     if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();
     if (preadTrail.length < 60) preadTrail.push(`${src.replace(/^.*\//, '')}@${(off / 1048576).toFixed(0)}`);
     if (preadStacks.length < 3 && preads > 6) preadStacks.push((new Error().stack || '').split('\n').slice(1, 16).map((l) => l.trim().replace(/^at /, '').replace(/ \(.*$/, '')).join(' < '));
-    if (reader) {
+    const wantUrl = reader ? windowUrl(src, off, len) : null;
+    if (reader && wantUrl) {
       const key = `${src}@${off}@${len}`, ahead = [];
       // forward through the file, by up to READ_AHEAD windows (the mount pass
       // reads each entry's start in offset order; an entry of a few MB skips
@@ -318,14 +369,21 @@ cfg.isaacLazyPread = (src, dst, off, len) => {
           const o = off + k * FS_WINDOW;
           if (o >= size) break;
           const l = Math.min(FS_WINDOW, size - o);
-          ahead.push([`${src}@${o}@${l}`, windowUrl(src, o, l), l]);
+          const au = windowUrl(src, o, l);
+          if (au) ahead.push([`${src}@${o}@${l}`, au, l]);
         }
       }
       return new Promise((resolve) => {
         const id = ++wantId;
         pendingReads.set(id, { src, off, len, dst, resolve, t0: performance.now() });
-        reader.postMessage({ want: id, key, url: windowUrl(src, off, len), len, ahead });
+        reader.postMessage({ want: id, key, url: wantUrl, len, ahead });
       });
+    }
+    // round 70: a build with the payload inline has no server to read from
+    if (hooks.preadBytes) {
+      const got = hooks.preadBytes(src, off, len);
+      if (got && typeof got.then === 'function') return got.then((b) => (b ? finishRead(src, off, dst, b) : failRead(src, off, len, 'no bytes')));
+      if (got) return finishRead(src, off, dst, got);
     }
     return finishRead(src, off, dst, fetchSync(`/instance/${src}?off=${off}&len=${len}`));
   } catch (e) {
@@ -637,6 +695,25 @@ try {
     }
     log(`  ${n} saved file(s) restored from the store`);
     return n;
+  });
+  // --- round 74: mods from this browser, seeded where the engine scans for them.
+  // After the saves, and into a directory tree of its own: every path is built
+  // from an id and a relative name the store already checked, so no mod decides
+  // where its bytes land.
+  await stageOk('seed mods', async () => {
+    if (!modsOn) { log('  mods=0: no mods, and no import row'); return 0; }
+    try { modDb = await openModDb(); } catch (e) { log(`  mod store unavailable: ${e.message}`); modDb = null; }
+    const seed = (path, bytes) => {
+      const pp = cstr(path), dp = m._malloc(bytes.length || 1);
+      m.HEAPU8.set(bytes, dp);
+      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
+      m._free(pp); m._free(dp);
+      return !!ok;
+    };
+    const r = await seedMods(modDb, seed, log);
+    log(`  ${r.mods} mod(s), ${r.files} file(s), ${(r.bytes / 1048576).toFixed(2)} MB`
+      + (r.state ? `, ${r.state} state file(s)` : '') + (r.skipped ? `, ${r.skipped} skipped` : ''));
+    return r.files;
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there
   await stageOk('lua scripts into MEMFS', async () => {

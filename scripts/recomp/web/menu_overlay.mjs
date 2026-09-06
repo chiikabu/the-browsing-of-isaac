@@ -54,8 +54,9 @@ function tintAtlas(img, ink) {
 }
 
 export function createEditFileMenu(opts) {
-  // opts: { stage, canvas, assetsUrl, audioContext(), actions: { export(slot), import(slot), delete(slot) }, injectKey(name, down), log }
-  const { stage, canvas, assetsUrl, actions, injectKey } = opts;
+  // opts: { stage, canvas, assetsUrl, readAsset(name), audioContext(), actions: { export(slot), import(slot), delete(slot) }, injectKey(name, down), log }
+  // readAsset (round 70) is how a build with no server hands over its own files
+  const { stage, canvas, assetsUrl, readAsset, actions, injectKey } = opts;
   const log = opts.log || (() => {});
   const state = { open: false, slot: 0, cursor: 0, ready: false, loading: null, message: null, fps: null, fpsOn: false, closing: false };
   const A = { menu: null, sheet: null, paper: null, cursor: null, font: null, atlas: null, sounds: new Map() };
@@ -78,11 +79,21 @@ export function createEditFileMenu(opts) {
   stage.appendChild(fpsEl);
 
   const fetchAsset = async (name, kind) => {
-    const r = await fetch(`${assetsUrl}/${name}`);
-    if (!r.ok) throw new Error(`${name}: ${r.status}`);
-    if (kind === 'json') return r.json();
-    if (kind === 'buffer') return r.arrayBuffer();
-    const blob = await r.blob();
+    let blob = null;
+    if (readAsset) {
+      const bytes = await readAsset(name);
+      if (!bytes) throw new Error(`${name}: not in the payload`);
+      if (kind === 'json') return JSON.parse(new TextDecoder().decode(bytes));
+      if (kind === 'buffer') return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      blob = new Blob([bytes]);
+    }
+    if (!blob) {
+      const r = await fetch(`${assetsUrl}/${name}`);
+      if (!r.ok) throw new Error(`${name}: ${r.status}`);
+      if (kind === 'json') return r.json();
+      if (kind === 'buffer') return r.arrayBuffer();
+      blob = await r.blob();
+    }
     const img = new Image();
     await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error(`${name}: not an image`)); img.src = URL.createObjectURL(blob); });
     return img;
