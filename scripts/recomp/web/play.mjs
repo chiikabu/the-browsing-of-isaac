@@ -52,8 +52,8 @@ const toggleFullscreen = () => {
 };
 window.addEventListener('keydown', (ev) => {
   if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();
-  // M flips the FPS readout (round 52c; M is unbound in the game's default keys, unlike Q); the key still reaches the game
-  if (ev.code === 'KeyM' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()) window.isaacEditFileMenu.toggleFps();
+  // N flips the FPS readout (round 52c-e; unbound in the game's default keys); the key still reaches the game
+  if (ev.code === 'KeyN' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()) window.isaacEditFileMenu.toggleFps();
 });
 const mb = (n) => (n / 1048576).toFixed(1);
 const fmtBytes = (n) => n >= 1048576 ? `${mb(n)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`;

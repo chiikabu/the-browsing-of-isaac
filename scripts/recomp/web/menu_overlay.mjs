@@ -7,7 +7,7 @@
 // for the file the cursor is on; the lifted block at 0x9d9d59 asks the host
 // gate first, which asks window.isaacEditFile(slot): this module opens the
 // menu instead. Its entries: EXPORT FILE, IMPORT FILE, DELETE FILE, BACK.
-// The FPS readout is a key, not an entry: M flips it (play.mjs), a corner
+// The FPS readout is a key, not an entry: N flips it (play.mjs), a corner
 // text in the same font, remembered by this browser only. Delete hands the flow back to the engine (the
 // page sets window.isaacEditFileDelete and presses confirm again, so the
 // game's own prompt and deletion run untouched). Export and import are the
@@ -96,6 +96,7 @@ export function createEditFileMenu(opts) {
       A.font = parseBmfont(await fetchAsset(A.menu.font.fnt, 'buffer'));
       A.atlas = tintAtlas(A.atlasImg, A.menu.colours.ink);
       A.atlasLight = tintAtlas(A.atlasImg, [140, 120, 120]);
+      A.atlasWhite = tintAtlas(A.atlasImg, [255, 255, 255]);
       state.ready = true;
       // the sounds decode lazily on the first open (the AudioContext exists once the engine runs)
       const ctx = opts.audioContext && opts.audioContext();
@@ -130,7 +131,7 @@ export function createEditFileMenu(opts) {
   };
 
   const items = () => ['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK'];
-  // the FPS readout is a key, not a setting: M flips it (play.mjs), this browser remembers it
+  // the FPS readout is a key, not a setting: N flips it (play.mjs), this browser remembers it
   const toggleFps = () => {
     state.fpsOn = !state.fpsOn;
     try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }
@@ -167,10 +168,10 @@ export function createEditFileMenu(opts) {
     gg.imageSmoothingEnabled = false;
     gg.clearRect(0, 0, fpsEl.width, fpsEl.height);
     if (state.fps == null) return;
-    // plain text in the game's font: a light shadow a pixel down-right, the ink on top
-    const text = `${Math.round(state.fps)} FPS`;
-    drawText(gg, text, 3, 3, A.atlasLight);
-    drawText(gg, text, 2, 2, A.atlas);
+    // just the number, white, in the game's font, a dark shadow a pixel down-right for the light rooms
+    const text = `${Math.round(state.fps)}`;
+    drawText(gg, text, 3, 3, A.atlas);
+    drawText(gg, text, 2, 2, A.atlasWhite);
   };
 
   const open = async (slot) => {

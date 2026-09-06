@@ -251,7 +251,8 @@ test('round 52: the EDIT FILE menu -- the page takes the keys while it is up, pr
   assert.ok(m.includes("window.isaacEditFileDelete = state.slot;") && m.includes("injectKey('enter', true);"), 'Delete names the slot and presses confirm: the engine prompt');
   assert.ok(m.includes("['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK']"), 'the entries');
   assert.ok(m.includes("localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0');") && m.includes('const toggleFps = () => {'), 'the fps readout is a toggle this browser remembers');
-  assert.ok(p.includes("if (ev.code === 'KeyM' && !ev.repeat") && p.includes('window.isaacEditFileMenu.toggleFps();'), 'M flips the FPS readout (unbound in the game, unlike Q)');
+  assert.ok(p.includes("if (ev.code === 'KeyN' && !ev.repeat") && p.includes('window.isaacEditFileMenu.toggleFps();'), 'N flips the FPS readout (unbound in the game)');
+  assert.ok(m.includes("const text = `${Math.round(state.fps)}`;") && m.includes('drawText(gg, text, 2, 2, A.atlasWhite);'), 'the readout is the number alone, in white');
   assert.ok(!p.includes('page-settings.json'), 'no page setting in the saves store');
   const pa = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'page_assets.py'), 'utf8');
   assert.ok(pa.includes('render_text(font, atlas, "EDIT FILE", ink)') && pa.includes('items.append({"h1": e.h1, "h2": e.h2, "data": patched})'), 'the sheet is reset in the font and repacked into afterbirthp.a');
