@@ -30,10 +30,10 @@
 #define TEXT_LO 0x00401000u
 #define TEXT_HI 0x00b17134u
 
-/* The oracle's guest stack: top 0x30001000, entry ESP = 0x30000FFC (the
+/* The oracle's guest stack: top 0x20001000, entry ESP = 0x20000FFC (the
  * return-address slot), stack args at ESP+4, ESP+8, ... left to right. */
-#define ORACLE_ESP 0x30000ffcu
-#define GUEST_HI   0x34000000ull
+#define ORACLE_ESP 0x20000ffcu
+#define GUEST_HI   0x24000000ull
 
 static uint16_t *g_map;
 static int g_unresolved;

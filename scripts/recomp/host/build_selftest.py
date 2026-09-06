@@ -69,9 +69,9 @@ if LUA_SRC.joinpath("lua.h").exists():
 # so a wild guest write cannot reach the dispatch table or CpuState. See the
 # address-space map in isaac_host.h. INITIAL_MEMORY must clear GLOBAL_BASE plus
 # the host's own needs (14.2 MB dispatch table + statics + stack + malloc).
-LDFLAGS = ["-sINITIAL_MEMORY=939524096", "-sALLOW_MEMORY_GROWTH=1",
+LDFLAGS = ["-sINITIAL_MEMORY=671088640", "-sALLOW_MEMORY_GROWTH=1",
            "-sMAXIMUM_MEMORY=4294967296",
-           "-sGLOBAL_BASE=872415232", "-sSTACK_SIZE=1048576",   # round 24f: host base 0x34000000
+           "-sGLOBAL_BASE=603979776", "-sSTACK_SIZE=1048576",   # round 66: host base 0x24000000
            "-sEXIT_RUNTIME=1", "-sASSERTIONS=1",
            "-sENVIRONMENT=node", "-sNODERAWFS=1", "-o"]
 

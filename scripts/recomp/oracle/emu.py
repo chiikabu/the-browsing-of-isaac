@@ -58,17 +58,18 @@ STACK_BASE = 0x20000000
 STACK_SIZE = 0x00100000          # 1 MiB
 STACK_TOP_GAP = 0x2000           # caller-frame room above initial ESP
 
-# Scratch deliberately starts ABOVE 0x30100000.  The lifted-module replay
+# Scratch deliberately starts ABOVE 0x20100000.  The lifted-module replay
 # harness (scripts/recomp/lift/oracle_replay.c) hardcodes its guest stack at
-# ORACLE_ESP = 0x30000ffc and writes a fake return address there, then stack
-# arguments at 0x30001000+.  With scratch at 0x30000000 the first small
-# allocation of every vector landed at 0x30000fe8..0x30000fff -- so the
+# ORACLE_ESP = 0x20000ffc and writes a fake return address there, then stack
+# arguments at 0x20001000+.  With scratch at 0x20000000 the first small
+# allocation of every vector landed at 0x20000fe8..0x20000fff -- so the
 # harness overwrote offset 0x14 of that object (the capacity field of an MSVC
 # basic_string) with 0x00deadbe before calling the lifted function, on EVERY
 # vector.  Keeping scratch out of that page removes the collision without
 # touching the lifter's files.  Must stay below the harness's
-# GUEST_HI = 0x34000000 or addresses are rejected as out of range.
-HEAP_BASE = int(os.environ.get("ISAAC_ORACLE_HEAP_BASE", "0x31000000"), 0)
+# GUEST_HI = 0x24000000 or addresses are rejected as out of range (round 66
+# moved both down with the guest map).
+HEAP_BASE = int(os.environ.get("ISAAC_ORACLE_HEAP_BASE", "0x21000000"), 0)
 HEAP_SIZE = 0x02000000           # address-space window reserved for scratch
 
 # Scratch is served from a PRE-MAPPED slot pool.  mem_map/mem_unmap flush

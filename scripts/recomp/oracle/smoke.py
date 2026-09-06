@@ -57,7 +57,7 @@ def main():
               f"stub={cr.stub} args={[hex(a) for a in cr.args[:3]]}")
 
     # ---- uninit / unmapped detection ----
-    r = o.call(0x0040D040, cc="thiscall", ecx=0x30000000 + 0x777, func_blocks=fb)
+    r = o.call(0x0040D040, cc="thiscall", ecx=0x21000000 + 0x777, func_blocks=fb)
     show("unmapped this", r)
 
     print(f"\ntotal {time.time()-t0:.2f}s")

@@ -115,19 +115,20 @@ LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=1"]
 
 LDFLAGS = [
     "-O2", "-w", "--no-entry", "--profiling-funcs",
-    # 768 MiB. 384 was enough while only the six boot archives were seeded;
-    # round 15d adds music.a (182 MB) and videos.a (93 MB) lazily, and
-    # growing a wasm memory reallocates and copies the whole heap -- with
-    # the old value a 200-s play run managed 900 frames instead of 7,980
-    # (round 15e). Override with --initial-memory.
-    # Round 24f: the guest heap is 768 MiB and the host base moved to
-    # 0x34000000 (isaac_host.h), so the initial memory has to clear that plus
-    # the host's own needs: 1088 MiB. MAXIMUM_MEMORY lifts the 2 GiB growth
-    # ceiling wasm32 gets by default.
-    "-sINITIAL_MEMORY=1140850688",
+    # The wasm memory is committed the moment it is created, so INITIAL_MEMORY is
+    # resident bytes on every machine that opens the page; growing it later
+    # reallocates and copies the whole heap (round 15e: a 200-s play run managed
+    # 900 frames instead of 7,980 when it had to grow). It has to clear the host
+    # base -- the top of the guest map in isaac_host.h -- plus the host's own
+    # 256 MiB. Round 66 took the guest arena from 768 MiB to 512, measured
+    # against the engine's own high-water mark of 350 MiB, so the host base is
+    # 0x24000000 and this is 832 MiB instead of 1088. Override with
+    # --initial-memory. MAXIMUM_MEMORY lifts the 2 GiB growth ceiling wasm32
+    # gets by default.
+    "-sINITIAL_MEMORY=872415232",
     "-sMAXIMUM_MEMORY=4294967296",
     "-sALLOW_MEMORY_GROWTH=1",
-    "-sGLOBAL_BASE=872415232",
+    "-sGLOBAL_BASE=603979776",
     "-sSTACK_SIZE=1048576",
     "-sASSERTIONS=1",
     "-sENVIRONMENT=node",

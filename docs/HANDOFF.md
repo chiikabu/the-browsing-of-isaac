@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-65: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-66: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 66: the guest arena down to what the engine actually uses** (§21.80).
+  The wasm memory is committed on creation, and the engine's own high-water
+  report reads 350.1 MiB after 900, 4,000 and 6,000 frames -- the arena was
+  768. It is 512 now, the whole guest map moved down by 0x10000000 (host
+  base `0x24000000`), and `-sINITIAL_MEMORY` fell from 1,088 MiB to **832**.
+  The generated shim table and the oracle harness's fixed addresses had to
+  move with it; the lifted objects rebuilt themselves off the header
+  fingerprint. The renderer's private bytes fall from ~1.5 GB to **1,227 MB**; peak live is still 350.1 MiB with 0 allocation failures.
 - **Round 65: the same layout, from the boot's own trace** (§21.79).
   `ISAAC_FS_READ_TRACE=packed` names every `fread` by file and offset, and
   the entry table turns an offset into an entry: one boot gives the real

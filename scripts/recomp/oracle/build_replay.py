@@ -121,8 +121,8 @@ def main():
         # indirect-call table (symptom: "table index is out of bounds" inside
         # orc_load_image).  GLOBAL_BASE is set to the harness's GUEST_HI so
         # the split is exact: < 0x34000000 guest, >= 0x34000000 host.
-        "-sGLOBAL_BASE=872415232",
-        "-sALLOW_MEMORY_GROWTH=1", "-sINITIAL_MEMORY=1207959552",
+        "-sGLOBAL_BASE=603979776",
+        "-sALLOW_MEMORY_GROWTH=1", "-sINITIAL_MEMORY=939524096",
         "-sSTACK_SIZE=8388608", "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8",
         "-sEXPORTED_FUNCTIONS="
         "_orc_load,_orc_run,_orc_nvec,_orc_nfn,_orc_vec_va,"

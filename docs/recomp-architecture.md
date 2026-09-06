@@ -6501,3 +6501,60 @@ gain is not fewer bytes but fewer requests: a reader that recognises a
 contiguous run and asks for it as one range would replace ~280 window
 fetches with a handful, which is worth more on a connection with real
 latency than on a 20 ms emulated one.
+
+### 21.80 Round 66: the guest arena down to what the engine actually uses
+
+**The number nobody had spent.** The wasm memory is committed the moment it
+is created, so `-sINITIAL_MEMORY` is resident bytes on every machine that
+opens the page -- 1,088 MiB of it, most of which is the guest arena. Round
+24f had set that arena to 768 MiB because the old 192 ran out at 201 MB
+live, and nothing since had asked what the engine really uses. It answers
+itself: `host_shims_heap.c` has printed a high-water report at exit since
+round 51, and it reads **350.1 MiB, at the same allocation number, after
+900, 4,000 and 6,000 frames**. The catalogue preload is nearly all of it
+and it happens at boot, so play adds nothing. The report even names the
+fix: "Move ISAAC_GUEST_LIMIT_VA / ISAAC_HEAP_SIZE to PEAK plus deliberate
+headroom, then GLOBAL_BASE and INITIAL_MEMORY follow from it."
+
+**The map moved down by 0x10000000.** The arena is 512 MiB now, 162 MiB of
+headroom over the measured peak, and everything above it followed: stack
+top `0x21ff0000`, TEB `0x22000000`, shim tokens `0x23000000`, guest limit
+and guard `0x23f00000`, host base `0x24000000`. `-sGLOBAL_BASE` is
+603,979,776 in all three builds that link host code, and each build's
+`-sINITIAL_MEMORY` came down by the same 256 MiB: the boot's from 1,088 MiB
+to **832**.
+
+**Two things had to move with it, and both said so out loud.** The
+generated shim table bakes each token's address, so the selftest failed 8
+checks ("every shim token resolves to its import") until `gen_shims.py`
+regenerated it from the new `ISAAC_SHIM_BASE`. And the oracle harness puts
+its own guest stack at a fixed address with the scratch pool above it --
+both were above the new guest limit, so `oracle_replay.c`'s `ORACLE_ESP`
+and `emu.py`'s `HEAP_BASE` moved down by the same amount. The lifted
+objects rebuilt themselves: `build_boot.py` hashes every header the lifted
+TUs include into the object fingerprint (round 15b), so editing
+`RECOMP_GUEST_LIMIT` recompiles all of them rather than leaving a module
+whose bound check still trusts the old limit.
+
+**Measured.** The wasm memory is 832 MiB instead of 1,088 -- that figure is
+exact, it is a link flag. What the operating system sees, on the shipping
+page with a real GPU after three forced collections (`drive_memory.mjs`):
+the renderer's working set is **977 MB and its private bytes 1,227 MB**,
+against roughly 1.0 GB and 1.5 GB before, so the process gives back very
+nearly the 256 MiB the arena lost. The GPU process is unchanged at 366 MB
+(635 private) -- it holds textures, which this round does not touch.
+Nothing about the frame changed: the floor sweep still reads 59-60 fps.
+
+**Checks.** The selftest is back to 391 checks and 0 failures once the shim
+table was regenerated; a 1,500-frame explored run with the engine's own
+per-entry checksum pass on reports the arena at 512 MiB, a high-water mark
+still of 350.1 MiB and **0 allocation failures** over 3.2 million
+allocations, with the audio census intact (200 buffer uploads). The page,
+the EDIT FILE menu (11 of 11), the save round trip (15 of 15), the floor
+sweep (21 of 21) and the family (4,053) all pass.
+
+**What is left.** The arena is committed because the engine's allocator
+owns it; the remaining wasm memory above the host base is emscripten's own
+heap and grows on demand. Below the arena the guest image and its 256 MiB
+of host statics are what they are. The next memory question is the one the
+GPU process asks, not this one.
