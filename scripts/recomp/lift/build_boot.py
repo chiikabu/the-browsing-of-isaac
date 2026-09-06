@@ -244,6 +244,10 @@ def main():
         # code, and the host is a quarter to a third of the loading window
         # (the decoders, the GL emulation) and of a play frame.
         HOST_CFLAGS = ["-O3" if f == "-O1" else f for f in HOST_CFLAGS]
+        # Round 61: wasm SIMD for the host TUs (every browser since 2021 and
+        # node have it): clang vectorises the byte loops of the decoders, the
+        # premultiply and adler32 at -O3 once it may use v128.
+        HOST_CFLAGS = HOST_CFLAGS + ["-msimd128"]
         lift_obj_suffix = ".fast.o"
         args.fast_link = False
 

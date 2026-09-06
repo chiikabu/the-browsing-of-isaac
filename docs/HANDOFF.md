@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-60: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-61: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,10 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 61: wasm SIMD for the host TUs** (§21.75). A 600 s soak of the
+  round-60 module first: 60 fps median, renderer working set 1,239 -> 1,022
+  MB, nothing growing. Then `-msimd128` on the fast profile's host TUs
+  (auto-vectorised byte loops; the lifted TUs stay scalar): nothing measurable by itself (loading window 19.7 s against 19.8, play 18.8-21.2 ms against 19.8-22.5); verify mode clean; the flag stays for a hand-written v128 keystream next.
 - **Round 60: the memory map** (§21.74). `drive_memory.mjs` (new): OS
   figures for the renderer and GPU processes, a memory-infra dump by
   allocator, a texture-upload census -- after three forced garbage

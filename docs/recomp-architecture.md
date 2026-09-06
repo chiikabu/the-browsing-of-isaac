@@ -6285,3 +6285,22 @@ sends the rows as `glTexSubImage2D` bands of at most 4 MB when the upload
 is larger (RGBA, RGB, LUMINANCE(_ALPHA) UNSIGNED_BYTE, the default unpack
 alignment: all the engine uses); `ISAAC_GL_TEX_BAND=0` keeps the whole
 uploads. The pixels are the same: the headless runner's frames 100, 200, 300 and 399 hash identically with the bands and without (`ISAAC_GL_TEX_BAND=0`; 580 uploads on that run, 6 of them in 38 bands). Memory at stage 2, garbage collected first: the renderer's working set 1,002-1,004 MB against 1,090 (its `gpu` allocator 19 MB against 115: the 64 and 32 MB chunks are gone), the GPU process 409-410 MB against 511 of working set -- and 762-764 MB against 607 of private bytes, committed but not resident, ANGLE's own staging for the sub-image path on this D3D11 machine; a Chromebook's ANGLE is another backend, and resident pages are what it pays for. The page check passes.
+
+### 21.75 Round 61: the host TUs with wasm SIMD, and a soak of the round-60 module
+
+**The soak first.** `drive_perf.mjs seconds=600` on the round-60 module
+(the reader Worker with its cache cleared at frame 600, the uploads in
+bands): 60 fps median over 600 s of play at the machine's own speed (one
+28.5 fps sample, the run's start), the renderer's working set 1,239 MB
+at six seconds and 1,022 MB at the end -- the boot's garbage collected,
+nothing growing -- the GPU process 447 MB, no error. The edge drives on
+that module: 22 of 22, the EDIT FILE menu 11 of 11.
+
+**SIMD.** The fast profile's host TUs are compiled with `-msimd128` now
+(`build_boot.py`; the lifted TUs are not: their SSE is scalar by the
+lifter's hand, and clang will not vectorise across it). Every browser
+since 2021 and node have wasm SIMD, so nothing is lost by requiring it,
+and clang at -O3 vectorises the plain byte loops -- adler32, the
+premultiply, the PNG unfilter, memset/memcpy-shaped copies -- on its own.
+The verify mode is the proof that the vectorised fastpaths stay
+byte-exact on the game's own data. Verify mode: 0 mismatches over the explorer's 2,000 frames, the census md5 unchanged. And the honest figure: nothing measurable. The loading window is the same length (19.7 s sampled to frame 300 against 19.8; keystream 7.3 %, tinfl 9.4 %, inflate 6.8 %, premultiply 3.2 %, adler32 1.5 % -- the decoders' loops carry a dependency from byte to byte, the premultiply is a table lookup, and clang vectorises none of them), and the play frame at 4x reads 18.8, 19.9, 20.5 and 21.2 ms over four profiles against 19.8 and 22.5 before -- the spread of the method, not a difference. (A first profile after a server restart twice showed the slow dispatcher at 17 % where later ones show 3-5 %: the node census counts a 98.9 % cache hit rate, so that is the profiler's attribution on a cold module, and the reason profiles are read in interleaved pairs.) The flag stays: it costs nothing, every target has SIMD, and it is what a hand-written v128 keystream needs next.
