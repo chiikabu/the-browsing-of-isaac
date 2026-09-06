@@ -774,6 +774,24 @@ def cmd_pack(args) -> int:
     return 0
 
 
+def order_key(line: str) -> tuple[int, int]:
+    """A line of an order file: a resource path, or the "h1-h2" tag `Entry.tag` prints (round
+    65: a boot trace names entries the catalogues do not, and an archive's names are not all
+    recoverable)."""
+    if len(line) == 17 and line[8] == "-":
+        try:
+            return int(line[:8], 16), int(line[9:], 16)
+        except ValueError:
+            pass
+    return key_of(resource_key(line))
+
+
+def read_order(path: str) -> list[str]:
+    """The non-empty, non-comment lines of an order file, in order."""
+    with open(path, encoding="utf-8") as f:
+        return [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+
+
 def entry_order(entries, order_paths):
     """Round 64: the entries the listed paths name, in that order, then the rest in table
     order. Payloads are written in table order, so this IS the file layout: a reader that
@@ -781,7 +799,7 @@ def entry_order(entries, order_paths):
     reader (host_shims_fs.c) or an HTTP range reader fetches each window once."""
     pos = {}
     for i, p in enumerate(order_paths):
-        pos.setdefault(key_of(resource_key(p)), i)
+        pos.setdefault(order_key(p), i)
     lead, rest = [], []
     for e in entries:
         (lead if e.key in pos else rest).append(e)
@@ -825,8 +843,7 @@ def cmd_repack(args) -> int:
         version = a.version if args.version is None else args.version
         entries = a.entries
         if getattr(args, "order", None):
-            order_paths = [ln.strip() for ln in open(args.order, encoding="utf-8") if ln.strip() and not ln.startswith("#")]
-            entries = entry_order(entries, order_paths)
+            entries = entry_order(entries, read_order(args.order))
         for e in entries:
             if e.key in drop:
                 dropped += 1
@@ -956,6 +973,19 @@ def _selftest() -> int:
             # entry_order alone: an empty order list leaves the table untouched
             with Archive(out) as a:
                 assert [e.key for e in entry_order(a.entries, [])] == [e.key for e in a.entries]
+            # round 65: an order file may name an entry by its h1-h2 tag, which is how a boot
+            # trace names the entries no catalogue does. Same order, same file.
+            with Archive(out) as a:
+                tags = [a.find(w).tag for w in want]
+            assert all(order_key(t) == key_of(resource_key(w)) for t, w in zip(tags, want))
+            of2 = os.path.join(td, "order%d-tags.txt" % version)
+            with open(of2, "w", encoding="utf-8") as f:
+                f.write("\n".join(tags) + "\n")
+            out4 = os.path.join(td, "t%d-4.a" % version)
+            ns = argparse.Namespace(archive=out, out=out4, names=None, replace=None, replace_json=None,
+                                    version=None, level=9, mode="auto", drop_shadowed_by=None, order=of2)
+            cmd_repack(ns)
+            assert open(out3, "rb").read() == open(out4, "rb").read(), "tags and paths order alike"
         # stored-mode round trip
         big = bytes(rnd.getrandbits(8) for _ in range(5000))
         payload = miniz_encode(big, 0x12345678, mode="stored")

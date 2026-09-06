@@ -488,13 +488,20 @@ def cmd_layout(args) -> int:
     Worker's read-ahead is built for. Payload bytes, keys, sizes and checksums are unchanged;
     only the order of the payloads (and so the table's offsets) differs."""
     t0 = time.time()
-    order = boot_order(args.catalogue or args.archive)
+    if getattr(args, "order", None):
+        # round 65: the boot's own access order, read off an ISAAC_FS_READ_TRACE run --
+        # it names the title screen's entries too, which no catalogue does
+        order = ar.read_order(args.order)
+        src = args.order
+    else:
+        order = boot_order(args.catalogue or args.archive)
+        src = args.catalogue or args.archive
     if not order:
-        print("no catalogue in %s: nothing to order by" % (args.catalogue or args.archive))
+        print("nothing to order by in %s" % src)
         return 1
     with ar.Archive(args.archive) as a:
         entries = ar.entry_order(a.entries, order)
-        named = {ar.key_of(ar.resource_key(p)) for p in order}
+        named = {ar.order_key(p) for p in order}
         led = sum(1 for e in a.entries if e.key in named)
         items = [{"h1": e.h1, "h2": e.h2, "src": a, "entry": e} for e in entries]
         r = ar.write_archive(args.out, a.version, items)
@@ -510,8 +517,8 @@ def cmd_layout(args) -> int:
                 bad += 1
                 if bad < 5:
                     print("  entry %s differs" % e.tag)
-    print("laid out %s -> %s: %d entries (%d named by the catalogue, laid out first), %d bytes, %d verify failures, %.1f s" % (
-        args.archive, args.out, r["entries"], led, r["size"], bad, time.time() - t0))
+    print("laid out %s -> %s: %d entries (%d of them named by %s, laid out first), %d bytes, %d verify failures, %.1f s" % (
+        args.archive, args.out, r["entries"], led, src, r["size"], bad, time.time() - t0))
     return 1 if bad else 0
 
 
@@ -530,6 +537,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("layout", help="lay an archive out in the boot's read order (round 64)")
     p.add_argument("archive"); p.add_argument("out")
     p.add_argument("--catalogue", help="archive carrying sounds.xml / music.xml (default: the archive itself)")
+    p.add_argument("--order", help="order file (paths or h1-h2 tags) to lay out first, instead of the catalogue")
     p.set_defaults(fn=cmd_layout)
     p = sub.add_parser("sfx"); p.add_argument("archive", nargs="+"); p.add_argument("--sounds", required=True)
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=8); p.add_argument("--sample", type=int, default=0)

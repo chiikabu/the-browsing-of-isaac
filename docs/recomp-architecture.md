@@ -6443,3 +6443,61 @@ every `fread` by file and offset, and the entry table turns an offset back
 into an entry -- which would make the first visit a contiguous prefix of
 the file that a range reader could fetch in a few large pieces instead of
 300 window-sized ones.
+
+### 21.79 Round 65: the same layout, from the boot's own trace
+
+**The catalogue is not the whole boot.** Round 64 ordered `afterbirthp.a`
+by `sounds.xml`, which is what the preload reads; the title screen reads
+more -- art, xml, fonts, shaders -- and those entries stayed where they
+were. The port already has a way to name them: `ISAAC_FS_READ_TRACE=packed`
+logs every `fread` by file and offset (round 16 built it to tell an opened
+archive from a read one), and the entry table turns an offset back into an
+entry. One 300-frame headless boot writes 550 thousand `fread` lines for
+`afterbirthp.a` alone; 499 thousand of them land inside an entry, and the
+first touch of each gives the order the boot actually wants: **1,450
+entries, 230 MB**, against the 1,218 the catalogue names.
+
+**One order file, one command.** An order file may now name an entry by its
+`h1-h2` tag as well as by path (`archive.py order_key`), because most of
+what a trace finds has no recoverable name, and `optimize.py layout
+--order <file>` takes that file instead of reading a catalogue. The same
+verification runs: keys, sizes, mount checksums and payload bytes compared
+per entry against the source. Simulated over the traced order, with the
+host's 32 windows:
+
+| archive | round 64 | round 65 | backward steps |
+|---|---|---|---|
+| afterbirthp.a | 258 | **231** | 39 -> 0 |
+| afterbirth.a | 40 | **36** | 2 -> 0 |
+| sfx.a | 12 | 12 | 0 -> 0 |
+| graphics.a | 6 | **1** | 6 -> 0 |
+
+**Measured.** A first visit now fetches **279 windows, 277.2 MB**; the
+whole ladder from the layout that shipped before round 64, one machine, one
+module, each layout with its own recorded trail, cold in a fresh profile at
+a 4x CPU throttle:
+
+| | windows | transferred | misses | waits | frame 300 @200 | frame 300 @50 |
+|---|---|---|---|---|---|---|
+| as shipped | 442 | 440 MB | 136 / 142 | 1.9 s / 14.9 s | 34.0 s | 80.5 s |
+| round 64 (catalogue) | 305 | 303.1 MB | 8 / 9 | 0.4 s / 3.9 s | 33.4 s | 78.1 s |
+| round 65 (trace) | **279** | **277.2 MB** | **2 / 2** | **0.3 s / 1.0 s** | **30.8 s** | **72.9 s** |
+
+That is **163 MB and 37 % of the archive traffic**, the reader's misses
+down from 136 to 2, and -3.2 s to the title screen on a 200 Mbit/s line,
+-7.7 s on a 50 Mbit/s one. The remaining 279 windows are very nearly the
+280 the payload needs: **the boot now reads a prefix of each archive, front
+to back, and fetches every window exactly once**.
+
+**Checks.** The engine's own per-entry checksum pass over the four
+re-laid archives (`ISAAC_ARCHIVE_VERIFY=1`) is clean; the page, EDIT FILE
+(11 of 11), the save round trip (15 of 15), the floor sweep (21 of 21) and
+the edge drive (22 of 22) pass on the trace-ordered dist; the selftest and
+`tests/recomp-assets.test.js` pin that an order file of tags lays an
+archive out exactly as one of paths.
+
+**What is left.** Every window is fetched once and in order, so the next
+gain is not fewer bytes but fewer requests: a reader that recognises a
+contiguous run and asks for it as one range would replace ~280 window
+fetches with a handful, which is worth more on a connection with real
+latency than on a 20 ms emulated one.

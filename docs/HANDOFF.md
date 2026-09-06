@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-64: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-65: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,15 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 65: the same layout, from the boot's own trace** (§21.79).
+  `ISAAC_FS_READ_TRACE=packed` names every `fread` by file and offset, and
+  the entry table turns an offset into an entry: one boot gives the real
+  access order, 1,450 entries against the 1,218 `sounds.xml` names. Order
+  files take `h1-h2` tags now, so unnamed entries can be ordered too. A
+  first visit fetches **279 windows / 277.2 MB against 442 / 440 as
+  shipped** -- 37 % of the archive traffic gone, misses 136 -> 2, frame 300
+  -3.2 s at 200 Mbit/s and -7.7 s at 50. Every window is fetched once, in
+  order: the boot reads a prefix of each archive.
 - **Round 64: the archive laid out in the order the boot reads it** (§21.78).
   The boot's inflater decodes 35.6 MB to frame 300 -- the traffic is the
   sound catalogue's 218 MB of *stored* PCM. The engine preloads it in

@@ -176,6 +176,14 @@ test('round 64: repack --order lays the named entries out first, and changes not
       assert.deepEqual(offs, [...offs].sort((x, y) => x - y), 'the listed paths are laid out in the listed order');
       assert.ok(offs[0] === 14, 'the first listed path is the first payload in the file');
       for (const rel of ['gfx/ui/a.png', 'xml/z.xml']) assert.ok(offOf(rel) > offs[2], `${rel} follows the listed ones`);
+      // round 65: the same order written as h1-h2 tags (how a boot trace names an entry
+      // whose path nothing records) lays the archive out identically
+      const tags = want.map((rel) => `${djb2('resources/' + rel).toString(16).padStart(8, '0')}-${fnv1a('resources/' + rel).toString(16).padStart(8, '0')}`);
+      const orderTags = join(dir, `order${version}-tags.txt`);
+      writeFileSync(orderTags, tags.join('\n') + '\n');
+      const c = join(dir, `t${version}-tags.a`);
+      run(['repack', a, c, '--order', orderTags]);
+      assert.ok(readFileSync(c).equals(readFileSync(b)), 'an order file of tags lays the archive out like one of paths');
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
