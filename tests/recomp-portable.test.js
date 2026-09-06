@@ -56,9 +56,16 @@ test('a window is a byte range inside a large chunk, and the payload is a dozen 
   // windowed archives are padded up to the window so a read never crosses a cut
   assert.match(portable, /def lay_out\(part: list\[dict\], table: dict, stream: int, align: int = 1\) -> int:/);
   assert.match(portable, /b_len = lay_out\(windowed, table, 1, WINDOW\)/, 'part B is laid out on window boundaries');
-  // and the host is asked once, before the first window goes out as a range
+  // and the host is asked once, before the first window goes out as a range.
+  // Round 78: jsDelivr answers 206 with a plausible Content-Range and the wrong
+  // bytes (4 bytes early at 1 MiB) plus a total 37 bytes over the file. A probe
+  // that only checks "206 and two bytes" passes. The page knows the chunk
+  // length, so the probe requires Content-Range's total to match it.
   assert.match(portable, /async function probeRanges\(\) \{/);
-  assert.match(portable, /ranges = r\.status === 206 && \(await r\.arrayBuffer\(\)\)\.byteLength === 2;/);
+  assert.match(portable, /Range: 'bytes=0-63'/);
+  assert.match(portable, /ranges = got === 64 && claimed === want;/);
+  assert.match(portable, /"bytes": b_len/, 'the page carries the raw stream length so the probe has a number to check');
+  assert.match(portable, /--part-mib/, 'a 1 MiB cut exists for a host whose ranges cannot be trusted');
 });
 
 test('the pieces of a read are fetched in parallel', () => {
@@ -66,6 +73,22 @@ test('the pieces of a read are fetched in parallel', () => {
   assert.match(portable, /for \(var w = 0; w < Math\.min\(6, parts\.length\); w\+\+\) crew\.push\(worker\(\)\);/);
   assert.match(portable, /if \(r\.status !== 206 \|\| u\.length !== p\.take\) \{/, 'a host that ignores Range is noticed and not asked again');
   assert.match(portable, /ranges = false;/);
+});
+
+test('round 78: a host whose ranges lie does not start the reader Worker', () => {
+  // the Worker is what sends Range; once the probe has said no, every window
+  // is a whole GET through preadBytes
+  assert.match(play, /if \(portable\.ranges && !portable\.ranges\(\)\) \{\s*\n\s*hooks\.noReader = true;/);
+});
+
+test('round 78: whole-chunk mode fetches every piece once and keeps them', () => {
+  // 6 cached 19 MB pieces with FIFO eviction is the freeze: a new room misses,
+  // downloads 19 MB on the engine's read, and drops a piece it will need again.
+  assert.match(portable, /if \(ranges && cache\.size > 6\) cache\.delete\(cache\.keys\(\)\.next\(\)\.value\);/);
+  assert.match(portable, /async function prefetchAll\(\)/);
+  assert.match(portable, /if \(!ranges\) await prefetchAll\(\);/);
+  assert.match(play, /onChunk = \(got, total\) => \{[\s\S]*?if \(portable && portable\.ready\)/,
+    'the status hook is installed before ready waits on the prefetch');
 });
 
 test('the provider is keyed by the engine\'s own name for a file', () => {
@@ -216,4 +239,16 @@ test('round 77: every page module parses, before and after minifying', async (t)
     const after = parses(tmp);
     assert.equal(after.status, 0, `${name} still parses minified: ${after.stderr}`);
   }
+});
+
+test('round 78: a portable build carries the menus own art', () => {
+  // ship.py keeps page-assets out of instance_index.json (the pipeline must not
+  // seed the page's files into the guest FS), and plan() walks that index -- so
+  // the payload had no menu.json, no font, no cursor. readAsset returned null,
+  // menuAssets.load() threw, and IMPORT MOD did nothing at all. Silently.
+  assert.match(portable, /assets = os\.path\.join\(dist, "instance", "page-assets"\)/);
+  assert.match(portable, /rel = "page-assets\/" \+ name/, 'keyed the way readAsset asks');
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  const asks = [...play.matchAll(/portable\.bytesFor\(`page-assets\/\$\{name\}`/g)].length;
+  assert.ok(asks >= 2, 'both menus read their art through the provider');
 });
