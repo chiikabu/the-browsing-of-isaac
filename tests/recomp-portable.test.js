@@ -87,3 +87,24 @@ test('the single-file build inlines the payload in pieces, not one string', () =
   assert.ok(portable.includes(String.raw`var text = src[name].replace(/(["'])\.\/([A-Za-z0-9_.-]+\.mjs)\1/g,`),
     'a blob URL resolves no relative import, so each module\'s imports are rewritten to the map first');
 });
+
+test('the inline loader builds each module after everything it imports', () => {
+  // a blob URL resolves no relative import, so each source is rewritten to import
+  // from the map of blobs built so far. A module built before one it imports gets
+  // './dep.mjs' left in it, which resolves against nothing and fails at load.
+  const web = join(root, 'scripts', 'recomp', 'web');
+  const order = /var order = \[([^\]]+)\];/.exec(portable)[1].split(',').map((s) => s.trim().replace(/'/g, ''));
+  const at = new Map(order.map((n, i) => [n, i]));
+  for (const name of order) {
+    if (name === 'boot.mjs') continue;                    // the build output, not in this tree
+    const src = readFileSync(join(web, name), 'utf8');
+    for (const m of src.matchAll(/from '\.\/([A-Za-z0-9_.-]+\.mjs)'/g)) {
+      const dep = m[1];
+      assert.ok(at.has(dep), `${name} imports ${dep}, which the loader never builds`);
+      assert.ok(at.get(dep) < at.get(name), `${name} is built before ${dep}, which it imports`);
+    }
+  }
+  // and the list the payload carries is the list the loader builds
+  const modules = /MODULES = \(([^)]+)\)/.exec(portable)[1].split(',').map((s) => s.trim().replace(/"/g, ''));
+  assert.deepEqual(new Set(modules), new Set(order), 'every inlined module is built, and nothing else is');
+});

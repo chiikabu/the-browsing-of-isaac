@@ -90,10 +90,15 @@ export const listMods = (db) => all(db, M_STORE).then((r) => r.map((x) => x.valu
 export const listModFiles = (db) => all(db, F_STORE);
 export const listModState = (db) => all(db, S_STORE);
 
+// Importing over a mod that is already there replaces it. The old files go
+// first, in the same transaction: a version that dropped a file would otherwise
+// leave it behind for the seed to find, and the mod would load with a file its
+// author removed.
 export function putMod(db, mod, files) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction([F_STORE, M_STORE], 'readwrite');
     const fs = tx.objectStore(F_STORE), ms = tx.objectStore(M_STORE);
+    fs.delete(IDBKeyRange.bound(`${mod.id}/`, `${mod.id}/\uffff`));
     for (const f of files) fs.put({ bytes: f.bytes }, `${mod.id}/${f.name}`);
     ms.put(mod, mod.id);
     tx.oncomplete = () => resolve(mod);
@@ -393,12 +398,20 @@ export function createModsMenu(opts) {
       say('reading\u2026');
       const { entries, fallback } = await importFrom(chosen);
       const { mod, files, dropped, madeMetadata } = planMod(entries, fallback);
+      const mib = (n) => `${(n / 1048576).toFixed(1)} MB`;
+      if (mod.bytes > SEED_BUDGET) {
+        throw new Error(`${mod.name} is ${mib(mod.bytes)}; the game is given ${mib(SEED_BUDGET)} for mods, `
+          + 'so this one would be kept and never loaded');
+      }
       db = db || await openModDb();
       if (!db) throw new Error('this browser keeps no database, so a mod could not be kept');
       await putMod(db, mod, files);
       const notes = [];
       if (madeMetadata) notes.push('no metadata.xml, so one was written');
       if (dropped.length) notes.push(`${dropped.length} path(s) outside the mod were dropped`);
+      const total = (await listMods(db)).reduce((n, x) => n + x.bytes, 0);
+      if (total > SEED_BUDGET) notes.push(`${mib(total)} of mods now, over the ${mib(SEED_BUDGET)} the game is given: `
+        + 'the ones past it are skipped at the next boot');
       say(`${mod.name}: ${files.length} file(s), ${(mod.bytes / 1048576).toFixed(2)} MB`
         + (notes.length ? ` (${notes.join('; ')})` : ''), true);
       await refresh();

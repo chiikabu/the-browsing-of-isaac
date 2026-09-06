@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import random
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 
 import emu as emumod
 

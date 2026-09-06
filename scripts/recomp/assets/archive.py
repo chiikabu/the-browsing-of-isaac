@@ -356,13 +356,39 @@ def miniz_decode(buf: bytes, offset: int, size: int, h2: int) -> tuple[bytes, in
     return bytes(out[:size]), end - offset
 
 
-def _deflate_piece(block: bytes, final: bool, level: int) -> bytes:
-    c = zlib.compressobj(level, zlib.DEFLATED, -15)
+def _deflate_piece(block: bytes, final: bool, level: int, strategy: int = zlib.Z_DEFAULT_STRATEGY) -> bytes:
+    c = zlib.compressobj(level, zlib.DEFLATED, -15, 8, strategy)
     return c.compress(block) + c.flush(zlib.Z_FINISH if final else zlib.Z_FULL_FLUSH)
 
 
-def miniz_encode(data: bytes, h2: int, level: int = 9, mode: str = "auto") -> bytes:
-    """Encode a version-2 entry payload. mode: auto (smaller of deflate/stored), deflate, stored."""
+def _piece_ok(piece: bytes, final: bool) -> bool:
+    """A piece the format can carry: under 0x7ff, and not a full 0x400 non-final
+    block (which is how the reader is told the rest of the entry is stored)."""
+    return len(piece) <= PIECE_MAX and (final or len(piece) != BLOCK)
+
+
+def _best_piece(block: bytes, final: bool, level: int, fixed_cost: int | None) -> bytes:
+    """Round 75: static Huffman when it costs at most `fixed_cost` bytes.
+
+    Dynamic Huffman spends a header and, in the decoder, a table build per 0x400
+    block; static spends neither and gives a few bytes back. `fixed_cost` is how
+    many bytes a block may grow to stop paying for a table -- None keeps the
+    dynamic choice zlib would have made on its own."""
+    dyn = _deflate_piece(block, final, level)
+    if fixed_cost is None:
+        return dyn
+    fix = _deflate_piece(block, final, level, zlib.Z_FIXED)
+    if fix == dyn:
+        return dyn                       # incompressible: both emit a stored block
+    if len(fix) - len(dyn) <= fixed_cost and _piece_ok(fix, final):
+        return fix
+    return dyn
+
+
+def miniz_encode(data: bytes, h2: int, level: int = 9, mode: str = "auto",
+                 fixed_cost: int | None = None) -> bytes:
+    """Encode a version-2 entry payload. mode: auto (smaller of deflate/stored), deflate, stored.
+    fixed_cost (round 75): how many bytes a block may grow to use static Huffman."""
     size = len(data)
     n = (size + BLOCK - 1) // BLOCK
     if n == 0:
@@ -374,7 +400,7 @@ def miniz_encode(data: bytes, h2: int, level: int = 9, mode: str = "auto") -> by
         pieces = []
         for i, block in enumerate(blocks):
             final = i == len(blocks) - 1
-            piece = _deflate_piece(block, final, level)
+            piece = _best_piece(block, final, level, fixed_cost)
             if not final and len(piece) == BLOCK:
                 # a non-final piece of exactly 0x400 bytes would flip the engine into stored mode
                 for alt in (level - 1, 1, 0, 6, 3):
@@ -589,17 +615,19 @@ class Archive:
 # archive writer
 # ---------------------------------------------------------------------------
 
-def encode_payload(version: int, data: bytes, h2: int, level: int = 9, mode: str = "auto") -> bytes:
+def encode_payload(version: int, data: bytes, h2: int, level: int = 9, mode: str = "auto",
+                   fixed_cost: int | None = None) -> bytes:
     if version == 0:
         return raw_encode(data, h2)
     if version == 2:
-        return miniz_encode(data, h2, level=level, mode=mode)
+        return miniz_encode(data, h2, level=level, mode=mode, fixed_cost=fixed_cost)
     if version == 1:
         raise PieceError("version 1 (LZW) entries cannot be re-encoded; repack with --version 0 or 2")
     raise PieceError("archive version %d is not supported" % version)
 
 
-def write_archive(path: str, version: int, items: list[dict], level: int = 9, mode: str = "auto") -> dict:
+def write_archive(path: str, version: int, items: list[dict], level: int = 9, mode: str = "auto",
+                  fixed_cost: int | None = None) -> dict:
     """items, in table order: {'h1','h2', 'raw': packed bytes, 'size', 'x'} (passthrough),
     {'h1','h2', 'src': Archive, 'entry': Entry} (passthrough copied from the source archive at
     write time, so a large archive is never held in memory) or {'h1','h2','data': decoded bytes}
@@ -627,7 +655,8 @@ def write_archive(path: str, version: int, items: list[dict], level: int = 9, mo
                 passthrough += 1
             else:
                 data = it["data"]
-                raw = encode_payload(version, data, h2, level=level, mode=it.get("mode", mode))
+                raw = encode_payload(version, data, h2, level=level, mode=it.get("mode", mode),
+                                     fixed_cost=it.get("fixed_cost", fixed_cost))
                 size = len(data)
                 x = mount_checksum(data)
                 encoded += 1

@@ -6896,3 +6896,96 @@ built by the driver through the picker, a reload, and the engine's own
 witness in the save store checked byte for byte before and after: **17 of
 17**. `tests/recomp-mods.test.js` pins the path rules, the peeling, the
 metadata reader and the two databases: 12 tests.
+
+### 21.89 Round 75: a Huffman table per kilobyte, on both sides
+
+**Where the loading window actually goes.** At a 4x throttle, frames 1-300:
+43.0% host C, 23.6% idle, 18.4% lifted guest. Inside the host C, one function:
+`isaac_fast_tinfl` at **23.3%**, with `isaac_fast_inflate_ring` (the engine's
+own zlib, decoding PNGs) at 7.2% behind it. Round 72 tried to give the archive
+inflater less to do and bought 1.1%. This round asks a different question: not
+how much it decodes, but what it is spending the time on.
+
+**The format's own shape is the answer.** A version-2 entry is cut into
+0x400-byte blocks and the packer full-flushes each one, because the engine's
+reader has a 0x400-byte circular output window. A full flush ends the deflate
+block, so **every kilobyte of the archive carries its own dynamic Huffman
+header**, and every kilobyte costs the decoder a table build.
+
+Measured, on 20.1 MB decoded out of afterbirthp.a, decoding per entry the way
+the engine does:
+
+| encoding | size | decode |
+|---|---|---|
+| as packed (dynamic, flushed per 1 KiB) | 16.79 MB | 189.7 MB/s |
+| static Huffman, same flushing | 17.92 MB (+6.75%) | **862.7 MB/s** |
+| one stream, no flushes at all | 15.57 MB | 278.2 MB/s |
+
+Reading and building tables is **77.6%** of the inflate. The third row is the
+control, and the one that decides the shape of the fix: dropping every flush
+removes almost every table and is still three times slower than keeping the
+flushes and making the tables free. It also cannot be done -- the reader wants
+its 0x400 window -- so the interesting column was never the size one.
+
+**Two halves, and the first one alone would have been a lie.** zlib keeps the
+fixed tables in `lenfix`/`distfix` and a static block costs it nothing, which is
+what the table above measures. **miniz does not.** It fills the code-size arrays
+with the fixed lengths and then runs the same table build a dynamic block runs,
+so a static block would have saved the header and paid for the tables anyway.
+The engine's inflater is miniz, so the packer change on its own would have been
+worth a fraction of what the bench promised.
+
+So both halves landed together:
+
+* `optimize.py huffman <in> <out>` re-encodes each block whichever way is
+  wanted. `--cost N` is how many bytes a block may grow to stop carrying a
+  table; the default is no limit. The format's two rules are checked per block
+  as they always were: a piece is at most 0x7ff bytes, and a non-final piece is
+  never exactly 0x400 (which is how the reader is told the rest is stored).
+  Entries already in stored mode are passed through untouched, and the table
+  order is preserved, so this runs after `layout` and does not undo round 64.
+* `isaac_fast_tinfl` keeps the tables the first static block builds and copies
+  them into every one after it. Nothing is precomputed by hand: the tables in
+  use are the tables the decoder itself produced, which is the only way to be
+  sure they are the right ones. Setting `m_type` to -1 after the copy is what
+  skips the build, because that is the state the build loop exits in anyway.
+
+**What it cost in bytes.** Re-encoding at level 9 is itself worth something,
+because the entries that were passed through came from the game's own packer:
+afterbirthp.a is 5.38 MB smaller with dynamic blocks throughout. Static Huffman
+spends that back and a little more.
+
+| | afterbirth.a | afterbirthp.a | the bundle |
+|---|---|---|---|
+| as it shipped | 65.6 MB | 331.7 MB | 581.7 MB |
+| dynamic, re-encoded (`--cost 0`) | 64.0 | 326.3 | 574.7 |
+| a 128-byte budget | 64.8 | 330.8 | 580.1 |
+| static wherever it fits | 65.8 | 336.9 | **587.3 MB** |
+
+Static everywhere costs **+5.42 MB** against what shipped, which is
+0.98% of the download and is paid once; the decode is paid on every
+load, on the slowest machine the page will ever open on. That is the trade
+this round takes.
+
+**Measured.** Three runs of the loading window at a 4x throttle, on a machine
+with nothing else on it: **45.1, 45.1, 45.2 ms/frame**, against 54.8, 54.5 and
+54.5 before. `isaac_fast_tinfl` falls from **23.3% to 9.3-9.5%** of the profile
+and idle rises from 23.6% to 28.1-30.1%, which is the shape of a loader that has
+stopped being the thing holding the frame up. Time to frame 300 goes 19.0 s to
+**13.6 s**.
+
+The census says why: a 901-frame explored run decodes **220,223 static blocks,
+220,222 of which took the kept tables** (the one that did not is the first, which
+built them). The same run before the change saw 23,279 static blocks, because
+zlib emits a fixed block on its own where one is smaller.
+
+**Checks.** The 901-frame explored run with the engine's own per-entry
+checksum pass reports 0 failures and **frame hashes identical to the baseline**,
+every frame, so nothing about what is drawn moved. Selftest 391 and 0 failures.
+Page ok, saves 15 of 15, EDIT FILE 11 of 11, mods 17 of 17,
+floors 21 of 21 over 16 floors. The cold boot, against round 72 on the same
+machine with the same driver: uncapped, first frame 1,965 -> **1,648 ms** and
+frame 300 21,280 -> **16,553 ms**; at 50 Mbit/s, frame 300 55,742 -> **54,589
+ms**, so the 5.4 MB the archives gained is paid back inside the first visit even
+on a capped link, and costs nothing on any visit after it. Windows 174 (172 MB)
+-> 177 (175.9 MB).

@@ -28,7 +28,10 @@ import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import archive as ar  # noqa: E402
+import archive as ar
+
+BLOCK_BYTES = ar.BLOCK          # the format's 0x400 decode window
+BUDGET_ALL = 1 << 30            # a budget no block can spend: static Huffman wherever it fits  # noqa: E402
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -670,6 +673,60 @@ def cmd_store(args) -> int:
     return 1 if bad else 0
 
 
+# ---------------------------------------------------------------------------
+# huffman (round 75)
+# ---------------------------------------------------------------------------
+
+
+def cmd_huffman(args) -> int:
+    """Static Huffman for the blocks where it costs almost nothing.
+
+    The format full-flushes every 0x400 bytes, so each kilobyte carries its own
+    Huffman header and costs the decoder a table build -- 77.6% of the inflate,
+    measured. A static block has no header and needs no table; it is a median of
+    23 bytes larger. `--cost N` is how many bytes a block may grow to stop paying
+    for a table; the entry's decoded bytes and mount checksum do not change, and
+    the layout order is preserved, so this runs after `layout`.
+    """
+    t0 = time.time()
+    with ar.Archive(args.archive) as a:
+        if a.version != 2:
+            print("%s is version %d: its entries are not deflate pieces, nothing to do"
+                  % (args.archive, a.version))
+            return 0
+        items, deflate = [], 0
+        for e in a.entries:
+            data = a.decode(e)
+            packed = a.raw_extent(e)[1]
+            n = (e.size + BLOCK_BYTES - 1) // BLOCK_BYTES
+            if packed == 4 * n + e.size or e.size == 0:
+                items.append({"h1": e.h1, "h2": e.h2, "src": a, "entry": e})   # stored: not ours
+            else:
+                items.append({"h1": e.h1, "h2": e.h2, "data": data, "mode": "deflate",
+                              "fixed_cost": BUDGET_ALL if args.cost is None else args.cost})
+                deflate += 1
+        r = ar.write_archive(args.out, a.version, items)
+    before = os.path.getsize(args.archive)
+    after = os.path.getsize(args.out)
+    bad = 0
+    with ar.Archive(args.archive) as a, ar.Archive(args.out) as b:
+        if set(a.by_key) != set(b.by_key) or a.count != b.count:
+            print("FAILED: the entry set changed")
+            return 1
+        for e in a.entries:
+            f = b.by_key[e.key]
+            if e.size != f.size or e.x != f.x or a.decode(e) != b.decode(f):
+                bad += 1
+                if bad < 5:
+                    print("  entry %s differs" % e.tag)
+    print("huffman %s -> %s: %d deflate entries re-encoded at cost<=%s, %d left alone, "
+          "%.1f -> %.1f MB (%+.2f MB, %+.2f%%), %d verify failures, %.0f s"
+          % (args.archive, args.out, deflate, "any" if args.cost is None else args.cost, len(items) - deflate,
+             before / 1048576.0, after / 1048576.0, (after - before) / 1048576.0,
+             100.0 * (after - before) / before, bad, time.time() - t0))
+    return 1 if bad else 0
+
+
 def catalogue_order(arc: "ar.Archive", entry_name: str, attrs: tuple[str, ...], prefix: str) -> list[str]:
     """The paths an xml catalogue names, in document order, duplicates dropped. The engine
     preloads its sound catalogue in exactly this order (round 64: the boot trail's window
@@ -758,6 +815,13 @@ def main(argv=None) -> int:
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=6); p.add_argument("--json")
     p.add_argument("--source", help="archive to take the pristine music bytes from (by key); the rest passes through from `archive`")
     p.set_defaults(fn=cmd_music)
+    p = sub.add_parser("huffman", help="static Huffman for the blocks where it is nearly free (round 75)")
+    p.add_argument("archive"); p.add_argument("out")
+    p.add_argument("--cost", type=int, default=None,
+                   help="most bytes a 0x400 block may grow to stop carrying a Huffman table; "
+                        "the default takes static Huffman wherever the format allows it "
+                        "(+0.93%% of the shipping bundle, and the inflate at a fifth of the cost)")
+    p.set_defaults(fn=cmd_huffman)
     p = sub.add_parser("store", help="re-encode already-compressed entries as stored bytes (round 72)")
     p.add_argument("archive"); p.add_argument("out")
     p.add_argument("--kinds", nargs="*", default=["png"], help="sniffed kinds to store (default png)")

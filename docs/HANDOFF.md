@@ -181,6 +181,28 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 75: a Huffman table per kilobyte, on both sides** (§21.89).
+  The format cuts an entry into 0x400-byte blocks and full-flushes each one, so
+  every kilobyte carries its own dynamic Huffman header and costs the decoder a
+  table build. On 20.1 MB of afterbirthp.a, decoded per entry: dynamic 189.7
+  MB/s, **static Huffman 862.7 MB/s** for +6.75% of size, and one stream with no
+  flushes at all only 278.2 -- so **77.6% of the inflate was tables**, not bytes.
+  Both halves were needed: zlib has the fixed tables precomputed and miniz does
+  not, so the packer change alone would have saved the header and paid for the
+  tables anyway. `optimize.py huffman` re-encodes each block (`--cost N` bounds
+  what a block may grow; the default is no bound, and stored entries and the
+  round-64 layout order are untouched), and `isaac_fast_tinfl` keeps the tables
+  the first static block builds and copies them into every one after. Re-encoding
+  at level 9 is itself worth 7.0 MB, which static Huffman spends back and a
+  little more: the bundle goes 581.7 -> 587.3 MB (+0.98%).
+  The loading window at a 4x throttle, three runs each side:
+  **54.8/54.5/54.5 -> 45.1/45.1/45.2 ms/frame**, `isaac_fast_tinfl` **23.3% ->
+  9.3-9.5%**, idle 23.6 -> 28-30%, frame 300 at 19.0 -> **13.6 s**. A 901-frame
+  explored run decodes 220,223 static blocks, 220,222 of them off the kept
+  tables, with **frame hashes identical to the baseline** and 0 checksum
+  failures. run_web.mjs also serves page modules by shape now: round 74's
+  `mods.mjs` import was a 404 there, which is a module graph that never resolves
+  and a run that waits out its 20-minute timeout with an empty log.
 - **Round 74: mods from the device, in the game's own list** (§21.88).
   The game scans `mods/` itself through the FS shim's `FindFirstFileA`, so a
   mod seeded before `main` is a mod on disk: `LOADED MOD //mods/...` from the

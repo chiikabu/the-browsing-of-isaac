@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -242,6 +242,74 @@ test('round 64: repack --order lays the named entries out first, and changes not
       run(['repack', a, c, '--order', orderTags]);
       assert.ok(readFileSync(c).equals(readFileSync(b)), 'an order file of tags lays the archive out like one of paths');
     }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('round 75: huffman re-encodes the blocks and not the bytes', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-huffman-'));
+  try {
+    const src = join(dir, 'src');
+    // compressible text, so the blocks are real deflate blocks with real Huffman
+    // headers rather than the stored blocks incompressible bytes get
+    const text = (n, seed) => {
+      const words = ['isaac', 'room', 'entity', 'sprite', 'layer', 'anm2', 'gfx', 'null'];
+      let out = '', r = seed;
+      while (out.length < n) { r = (r * 1103515245 + 12345) >>> 0; out += words[r % words.length] + ' '; }
+      return Buffer.from(out.slice(0, n));
+    };
+    // and a skewed byte stream with few matches, which is where a dynamic table
+    // earns its header and static Huffman does not
+    const skewed = (n, seed) => {
+      const out = Buffer.alloc(n);
+      let r = seed;
+      for (let i = 0; i < n; i++) {
+        r = (r * 1103515245 + 12345) >>> 0;
+        let v = 0, x = (r >>> 8) & 0xffff;
+        while (v < 200 && x > 8000) { x = (x * 3) >>> 2 & 0xffff; v += 7; }
+        out[i] = v & 0xff;
+      }
+      return out;
+    };
+    const files = {
+      'gfx/ui/a.png': skewed(30000, 3),
+      'xml/entities.xml': text(40000, 4),
+      'sfx/one.wav': randomBytes(0x401, 8),         // incompressible: stays as it is
+      'xml/z.xml': Buffer.from('<z/>'),             // under one block
+    };
+    for (const [rel, data] of Object.entries(files)) {
+      mkdirSync(dirname(join(src, rel)), { recursive: true });
+      writeFileSync(join(src, rel), data);
+    }
+    const a = join(dir, 'v2.a');
+    run(['pack', src, a, '--version', '2']);
+    const before = run(['list', a]).split(/\r?\n/).filter((l) => l.includes('size='));
+    const opt = join(root, 'scripts', 'recomp', 'assets', 'optimize.py');
+    const sizes = {};
+    for (const cost of ['0', '128', '1000000']) {
+      const b = join(dir, `v2-c${cost}.a`);
+      const r = spawnSync(python, [opt, 'huffman', a, b, '--cost', cost], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /0 verify failures/, `cost ${cost}: every entry decodes to the same bytes`);
+      // the table is untouched: same keys, same sizes, same mount checksums
+      const after = run(['list', b]).split(/\r?\n/).filter((l) => l.includes('size='));
+      const strip = (l) => l.replace(/^\s*\d+ /, '').replace(/off=\s*\d+/, 'off=');
+      assert.deepEqual(new Set(after.map(strip)), new Set(before.map(strip)), `cost ${cost}: same keys, sizes and checksums`);
+      assert.match(run(['verify', b]), new RegExp(`${Object.keys(files).length}/\\s*${Object.keys(files).length} matched`));
+      // and the payloads still come back
+      const ex = join(dir, `ex${cost}`);
+      const names = join(dir, 'names.txt');
+      writeFileSync(names, Object.keys(files).join('\n') + '\n');
+      run(['extract', b, ex, '--names', names]);
+      for (const [rel, data] of Object.entries(files)) assert.ok(readFileSync(join(ex, rel)).equals(data), `cost ${cost}: ${rel}`);
+      sizes[cost] = statSync(b).size;
+    }
+    // the budget does what it says: more allowance, more static blocks, more bytes
+    assert.ok(sizes['0'] <= sizes['128'], `cost 0 (${sizes['0']}) is no larger than cost 128 (${sizes['128']})`);
+    assert.ok(sizes['128'] <= sizes['1000000'], `cost 128 (${sizes['128']}) is no larger than all static (${sizes['1000000']})`);
+    // and the knob is a knob: the two ends do not produce the same file
+    assert.ok(!readFileSync(join(dir, 'v2-c0.a')).equals(readFileSync(join(dir, 'v2-c1000000.a'))),
+      'the budget changes the encoding, not just the report');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

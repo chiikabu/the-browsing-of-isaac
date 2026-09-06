@@ -608,8 +608,16 @@ static uint32_t g_fp_va[FP_CENSUS_MAX], g_fp_lifted[FP_CENSUS_MAX], g_fp_verifie
 static unsigned g_fp_n;
 /* Round 64: what the archive inflater decodes -- calls, bytes in and out,
  * streams finished (a DONE) -- reported with the fastpath census: the
- * question of how much of the archive a boot really opens. */
+ * question of how much of the archive a boot really opens.
+ * Round 75: read `MB in/out` as an upper bound, not a total. The figures are
+ * (cur - next) per call, and `next` is the caller's buffer base, so a stream the
+ * decoder resumes counts the bytes of its earlier calls again. The count of
+ * calls and of finished streams are exact; the byte totals move with how often
+ * the coroutine returns, which is why they rose when the blocks got cheaper. */
 static uint64_t g_tinfl_calls, g_tinfl_in, g_tinfl_out, g_tinfl_done;
+/* Round 75: static blocks seen, and how many took the tables kept from the first
+ * one instead of building their own (the arrays are below the tinfl macros). */
+static uint64_t g_tf_fix_hits, g_tf_fix_blocks;
 void isaac_tinfl_volume(uint64_t *calls, uint64_t *in, uint64_t *out, uint64_t *done) {
     if (calls) *calls = g_tinfl_calls; if (in) *in = g_tinfl_in; if (out) *out = g_tinfl_out; if (done) *done = g_tinfl_done;
 }
@@ -623,6 +631,9 @@ void isaac_fastpath_report(void) {
     if (g_tinfl_calls)
         isaac_log("[isaac][fastpath] archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished",
                   (unsigned long long)g_tinfl_calls, g_tinfl_in / 1048576.0, g_tinfl_out / 1048576.0, (unsigned long long)g_tinfl_done);
+    if (g_tf_fix_blocks)
+        isaac_log("[isaac][fastpath]   static blocks: %llu, of which %llu took the kept tables",
+                  (unsigned long long)g_tf_fix_blocks, (unsigned long long)g_tf_fix_hits);
     if (g_pm_pixels)
         isaac_log("[isaac][fastpath] premultiply: %.1f M pixels, four at a time %llu opaque / %llu clear / %llu mixed",
                   g_pm_pixels / 1e6, (unsigned long long)g_pm_opaque4, (unsigned long long)g_pm_clear4,
@@ -1026,6 +1037,16 @@ done:
 #define TF_CODE_SIZE(t) ((uint8_t *)TF_TABLE(t))
 #define TF_LOOKUP(t) ((int16_t *)(TF_TABLE(t) + 0x120u))
 #define TF_TREE(t) ((int16_t *)(TF_TABLE(t) + 0x920u))
+
+/* Round 75: a static (fixed-Huffman) block's tables are a constant. miniz builds
+ * them per block all the same, which is 3.2 KB of memset and 320 symbols each
+ * time; zlib has had them precomputed since 1995. The first static block builds
+ * them and they are kept here, so every one after it is a copy. */
+static int16_t g_tf_fix_lookup[2][TF_LOOKUP_SIZE];
+static int16_t g_tf_fix_tree[2][576];
+static uint8_t g_tf_fix_size[2][288];
+static uint8_t g_tf_fix_ready;              /* the tables above hold a real build */
+static uint8_t g_tf_fix_pending;            /* this call is building them */
 #define TF_RAW_HEADER (R + 0x2920u)
 #define TF_LEN_CODES (R + 0x2924u)
 #define TF_CR_RETURN(state_index, result) do { status = (result); TF_U32(0) = (state_index); goto common_exit; case state_index:; } while (0)
@@ -1139,11 +1160,27 @@ int isaac_fast_tinfl(uint32_t r_va, uint32_t in_next_va, uint32_t in_size_va, ui
                     uint8_t *p = TF_CODE_SIZE(0);
                     uint32_t i;
                     TF_U32(0x2c) = 288u; TF_U32(0x30) = 32u;
-                    memset(TF_CODE_SIZE(1), 5, 32);
-                    for (i = 0; i <= 143u; ++i) *p++ = 8;
-                    for (; i <= 255u; ++i) *p++ = 9;
-                    for (; i <= 279u; ++i) *p++ = 7;
-                    for (; i <= 287u; ++i) *p++ = 8;
+                    ++g_tf_fix_blocks;
+                    if (g_tf_fix_ready) {
+                        /* round 75: the same tables as last time, copied rather than built.
+                         * m_type = -1 is the state the build loop below exits in, so it
+                         * runs zero iterations and the decode picks up as it always did. */
+                        for (uint32_t t = 0; t < 2u; ++t) {
+                            memcpy(TF_LOOKUP(t), g_tf_fix_lookup[t], sizeof g_tf_fix_lookup[0]);
+                            memcpy(TF_TREE(t), g_tf_fix_tree[t], 1152);
+                        }
+                        memcpy(TF_CODE_SIZE(0), g_tf_fix_size[0], 288);
+                        memcpy(TF_CODE_SIZE(1), g_tf_fix_size[1], 32);
+                        TF_U32(0x18) = 0xffffffffu;
+                        ++g_tf_fix_hits;
+                    } else {
+                        memset(TF_CODE_SIZE(1), 5, 32);
+                        for (i = 0; i <= 143u; ++i) *p++ = 8;
+                        for (; i <= 255u; ++i) *p++ = 9;
+                        for (; i <= 279u; ++i) *p++ = 7;
+                        for (; i <= 287u; ++i) *p++ = 8;
+                        g_tf_fix_pending = 1u;      /* keep what this build produces */
+                    }
                 } else {
                     for (counter = 0; counter < 3u; counter++) {
                         TF_GET_BITS(11, TF_U32(0x2c + counter * 4u), (uint32_t)"\05\05\04"[counter]);
@@ -1211,6 +1248,19 @@ int isaac_fast_tinfl(uint32_t r_va, uint32_t in_next_va, uint32_t in_size_va, ui
                         memcpy(TF_CODE_SIZE(0), TF_LEN_CODES, TF_U32(0x2c));
                         memcpy(TF_CODE_SIZE(1), TF_LEN_CODES + TF_U32(0x2c), TF_U32(0x30));
                     }
+                }
+                if (g_tf_fix_pending) {
+                    /* the first static block just built the fixed tables: keep them.
+                     * There is no suspension point between the branch that set this
+                     * and here, so it cannot be another stream's build being kept. */
+                    for (uint32_t t = 0; t < 2u; ++t) {
+                        memcpy(g_tf_fix_lookup[t], TF_LOOKUP(t), sizeof g_tf_fix_lookup[0]);
+                        memcpy(g_tf_fix_tree[t], TF_TREE(t), 1152);
+                    }
+                    memcpy(g_tf_fix_size[0], TF_CODE_SIZE(0), 288);
+                    memcpy(g_tf_fix_size[1], TF_CODE_SIZE(1), 32);
+                    g_tf_fix_ready = 1u;
+                    g_tf_fix_pending = 0u;
                 }
                 for (;;) {
                     uint8_t *pSrc;

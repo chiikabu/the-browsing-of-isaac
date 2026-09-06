@@ -119,9 +119,6 @@ class Decoder:
         return got
 
 
-TERMINAL = (OpCode.RETURN, OpCode.BRANCH, OpCode.BRANCHIND)
-
-
 def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
                   jt=None, extent=None, bad=None):
     """Walk direct control flow from `start`.
@@ -1216,11 +1213,3 @@ def ftype(size):
 # --------------------------------------------------------------------------
 
 
-def load_userops(ctx):
-    try:
-        names = ctx.userops
-    except Exception:
-        return {}
-    if isinstance(names, dict):
-        return {v: k for k, v in names.items()}
-    return {i: n for i, n in enumerate(names)}

@@ -302,6 +302,32 @@ test('round 55/56: the boot trail, and every archive window read by a Worker wit
   assert.ok(c.includes('return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;'), 'the C side hands a promise through to JSPI');
 });
 
+test('the node runner serves every module the pipeline imports', () => {
+  // round 74 gave boot_web.mjs a sibling and the runner answered 404 for it: an
+  // ES import that 404s is a module graph that never resolves, so window.isaacDone
+  // was never set and every run sat on its 20-minute timeout with an empty log.
+  // Served by shape now, and this is the pin that says so.
+  const runner = readFileSync(join(root, 'scripts', 'recomp', 'web', 'run_web.mjs'), 'utf8');
+  assert.ok(runner.includes("if (/^\\/[A-Za-z0-9_.-]+\\.mjs$/.test(rel)) return { file: join(HERE, rel.slice(1)) };"),
+    'a page module is served by shape, not by name');
+  // and the shape covers what is actually imported, transitively
+  const web = join(root, 'scripts', 'recomp', 'web');
+  const seen = new Set(['boot_web.mjs']);
+  const queue = ['boot_web.mjs'];
+  while (queue.length) {
+    const f = queue.shift();
+    const src = readFileSync(join(web, f), 'utf8');
+    for (const m of src.matchAll(/from '\.\/([A-Za-z0-9_.-]+\.mjs)'/g)) {
+      const dep = m[1];
+      if (dep === 'boot.mjs') continue;              // the build output, served from BOOT
+      assert.match(dep, /^[A-Za-z0-9_.-]+\.mjs$/, `${dep} would not match the runner's rule`);
+      assert.ok(existsSync(join(web, dep)), `${f} imports ${dep}, which is not beside it`);
+      if (!seen.has(dep)) { seen.add(dep); queue.push(dep); }
+    }
+  }
+  assert.ok(seen.has('mods.mjs') && seen.has('zip.mjs'), 'and it does reach the round-74 modules');
+});
+
 test('round 59: a first visit gets the trail the dist ships', () => {
   const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
   assert.ok(b.includes("const TRAIL_SHIPPED = 'boot-trail.json';") && b.includes("fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {"), 'no trail of its own: the page asks for the shipped one');

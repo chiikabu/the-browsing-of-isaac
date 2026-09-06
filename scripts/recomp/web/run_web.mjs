@@ -173,8 +173,12 @@ function writeServedIndex() {
 // channel as base64), and streaming compilation wants a normal response.
 function resolveFile(rel) {
   if (rel === '/' || rel === '/boot_web.html') return { file: join(HERE, 'boot_web.html') };
-  if (rel === '/boot_web.mjs') return { file: join(HERE, 'boot_web.mjs') };
   if (rel === '/boot.mjs' || rel === '/boot.wasm') return { file: join(BOOT, rel.slice(1)) };
+  // any page module beside this file: boot_web.mjs and whatever it imports
+  // (round 74 added mods.mjs and zip.mjs). By shape, not by name -- a named list
+  // fails silently, as a 404 on an ES import is a module graph that never
+  // resolves and a run that waits out its timeout with nothing in the log.
+  if (/^\/[A-Za-z0-9_.-]+\.mjs$/.test(rel)) return { file: join(HERE, rel.slice(1)) };
   if (rel === '/isaac.segs.bin') return { file: SEGS };
   if (rel === '/instance_index.json') return { body: Buffer.from(JSON.stringify(index)) };
   if (rel.startsWith('/instance/')) return { file: join(INSTANCE, rel.slice('/instance/'.length)) };

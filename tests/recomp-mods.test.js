@@ -169,6 +169,24 @@ test('the import row is a mod, and the toggle on it is the button', () => {
   assert.ok(p.includes("import { createModsMenu } from './mods.mjs';"));
 });
 
+test('importing over a mod replaces it rather than merging into it', () => {
+  // a version that dropped a file would otherwise leave the old one for the seed
+  // to find, and the mod would load carrying a file its author removed
+  const m = src('mods.mjs');
+  assert.ok(m.includes("fs.delete(IDBKeyRange.bound(`${mod.id}/`, `${mod.id}/\\uffff`));"),
+    "the mod's own files go first, in the same transaction as the new ones");
+  assert.ok(m.indexOf('fs.delete(IDBKeyRange.bound') < m.indexOf('for (const f of files) fs.put('), 'and before them');
+});
+
+test('a mod too big to be seeded is refused at the import, not at the next boot', () => {
+  // seedMods stops at SEED_BUDGET, and a mod past it is skipped with a line in a
+  // log nobody reads: the import would say it worked and the game would not change
+  const m = src('mods.mjs');
+  assert.ok(m.includes('if (mod.bytes > SEED_BUDGET) {'), 'checked where the person is looking');
+  assert.ok(m.includes('so this one would be kept and never loaded'), 'and said in those terms');
+  assert.ok(m.includes('if (total > SEED_BUDGET) notes.push('), 'a total that has gone past it is said too');
+});
+
 test('mods and saves are separate databases, and a write under mods/ never reaches the saves', () => {
   assert.equal(MODS_DB, 'isaac-mods');
   const b = src('boot_web.mjs');

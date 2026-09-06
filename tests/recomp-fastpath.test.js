@@ -285,6 +285,40 @@ test('round 64: the archive inflater reports what it decoded', () => {
   assert.ok(fp.includes('archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished'), 'reported with the census, in every mode');
 });
 
+test('round 75: a static block takes the tables the first one built', () => {
+  // miniz fills the fixed code lengths and then runs the same table build a
+  // dynamic block runs -- 3.2 KB of memset and 320 symbols, per 0x400 block.
+  // zlib has had those tables precomputed since 1995. The archive is packed in
+  // static blocks now (optimize.py huffman), so this is the cost that was left.
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  assert.ok(fp.includes('static int16_t g_tf_fix_lookup[2][TF_LOOKUP_SIZE];') && fp.includes('static int16_t g_tf_fix_tree[2][576];'),
+    'the tables are kept for both trees');
+  assert.ok(fp.includes('if (g_tf_fix_ready) {'), 'and used when there are some');
+  // m_type = -1 is what makes the build loop below run zero iterations: it is the
+  // state that loop exits in anyway, so the decode continues exactly as it did
+  assert.ok(fp.includes('TF_U32(0x18) = 0xffffffffu;'), 'the build loop is skipped by the state it would have ended in');
+  assert.ok(fp.includes('for (; (int32_t)TF_U32(0x18) >= 0; TF_U32(0x18)--) {'), 'which is still the loop');
+  // the first static block builds them the old way and they are kept from it, so
+  // the tables in use are the ones the decoder itself produced
+  assert.ok(fp.includes('g_tf_fix_pending = 1u;') && fp.includes('if (g_tf_fix_pending) {') && fp.includes('g_tf_fix_ready = 1u;'),
+    'the first build is what is kept');
+  assert.ok(fp.includes('static blocks: %llu, of which %llu took the kept tables'), 'and the census says how often it paid');
+});
+
+test('round 75: the packer can spend bytes to drop a Huffman table', () => {
+  const arc = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'archive.py'), 'utf8');
+  assert.match(arc, /def _best_piece\(block: bytes, final: bool, level: int, fixed_cost: int \| None\) -> bytes:/);
+  assert.match(arc, /fix = _deflate_piece\(block, final, level, zlib\.Z_FIXED\)/);
+  assert.match(arc, /if fix == dyn:/, 'incompressible blocks are stored either way and are left alone');
+  assert.match(arc, /if len\(fix\) - len\(dyn\) <= fixed_cost and _piece_ok\(fix, final\):/);
+  // the format's two limits are still the format's two limits
+  assert.match(arc, /return len\(piece\) <= PIECE_MAX and \(final or len\(piece\) != BLOCK\)/);
+  const opt = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'optimize.py'), 'utf8');
+  assert.match(opt, /def cmd_huffman\(args\) -> int:/);
+  assert.match(opt, /"fixed_cost": BUDGET_ALL if args\.cost is None else args\.cost/, 'the default is no budget at all');
+  assert.match(opt, /if packed == 4 \* n \+ e\.size or e\.size == 0:/, 'a stored entry is passed through, not re-encoded');
+});
+
 test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
   const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
   assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');

@@ -23,7 +23,6 @@ const { chromium } = require('playwright');
 
 const URL = process.argv[2];
 const OUT = process.argv[3] || join(HERE, '..', '..', '..', 'output', 'recomp', 'web-interactive-drive');
-const BUDGET = Number(process.argv[4] || '1500');
 const TIMEOUT_MS = Number(process.argv[5] || '600000');
 if (!URL) { console.log('usage: node drive_interactive.mjs <url> <out-dir> [budgetFrames] [timeoutMs]'); process.exit(2); }
 mkdirSync(OUT, { recursive: true });
