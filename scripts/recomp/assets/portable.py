@@ -36,6 +36,7 @@ import base64
 import gzip
 import json
 import os
+import re
 import shutil
 import sys
 
@@ -539,8 +540,21 @@ def cmd_chunks(args) -> int:
         b_size = max(WINDOW, args.part_mib * MIB // WINDOW * WINDOW)
     written = [0]
 
-    key = b"" if args.plain else keystream_key(
-        ("isaac-portable/%d/%d/%d" % (a_len, b_len, args.chunks)).encode("ascii"))
+    # Round 80: the seed is the two stream lengths, so a build that adds one file
+    # to part A re-scrambles part B as well -- half a gigabyte of chunks that
+    # differ only in their keystream. --key-b64 takes the key off an earlier
+    # build's page instead: part B is then byte for byte what is already
+    # uploaded, and only the chunks whose contents really moved need sending
+    # again. `chunks --key-of <index.html>` reads it out of one.
+    if args.plain:
+        key = b""
+    elif args.key_b64:
+        key = base64.b64decode(args.key_b64)
+        if len(key) != 256:
+            raise SystemExit("--key-b64: expected 256 bytes, got %d" % len(key))
+    else:
+        key = keystream_key(
+            ("isaac-portable/%d/%d/%d" % (a_len, b_len, args.chunks)).encode("ascii"))
 
     def emit_for(tag, gz, size):
         def emit(i, b):
@@ -670,6 +684,9 @@ def main(argv=None) -> int:
                    help="leave the chunks as they are and the page readable (the default scrambles both)")
     p.add_argument("--html-only", action="store_true",
                    help="rewrite the page without touching the chunk files (the probe, not the payload)")
+    p.add_argument("--key-b64", help="scramble with this key instead of one derived from the sizes, so "
+                                     "chunks that did not change keep the bytes already uploaded")
+    p.add_argument("--key-of", help="take --key-b64 out of an earlier build's index.html")
     p.set_defaults(fn=cmd_chunks)
     p = sub.add_parser("offline")
     p.add_argument("dist"); p.add_argument("out")
@@ -677,6 +694,14 @@ def main(argv=None) -> int:
     p.add_argument("--skip", nargs="*", help="archive file names to leave out")
     p.set_defaults(fn=cmd_offline)
     args = ap.parse_args(argv)
+    if getattr(args, "key_of", None) and not args.key_b64:
+        page = read(args.key_of).decode("utf-8", "replace")
+        m = re.search(r'window\.__isaacPortableData\s*=\s*(\{.*?\});', page, re.S)
+        if not m:
+            raise SystemExit("--key-of: %s carries no portable data" % args.key_of)
+        args.key_b64 = json.loads(m.group(1)).get("key")
+        if not args.key_b64:
+            raise SystemExit("--key-of: %s was built --plain, it has no key" % args.key_of)
     return args.fn(args)
 
 

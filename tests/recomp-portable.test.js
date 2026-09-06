@@ -252,3 +252,26 @@ test('round 78: a portable build carries the menus own art', () => {
   const asks = [...play.matchAll(/portable\.bytesFor\(`page-assets\/\$\{name\}`/g)].length;
   assert.ok(asks >= 2, 'both menus read their art through the provider');
 });
+
+test('round 80: a rebuild can keep the key the uploaded chunks were scrambled with', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  // The default seed is the two stream lengths, so adding one file to part A
+  // re-scrambles part B too: half a gigabyte of chunks that differ only in their
+  // keystream, all of which would have to be uploaded again.
+  assert.match(portable, /--key-b64/);
+  assert.match(portable, /--key-of/);
+  const out = runPy([
+    'import base64, sys; sys.path.insert(0, "scripts/recomp/assets"); import portable as P',
+    'k = P.keystream_key(b"pin")',
+    'b64 = base64.b64encode(k).decode("ascii")',
+    // what the CLI does with --key-b64, and that it round trips
+    'print(base64.b64decode(b64) == k)',
+    'print(len(k) == 256)',
+    // and --key-of finds it in a page built with that key
+    'page = "<script>window.__isaacPortableData = " + __import__("json").dumps({"key": b64, "chunks": 33}) + ";</script>"',
+    'import re',
+    'm = re.search(r"window\\.__isaacPortableData\\s*=\\s*(\\{.*?\\});", page, re.S)',
+    'print(__import__("json").loads(m.group(1))["key"] == b64)',
+  ].join('\n'));
+  assert.deepEqual(out.split(/\r?\n/), ['True', 'True', 'True']);
+});
