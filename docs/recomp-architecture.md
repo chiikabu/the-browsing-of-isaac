@@ -6304,3 +6304,26 @@ and clang at -O3 vectorises the plain byte loops -- adler32, the
 premultiply, the PNG unfilter, memset/memcpy-shaped copies -- on its own.
 The verify mode is the proof that the vectorised fastpaths stay
 byte-exact on the game's own data. Verify mode: 0 mismatches over the explorer's 2,000 frames, the census md5 unchanged. And the honest figure: nothing measurable. The loading window is the same length (19.7 s sampled to frame 300 against 19.8; keystream 7.3 %, tinfl 9.4 %, inflate 6.8 %, premultiply 3.2 %, adler32 1.5 % -- the decoders' loops carry a dependency from byte to byte, the premultiply is a table lookup, and clang vectorises none of them), and the play frame at 4x reads 18.8, 19.9, 20.5 and 21.2 ms over four profiles against 19.8 and 22.5 before -- the spread of the method, not a difference. (A first profile after a server restart twice showed the slow dispatcher at 17 % where later ones show 3-5 %: the node census counts a 98.9 % cache hit rate, so that is the profiler's attribution on a cold module, and the reason profiles are read in interleaved pairs.) The flag stays: it costs nothing, every target has SIMD, and it is what a hand-written v128 keystream needs next.
+
+### 21.76 Round 62: the keystream sixteen bytes at a time, and two censuses
+
+**The keystream in v128.** Four consecutive words of r[] are the same
+sixteen keystream bytes, least significant byte first, that four scalar
+steps take, so where the build has wasm SIMD (`__wasm_simd128__`, the
+fast profile since round 61) `isaac_fast_keystream_xor` does them with one
+`v128.xor` per block; a block that would take r[255] -- the refill point
+-- or lie past it goes word by word, so the refill lands exactly where the
+scalar loop puts it, and the tail is the word loop. The selftest build
+has SIMD too now (it runs on node), and its keystream check covers forty
+bytes from r[254]: two words to the refill, then two v128 blocks of the
+new block; the verify mode covers the game's 263,360 calls. Measured at 4x: the keystream's share of the loading window 7.3 % to 5.6-5.7 % (1.4 s to 1.0 s), the window 19.7 s to 18.1-18.3 s sampled to frame 300 (two profiles), a first visit's frame 300 at 20.5 s (23.7 last round, the same shipped trail); the selftest 391 checks with SIMD on, the explorer census md5 unchanged. A tab hidden in the middle of the loading (`drive_boot.mjs hide_at=60 hide_s=10`, new: `document.hidden` forged from frame 63 for 10 s, with the reader Worker's windows in flight and the engine suspended in reads): 30 frames ticked on the 250 ms path meanwhile, and the boot went on to frame 300 at 32.1 s and 600 at 37.1 s once visible, 0 page errors.
+
+**Two censuses on the way.** The browser explorer's 3,000 frames: 32.1 M
+dispatches, the cache 32.07 M hits to 49 K fills (99.85 %) -- so the two
+profiles that showed the slow dispatcher at 17 % (§21.75) were the
+profiler's attribution on a cold module, not misses. And the one GL error
+every finite run reports (0x501, pending at a present around the title):
+`ISAAC_GL_CHECK=1` names it -- `glDeleteProgram` of a name that is not a
+live program, four times in 121 frames. The host forwards program names
+untouched, so it is the engine's own call, as on the desktop, where the
+same error is raised and never read: reproduced, not fixed.

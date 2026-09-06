@@ -6,7 +6,7 @@
 // parallel, while the module compiles, and the engine's reads hit the
 // cache). Reported per visit: the first frame's time, the time to frame 300
 // and 600, the archive windows read, prefetched and hit.
-//   node scripts/recomp/web/drive_boot.mjs <url> <out-dir> [gl=hw] [cpu=4] [visits=2] [fresh=1] [net=<Mbit/s>]
+//   node scripts/recomp/web/drive_boot.mjs <url> <out-dir> [gl=hw] [cpu=4] [visits=2] [fresh=1] [net=<Mbit/s>] [hide_at=<frame> hide_s=<s>]
 // cpu= throttles the CPU (4 = a Chromebook-class core); fresh=1 starts from an
 // empty profile (the default), so visit 1 is cold.
 import { chromium } from 'playwright';
@@ -26,6 +26,11 @@ const cpu = Number(opt.cpu || '4');
 // trail's prefetch overlaps the engine's loading only when the network is the
 // slower party, which localhost never is
 const netMbps = Number(opt.net || '0');
+// hide_at=<frame> hide_s=<seconds> (round 62): the tab reads as hidden from that
+// frame for that long -- in the middle of the loading, while the reader Worker
+// has windows in flight and the engine sits suspended in reads -- and the boot
+// must still reach frames 300 and 600 once it is visible again
+const hideAt = Number(opt.hide_at || '0'), hideS = Number(opt.hide_s || '10');
 const visits = Number(opt.visits || '2');
 const results = [];
 for (let v = 1; v <= visits; v++) {
@@ -42,6 +47,17 @@ for (let v = 1; v <= visits; v++) {
   const state = () => page.evaluate(() => ({ f: window.isaacFrame || 0, lazy: typeof window.isaacLazyStats === 'function' ? window.isaacLazyStats() : null }));
   const waitFrame = async (n, limit) => { for (;;) { const s = await state(); if (s.f >= n) return Date.now() - t0; if (Date.now() - t0 > limit) return null; await sleep(50); } };
   const first = await waitFrame(1, 600000);
+  let hidden = null;
+  if (hideAt > 0) {
+    await waitFrame(hideAt, 600000);
+    const fBefore = (await state()).f;
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
+    await sleep(hideS * 1000);
+    const fHidden = (await state()).f;
+    await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
+    hidden = { at: fBefore, framesWhileHidden: fHidden - fBefore, seconds: hideS };
+    console.log(`[boot]   hidden from frame ${fBefore} for ${hideS} s: ${hidden.framesWhileHidden} frames ticked meanwhile (the 250 ms path)`);
+  }
   const f300 = await waitFrame(300, 120000);
   const f600 = await waitFrame(600, 120000);
   await sleep(1500);                                        // let the trail be written
@@ -51,7 +67,7 @@ for (let v = 1; v <= visits; v++) {
   // round 59: the trail this visit left, for ship.py --trail (the dist then ships it to first visits)
   const trailJson = await page.evaluate(() => { try { return localStorage.getItem('isaac-boot-trail') || ''; } catch (e) { return ''; } });
   if (trailJson) writeFileSync(join(OUT, 'boot-trail.json'), trailJson);
-  const r = { visit: v, firstFrameMs: first, frame300Ms: f300, frame600Ms: f600, windows: lazy.windows, windowMB: lazy.windowBytes != null ? +(lazy.windowBytes / 1048576).toFixed(1) : null,
+  const r = { visit: v, firstFrameMs: first, frame300Ms: f300, frame600Ms: f600, hidden, windows: lazy.windows, windowMB: lazy.windowBytes != null ? +(lazy.windowBytes / 1048576).toFixed(1) : null,
     prefetched: lazy.prefetched, prefetchHits: lazy.prefetchHits, prefetchMisses: lazy.prefetchMisses, aheadFetched: lazy.aheadFetched, readerWaits: lazy.readerWaits, readerWaitMs: lazy.readerWaitMs, reader: lazy.reader, trailKept: lazy.trailKept, trailShipped: lazy.trailShipped, trailWritten: lazy.trailWritten, trailLen: lazy.trailLen, storedTrail: stored, errors: errors.length };
   results.push(r);
   if (Array.isArray(lazy.trail)) console.log(`[boot]   the first windows: ${lazy.trail.slice(0, 40).join(' ')}`);

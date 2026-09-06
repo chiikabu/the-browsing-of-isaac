@@ -693,17 +693,18 @@ int main(int argc, char **argv) {
         memcpy(isaac_g(ctx2), isaac_g(ctx), 0x810u);
         uint32_t r254 = isaac_r32(ctx + 4u + 4u * 254u), r255 = isaac_r32(ctx + 4u + 4u * 255u);
         isaac_fast_isaac(ctx2, NULL);                        /* what the refill inside the XOR will produce */
-        uint32_t r0next = isaac_r32(ctx2 + 4u);
-        for (uint32_t i = 0; i < 12u; i++) *(uint8_t *)isaac_g(buf + i) = (uint8_t)(0x40u + i);
-        check(isaac_fast_keystream_ok(holder, buf, 12u), "keystream: a guest holder, context and buffer are accepted");
-        isaac_fast_keystream_xor(holder, buf, 12u);
+        /* 40 bytes from r[254]: two words to the refill, then eight of the new block
+         * (two sixteen-byte blocks where the build has SIMD, round 62) */
+        for (uint32_t i = 0; i < 40u; i++) *(uint8_t *)isaac_g(buf + i) = (uint8_t)(0x40u + i);
+        check(isaac_fast_keystream_ok(holder, buf, 40u), "keystream: a guest holder, context and buffer are accepted");
+        isaac_fast_keystream_xor(holder, buf, 40u);
         int ks_ok = 1;
-        for (uint32_t i = 0; i < 12u; i++) {
-            uint32_t w = i < 4u ? r254 : i < 8u ? r255 : r0next;
+        for (uint32_t i = 0; i < 40u; i++) {
+            uint32_t w = i < 4u ? r254 : i < 8u ? r255 : isaac_r32(ctx2 + 4u + 4u * ((i - 8u) / 4u));
             if (*(uint8_t *)isaac_g(buf + i) != (uint8_t)((0x40u + i) ^ (w >> (8u * (i & 3u))))) ks_ok = 0;
         }
         check(ks_ok, "keystream: each byte XORs r[idx], least significant byte first, across the refill");
-        check(isaac_r32(ctx) == 1u, "keystream: taking r[255] refills at once and the index restarts at 0");
+        check(isaac_r32(ctx) == 8u, "keystream: taking r[255] refills at once and the index goes on from 0 (eight words of the new block taken)");
         check(memcmp(isaac_g(ctx + 4u), isaac_g(ctx2 + 4u), 0x80cu) == 0, "keystream: the refilled block is isaac() of the old one, c included");
         isaac_w32(ctx, 0x100u);
         check(!isaac_fast_keystream_ok(holder, buf, 12u), "keystream: an index past r[] is left to the lifted body");

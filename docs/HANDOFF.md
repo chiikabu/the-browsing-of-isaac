@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-61: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-62: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,13 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 62: the keystream in v128** (§21.76). One `v128.xor` per sixteen
+  bytes where the build has SIMD, the refill exactly where the scalar
+  loop puts it; the selftest (SIMD too, forty bytes across the refill)
+  and the verify mode (263,360 calls) are the proof. keystream 7.3 -> 5.6 % of the loading window (1.4 -> 1.0 s), the window 19.7 -> 18.2 s, first-visit frame 300 at 20.5 s. hidden from frame 63 for 10 s mid-loading: 30 frames on the 250 ms path, then frame 300 at 32.1 s, 0 errors. The
+  browser's dispatch cache hits 99.85 % (the 17 % profiles were cold-
+  module attribution); the one pending GL error is the engine's own
+  `glDeleteProgram` of a dead name, reproduced.
 - **Round 61: wasm SIMD for the host TUs** (§21.75). A 600 s soak of the
   round-60 module first: 60 fps median, renderer working set 1,239 -> 1,022
   MB, nothing growing. Then `-msimd128` on the fast profile's host TUs

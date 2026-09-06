@@ -268,6 +268,17 @@ test('round 58: miniz tinfl_decompress has a host fastpath with the verify mode'
   assert.ok(st.includes('reassembles byte for byte over HAS_MORE_OUTPUT rounds') && st.includes('resumes at every state and ends DONE'), 'the selftest decodes zlib-made streams whole, a byte at a time, and through a ring');
 });
 
+test('round 62: the keystream XOR goes sixteen bytes at a time where the build has wasm SIMD', () => {
+  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
+  assert.ok(fp.includes('#ifdef __wasm_simd128__\n#include <wasm_simd128.h>\n#endif'), 'the intrinsics only where the build has them');
+  assert.ok(fp.includes('wasm_v128_store(p + k, wasm_v128_xor(wasm_v128_load(p + k), wasm_v128_load(&c[idx + 1u])));'), 'one v128 XOR for four words');
+  assert.ok(fp.includes('if (idx + 4u > 256u) {') && fp.includes('if (idx + 4u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }'), 'a block touching r[255] goes word by word; a block ending there refills');
+  const bs = readFileSync(join(root, 'scripts', 'recomp', 'host', 'build_selftest.py'), 'utf8');
+  assert.ok(bs.includes('"-msimd128"'), 'the selftest build has SIMD too, so its checks run the v128 path');
+  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
+  assert.ok(st.includes('isaac_fast_keystream_xor(holder, buf, 40u);') && st.includes('eight words of the new block taken'), 'forty bytes across the refill');
+});
+
 test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
   const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
   assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');

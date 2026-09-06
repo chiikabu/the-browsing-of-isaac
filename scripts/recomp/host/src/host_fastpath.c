@@ -16,6 +16,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 static int fastpath_mode(void) {          /* 0 = lifted only, 1 = host, 2 = verify both */
     static int v = -1;
@@ -692,11 +695,33 @@ static inline uint32_t keystream_word(uint32_t ctx, uint32_t *c) {
     if (idx + 1u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }
     return w;
 }
+/* Round 62: sixteen bytes at a time where the build has wasm SIMD. Four
+ * consecutive words of r[] are the same sixteen keystream bytes, least
+ * significant byte first, that four scalar steps take, so one v128 XOR does
+ * their work -- as long as all four sit inside r[0..255]; a block that would
+ * take r[255] (the refill point) or lie past it goes word by word, so the
+ * refill happens exactly where the scalar loop puts it. Without SIMD the
+ * word loop stands alone. */
 void isaac_fast_keystream_xor(uint32_t self_va, uint32_t buf_va, uint32_t len) {
     uint32_t ctx = isaac_r32(self_va);
     uint32_t *c = (uint32_t *)isaac_g(ctx);
     uint8_t *p = (uint8_t *)isaac_g(buf_va);
     uint32_t k = 0u;
+#ifdef __wasm_simd128__
+    while (k + 16u <= len) {
+        uint32_t idx = c[0];
+        if (idx + 4u > 256u) {                       /* r[255] inside or past the block: word by word */
+            uint32_t w = keystream_word(ctx, c), v;
+            memcpy(&v, p + k, 4u); v ^= w; memcpy(p + k, &v, 4u);
+            k += 4u;
+            continue;
+        }
+        wasm_v128_store(p + k, wasm_v128_xor(wasm_v128_load(p + k), wasm_v128_load(&c[idx + 1u])));
+        c[0] = idx + 4u;
+        if (idx + 4u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }
+        k += 16u;
+    }
+#endif
     for (; k + 4u <= len; k += 4u) {
         uint32_t w = keystream_word(ctx, c), v;
         memcpy(&v, p + k, 4u);

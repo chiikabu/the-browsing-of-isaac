@@ -51,7 +51,7 @@ SOURCES = sorted(HOST.glob("src/*.c")) + sorted(HOST.glob("generated/*.c")) + \
 # and the shim arena at 0x0e000000/0x0f000000, so linear memory has to cover
 # them. GLOBAL_BASE keeps host statics below the image, which the host layer
 # asserts at boot.
-CFLAGS = ["-O1", "-std=gnu11", "-Wall", "-Wextra", "-Wno-unused-parameter",
+CFLAGS = ["-O1", "-std=gnu11", "-Wall", "-Wextra", "-Wno-unused-parameter", "-msimd128",   # round 62: the v128 paths run here too (node has SIMD)
           "-I", str(HOST / "include"), "-I", str(HOST / "generated")]
 
 # Upstream Lua 5.3.3, if present: host_lua.c compiles its real 59-symbol
