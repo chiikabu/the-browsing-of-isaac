@@ -7,7 +7,7 @@
 // for the file the cursor is on; the lifted block at 0x9d9d59 asks the host
 // gate first, which asks window.isaacEditFile(slot): this module opens the
 // menu instead. Its entries: EXPORT FILE, IMPORT FILE, DELETE FILE, BACK.
-// The FPS readout is a key, not an entry: Q flips it (play.mjs), a corner
+// The FPS readout is a key, not an entry: M flips it (play.mjs), a corner
 // text in the same font, remembered by this browser only. Delete hands the flow back to the engine (the
 // page sets window.isaacEditFileDelete and presses confirm again, so the
 // game's own prompt and deletion run untouched). Export and import are the
@@ -130,7 +130,7 @@ export function createEditFileMenu(opts) {
   };
 
   const items = () => ['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK'];
-  // the FPS readout is a key, not a setting: Q flips it (play.mjs), this browser remembers it
+  // the FPS readout is a key, not a setting: M flips it (play.mjs), this browser remembers it
   const toggleFps = () => {
     state.fpsOn = !state.fpsOn;
     try { localStorage.setItem('isaac-fps-viewer', state.fpsOn ? '1' : '0'); } catch (e) { /* no storage */ }

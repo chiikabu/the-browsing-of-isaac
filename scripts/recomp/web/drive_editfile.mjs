@@ -5,7 +5,7 @@
 // the menu in file-choosing mode) -> confirm on file 1: the page's menu opens
 // instead of the engine's prompt. Then: BACK closes it; DELETE hands the flow
 // back to the engine (the page names the slot and presses confirm; the gate
-// consumes the name), and Backspace leaves the engine's own prompt; Q flips
+// consumes the name), and Backspace leaves the engine's own prompt; M flips
 // the FPS readout, remembered by the browser and never by the saves store.
 // Screenshots land in <out-dir>.
 import { chromium } from 'playwright';
@@ -77,10 +77,10 @@ try {
   await hold('Enter'); await sleep(400);
   st = await state();
   check(!st.open, 'BACK closes the menu', `open=${st.open}`);
-  // Q flips the FPS readout (no menu entry, no setting in the store) and this browser remembers it
-  await hold('KeyQ'); await sleep(600);
+  // M flips the FPS readout (no menu entry, no setting in the store) and this browser remembers it
+  await hold('KeyM'); await sleep(600);
   const fpsOn = await page.evaluate(() => ({ stored: localStorage.getItem('isaac-fps-viewer'), on: window.isaacEditFileMenu.fpsViewer() }));
-  check(fpsOn.on && fpsOn.stored === '1', 'Q turns the FPS readout on and this browser remembers it', JSON.stringify(fpsOn));
+  check(fpsOn.on && fpsOn.stored === '1', 'M turns the FPS readout on and this browser remembers it', JSON.stringify(fpsOn));
   const noStore = await page.evaluate(async () => new Promise((resolve) => {
     const req = indexedDB.open('isaac-saves', 1);
     req.onerror = () => resolve('open failed');

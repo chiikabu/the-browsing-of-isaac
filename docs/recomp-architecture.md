@@ -5900,10 +5900,11 @@ zip from that export or a bare `.dat`, renumbers it into the chosen file's
 slot and reloads (the engine holds the old data in memory). The FPS readout
 is plain text in the top-left corner -- the frame rate in the same font, a
 light shadow under the ink -- fed by the status line each second, and it is
-a key, not a setting: Q flips it, this browser remembers it in
+a key, not a setting: M flips it, this browser remembers it in
 `localStorage`, nothing of it touches the saves store (a menu entry and a
-store-backed setting were tried and taken out on request). Q is also the
-game's default pocket-item key; the key still reaches the game. The game's
+store-backed setting were tried and taken out on request; Q was the first
+key and is the game's pocket-item key, so M, which the game leaves
+unbound). The game's
 own Options menu is engine-drawn and engine-driven (the anm2 has one
 animation per option -- Fullscreen, ChargeBars, ExtraHUD, ... -- over a
 scrolling paper, and the item table is code); adding an item there is engine
