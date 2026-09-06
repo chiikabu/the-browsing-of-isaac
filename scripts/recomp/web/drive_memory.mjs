@@ -18,6 +18,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const glArgs = (opt.gl || 'hw') === 'hw' ? ['--use-angle=default', '--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader'];
 const browser = await chromium.launch({ headless: true, args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+await page.addInitScript(() => {
+  const T = { calls: 0, bytes: 0, maxBytes: 0, maxWH: '', over4MB: 0, over16MB: 0, sizes: {} };
+  window.__texUploads = T;
+  const bpp = (fmt, type) => (type === 0x1401 ? (fmt === 0x1908 ? 4 : fmt === 0x1907 ? 3 : 1) : 4);
+  for (const C of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
+    if (!C) continue;
+    const orig = C.prototype.texImage2D;
+    C.prototype.texImage2D = function (...a) {
+      try {
+        if (a.length >= 9 && typeof a[3] === 'number' && typeof a[4] === 'number') {
+          const w = a[3], h = a[4], n = w * h * bpp(a[6], a[7]);
+          T.calls++; T.bytes += n; if (n > T.maxBytes) { T.maxBytes = n; T.maxWH = `${w}x${h}`; }
+          if (n >= 4194304) T.over4MB++; if (n >= 16777216) T.over16MB++;
+          const k = `${w}x${h}`; T.sizes[k] = (T.sizes[k] || 0) + 1;
+        }
+      } catch (e) { /* never in the way */ }
+      return orig.apply(this, a);
+    };
+  }
+});
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));
 const cdp = await page.context().newCDPSession(page);
@@ -29,6 +49,30 @@ const hold = async (key, ms = 90) => { await page.keyboard.down(key); await slee
 const logMatch = (re, since = 0) => page.evaluate(([src, s]) => { const r = new RegExp(src); const log = window.isaacLog || []; for (let i = log.length - 1; i >= s; i--) if (r.test(log[i])) return log[i]; return null; }, [re.source, since]);
 const t0 = Date.now();
 const out = { url: URL, cpu, frame: Number(opt.frame || '600') };
+// the OS's view of the processes (drive_floors' way): working set and private bytes of the renderer and the GPU process
+const osMemory = async () => {
+  const m = await page.evaluate(() => { const mm = performance.memory; return mm ? { jsHeapMB: +(mm.usedJSHeapSize / 1048576).toFixed(1) } : {}; });
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const bcdp = await browser.newBrowserCDPSession();
+    const info = await bcdp.send('SystemInfo.getProcessInfo');
+    await bcdp.detach();
+    if (process.platform === 'win32') {
+      const ids = info.processInfo.map((q) => q.id).join(',');
+      const text = execFileSync('powershell', ['-NoProfile', '-Command',
+        `Get-Process -Id ${ids} -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id)|$($_.WorkingSet64)|$($_.PrivateMemorySize64)" }`], { encoding: 'utf8' });
+      const typeOf = new Map(info.processInfo.map((q) => [q.id, q.type]));
+      for (const line of text.split(/\r?\n/)) {
+        const [id, ws, priv] = line.split('|');
+        if (!id) continue;
+        const type = String(typeOf.get(Number(id)) || '').toLowerCase();
+        if (type === 'renderer' && Number(ws) / 1048576 > (m.rendererWorkingSetMB || 0)) { m.rendererWorkingSetMB = +(Number(ws) / 1048576).toFixed(0); m.rendererPrivateMB = +(Number(priv) / 1048576).toFixed(0); m.rendererPid = Number(id); }
+        if (type === 'gpu') { m.gpuWorkingSetMB = +(Number(ws) / 1048576).toFixed(0); m.gpuPrivateMB = +(Number(priv) / 1048576).toFixed(0); }
+      }
+    }
+  } catch (e) { m.error = e.message; }
+  return m;
+};
 try {
   if (opt.options) {
     const origin = new globalThis.URL(URL).origin;
@@ -65,6 +109,14 @@ try {
     console.log(`[memory] stage ${opt.stage} at ${Date.now() - t0} ms`);
   }
   await sleep(2000);
+  out.osBeforeGc = await osMemory();
+  console.log(`[memory] OS before GC: renderer working set ${out.osBeforeGc.rendererWorkingSetMB} MB (private ${out.osBeforeGc.rendererPrivateMB}), gpu ${out.osBeforeGc.gpuWorkingSetMB} MB, js heap ${out.osBeforeGc.jsHeapMB} MB`);
+  // the garbage collected first: what a reading catches otherwise is the collector's timing
+  for (let i = 0; i < 3; i++) { await cdp.send('HeapProfiler.collectGarbage').catch(() => {}); await sleep(700); }
+  out.os = await osMemory();
+  console.log(`[memory] OS after GC: renderer working set ${out.os.rendererWorkingSetMB} MB (private ${out.os.rendererPrivateMB} MB, pid ${out.os.rendererPid}), gpu ${out.os.gpuWorkingSetMB} MB (private ${out.os.gpuPrivateMB}), js heap ${out.os.jsHeapMB} MB`);
+  out.tex = await page.evaluate(() => { const T = window.__texUploads; if (!T) return null; const top = Object.entries(T.sizes).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} x${v}`); return { calls: T.calls, MB: +(T.bytes / 1048576).toFixed(1), maxMB: +(T.maxBytes / 1048576).toFixed(1), maxWH: T.maxWH, over4MB: T.over4MB, over16MB: T.over16MB, top }; });
+  if (out.tex) console.log(`[memory] texImage2D: ${out.tex.calls} uploads, ${out.tex.MB} MB in all, the largest ${out.tex.maxMB} MB (${out.tex.maxWH}); ${out.tex.over4MB} of 4 MB or more, ${out.tex.over16MB} of 16 MB or more; most common ${out.tex.top.join(', ')}`);
   // a detailed memory-infra dump through tracing
   const dumps = [];
   cdp.on('Tracing.dataCollected', (e) => { for (const ev of e.value || []) if (ev.ph === 'v' && ev.args && ev.args.dumps) dumps.push(ev); });

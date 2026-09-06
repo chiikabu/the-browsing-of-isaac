@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-59: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-60: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 60: the memory map** (§21.74). `drive_memory.mjs` (new): OS
+  figures for the renderer and GPU processes, a memory-infra dump by
+  allocator, a texture-upload census -- after three forced garbage
+  collections (a raw reading is the collector's timing, +540 MB once).
+  Renderer 1.06-1.10 GB working set at stage 2, GPU 510-520 MB; the dump
+  attributes 560 MB (wasm memory and code are not in it). The reader
+  Worker drops its cache at frame 600 (was up to 128 MB held for the
+  page's life). Large texture uploads go in 4 MB bands: pixels identical (frames 100-399 hash the same on/off), renderer working set 1,090 -> 1,002-1,004 MB, GPU process 511 -> 409-410 MB (its private bytes 607 -> 764: committed, not resident).
 - **Round 59: the saves round trip, the shipped boot trail** (§21.73).
   `drive_saves.mjs`: export on file 1 (a zip, byte-exact), import into file
   2 (exact before and after the page's reload), a bare .dat into file 3:

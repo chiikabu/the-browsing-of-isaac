@@ -6236,3 +6236,52 @@ first frame, though -- 12-13 s against 6.5 -- because the prefetch
 competed with the boot's own downloads on the capped link. The prefetch now starts at the first presented frame instead of at load: the first frame is back at 5.7-6.0 s (the same as without the trail), and frame 300 comes at 32.0-32.7 s against 46.5-46.9 without -- 14-15 s sooner, the engine waiting 1.7-1.8 s for windows against 20.
 
 **Drives on the round's module and page.** edges 22 ok / 0 fail, EDIT FILE PASS 11/11, page 1 ok / 0 fail, saves PASS 15/15, floors PASS 21/21 (59.3-59.9 fps, renderer 1181-1644 MB), family 4048/4048 pass, 0 fail.
+
+### 21.74 Round 60: the memory map, the Worker's cache after the boot, the uploads in bands
+
+**The driver (`drive_memory.mjs`, new).** The page boots to frame 600 and,
+with `options=` and `stage=`, into a floor by console the floors driver's
+way; then the OS's figures for the renderer and the GPU process (working
+set and private bytes, `SystemInfo.getProcessInfo` and Get-Process), a
+detailed memory-infra dump through CDP tracing (every allocator's
+effective size, per process), and a census of every `texImage2D` the GL
+glue made (an init script wraps the prototype). One reading is the
+collector's timing: the same page read 1,094 MB and 1,634 MB of working
+set at the same floor five minutes apart, the second with 78 MB of
+JavaScript garbage pending -- so the driver asks for three garbage
+collections first (`HeapProfiler.collectGarbage`) and reports both
+readings. After that the figures repeat within 20 MB.
+
+**What the dump says, and what it cannot.** At stage 2 the renderer's
+working set is 1.06-1.10 GB, its private bytes 1.47-1.51 GB (the 1,088 MiB
+wasm memory is committed whole on Windows; on ChromeOS only the touched
+pages are resident), the GPU process 510-520 MB. memory-infra attributes
+560 MB of it: partition_alloc 220-243 MB, `gpu/mapped_memory` 98 MB (a 64
+MB and a 32 MB transfer chunk, the same bytes again as `shared_memory` and
+in the GPU process), malloc 105-109 MB, the WebGL drawing buffer 26 MB,
+v8 8 MB. The wasm memory and the wasm code are not in it (the v8 provider
+reports its JavaScript heaps only), which is where the other half a
+gigabyte lives: the guest arena's 352 MiB touched span (§21.65), the
+host's LRU archive windows (32 a file, 128 MB when all four files are
+touched), and the module's Liftoff code.
+
+**The reader Worker's cache.** The Worker held up to its 128 MB budget of
+windows fetched ahead and never asked for, plus the trail's leftovers, for
+the page's life: 1,157 MB of working set against 1,078 with `?reader=0`.
+At frame 600 (the title up, its resources read) the page now tells it to
+drop its cache and the trail and to keep 8 MB of read-ahead for play
+(`clear`); 1,091-1,101 MB against 1,062-1,071 with the reader off, the
+rest the Worker isolate itself. The memory image's 8 MB (isaac.segs.bin)
+was held by the boot function's frame for as long as main() runs -- it is
+dropped once placed.
+
+**The uploads.** The census: 702 `texImage2D` calls, 419 MB of texels in
+all, 35 of 4 MB or more, 5 of 16 MB or more, the largest 64 MB (a
+4096x4096 RGBA sheet). Chrome's GL client stages an upload through a
+mapped transfer chunk sized for it and keeps the chunk, so that one sheet
+is the 64 MB chunk (and the 32 MB one another sheet) resident in both
+processes. The host's `glTexImage2D` now allocates with a null pointer and
+sends the rows as `glTexSubImage2D` bands of at most 4 MB when the upload
+is larger (RGBA, RGB, LUMINANCE(_ALPHA) UNSIGNED_BYTE, the default unpack
+alignment: all the engine uses); `ISAAC_GL_TEX_BAND=0` keeps the whole
+uploads. The pixels are the same: the headless runner's frames 100, 200, 300 and 399 hash identically with the bands and without (`ISAAC_GL_TEX_BAND=0`; 580 uploads on that run, 6 of them in 38 bands). Memory at stage 2, garbage collected first: the renderer's working set 1,002-1,004 MB against 1,090 (its `gpu` allocator 19 MB against 115: the 64 and 32 MB chunks are gone), the GPU process 409-410 MB against 511 of working set -- and 762-764 MB against 607 of private bytes, committed but not resident, ANGLE's own staging for the sub-image path on this D3D11 machine; a Chromebook's ANGLE is another backend, and resident pages are what it pays for. The page check passes.

@@ -34,6 +34,24 @@
 #include "shim_decls.h"
 
 #include <GLES3/gl3.h>
+#include <stdlib.h>                    /* round 60: getenv for the band switch, ahead of the report */
+
+/* Round 60: a large upload goes in bands. Chrome's GL client stages every
+ * texImage2D through a mapped transfer chunk sized for the upload, and keeps
+ * the chunk: one 4096x4096 RGBA sheet (64 MB) left a 64 MB and a 32 MB chunk
+ * resident in the renderer and, as shared memory, in the GPU process for the
+ * page's life (memory-infra, drive_memory.mjs). The same texels arrive as a
+ * null allocation plus glTexSubImage2D rows of at most TEX_BAND_BYTES, so the
+ * chunk never grows past that. RGBA / RGB / LUMINANCE(_ALPHA) UNSIGNED_BYTE
+ * only (all the engine uses); the unpack alignment is the default 4 (the
+ * engine never sets it). ISAAC_GL_TEX_BAND=0 keeps the whole uploads (the A/B). */
+#define TEX_BAND_BYTES (4u << 20)
+static int g_tex_band_mode = -1;
+static uint32_t g_tex_uploads, g_tex_banded, g_tex_bands;
+static int tex_band_mode(void) {
+    if (g_tex_band_mode < 0) { const char *e = getenv("ISAAC_GL_TEX_BAND"); g_tex_band_mode = (e && *e == '0') ? 0 : 1; }
+    return g_tex_band_mode;
+}
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <stdlib.h>
@@ -191,6 +209,8 @@ void isaac_web_gl_report(void) {
     isaac_log("[isaac][gl] web backend: %u GL calls, %u GL errors, %u frames presented",
               g_gl_calls, g_gl_errors, g_present_count);
     isaac_glc_report();
+    isaac_log("[isaac][gl] texture uploads: %u, %u of them in bands of %u MB (%u bands)%s",
+              g_tex_uploads, g_tex_banded, TEX_BAND_BYTES >> 20, g_tex_bands, tex_band_mode() ? "" : " -- ISAAC_GL_TEX_BAND=0");
     isaac_log("[isaac][gl] redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u, "
               "attrib enables %u, uniforms %u",
               gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp, gls_skip_attrib, gls_skip_uniform);
@@ -480,6 +500,28 @@ GLFN(glShaderSource) {
 GLFN(glTexImage2D) {
     ENTER;
     isaac_glc_tex_image(A(0));
+    ++g_tex_uploads;
+    {
+        GLenum target = A(0), format = A(6), type = A(7);
+        GLsizei w = (GLsizei)A(3), h = (GLsizei)A(4);
+        const uint8_t *px = (const uint8_t *)AP(8);
+        uint32_t bpp = type != GL_UNSIGNED_BYTE ? 0u : format == GL_RGBA ? 4u : format == GL_RGB ? 3u :
+                       format == GL_LUMINANCE_ALPHA ? 2u : (format == GL_LUMINANCE || format == GL_ALPHA) ? 1u : 0u;
+        if (tex_band_mode() && px && bpp && w > 0 && h > 1 && (uint64_t)w * (uint64_t)h * bpp > (uint64_t)TEX_BAND_BYTES) {
+            uint32_t row = ((uint32_t)w * bpp + 3u) & ~3u;
+            uint32_t rows = TEX_BAND_BYTES / row;
+            GLsizei y;
+            if (rows < 1u) rows = 1u;
+            glTexImage2D(target, (GLint)A(1), (GLint)A(2), w, h, (GLint)A(5), format, type, NULL);
+            for (y = 0; y < h; y += (GLsizei)rows) {
+                GLsizei n = (h - y) < (GLsizei)rows ? (h - y) : (GLsizei)rows;
+                glTexSubImage2D(target, (GLint)A(1), 0, y, w, n, format, type, px + (size_t)y * row);
+                ++g_tex_bands;
+            }
+            ++g_tex_banded;
+            RET0;
+        }
+    }
     glTexImage2D(A(0), (GLint)A(1), (GLint)A(2), (GLsizei)A(3), (GLsizei)A(4), (GLint)A(5),
                  A(6), A(7), AP(8));
     RET0;

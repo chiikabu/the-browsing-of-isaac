@@ -314,3 +314,22 @@ test('round 59: the saves round trip is driven on the shipping page, and the men
   const pl = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
   assert.ok(pl.includes("console.log('[menu] the file chooser was asked for');"), 'the import logs the chooser call');
 });
+
+test('round 60: after the boot the reader Worker drops what it fetched ahead and keeps a small read-ahead', () => {
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes('const READER_PLAY_BUDGET = 8 << 20, READER_CLEAR_FRAME = 600;'), 'the play budget and the frame');
+  assert.ok(b.includes("if (n === READER_CLEAR_FRAME && reader) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }"), 'the page tells the Worker at frame 600');
+  assert.ok(b.includes("if (d.clear) { cache.clear(); held = inflightBytes; budget = d.budget; jobs = []; ji = 0; return; }"), 'the Worker drops its cache and the trail, keeps what is in flight, takes the new budget');
+});
+
+test('round 60: a large texture upload goes in bands, so the GL transfer chunk never grows past 4 MB', () => {
+  const g = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_gl_webgl.c'), 'utf8');
+  assert.ok(g.includes('#define TEX_BAND_BYTES (4u << 20)') && g.includes('getenv("ISAAC_GL_TEX_BAND")'), 'the band size and the A/B switch');
+  assert.ok(g.includes('glTexImage2D(target, (GLint)A(1), (GLint)A(2), w, h, (GLint)A(5), format, type, NULL);') && g.includes('glTexSubImage2D(target, (GLint)A(1), 0, y, w, n, format, type, px + (size_t)y * row);'), 'a null allocation, then rows');
+  assert.ok(g.includes('uint32_t row = ((uint32_t)w * bpp + 3u) & ~3u;'), 'rows at the default unpack alignment');
+  assert.ok(g.includes('texture uploads: %u, %u of them in bands of %u MB (%u bands)%s'), 'the census line');
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes("dropBody(blob);                                           // round 60: this frame lives as long as main() does"), 'the placed image\'s bytes are dropped');
+  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_memory.mjs'), 'utf8');
+  assert.ok(d.includes("await cdp.send('HeapProfiler.collectGarbage')") && d.includes('window.__texUploads = T;'), 'the memory driver collects garbage before its reading and counts the uploads');
+});

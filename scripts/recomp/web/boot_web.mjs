@@ -169,6 +169,7 @@ const windowsSeen = new Set();
 // ahead. Round 56: a Worker reads every window (below).
 const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;
 const TRAIL_SHIPPED = 'boot-trail.json';                  // round 59: the dist's own trail (ship.py --trail), for a first visit
+const READER_PLAY_BUDGET = 8 << 20, READER_CLEAR_FRAME = 600;   // round 60: after the boot the Worker keeps only a little read-ahead
 const FS_WINDOW = 1 << 20;                                // the host's window (FS_WIN in host_shims_fs.c)
 const trail = [];                                         // [src, off, len] in read order, until written
 let prefetched = 0, prefetchHits = 0, prefetchMisses = 0, trailKept = 0, trailWritten = false;
@@ -187,15 +188,15 @@ let trailShipped = false;                                 // the trail came with
 // there is no Worker).
 const READER_WORKER = `
 const cache = new Map(), inflight = new Map(), done = new Set();
-let jobs = [], ji = 0, budget = 0, held = 0, parallel = 4, prefetched = 0, ahead = 0;
+let jobs = [], ji = 0, budget = 0, held = 0, inflightBytes = 0, parallel = 4, prefetched = 0, ahead = 0;
 function start(key, url, len, why, want) {
-  inflight.set(key, want | 0); held += len;
+  inflight.set(key, want | 0); held += len; inflightBytes += len;
   fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null)).then((buf) => {
-    const w = inflight.get(key); inflight.delete(key); held -= len;
+    const w = inflight.get(key); inflight.delete(key); held -= len; inflightBytes -= len;
     if (w) { done.add(key); postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []); }
     else if (buf && !done.has(key)) { cache.set(key, buf); held += buf.byteLength; if (why === 'trail') prefetched += 1; else ahead += 1; }
   }).catch(() => {
-    const w = inflight.get(key); inflight.delete(key); held -= len;
+    const w = inflight.get(key); inflight.delete(key); held -= len; inflightBytes -= len;
     if (w) postMessage({ want: w, buf: null, hit: false, pf: prefetched, ah: ahead });
   }).finally(pump);
 }
@@ -208,6 +209,7 @@ function pump() {
 onmessage = (e) => {
   const d = e.data;
   if (d.jobs) { jobs = d.jobs; budget = d.budget; parallel = d.parallel; pump(); return; }
+  if (d.clear) { cache.clear(); held = inflightBytes; budget = d.budget; jobs = []; ji = 0; return; }
   if (!d.want) return;
   const buf = cache.get(d.key);
   if (buf) { cache.delete(d.key); held -= buf.byteLength; done.add(d.key); postMessage({ want: d.want, buf, hit: true, pf: prefetched, ah: ahead }, [buf]); }
@@ -345,6 +347,11 @@ cfg.isaacWantsFrame = (n) => {
   window.isaacFrame = n;
   if (n >= 300 && !trailWritten) writeTrail();            // round 55: the boot's windows, kept for the next visit
   if (!trailArmed) { trailArmed = true; if (trailJobs) armTrail(trailJobs); }   // round 59: the prefetch starts here
+  // round 60: the boot is over by frame 600 (the title up, its resources read): the
+  // Worker drops the windows it fetched ahead and never handed over (up to the
+  // 128 MB budget -- ~80 MB of the renderer's working set) and keeps 8 MB of
+  // read-ahead for play; the trail's leftovers go with them
+  if (n === READER_CLEAR_FRAME && reader) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
   const want = interactive ? (keepEvery ? n % keepEvery === 0 : false)
     : (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
   if (want) wantedFrame = n;
@@ -563,6 +570,7 @@ try {
   const nseg = await stageOk('place memory image', () => m._isaac_place_image(p, blob.length));
   log(`  isaac.segs.bin ${blob.length} bytes -> ${nseg} segments`);
   m._free(p);
+  dropBody(blob);                                           // round 60: this frame lives as long as main() does
   if (nseg === null || nseg < 0) throw new Error('image placement failed');
 
   // --- layout + guard
