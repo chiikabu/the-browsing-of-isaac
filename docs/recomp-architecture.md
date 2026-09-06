@@ -6631,3 +6631,59 @@ and level, a 15 kHz tone is left byte for byte alone.
 **What is left.** The arena's high-water mark fell to 249.4 MiB, so the 512
 MiB round 66 gave it is now 262 MiB of headroom -- there is another 128 MiB
 of committed wasm memory to hand back.
+
+### 21.82 Round 68: the music at q2, and the textures the engine will not take
+
+**The music.** Round 28 re-encoded the catalogue at Vorbis q3 and left it
+there. q2 was measured on a sample at 24 % smaller, so it was applied the
+way round 28 applies anything: from the *pristine* archives by key
+(`optimize.py music --source`), so a track is encoded once from the
+original and never from the q3 copy. 167 of 179 catalogued tracks were
+replaced (the other 12 are 1-4 kbps layer intros already below q2), and
+the shipping bundle went from 619.3 MB to **581.7 MB**. This is not on the
+boot path -- the boot reads three windows of music -- so it buys total
+download, not the wait for the title screen. Unlike round 67 it is a real
+quality step rather than a measured-inaudible one, taken deliberately.
+
+**The textures: a 20 % that was not there.** Round 28 ran oxipng with
+every lossless reduction switched off, and this round asked why. On a
+300-image sample the reductions are worth 20.0 % with the decoded RGBA
+identical on every one -- so they were turned on, and 8,434 images were
+rewritten, and the game did not boot:
+
+```
+Failed to load image '...bgblack.png' because the component depth is not 8-bit.
+Failed to load image 'resources/gfx/shadow.png' because it has a unsupported number of channels (8)
+TRAP in main @ 0x00931050: memory access out of bounds
+```
+
+The engine's own image loader takes **8-bit components in RGB or RGBA and
+nothing else**. It refuses anything else, carries on with no surface, and
+then walks off the end of memory -- which is why the failure arrives as a
+trap in a function that has nothing to do with images. Every one of the
+game's 10,158 shipped PNGs is 8-bit colour type 2 or 6, so the limit is
+the engine's and the art never tests it.
+
+With both rules enforced the only reduction left is dropping an alpha
+channel from an image that is opaque everywhere: **8 images in 400, worth
+0.00 %**. Round 28's conservative setting was right, and now the reason is
+written down instead of assumed. `--reduce` stays as the guard that states
+the two limits and refuses to break them; it is off by default and the
+shipped pass is unchanged.
+
+**The lesson.** Every offline check passed -- IHDR, mode, palette, gamma,
+decoded RGBA, 8,434 of 8,434 -- and the artefact was still broken. What
+caught it was rendering 1,500 frames and hashing them. An asset check that
+does not run the engine is not a check.
+
+**Measured.** With the music applied: bundle **581.7 MB**, dist transfer
+**593.2 MB**, and a first visit is unchanged at 175 windows / 173.4 MB -- music is not
+in it. Frame 300 reads 28.8 s at 200 Mbit/s and 54.0 s at 50, and the
+reader now misses **one** window of 175. The explorer's frames hash identically to round
+67 (9 of 9 kept frames, 1,501 presented), which they must -- nothing
+visual changed.
+
+**Checks.** The engine's per-entry checksum pass is clean with 0 allocation
+failures; the browser's master output still carries the music (title window
+100 % above the RMS threshold, `drive_audio.mjs` exit 0); page, EDIT FILE
+11 of 11, saves 15 of 15, floors 21 of 21, edges 22 of 22, family 4,054.

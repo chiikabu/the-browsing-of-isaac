@@ -151,8 +151,13 @@ def _png_check(orig: bytes, new: bytes, reduce: bool = False) -> str:
     the decoded samples identical, palette + tRNS identical for indexed images, RGBA identical.
 
     With --reduce (round 68) the point of the pass is to change the colour type, so the check
-    is what a reader can actually observe: the same size and the same decoded RGBA, alpha
-    included. Every texture reaches GL as RGBA, so that is the whole of it."""
+    is the same size and the same decoded RGBA, alpha included -- every texture reaches GL as
+    RGBA -- plus the two rules the engine itself wrote. Its loader refuses an image whose
+    component depth is not 8 bits ("because the component depth is not 8-bit") and one in a
+    colour type the shipped art does not use ("unsupported number of channels"); either way it
+    carries on with nothing and then traps on the missing surface. So an output is rejected
+    here unless it is 8-bit RGB or RGBA, however identical it decodes. Round 68 measured what
+    that leaves: 8 images in 400 are opaque enough to drop an alpha channel, worth 0.00 %."""
     from PIL import Image
     i1 = Image.open(io.BytesIO(orig))
     i2 = Image.open(io.BytesIO(new))
@@ -160,6 +165,10 @@ def _png_check(orig: bytes, new: bytes, reduce: bool = False) -> str:
     i2.load()
     if i1.size != i2.size:
         return "size differs"
+    if new[24] != 8:
+        return "bit depth %d: the engine's loader takes 8-bit components only" % new[24]
+    if new[25] not in (2, 6):
+        return "colour type %d: the engine's loader takes RGB and RGBA only" % new[25]
     if not reduce:
         if orig[8:33] != new[8:33]:
             return "IHDR differs"
@@ -186,8 +195,10 @@ def _png_worker(task):
     try:
         out = oxipng.optimize_from_memory(
             data, level=_PNG_LEVEL, deflate=oxipng.Deflaters.libdeflater(12), strip=oxipng.StripChunks.none(),
-            bit_depth_reduction=_PNG_REDUCE, color_type_reduction=_PNG_REDUCE, palette_reduction=_PNG_REDUCE,
-            grayscale_reduction=_PNG_REDUCE, interlace=None, optimize_alpha=False, fix_errors=False)
+            bit_depth_reduction=False,          # 8-bit components only (the engine's loader)
+            color_type_reduction=_PNG_REDUCE,   # RGBA -> RGB where the alpha is opaque
+            palette_reduction=False, grayscale_reduction=False,   # the loader refuses both
+            interlace=None, optimize_alpha=False, fix_errors=False)
     except Exception as ex:
         return idx, None, "oxipng error: %s" % ex
     status = _png_check(data, out, _PNG_REDUCE)
@@ -675,7 +686,8 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_census)
     p = sub.add_parser("png"); p.add_argument("archive"); p.add_argument("out"); p.add_argument("--jobs", type=int, default=8)
     p.add_argument("--reduce", action="store_true",
-                   help="let oxipng change the colour type, bit depth and palette (round 68): the decoded RGBA is still identical")
+                   help="let oxipng drop an opaque alpha channel (round 68). Measured at 0.00 %%: the engine's "
+                        "loader takes 8-bit RGB/RGBA only, so palette, greyscale and narrow depths are refused")
     p.add_argument("--level", type=int, default=4); p.add_argument("--json")
     p.set_defaults(fn=cmd_png)
     p = sub.add_parser("music"); p.add_argument("archive"); p.add_argument("out"); p.add_argument("--music", required=True)

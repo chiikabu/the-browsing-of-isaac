@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-67: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-68: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 68: the music at q2, and the textures the engine will not take** (§21.82).
+  Music re-encoded from the pristine archives at q2 (167 of 179 tracks):
+  bundle 619.3 -> **581.7 MB**, off the total download rather than the boot.
+  The textures gave nothing: oxipng's lossless reductions are worth 20 % and
+  the engine's loader **takes 8-bit RGB/RGBA only** -- it refuses the rest,
+  carries on with no surface and traps. 8 images in 400 can drop an opaque
+  alpha, worth 0.00 %. Every offline check passed on the broken build; what
+  caught it was rendering 1,500 frames and hashing them.
 - **Round 67: half the sound catalogue, where half is all there was** (§21.81).
   976 of 1,553 preloaded WAVs carry under 0.5 % of their energy above 11 kHz,
   so `optimize.py halve-sfx` filters and decimates those by two (44,100 ->
