@@ -205,11 +205,13 @@ export function createEditFileMenu(opts) {
     }
     play('select');
     state.message = i === 0 ? 'EXPORTING...' : 'CHOOSE A FILE...';
+    log(`[menu] ${items()[i]} for file ${state.slot + 1}`);
     draw();
     try {
       const r = await (i === 0 ? actions.export(state.slot) : actions.import(state.slot));
       state.message = r || (i === 0 ? 'EXPORTED' : 'IMPORTED');
     } catch (e) { state.message = (e && e.message ? e.message : 'FAILED').toUpperCase().slice(0, 28); }
+    log(`[menu] ${state.message}`);
     draw();
   };
   const onKey = (ev, down) => {
@@ -229,6 +231,7 @@ export function createEditFileMenu(opts) {
   return {
     open, close, onKey, draw, toggleFps,
     isOpen: () => state.open,
+    message: () => state.message,
     fpsViewer: () => state.fpsOn,
     setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!state.ready) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
     preload: load,

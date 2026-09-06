@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-58: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-59: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,14 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 59: the saves round trip, the shipped boot trail** (§21.73).
+  `drive_saves.mjs`: export on file 1 (a zip, byte-exact), import into file
+  2 (exact before and after the page's reload), a bare .dat into file 3:
+  15/15 (the engine's `save_backups/` copies were the false duplicates).
+  `ship.py build --trail <drive_boot's boot-trail.json>` ships the trail;
+  a first visit hits 306/442 windows. Under a 200 Mbit/s cap (`drive_boot
+  net=200`) frame 300 comes 10-12 s sooner; with the prefetch deferred to the first frame, 32 s against 46.5 (the first frame unchanged at 6 s); `drive_memory.mjs`
+  (new) dumps the renderer's allocators through memory-infra.
 - **Round 58: tinfl on the host, the host at -O3** (§21.72). `sub_00a85710`
   is miniz 1.x's `tinfl_decompress` (the archive stream's inflater, 10 %
   of the loading window): ported from the public source with the 1.x

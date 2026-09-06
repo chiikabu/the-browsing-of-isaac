@@ -297,6 +297,7 @@ async function importSlot(slot) {
     const onChange = () => { input.removeEventListener('change', onChange); resolve(input.files && input.files[0]); input.value = ''; };
     input.addEventListener('change', onChange);
     input.click();
+    console.log('[menu] the file chooser was asked for');
   });
   if (!file) throw new Error('NO FILE CHOSEN');
   const db = await openStore();

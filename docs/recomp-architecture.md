@@ -6198,3 +6198,41 @@ against the lifted body's 2.4).
 **Measured.** Frame 300 at the 4x throttle: 22.3 s cold (24.0 last
 round), 18.9 s warm (22.3). Drives on this module: the saves round trip
 below is round 59's.
+
+### 21.73 Round 59: the saves round trip driven, and the dist ships its boot trail
+
+**The saves round trip (`drive_saves.mjs`, new).** A persistentgamedata1.dat
+of 1,024 known bytes is seeded into the save store with options.ini; the
+player's way in; EXPORT FILE on file 1 hands the browser a zip, read back
+in node: one stored entry under the save's travel name with the store's
+bytes, and a manifest naming slot 1. BACK; Right onto file 2; IMPORT FILE
+opens the file chooser (a hidden input's `click()` from the key event --
+checked in isolation: it opens with or without a user activation, and
+survives the page reloading itself), which gets that zip: the store holds
+the same bytes as persistentgamedata2.dat, key and travel name renumbered,
+before the page reloads itself and after. After the reload a bare .dat
+goes into file 3 the same way. 15 of 15. Two things the driver learnt on
+the way: the engine keeps a `save_backups/<date>.persistentgamedataN.dat`
+copy of every file it opens (a regex over the store's keys counted them
+as duplicates; the checks go by the exact key now), and a driver that
+takes several choosers across reloads is steadier with one `filechooser`
+listener and a queue than with a `waitForEvent` each time. The menu now
+logs the entry chosen and its outcome, and exposes `message()`.
+
+**The dist ships its boot trail.** `drive_boot.mjs` leaves the trail its
+visit recorded as `<out>/boot-trail.json`; `ship.py build --trail <file>`
+places it in the dist and the manifest as `/boot-trail.json` (23 KB, 441
+windows); a page with no trail of its own fetches it (`?trail=0`
+declines: the A/B). A fresh profile's first visit then reads like a
+returning one: 306 of 442 windows hit, the engine waiting 1.0 s for
+windows instead of 2.6-2.9. On localhost that is inside the noise of the
+frame-300 time (22.9 s against 22.3), because there the cold/warm gap is
+the first boot's own work (the default options and saves it writes, the
+backups), not the reads. Under a 200 Mbit/s download cap (`drive_boot.mjs
+net=200`, CDP's emulation, 20 ms of latency) the reads are the slower
+party and the trail is worth 10-12 s: frame 300 at 38-40 s with it
+against 48-52 without (the engine waited 2 s against 21). It cost the
+first frame, though -- 12-13 s against 6.5 -- because the prefetch
+competed with the boot's own downloads on the capped link. The prefetch now starts at the first presented frame instead of at load: the first frame is back at 5.7-6.0 s (the same as without the trail), and frame 300 comes at 32.0-32.7 s against 46.5-46.9 without -- 14-15 s sooner, the engine waiting 1.7-1.8 s for windows against 20.
+
+**Drives on the round's module and page.** edges 22 ok / 0 fail, EDIT FILE PASS 11/11, page 1 ok / 0 fail, saves PASS 15/15, floors PASS 21/21 (59.3-59.9 fps, renderer 1181-1644 MB), family 4048/4048 pass, 0 fail.

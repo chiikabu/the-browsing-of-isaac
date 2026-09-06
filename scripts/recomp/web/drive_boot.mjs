@@ -6,7 +6,7 @@
 // parallel, while the module compiles, and the engine's reads hit the
 // cache). Reported per visit: the first frame's time, the time to frame 300
 // and 600, the archive windows read, prefetched and hit.
-//   node scripts/recomp/web/drive_boot.mjs <url> <out-dir> [gl=hw] [cpu=4] [visits=2] [fresh=1]
+//   node scripts/recomp/web/drive_boot.mjs <url> <out-dir> [gl=hw] [cpu=4] [visits=2] [fresh=1] [net=<Mbit/s>]
 // cpu= throttles the CPU (4 = a Chromebook-class core); fresh=1 starts from an
 // empty profile (the default), so visit 1 is cold.
 import { chromium } from 'playwright';
@@ -22,6 +22,10 @@ if (opt.fresh !== '0') rmSync(PROFILE, { recursive: true, force: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const glArgs = (opt.gl || 'hw') === 'hw' ? ['--use-angle=default', '--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader'];
 const cpu = Number(opt.cpu || '4');
+// net=<Mbit/s> (round 59): a download cap through CDP, 20 ms of latency -- the
+// trail's prefetch overlaps the engine's loading only when the network is the
+// slower party, which localhost never is
+const netMbps = Number(opt.net || '0');
 const visits = Number(opt.visits || '2');
 const results = [];
 for (let v = 1; v <= visits; v++) {
@@ -30,6 +34,7 @@ for (let v = 1; v <= visits; v++) {
   const page = ctx.pages()[0] || await ctx.newPage();
   const cdp = await ctx.newCDPSession(page);
   if (cpu > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu });
+  if (netMbps > 0) await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 20, downloadThroughput: netMbps * 125000, uploadThroughput: netMbps * 125000 });
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   const t0 = Date.now();
@@ -43,11 +48,14 @@ for (let v = 1; v <= visits; v++) {
   const s = await state();
   const lazy = s.lazy || {};
   const stored = await page.evaluate(() => { try { const t = localStorage.getItem('isaac-boot-trail'); return t ? JSON.parse(t).length : 0; } catch (e) { return -1; } });
+  // round 59: the trail this visit left, for ship.py --trail (the dist then ships it to first visits)
+  const trailJson = await page.evaluate(() => { try { return localStorage.getItem('isaac-boot-trail') || ''; } catch (e) { return ''; } });
+  if (trailJson) writeFileSync(join(OUT, 'boot-trail.json'), trailJson);
   const r = { visit: v, firstFrameMs: first, frame300Ms: f300, frame600Ms: f600, windows: lazy.windows, windowMB: lazy.windowBytes != null ? +(lazy.windowBytes / 1048576).toFixed(1) : null,
-    prefetched: lazy.prefetched, prefetchHits: lazy.prefetchHits, prefetchMisses: lazy.prefetchMisses, aheadFetched: lazy.aheadFetched, readerWaits: lazy.readerWaits, readerWaitMs: lazy.readerWaitMs, reader: lazy.reader, trailKept: lazy.trailKept, trailWritten: lazy.trailWritten, trailLen: lazy.trailLen, storedTrail: stored, errors: errors.length };
+    prefetched: lazy.prefetched, prefetchHits: lazy.prefetchHits, prefetchMisses: lazy.prefetchMisses, aheadFetched: lazy.aheadFetched, readerWaits: lazy.readerWaits, readerWaitMs: lazy.readerWaitMs, reader: lazy.reader, trailKept: lazy.trailKept, trailShipped: lazy.trailShipped, trailWritten: lazy.trailWritten, trailLen: lazy.trailLen, storedTrail: stored, errors: errors.length };
   results.push(r);
   if (Array.isArray(lazy.trail)) console.log(`[boot]   the first windows: ${lazy.trail.slice(0, 40).join(' ')}`);
-  console.log(`[boot] visit ${v} (${v === 1 ? 'cold' : 'warm'}): first frame ${first} ms, frame 300 at ${f300} ms, frame 600 at ${f600} ms; windows ${r.windows} (${r.windowMB} MB), prefetched ${r.prefetched}, hits ${r.prefetchHits}, misses ${r.prefetchMisses}, ahead ${r.aheadFetched}, waits ${r.readerWaits} (${r.readerWaitMs} ms), reader ${r.reader}, trail kept ${r.trailKept}, written ${r.trailWritten} (${r.trailLen} entries, ${stored} stored)${errors.length ? '; ERRORS ' + errors[0].slice(0, 80) : ''}`);
+  console.log(`[boot] visit ${v} (${v === 1 ? 'cold' : 'warm'}): first frame ${first} ms, frame 300 at ${f300} ms, frame 600 at ${f600} ms; windows ${r.windows} (${r.windowMB} MB), prefetched ${r.prefetched}, hits ${r.prefetchHits}, misses ${r.prefetchMisses}, ahead ${r.aheadFetched}, waits ${r.readerWaits} (${r.readerWaitMs} ms), reader ${r.reader}, trail kept ${r.trailKept}${r.trailShipped ? ' (shipped)' : ''}, written ${r.trailWritten} (${r.trailLen} entries, ${stored} stored)${errors.length ? '; ERRORS ' + errors[0].slice(0, 80) : ''}`);
   await ctx.close();
 }
 writeFileSync(join(OUT, 'boot.json'), JSON.stringify({ url: URL, cpu, results }, null, 1));

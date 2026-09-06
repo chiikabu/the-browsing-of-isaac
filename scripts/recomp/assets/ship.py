@@ -56,6 +56,7 @@ MANIFEST_FORMAT = "isaac-recomp-dist/1"
 INDEX_NAME = "instance_index.json"
 INSTANCE_DIR = "instance"
 PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs")
+TRAIL_NAME = "boot-trail.json"       # round 59: the boot trail a drive_boot.mjs run left, shipped for first visits (--trail)
 MODULE_FILES = ("boot.mjs", "boot.wasm")
 SEGS_NAME = "isaac.segs.bin"
 MIN_COMPRESS = 1_000_000          # "above 1 MB": a sibling is considered from here
@@ -275,6 +276,8 @@ def cmd_build(args) -> int:
 
     for f in PAGE_FILES:
         add(f, os.path.join(web, f), "page", link=False)
+    if getattr(args, "trail", ""):
+        add(TRAIL_NAME, os.path.abspath(args.trail), "trail", link=False)
     for f in MODULE_FILES:
         add(f, os.path.join(module_dir, f), "module", link=False)
     add(SEGS_NAME, segs, "image", link=False)
@@ -508,6 +511,8 @@ def main(argv=None) -> int:
     p.add_argument("--web", default=DEFAULTS["web"], help="where play.html, play.mjs and boot_web.mjs live")
     p.add_argument("--dist", default=DEFAULTS["dist"], help="the output folder, default .scratch/game-dist")
     p.add_argument("--copy", action="store_true", help="copy the bundle's files instead of hard-linking them")
+    p.add_argument("--trail", default="", help="a boot trail (drive_boot.mjs writes <out>/boot-trail.json) shipped as /boot-trail.json: "
+                   "a first visit's reader fetches the windows it names ahead of the engine")
     p.add_argument("--no-compress", action="store_true", help="no precompressed siblings at all")
     p.add_argument("--no-brotli", action="store_true", help="gzip siblings only")
     p.add_argument("--brotli-quality", type=int, default=11)

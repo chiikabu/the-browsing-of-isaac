@@ -292,3 +292,25 @@ test('round 55/56: the boot trail, and every archive window read by a Worker wit
   const c = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_fs.c'), 'utf8');
   assert.ok(c.includes('return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;'), 'the C side hands a promise through to JSPI');
 });
+
+test('round 59: a first visit gets the trail the dist ships', () => {
+  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(b.includes("const TRAIL_SHIPPED = 'boot-trail.json';") && b.includes("fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {"), 'no trail of its own: the page asks for the shipped one');
+  assert.ok(b.includes("if (!Array.isArray(shipped) || !shipped.length || reader !== w) return;") && b.includes("trailKept = shipped.length; trailShipped = true;"), 'a Worker that is gone gets nothing; the figures say the trail was shipped');
+  assert.ok(b.includes("if (!trailArmed) { trailArmed = true; if (trailJobs) armTrail(trailJobs); }") && b.includes("w.postMessage({ jobs: [], budget: READER_BUDGET, parallel: READER_PARALLEL });"), 'the prefetch starts at the first presented frame, after the boot\'s own downloads');
+  const sh = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'ship.py'), 'utf8');
+  assert.ok(sh.includes('TRAIL_NAME = "boot-trail.json"') && sh.includes('add(TRAIL_NAME, os.path.abspath(args.trail), "trail", link=False)') && sh.includes('p.add_argument("--trail"'), 'ship.py --trail places it in the dist and the manifest');
+  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_boot.mjs'), 'utf8');
+  assert.ok(d.includes("if (trailJson) writeFileSync(join(OUT, 'boot-trail.json'), trailJson);"), 'drive_boot.mjs leaves the trail for ship.py');
+});
+
+test('round 59: the saves round trip is driven on the shipping page, and the menu says what it does', () => {
+  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_saves.mjs'), 'utf8');
+  assert.ok(d.includes("page.on('filechooser', (fc) => {") && d.includes('const nextChooser = (ms) =>'), 'one file-chooser listener for the whole drive, a queue behind it (the reloads in between)');
+  assert.ok(d.includes("const keyOf = (n) => SAVE_DIR + `persistentgamedata${n}.dat`;") && d.includes('const lookalikes = (all, n) =>'), 'a file is found by the exact key the page writes; the engine\'s save_backups copies are named, not counted');
+  assert.ok(d.includes("check(imported.length === 1 && same(imported[0].bytes, before[0].bytes)") && d.includes('a bare .dat imports into file 3 under this file'), 'the import is checked before the page reloads itself, and a bare .dat goes in too');
+  const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
+  assert.ok(m.includes("log(`[menu] ${items()[i]} for file ${state.slot + 1}`);") && m.includes("log(`[menu] ${state.message}`);") && m.includes('message: () => state.message,'), 'the menu logs the choice and its outcome, and exposes the message');
+  const pl = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.ok(pl.includes("console.log('[menu] the file chooser was asked for');"), 'the import logs the chooser call');
+});

@@ -77,7 +77,7 @@ const lazyByFile = new Map();                              // src -> bytes (roun
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
 const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
 window.isaacLazyStats = () => ({ reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
-  prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs: Math.round(readerWaitMs), reader: !!reader, trailKept, trailLen: trail.length, trailWritten,
+  prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs: Math.round(readerWaitMs), reader: !!reader, trailKept, trailShipped, trailLen: trail.length, trailWritten,
   top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
   try {
@@ -168,10 +168,12 @@ const windowsSeen = new Set();
 // 300th frame (localStorage, this origin) and the next visit fetches them
 // ahead. Round 56: a Worker reads every window (below).
 const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;
+const TRAIL_SHIPPED = 'boot-trail.json';                  // round 59: the dist's own trail (ship.py --trail), for a first visit
 const FS_WINDOW = 1 << 20;                                // the host's window (FS_WIN in host_shims_fs.c)
 const trail = [];                                         // [src, off, len] in read order, until written
 let prefetched = 0, prefetchHits = 0, prefetchMisses = 0, trailKept = 0, trailWritten = false;
 let aheadFetched = 0, readerWaits = 0, readerWaitMs = 0;  // windows read ahead along a file; reads fetched on demand, and the time the engine sat suspended for them
+let trailShipped = false;                                 // the trail came with the dist, not from this browser
 // Round 56: the windows are read by a Worker. isaac_fs_lazy_pread_js is a
 // JSPI import (build_boot.py), so the promise the hook below returns parks
 // the wasm stack mid-read while this thread's loop runs, and the Worker --
@@ -216,6 +218,15 @@ onmessage = (e) => {
 };
 `;
 let reader = null, wantId = 0;
+// Round 59: the trail's prefetch starts at the first presented frame, not at
+// load. On a capped link (200 Mbit/s, the A/B) it competed with the boot's own
+// downloads and pushed the first frame from 6.5 s to 12-13 s; the windows it
+// serves are the title's, read after that frame anyway.
+let trailJobs = null, trailArmed = false;
+const armTrail = (jobs) => {
+  trailJobs = jobs;
+  if (trailArmed && reader && trailJobs && trailJobs.length) { reader.postMessage({ jobs: trailJobs, budget: READER_BUDGET, parallel: READER_PARALLEL }); trailJobs = null; }
+};
 const pendingReads = new Map();                           // id -> { src, off, len, dst, resolve, t0 }
 const lazySizes = new Map();                              // src -> bytes (the instance index): read-ahead stops at a file's end
 const lastRead = new Map();                               // src -> the last window offset: read-ahead follows a sequential file
@@ -263,7 +274,20 @@ function startReader() {
     }
     try { w.terminate(); } catch (e2) { /* gone */ }
   };
-  w.postMessage({ jobs, budget: READER_BUDGET, parallel: READER_PARALLEL });
+  w.postMessage({ jobs: [], budget: READER_BUDGET, parallel: READER_PARALLEL });
+  if (jobs.length) armTrail(jobs);
+  if (!list.length && params.get('trail') !== '0') {
+    // a first visit: the dist may ship the trail its own boot leaves (drive_boot.mjs
+    // records it, ship.py --trail places it); it arrives while the module compiles
+    // (?trail=0 declines it: the A/B)
+    let url = TRAIL_SHIPPED;
+    if (hooks.url) url = hooks.url(url);
+    fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {
+      if (!Array.isArray(shipped) || !shipped.length || reader !== w) return;
+      trailKept = shipped.length; trailShipped = true;
+      armTrail(shipped.map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len]));
+    }).catch(() => { /* no shipped trail: the visit is cold */ });
+  }
 }
 function writeTrail() {
   if (trailWritten) return;
@@ -320,6 +344,7 @@ const interactive = params.get('ISAAC_YIELD') === '1';
 cfg.isaacWantsFrame = (n) => {
   window.isaacFrame = n;
   if (n >= 300 && !trailWritten) writeTrail();            // round 55: the boot's windows, kept for the next visit
+  if (!trailArmed) { trailArmed = true; if (trailJobs) armTrail(trailJobs); }   // round 59: the prefetch starts here
   const want = interactive ? (keepEvery ? n % keepEvery === 0 : false)
     : (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
   if (want) wantedFrame = n;
