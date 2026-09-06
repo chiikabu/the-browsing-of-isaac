@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-53: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-54: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,12 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 54: three edge hunts, nothing found** (§21.68). A 600 s browser
+  soak at full speed (60 fps median, renderer working set flat at ~1,075
+  MB, GPU ~503 MB, no errors); the tab hidden for 330 s and back (22/22;
+  the forged flag covers the port's path, not Chrome's real throttling);
+  `drive_floors.mjs <url> <out> options=<ini>`: every stage 2-13 plus the
+  alternate 1c-4c by console, 59-60 fps each, memory flat, 21/21.
 - **Round 53: one static index buffer for every quad** (§21.67). The
   engine's draws are quads in one fixed index pattern (0 2 1 1 2 3 stepping
   by four), so the client-array emulation draws them from one static

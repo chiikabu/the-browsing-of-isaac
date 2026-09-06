@@ -5963,3 +5963,42 @@ flat in rounds 47-51.
 **Round 52 corrections on request** (the EDIT FILE strip erased by its ink
 from the pristine sheet and set a pixel heavier; the FPS readout as plain
 text; then Q, then M to flip it, nothing in the saves store) are in 21.66.
+
+### 21.68 Round 54: three edge hunts -- a ten-minute soak, a tab hidden for five minutes, every floor by console
+
+Three runs on the round-53 module, all on the shipping-shaped page, none of
+which found a fault; each is a driver that can be run again.
+
+**The soak.** `drive_perf.mjs seconds=600` at the machine's own speed: 60 fps
+median over 600 seconds with no ten-second sample under 56, the renderer's
+working set 1,081 MB at the start and 1,075 MB at the end (1,053 minimum,
+1,216 at one transient, 124 samples), the GPU process at 503 MB, zero page
+errors. The node explorer's 20,000-frame soak (§21.67) had said the guest
+heap does not grow with play; the browser's process says the same of the
+whole renderer.
+
+**Hidden for five and a half minutes.** `drive_edges.mjs hidden_s=330`:
+3.8 fps for the whole of it (the 250 ms timer path), the audio context
+running throughout, full rate back within two 250 ms samples, no catch-up
+stall, the music audible again. One honesty about what this covers: the
+driver forges `document.hidden`, so it exercises the port's hidden path for
+that long, not Chrome's own background throttling -- a tab that is really
+hidden for five minutes gets its timers slowed to one a minute by Chrome's
+intensive throttling, so the game then ticks once a minute (paused, in
+effect) and the same resume path brings it back.
+
+**Every floor by console.** `drive_floors.mjs` (new): options.ini seeded
+with the console enabled, a run started, and `stage N` typed for 2 through
+13 and then the alternate path's 1c, 2c, 3c, 4c (Downpour, Mines,
+Mausoleum, Corpse), each waited for its `Level::Init` line, then the frame
+rate over two seconds and the browser's process memory. Sixteen floors
+generated and transitioned into at 59.2-60.1 fps each; the renderer's
+working set 1,075-1,193 MB once the boot transient had passed (the first
+sample, 1,589 MB, is the page still holding the module's bytes and its
+JavaScript heap at 307 MB; it is 1,075 MB by the seventh floor), the GPU
+process 511-523 MB; no page error. The seeds show the game's own floor seeds
+re-rolling per stage as they should. 21/21.
+
+What the goal's list still lacks a driver for: the wasm code cache on a
+warm start (unverifiable in the browsers here, §21.60), and a real
+Chromebook (the user's device: `play.html?stats=1`).

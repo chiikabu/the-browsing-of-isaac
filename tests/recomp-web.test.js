@@ -267,3 +267,11 @@ test('round 53: draws in the standard quad pattern take one static index buffer,
   assert.ok(ca.includes('getenv("ISAAC_GL_QUAD_IBO")'), 'ISAAC_GL_QUAD_IBO=0 is the A/B');
   assert.ok(ca.includes('%u draws on the static quad index buffer (pattern %u %u %u %u %u %u), %u index blocks not the pattern'), 'the census');
 });
+
+test('round 54: the floor sweep driver seeds the console, walks every stage and watches memory per floor', () => {
+  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_floors.mjs'), 'utf8');
+  assert.ok(d.includes("const STAGES = (opt.stages || '2,3,4,5,6,7,8,9,10,11,12,13,1c,2c,3c,4c')"), 'stages 2-13 and the alternate path by default');
+  assert.ok(d.includes('await typeSlow(`stage ${st}`);') && d.includes('m_StageType (') && d.includes("`stage ${st}`"), 'each stage typed and its Level::Init awaited');
+  assert.ok(d.includes("await bcdp.send('SystemInfo.getProcessInfo');"), 'the process memory per floor');
+  assert.ok(d.includes("'the renderer working set stays within 400 MB of the first floor across the sweep'"), 'the memory check');
+});
