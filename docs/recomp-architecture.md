@@ -6558,3 +6558,76 @@ owns it; the remaining wasm memory above the host base is emscripten's own
 heap and grows on demand. Below the arena the guest image and its 256 MiB
 of host statics are what they are. The next memory question is the one the
 GPU process asks, not this one.
+
+### 21.81 Round 67: half the sound catalogue, where half is all there was
+
+**Where the bytes are.** After rounds 64 and 65 a first visit fetched 277 MB,
+and 218 of those were one thing: the WAV catalogue the engine preloads
+before the title screen, stored uncompressed and XOR-scrambled, so nothing
+downstream can squeeze it. The question is not how to pack it better. It is
+whether the bytes say anything.
+
+**They mostly do not.** A sample carries no information above its own
+highest frequency, and a spectrum says where that is. Measured over all
+1,553 catalogued WAVs (`r67_audio_census.py`, an FFT per sample): **976 of
+them carry under 0.5 % of their energy above 11 kHz**, which is the Nyquist
+of half their rate. Those bytes describe silence. The other 577 are real:
+coin drops, chain breaks, splatter, up to 94 % of their energy above the
+line.
+
+Two other ideas measured worse and were dropped. Stereo whose channels are
+bit-identical is a mono sample stored twice -- exactly **one** sample of
+1,553. And a 32 kHz target saves 70 MB against 103, because 44,100 to
+22,050 is an exact 2:1 decimation and 32 kHz is a resample.
+
+**What was built.** `optimize.py halve-sfx <archive> <out>` walks the
+catalogue, measures each sample's energy above the new Nyquist, and for the
+ones under `--threshold` (0.5 % by default) filters and decimates by two --
+127-tap Kaiser-windowed sinc, cutoff at 0.45 of the old Nyquist, the group
+delay taken back out so a one-shot keeps its attack. 44,100 becomes 22,050
+and 48,000 becomes 24,000; the bit depth and the channel count do not move,
+and everything else passes through byte for byte.
+
+| archive | samples halved | kept for treble | PCM before | after |
+|---|---|---|---|---|
+| afterbirthp.a | 710 | 430 | 218.6 MB | **132.1 MB** |
+| afterbirth.a | 143 | 70 | 35.0 MB | **23.4 MB** |
+| sfx.a | 124 | 74 | 11.9 MB | **7.6 MB** |
+
+**What it cost, measured three ways.** Offline, against the original: the
+spectrum below 90 % of the new Nyquist -- the band that is meant to survive
+-- differs by a median of **1.06 %**; the length is identical to the sample;
+the peak level moves by a median of 0.05 % and at worst 5.9 %. By
+construction no sample lost more than 0.5 % of its energy. And in the
+browser, on the real master output: the title window is **100 % of samples
+above the RMS threshold**, and `drive_audio.mjs` exits 0 -- the music and
+the menu sounds are there.
+
+**What it bought.**
+
+| | before | after |
+|---|---|---|
+| catalogue PCM | 265.5 MB | **163.1 MB** |
+| shipping bundle | 733.8 MB | **619.3 MB** (31.96 % of the original instance) |
+| dist, best encoding | 745.4 MB | **630.8 MB** |
+| a first visit | 279 windows / 277.2 MB | **176 / 173.3 MB** |
+| frame 300 at 200 Mbit/s | 30.8 s | **29.7 s** |
+| frame 300 at 50 Mbit/s | 72.9 s | **55.4 s** |
+| guest arena high-water | 350.1 MiB | **249.4 MiB** |
+
+The 50 Mbit/s figure is the one that matters: 17.5 s off the wait for the
+title screen, where rounds 64 and 65 together moved it 7.7. Those rounds
+made the reads efficient; this one made them fewer, and bytes were what was
+left. A first visit is now **173 MB against the 440 it was three rounds
+ago**.
+
+**Checks.** The engine's own per-entry checksum pass is clean, the arena
+reports 0 allocation failures over 3.2 million allocations, and the page,
+EDIT FILE (11 of 11), saves (15 of 15), floors (21 of 21), edges (22 of 22)
+and the family (4,053) all pass. `tests/recomp-assets.test.js` pins the
+behaviour on a synthetic pair: a 440 Hz tone is halved and keeps its length
+and level, a 15 kHz tone is left byte for byte alone.
+
+**What is left.** The arena's high-water mark fell to 249.4 MiB, so the 512
+MiB round 66 gave it is now 262 MiB of headroom -- there is another 128 MiB
+of committed wasm memory to hand back.

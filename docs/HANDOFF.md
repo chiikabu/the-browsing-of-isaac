@@ -1,4 +1,4 @@
-# Handoff — read this first (2026-09-05, recomp rounds 26-66: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
+# Handoff — read this first (2026-09-05, recomp rounds 26-67: fixes, video, bundle, automated player, console, saves, music, the Chromebook budget, the giant functions split, below the cap)
 
 One page to orient a fresh session. Everything below is committed on
 `codex/decomp`. Do the two session-start steps in AGENTS.md, then pick a front.
@@ -181,6 +181,15 @@ REQUIRE emsdk on PATH:
   `ISAAC_AUDIO_TRACE=1` traces every source (host and JS sides);
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
+- **Round 67: half the sound catalogue, where half is all there was** (§21.81).
+  976 of 1,553 preloaded WAVs carry under 0.5 % of their energy above 11 kHz,
+  so `optimize.py halve-sfx` filters and decimates those by two (44,100 ->
+  22,050) and leaves the 577 with real treble alone. Catalogue PCM 265.5 ->
+  **163.1 MB**, bundle 733.8 -> **619.3 MB**, a first visit 277 -> **173 MB**,
+  the title screen at 50 Mbit/s 72.9 -> **55.4 s**, the guest arena's
+  high-water mark 350.1 -> **249.4 MiB**. Proved three ways: the surviving
+  band differs by 1.06 % median, the browser's master output is 100 % above
+  the RMS threshold, and every drive passes.
 - **Round 66: the guest arena down to what the engine actually uses** (§21.80).
   The wasm memory is committed on creation, and the engine's own high-water
   report reads 350.1 MiB after 900, 4,000 and 6,000 frames -- the arena was

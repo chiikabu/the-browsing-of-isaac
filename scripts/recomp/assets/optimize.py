@@ -146,22 +146,29 @@ def cmd_census(args) -> int:
 # png
 # ---------------------------------------------------------------------------
 
-def _png_check(orig: bytes, new: bytes) -> str:
-    """IHDR byte-identical (width, height, bit depth, colour type, interlace) and the decoded
-    samples identical; palette + tRNS identical for indexed images; RGBA identical as well."""
+def _png_check(orig: bytes, new: bytes, reduce: bool = False) -> str:
+    """Without --reduce: IHDR byte-identical (width, height, bit depth, colour type, interlace),
+    the decoded samples identical, palette + tRNS identical for indexed images, RGBA identical.
+
+    With --reduce (round 68) the point of the pass is to change the colour type, so the check
+    is what a reader can actually observe: the same size and the same decoded RGBA, alpha
+    included. Every texture reaches GL as RGBA, so that is the whole of it."""
     from PIL import Image
-    if orig[8:33] != new[8:33]:
-        return "IHDR differs"
     i1 = Image.open(io.BytesIO(orig))
     i2 = Image.open(io.BytesIO(new))
     i1.load()
     i2.load()
-    if i1.mode != i2.mode or i1.size != i2.size:
-        return "mode/size differ"
-    if i1.tobytes() != i2.tobytes():
-        return "samples differ"
-    if i1.mode == "P" and (i1.getpalette() != i2.getpalette() or i1.info.get("transparency") != i2.info.get("transparency")):
-        return "palette differs"
+    if i1.size != i2.size:
+        return "size differs"
+    if not reduce:
+        if orig[8:33] != new[8:33]:
+            return "IHDR differs"
+        if i1.mode != i2.mode:
+            return "mode differs"
+        if i1.tobytes() != i2.tobytes():
+            return "samples differ"
+        if i1.mode == "P" and (i1.getpalette() != i2.getpalette() or i1.info.get("transparency") != i2.info.get("transparency")):
+            return "palette differs"
     if i1.info.get("gamma") != i2.info.get("gamma"):
         return "gamma differs"
     if i1.convert("RGBA").tobytes() != i2.convert("RGBA").tobytes():
@@ -170,6 +177,7 @@ def _png_check(orig: bytes, new: bytes) -> str:
 
 
 _PNG_LEVEL = 4
+_PNG_REDUCE = False
 
 
 def _png_worker(task):
@@ -178,11 +186,11 @@ def _png_worker(task):
     try:
         out = oxipng.optimize_from_memory(
             data, level=_PNG_LEVEL, deflate=oxipng.Deflaters.libdeflater(12), strip=oxipng.StripChunks.none(),
-            bit_depth_reduction=False, color_type_reduction=False, palette_reduction=False,
-            grayscale_reduction=False, interlace=None, optimize_alpha=False, fix_errors=False)
+            bit_depth_reduction=_PNG_REDUCE, color_type_reduction=_PNG_REDUCE, palette_reduction=_PNG_REDUCE,
+            grayscale_reduction=_PNG_REDUCE, interlace=None, optimize_alpha=False, fix_errors=False)
     except Exception as ex:
         return idx, None, "oxipng error: %s" % ex
-    status = _png_check(data, out)
+    status = _png_check(data, out, _PNG_REDUCE)
     if status != "ok":
         return idx, None, status
     if len(out) >= len(data):
@@ -190,9 +198,16 @@ def _png_worker(task):
     return idx, out, "ok"
 
 
+def _png_init(level, reduce):
+    """A pool worker is a fresh process: it does not inherit the module globals set above."""
+    global _PNG_LEVEL, _PNG_REDUCE
+    _PNG_LEVEL, _PNG_REDUCE = level, reduce
+
+
 def cmd_png(args) -> int:
-    global _PNG_LEVEL
+    global _PNG_LEVEL, _PNG_REDUCE
     _PNG_LEVEL = args.level
+    _PNG_REDUCE = bool(getattr(args, "reduce", False))
     t0 = time.time()
     with ar.Archive(args.archive) as a:
         tasks = []
@@ -208,7 +223,8 @@ def cmd_png(args) -> int:
         statuses: dict[str, int] = {}
         failures = []
         if tasks:
-            with ProcessPoolExecutor(max_workers=args.jobs) as ex:
+            with ProcessPoolExecutor(max_workers=args.jobs, initializer=_png_init,
+                                     initargs=(args.level, _PNG_REDUCE)) as ex:
                 for idx, out, status in ex.map(_png_worker, tasks, chunksize=4):
                     statuses[status] = statuses.get(status, 0) + 1
                     if out is not None:
@@ -449,6 +465,136 @@ def cmd_sfx(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# halve-sfx (round 67)
+# ---------------------------------------------------------------------------
+
+WAV_HALVE_TAPS = 127
+WAV_HALVE_CUTOFF = 0.45          # of the OLD Nyquist: the new Nyquist is 0.5
+
+
+def _kaiser_lowpass(taps: int, cutoff: float, beta: float = 8.0):
+    """A linear-phase windowed-sinc low pass, `cutoff` in units of the old Nyquist."""
+    import numpy as np
+    n = np.arange(taps) - (taps - 1) / 2.0
+    h = 2.0 * cutoff * np.sinc(2.0 * cutoff * n)
+    h *= np.kaiser(taps, beta)
+    return (h / h.sum()).astype(np.float64)
+
+
+def wav_parts(data: bytes):
+    """(header bytes before `data`, format dict, pcm bytes) of a canonical RIFF/WAVE, or None."""
+    import struct as _s
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    pos, fmt = 12, None
+    while pos + 8 <= len(data):
+        cid = data[pos:pos + 4]
+        ln, = _s.unpack_from("<I", data, pos + 4)
+        body = pos + 8
+        if cid == b"fmt " and ln >= 16:
+            f, ch, rate, _br, _ba, bits = _s.unpack_from("<HHIIHH", data, body)
+            fmt = {"format": f, "channels": ch, "rate": rate, "bits": bits}
+        elif cid == b"data":
+            n = min(ln, len(data) - body)
+            return data[:pos], fmt, data[body:body + n]
+        pos = body + ln + (ln & 1)
+    return None
+
+
+def hf_share(pcm: bytes, channels: int, rate: int, target_rate: int) -> float:
+    """The share of the sample's spectral energy above the target's Nyquist -- what
+    halving the rate would throw away."""
+    import numpy as np
+    s = np.frombuffer(pcm[: len(pcm) // (2 * channels) * 2 * channels], dtype="<i2")
+    if s.size < 256:
+        return 0.0
+    m = (s.reshape(-1, channels)[:, 0] if channels > 1 else s).astype(np.float64)
+    seg = m[: 1 << 17]
+    spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) ** 2
+    freqs = np.fft.rfftfreq(len(seg), 1.0 / rate)
+    tot = float(spec.sum())
+    if tot <= 0.0:
+        return 0.0
+    return float(spec[freqs > target_rate / 2.0].sum()) / tot
+
+
+def halve_pcm(pcm: bytes, channels: int) -> bytes:
+    """Filter and decimate 16-bit PCM by two, per channel, keeping the alignment."""
+    import numpy as np
+    frames = len(pcm) // (2 * channels)
+    s = np.frombuffer(pcm[: frames * 2 * channels], dtype="<i2").reshape(frames, channels).astype(np.float64)
+    h = _kaiser_lowpass(WAV_HALVE_TAPS, WAV_HALVE_CUTOFF)
+    d = (WAV_HALVE_TAPS - 1) // 2
+    out = np.empty((((frames + 1) // 2), channels), dtype="<i2")
+    for c in range(channels):
+        pad = np.concatenate([np.zeros(d), s[:, c], np.zeros(d)])
+        y = np.convolve(pad, h, mode="valid")[: frames]         # group delay removed
+        y = y[::2]
+        np.clip(np.rint(y), -32768, 32767, out=y)
+        out[: len(y), c] = y.astype("<i2")
+        if len(y) < out.shape[0]:
+            out[len(y):, c] = 0
+    return out.tobytes()
+
+
+def wav_bytes(channels: int, rate: int, pcm: bytes) -> bytes:
+    """A canonical 16-bit RIFF/WAVE around `pcm`."""
+    import struct as _s
+    block = 2 * channels
+    hdr = (b"RIFF" + _s.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + _s.pack("<IHHIIHH", 16, 1, channels, rate,
+           rate * block, block, 16) + b"data" + _s.pack("<I", len(pcm)))
+    return hdr + pcm
+
+
+def cmd_halve_sfx(args) -> int:
+    t0 = time.time()
+    cat_path = args.catalogue or args.archive
+    with ar.Archive(cat_path) as c:
+        wanted = {ar.key_of(ar.resource_key(p)) for p in catalogue_order(c, "sounds.xml", ("path",), "sfx/")}
+        names = {ar.key_of(ar.resource_key(p)): p for p in catalogue_order(c, "sounds.xml", ("path",), "sfx/")}
+    kept = halved = skipped_loud = skipped_odd = 0
+    before = after = 0
+    worst = []
+    with ar.Archive(args.archive) as a:
+        items = []
+        for e in a.entries:
+            if e.key not in wanted:
+                items.append({"h1": e.h1, "h2": e.h2, "src": a, "entry": e})
+                continue
+            data = a.decode(e)
+            parts = wav_parts(data)
+            if not parts or not parts[1] or parts[1]["bits"] != 16 or parts[1]["format"] != 1 or parts[1]["rate"] < args.min_rate:
+                skipped_odd += 1
+                items.append({"h1": e.h1, "h2": e.h2, "src": a, "entry": e})
+                continue
+            _hdr, f, pcm = parts
+            target = f["rate"] // 2
+            share = hf_share(pcm, f["channels"], f["rate"], target)
+            before += len(pcm)
+            if share > args.threshold:
+                skipped_loud += 1
+                after += len(pcm)
+                worst.append((share, names.get(e.key, e.tag)))
+                items.append({"h1": e.h1, "h2": e.h2, "src": a, "entry": e})
+                continue
+            out = wav_bytes(f["channels"], target, halve_pcm(pcm, f["channels"]))
+            after += len(out) - 44
+            halved += 1
+            items.append({"h1": e.h1, "h2": e.h2, "data": out})
+        kept = a.count - halved
+        r = ar.write_archive(args.out, a.version, items)
+    worst.sort(reverse=True)
+    print("halved %s -> %s: %d of %d catalogued samples halved (%d kept for their treble, %d not plain 16-bit PCM), "
+          "PCM %.1f MB -> %.1f MB (%.1f %% less), archive %d bytes, %d entries, %.0f s" % (
+          args.archive, args.out, halved, halved + skipped_loud + skipped_odd, skipped_loud, skipped_odd,
+          before / 1048576.0, after / 1048576.0, 100.0 * (before - after) / max(1, before), r["size"], r["entries"],
+          time.time() - t0))
+    if worst:
+        print("  kept (most treble first): %s" % ", ".join("%s %.0f%%" % (n, s * 100) for s, n in worst[:8]))
+    return 0
+
+
 def catalogue_order(arc: "ar.Archive", entry_name: str, attrs: tuple[str, ...], prefix: str) -> list[str]:
     """The paths an xml catalogue names, in document order, duplicates dropped. The engine
     preloads its sound catalogue in exactly this order (round 64: the boot trail's window
@@ -528,12 +674,21 @@ def main(argv=None) -> int:
     p = sub.add_parser("census"); p.add_argument("archive", nargs="+"); p.add_argument("--sounds"); p.add_argument("--music"); p.add_argument("--json")
     p.set_defaults(fn=cmd_census)
     p = sub.add_parser("png"); p.add_argument("archive"); p.add_argument("out"); p.add_argument("--jobs", type=int, default=8)
+    p.add_argument("--reduce", action="store_true",
+                   help="let oxipng change the colour type, bit depth and palette (round 68): the decoded RGBA is still identical")
     p.add_argument("--level", type=int, default=4); p.add_argument("--json")
     p.set_defaults(fn=cmd_png)
     p = sub.add_parser("music"); p.add_argument("archive"); p.add_argument("out"); p.add_argument("--music", required=True)
     p.add_argument("--quality", default="3"); p.add_argument("--jobs", type=int, default=6); p.add_argument("--json")
     p.add_argument("--source", help="archive to take the pristine music bytes from (by key); the rest passes through from `archive`")
     p.set_defaults(fn=cmd_music)
+    p = sub.add_parser("halve-sfx", help="halve the sample rate of catalogued samples that carry no treble (round 67)")
+    p.add_argument("archive"); p.add_argument("out")
+    p.add_argument("--catalogue", help="archive carrying sounds.xml (default: the archive itself)")
+    p.add_argument("--threshold", type=float, default=0.005,
+                   help="the largest share of a sample's energy above the new Nyquist that may be dropped (default 0.005)")
+    p.add_argument("--min-rate", type=int, default=32000, help="leave samples already at or below this rate alone")
+    p.set_defaults(fn=cmd_halve_sfx)
     p = sub.add_parser("layout", help="lay an archive out in the boot's read order (round 64)")
     p.add_argument("archive"); p.add_argument("out")
     p.add_argument("--catalogue", help="archive carrying sounds.xml / music.xml (default: the archive itself)")

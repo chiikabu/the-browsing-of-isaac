@@ -129,6 +129,63 @@ test('mount checksum: python and the JS reference agree, and the stale-tail quir
   }
 });
 
+test('round 67: halve-sfx halves the samples that carry no treble and keeps the ones that do', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-halve-'));
+  try {
+    // two samples at 44.1 kHz: a 440 Hz tone (nothing above 11 kHz) and a 15 kHz tone
+    // (everything above it). sounds.xml names both, so both are candidates.
+    const wav = (hz, seconds = 0.5, rate = 44100) => {
+      const n = Math.round(rate * seconds);
+      const pcm = Buffer.alloc(n * 2);
+      for (let i = 0; i < n; i++) pcm.writeInt16LE(Math.round(16000 * Math.sin(2 * Math.PI * hz * i / rate)), i * 2);
+      const h = Buffer.alloc(44);
+      h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8); h.write('fmt ', 12);
+      h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(rate, 24);
+      h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36);
+      h.writeUInt32LE(pcm.length, 40);
+      return Buffer.concat([h, pcm]);
+    };
+    const src = join(dir, 'src');
+    const files = {
+      'sfx/low.wav': wav(440),
+      'sfx/high.wav': wav(15000),
+      'sounds.xml': Buffer.from('<sounds root="sfx/"><sound id="1"><sample weight="1" path="low.wav" /></sound>'
+        + '<sound id="2"><sample weight="1" path="high.wav" /></sound></sounds>'),
+    };
+    for (const [rel, data] of Object.entries(files)) {
+      mkdirSync(dirname(join(src, rel)), { recursive: true });
+      writeFileSync(join(src, rel), data);
+    }
+    const a = join(dir, 'in.a');
+    run(['pack', src, a, '--version', '0']);
+    const out = join(dir, 'out.a');
+    const opt = join(root, 'scripts', 'recomp', 'assets', 'optimize.py');
+    const r = spawnSync(python, [opt, 'halve-sfx', a, out, '--threshold', '0.005'], { encoding: 'utf8' });
+    if (/No module named .numpy./.test(r.stderr || '')) { t.skip('no numpy'); return; }
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /1 of 2 catalogued samples halved \(1 kept for their treble/);
+    // extract both and read their headers back
+    const ex = join(dir, 'ex');
+    const names = join(dir, 'names.txt');
+    writeFileSync(names, Object.keys(files).join('\n') + '\n');
+    run(['extract', out, ex, '--names', names]);
+    const low = readFileSync(join(ex, 'sfx', 'low.wav'));
+    const high = readFileSync(join(ex, 'sfx', 'high.wav'));
+    assert.equal(low.readUInt32LE(24), 22050, 'the 440 Hz tone came down to 22,050 Hz');
+    assert.equal(high.readUInt32LE(24), 44100, 'the 15 kHz tone kept its rate');
+    assert.ok(high.equals(files['sfx/high.wav']), 'a kept sample is byte-for-byte what it was');
+    assert.equal(low.readUInt16LE(22), 1, 'still mono');
+    assert.equal(low.readUInt16LE(34), 16, 'still 16-bit');
+    const seconds = (b) => b.readUInt32LE(40) / (b.readUInt32LE(24) * b.readUInt16LE(22) * (b.readUInt16LE(34) / 8));
+    assert.ok(Math.abs(seconds(low) - 0.5) < 0.002, `the halved sample is still half a second (${seconds(low)})`);
+    // and it is still a 440 Hz tone at roughly its old level
+    let peak = 0;
+    for (let i = 44; i + 1 < low.length; i += 2) peak = Math.max(peak, Math.abs(low.readInt16LE(i)));
+    assert.ok(peak > 14000 && peak < 18000, `the level survived (peak ${peak})`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('round 64: repack --order lays the named entries out first, and changes nothing else', (t) => {
   if (!python) { t.skip('no python 3 on PATH'); return; }
   const dir = mkdtempSync(join(tmpdir(), 'isaac-layout-'));
