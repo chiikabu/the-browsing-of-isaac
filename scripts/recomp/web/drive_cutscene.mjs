@@ -66,7 +66,7 @@ try {
   for (;;) {
     if (await logMatch(/Level::Init m_Stage|RNG Start Seed/)) break;
     if (enters >= 40) throw new Error('no run after 40 Enters');
-    await hold('Enter'); enters += 1; await sleep(2500);
+    await hold('Enter'); await sleep(500); await hold('Space'); enters += 1; await sleep(2000);
   }
   await sleep(2500);
   check(!!(await logMatch(/Level::Init m_Stage/)), 'a run started');
