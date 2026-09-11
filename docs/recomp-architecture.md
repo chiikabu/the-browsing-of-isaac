@@ -8230,6 +8230,9 @@ the defect. `ISAAC_FASTPATH=0` still runs it, for the A/B.
     before   The / Sad / Onion     +0.72 / Tears     x1 locust / 1.5x Isaac's / damage
     after    The Sad Onion         +0.72 Tears       x1 locust 1.5x Isaac's damage
 
+The A/B is one build: the same module under `?ISAAC_FASTPATH=0` draws the
+"before" row exactly, so the wrapper is the whole of the change.
+
 The helper was checked against `fisttp` on 24 values before building,
 including the out-of-range and NaN edges (integer indefinite,
 0x8000000000000000).
