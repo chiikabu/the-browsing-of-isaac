@@ -268,10 +268,10 @@ REQUIRE emsdk on PATH:
   inline `<color=0xAARRGGBB>` markup and some carry `<collectible=NNN>` icons.
   Reported symptom is "readable but aligned weird sometimes", which fits the
   width measurement counting the tag characters the renderer strips — only the
-  29% of lines with a tag would be off-centre. Still unreproduced: the box
-  needs standing on a pedestal you cannot take, and shop rolls kept giving
-  consumables (a spawned collectible in a shop is free, so it is taken on
-  touch).
+  29% of lines with a tag would be off-centre. (Superseded by round 90e above:
+  the tags were a wrong guess -- the markup is parsed correctly and every line
+  was affected, through `0x00af0800`. The panel shows while walking up to any
+  pedestal once the save has 641 and the option is on.)
   **Checked in 90d and NOT worth doing (do not re-check):** `007706e0` is
   `Player::HasCollectible` — a conditional cascade that calls a dozen game
   functions and **recurses into itself**; a host mirror is out of the question
@@ -280,11 +280,16 @@ REQUIRE emsdk on PATH:
   `readPixels` shows in the V8 profile at ~1.5% but **`glReadPixels` does not
   appear once in a 600-frame run** — that sample is the driver's own
   frame-detection readback, not the game (the "3 calls a run" note stands).
-  **Next, still open:** `00a14c00` `SetShaderUniform(name,…)` is called per
-  layer with `"ChampionColor"`, finds the slot by a **linear strcmp scan**
-  (`00a15040`, stride 0x18) and on change does `malloc(size+4)`/`memcpy`/`free`
-  — that is the guest_malloc 1.8% + guest_free 0.9%. Cache the name→slot and
-  reuse the buffer when the size is unchanged.
+  **`SetShaderUniform` (`00a14c00`), corrected in 90e — closed.** It is called
+  per layer with `"ChampionColor"` and finds the slot by a linear strcmp scan
+  (`00a15040`, stride 0x18), but on a changed value it does **not** replace
+  the old buffer: it allocates a new one, copies the value in, **appends** it
+  to that uniform's vector of versions (entry `+0xc..+0x14`), and rebuilds the
+  per-uniform latest-version index list at `this+0x40`. Draws recorded earlier
+  refer to older versions by index, so the old "reuse the buffer when the size
+  is unchanged" idea would change what those draws see. Where the versions are
+  freed was not traced. The name scan is all a cache could remove, and it
+  never reaches the top-30.
   `profile_load.mjs` verifies its own setup: it failed twice first, once
   profiling Basement because `stage 8` had not taken, once with the console
   open at 34% of samples (Enter on the empty line closes it; grave REOPENS it).

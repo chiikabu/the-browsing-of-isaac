@@ -7933,7 +7933,17 @@ strcmp scan** of the table (`0x00a15040`, stride 0x18) and, when the value
 differs, allocates: `0x00a0f4e0 -> 0x00a648b0 -> malloc(size+4)`, `memcpy`,
 freed via `free(p-4)`. That is where the `guest_malloc` 1.8% / `guest_free`
 0.9% in the profile comes from -- a string-keyed lookup and a heap round trip,
-per layer, per entity, per frame. Still open.
+per layer, per entity, per frame.
+
+**Corrected in round 90e, and closed.** It is not a replace. On a changed
+value the function appends the new buffer to that uniform's own vector of
+versions (entry `+0xc..+0x14`, grown through `0x0042c920` when full) and then
+rebuilds the per-uniform latest-version index list at `this+0x40`; draws
+recorded before the change refer to the older versions by index. There is no
+buffer to reuse -- reusing one would change what already-recorded draws see --
+and where the versions are freed was not traced, so the malloc/free share above
+is an attribution, not a measurement. What is left is the name scan, which
+never reaches the top-30.
 
 ### 21.112 Round 90d: the quad constructor that built what it overwrote
 
@@ -8023,8 +8033,10 @@ every draw is exactly the kind of waste a memo removes. It is not the cost:
 The whole string-hash-and-lookup path is ~2.5%, because the shader branch is
 the one `cVar3` rarely takes. The mass is `sub_00a671b0` at 10% of the frame,
 and that function calls three *game* functions (`0x00415bc0`, `0x0041fba0`,
-`0x00589e40`) and itself -- game logic reached through the renderer, not a pure
-leaf that a host implementation can stand in for.
+`0x00589e40`) among its 13 direct callees -- game logic reached through the
+renderer, not a pure leaf that a host implementation can stand in for. (This
+said "and itself" until round 90e; the lifted body has no call to itself, as
+the table above already says.)
 
 The last untried lever was the link itself: the `--fast` profile already builds
 lifted TUs at `-O3` and host TUs at `-O3 -msimd128`, but wasm-opt runs at `-O2`.
