@@ -8412,3 +8412,82 @@ the run: the console never opened, and the letters landed as game input (the
 `e` in "giveitem" is a bomb -- the screenshot has the scorch mark and half a
 heart gone). A driver that types into a page has to wait until frames are
 actually flowing, not just until a log line says the run began.
+
+### 21.116 Round 91: the other fstp xword
+
+Round 90e left a census: every other `fstp xword` whose fallback tests the
+80-bit exponent word has the same defect as `0x00af0800`. The index has
+exactly two (`mn=fstp`, `ops` starting `xword`): `0x00af079c` in
+`0x00af0780`, and `0x00af0829` in the int64 routine already wrapped.
+
+`0x00af0780` is the CRT float->int32. `fisttp dword` runs only when
+`[0xc7162c] >= 2`. The fallback stores ST0 as a tbyte and branches on the
+exponent word. `recomp_set80` keeps that word at zero, and the floor/ceil
+import shims (`ret_d` in `host_shims_forward.c`) write eight bytes of the
+double and leave the word alone, so it stays zero, the "|x| < 1" arm runs,
+and the conversion returns 0. There is no verify mode: the lifted body is
+the defect. `ISAAC_FASTPATH=0` still runs it.
+
+The body is reached only through `jmp 0x00af0770`. The lifter parks that as
+`recomp_jmp_target = 0xaf0780`, and all ten callers run the pending
+trampoline, so the wrap on `sub_00af0780` is the one that executes. Eight
+sites call `floor` (`0x00af0917` -> `api-ms-win-crt-math` `floor`) and then
+this conversion. Two, both in `ScoreSheet::Calculate` (`0x009e5d90`, exact
+ZHL), call `ceil` (`0x00af0911`) instead. The double at `0x00baa5a0` added
+before several of the floors is `0.5`. One of those, `0x00abac17` inside
+`0x00abab70`, is `log(n)/log(2) + 0.5`, then floor, then this conversion,
+and EAX is stored at `[edx+4]`. That is the log2n round 90 named in
+libvorbis `mdct_init`. Round 90's libm trace saw the right doubles from
+`log` and `floor`; this conversion sits after them and was still the zero.
+A cutscene A/B of that stored log2n (11 for a 2048-point block, 0 with
+`ISAAC_FASTPATH=0`) was not re-run this round.
+
+`isaac_fast_x87_trunc_i32` is `fisttp`'s result: trunc toward zero inside
+int32, and `0x80000000` for NaN, infinities, and anything outside. It is
+the int64 helper plus that range check, because wasm's own float->int
+truncation traps out of range. The fast path (`sub esp,4; fisttp dword
+[esp]; pop eax; ret`) leaves ECX and EDX alone, and so does the wrapper.
+The x87 stack shifts down the same way the int64 wrapper does.
+
+The uniform-name scan at `0x00a15040` was written up as a second wrapper
+and then taken back out. Round 90d already measured it off the top-30 self
+list and closed it ("fastpathing it buys nothing"). The "1.5%" sitting
+next to that sentence in HANDOFF is the driver's `readPixels`, not this
+function. The scan stays lifted.
+
+Host selftest **399/0** (`python scripts/recomp/host/build_selftest.py`),
+including the six new trunc32 checks. A mutant that makes
+`isaac_fast_x87_trunc_i32` return 0 is killed by that selftest
+(`mutate.mjs`, source restored). `node --test tests/recomp-fastpath.test.js`
+is 19/19; the new wrapper is in the `NO_VERIFY` table with the reason in
+its own body.
+
+`window.isaacHeapReport` calls the already-exported `_isaac_heap_report`
+so a long session can print the guest high-water mark without exiting.
+
+### 21.117 Round 92: the eight floats every tear quad scales
+
+The vertex packer `0x00a671b0` is the leaf that grows when the room fills
+with tears (round 90d: 189 ms to 709 ms). Its hot loop builds one 112-byte
+quad and one 0x24-byte element per sprite corner-set. The element is eight
+floats, x then y, four corners. When a flag byte at the end of the element
+is set, those floats are divided by the viewport width and height (uint32
+at `[scale+0x10]` / `[scale+0x14]`, converted unsigned: `cvtdq2pd`, then
+`+2^32` if the high bit is set, then `cvtpd2ps`) and the byte is cleared.
+Then, on every quad, the same eight floats are multiplied by the two
+floats at `[scale+0x20]` and `[scale+0x24]`.
+
+That span is `0x00a67435`..`0x00a6756c`, a few hundred lines of lifted SSE
+per quad. `isaac_fast_entity_quad_scale` does it in one loop.
+`BLOCK_PATCHES` calls it and jumps to the flag test at `0x00a67571`,
+leaving ZF as `[ebp-0x38] == 0`, which is what the `cmp` there produced.
+The four-corner tint at `0x00a676fd` is the same kind of span: each
+corner's scalar multiplies its three floats, and the dword after the
+corner is cleared. `isaac_fast_entity_quad_tint` does the four corners
+and the patch jumps to the loop join at `0x00a677fd`.
+
+Host selftest 412/0, including the divide-once path, the multiply-only
+second pass, a viewport whose high bit is set, and the four tinted
+corners. A mutant that adds the x scale instead of multiplying is killed
+by that selftest. The running module does not have either patch until
+`build_boot.py --web --fast`.

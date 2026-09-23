@@ -2072,6 +2072,127 @@ int main(int argc, char **argv) {
                 check(buf[0] == 0.0f && buf[2047] == 0.0f, "fastpath: without an alloc_buffer the host scratch serves");
             }
 
+            /* Rounds 90e and 91: the CRT's x87 float->int64 (0x00af0800) and
+             * float->int32 (0x00af0780). Their fallbacks test an 80-bit
+             * exponent word the runtime keeps as zero and returned 0 for
+             * everything; the wrappers compute fisttp's result instead. */
+            {
+                const double qnan = __builtin_nan(""), inf = __builtin_inf();
+                check(isaac_fast_x87_trunc_i32(85.9) == 85 && isaac_fast_x87_trunc_i32(-85.9) == -85,
+                      "x87 trunc32: truncates toward zero on both sides");
+                check(isaac_fast_x87_trunc_i32(11.0) == 11,
+                      "x87 trunc32: 11.0, log2 of a 2048-point block after floor, converts to 11");
+                check(isaac_fast_x87_trunc_i32(0.99) == 0 && isaac_fast_x87_trunc_i32(-0.99) == 0
+                      && isaac_fast_x87_trunc_i32(5e-324) == 0, "x87 trunc32: |d| < 1 is 0");
+                check(isaac_fast_x87_trunc_i32(2147483647.9) == 2147483647 && isaac_fast_x87_trunc_i32(-2147483647.9) == -2147483647,
+                      "x87 trunc32: the largest magnitudes int32 holds");
+                check(isaac_fast_x87_trunc_i32(2147483648.0) == INT32_MIN && isaac_fast_x87_trunc_i32(-2147483649.0) == INT32_MIN,
+                      "x87 trunc32: one past either edge is the integer indefinite 0x80000000");
+                check(isaac_fast_x87_trunc_i32(qnan) == INT32_MIN && isaac_fast_x87_trunc_i32(inf) == INT32_MIN
+                      && isaac_fast_x87_trunc_i32(-inf) == INT32_MIN, "x87 trunc32: NaN and both infinities are the integer indefinite");
+                check(isaac_fast_x87_trunc_i64(4294967296.7) == 4294967296LL && isaac_fast_x87_trunc_i64(-4611686018427387904.0) == -4611686018427387904LL,
+                      "x87 trunc64: past 32 bits, toward zero");
+                check(isaac_fast_x87_trunc_i64(9223372036854775808.0) == INT64_MIN && isaac_fast_x87_trunc_i64(qnan) == INT64_MIN,
+                      "x87 trunc64: 2^63 and NaN are the integer indefinite");
+            }
+
+            /* Round 92: the vertex packer's per-quad scale. Eight floats, x/y
+             * alternating, divided once by the viewport (the flag byte) and
+             * then multiplied by the two scale floats. A uint32 viewport with
+             * the high bit set converts as unsigned. */
+            {
+                uint32_t elem = ISAAC_HEAP_VA + 0x270000u, scale = elem + 0x40u, end = elem + 0x24u;
+                float in[8] = { 640.f, 480.f, 1280.f, 960.f, 320.f, 240.f, 160.f, 120.f };
+                float mx = 2.f, my = 0.5f;
+                memset(isaac_g(elem), 0x5a, 0x24u);
+                memcpy(isaac_g(elem), in, sizeof in);
+                *(uint8_t *)isaac_g(end - 4u) = 1;
+                *(uint32_t *)isaac_g(scale + 0x10u) = 640u;
+                *(uint32_t *)isaac_g(scale + 0x14u) = 480u;
+                memcpy(isaac_g(scale + 0x20u), &mx, 4);
+                memcpy(isaac_g(scale + 0x24u), &my, 4);
+                isaac_fast_entity_quad_scale(end, scale);
+                check(*(uint8_t *)isaac_g(end - 4u) == 0, "quad scale: the viewport divide runs once");
+                check(*(uint8_t *)isaac_g(elem + 0x21u) == 0x5a, "quad scale: only the flag byte of the last dword is cleared");
+                {
+                    float got[8];
+                    memcpy(got, isaac_g(elem), sizeof got);
+                    check(got[0] == 2.f && got[1] == 0.5f && got[2] == 4.f && got[3] == 1.f
+                          && got[4] == 1.f && got[5] == 0.25f && got[6] == 0.5f && got[7] == 0.125f,
+                          "quad scale: (x/width)*mx and (y/height)*my on four corners");
+                }
+                isaac_fast_entity_quad_scale(end, scale);
+                {
+                    float got[8];
+                    memcpy(got, isaac_g(elem), sizeof got);
+                    check(got[0] == 4.f && got[1] == 0.25f, "quad scale: a second pass multiplies and does not divide");
+                }
+                *(uint8_t *)isaac_g(end - 4u) = 1;
+                *(uint32_t *)isaac_g(scale + 0x10u) = 0x80000000u;
+                *(uint32_t *)isaac_g(scale + 0x14u) = 0x80000000u;
+                mx = 1.f; my = 1.f;
+                memcpy(isaac_g(scale + 0x20u), &mx, 4);
+                memcpy(isaac_g(scale + 0x24u), &my, 4);
+                in[0] = 2147483648.f; in[1] = 2147483648.f;
+                memcpy(isaac_g(elem), in, 8);
+                isaac_fast_entity_quad_scale(end, scale);
+                {
+                    float got[2];
+                    memcpy(got, isaac_g(elem), sizeof got);
+                    check(got[0] == 1.f && got[1] == 1.f, "quad scale: a viewport with the high bit set converts as unsigned");
+                }
+            }
+
+            /* Round 92: four corners of the 112-byte quad. rgb *= scalar, the
+             * scalar stays, the dword after each corner is cleared. */
+            {
+                uint32_t quad = ISAAC_HEAP_VA + 0x271000u;
+                static const uint32_t corner[] = { 0x20u, 0x34u, 0x48u, 0x5cu };
+                float rgb[3] = { 1.f, 0.5f, 0.25f };
+                float a = 0.5f;
+                unsigned i;
+                memset(isaac_g(quad), 0xab, 0x70u);
+                for (i = 0; i < 4u; ++i) {
+                    memcpy(isaac_g(quad + corner[i]), rgb, 12);
+                    memcpy(isaac_g(quad + corner[i] + 0xcu), &a, 4);
+                }
+                isaac_fast_entity_quad_tint(quad);
+                for (i = 0; i < 4u; ++i) {
+                    float got[3], ga;
+                    memcpy(got, isaac_g(quad + corner[i]), 12);
+                    memcpy(&ga, isaac_g(quad + corner[i] + 0xcu), 4);
+                    check(got[0] == 0.5f && got[1] == 0.25f && got[2] == 0.125f && ga == 0.5f,
+                          "quad tint: rgb is multiplied by the corner scalar, which stays");
+                    check(*(uint32_t *)isaac_g(quad + corner[i] + 0x10u) == 0u,
+                          "quad tint: the dword after the corner is cleared");
+                }
+            }
+
+            /* 0x004071c0: 44 bytes, and the byte after the object stays. */
+            {
+                uint32_t dst = ISAAC_HEAP_VA + 0x272000u, src = dst + 0x40u;
+                unsigned i;
+                for (i = 0; i < 44u; ++i) *(uint8_t *)isaac_g(src + i) = (uint8_t)(i * 3u + 1u);
+                memset(isaac_g(dst), 0x5a, 48u);
+                check(isaac_fast_copy44_ok(dst, src), "copy44: a guest object and source are accepted");
+                isaac_fast_copy44(dst, src);
+                check(memcmp(isaac_g(dst), isaac_g(src), 44u) == 0, "copy44: 44 bytes are copied");
+                check(*(uint8_t *)isaac_g(dst + 44u) == 0x5a, "copy44: the byte after the object is left alone");
+                check(!isaac_fast_copy44_ok(dst, ISAAC_GUEST_LIMIT_VA - 8u), "copy44: a source that runs off the guest is left to the lifted body");
+            }
+
+            /* 0x00a112a0 / 0x00a11210: 36 bytes. */
+            {
+                uint32_t dst = ISAAC_HEAP_VA + 0x273000u, src = dst + 0x40u;
+                unsigned i;
+                for (i = 0; i < 36u; ++i) *(uint8_t *)isaac_g(src + i) = (uint8_t)(0xa0u + i);
+                memset(isaac_g(dst), 0x11, 40u);
+                check(isaac_fast_copy36_ok(dst, src), "copy36: a guest object and source are accepted");
+                isaac_fast_copy36(dst, src);
+                check(memcmp(isaac_g(dst), isaac_g(src), 36u) == 0, "copy36: 36 bytes are copied");
+                check(*(uint8_t *)isaac_g(dst + 36u) == 0x11, "copy36: the byte after the object is left alone");
+            }
+
             /* Round 37: the host GL cache. Renderbuffer parameters come from
              * the storage call, a framebuffer's status is remembered until
              * something that can change its completeness happens, locations

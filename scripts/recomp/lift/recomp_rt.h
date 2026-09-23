@@ -70,8 +70,17 @@ int  isaac_fast_inverse_mdct_ok(uint32_t buf_va, uint32_t n, uint32_t f_va, uint
 int  isaac_fast_vorbis_bitrev_ok(uint32_t init_va, uint32_t x_va);
 int  isaac_fast_quad_copy_ok(uint32_t self_va, uint32_t src_va);
 void isaac_fast_quad_copy(uint32_t self_va, uint32_t src_va);
-/* x87 ST0 -> int64 truncation, fisttp's result without the ISA gate (0x00af0800) */
+int  isaac_fast_copy44_ok(uint32_t self_va, uint32_t src_va);
+void isaac_fast_copy44(uint32_t self_va, uint32_t src_va);
+int  isaac_fast_copy36_ok(uint32_t self_va, uint32_t src_va);
+void isaac_fast_copy36(uint32_t self_va, uint32_t src_va);
+/* Per-quad viewport scale inside the vertex packer 0x00a671b0 (round 92). */
+void isaac_fast_entity_quad_scale(uint32_t elem_end, uint32_t scale);
+/* Four-corner tint of a 112-byte quad, 0x00a676fd (round 92). */
+void isaac_fast_entity_quad_tint(uint32_t quad);
+/* x87 ST0 -> int64 / int32 truncation, fisttp's result without the ISA gate (0x00af0800 / 0x00af0780) */
 int64_t isaac_fast_x87_trunc_i64(double d);
+int32_t isaac_fast_x87_trunc_i32(double d);
 int  isaac_editfile_gate(uint32_t menu_va);   /* round 52: the page's EDIT FILE menu (host_shims_win.c) */
 /* round 27 (host_fastpath.c): the archive keystream, ArchivedFile::read, the engine Mutex */
 int  isaac_fast_guest_range(uint32_t va, uint32_t len);

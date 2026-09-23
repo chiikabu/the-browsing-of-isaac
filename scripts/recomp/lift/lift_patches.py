@@ -98,6 +98,17 @@ PATCHES: dict[int, tuple[str, str]] = {
 # function, its first block is re-decoded from 0xa2b5c8, and both targets
 # get a case in its re-entry switch.
 BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    # Round 92: the vertex packer's per-quad scale. Eight divs and eight muls,
+    # lifted one SSE instruction at a time, once per tear quad.
+    ("0x00a67435",
+     "  RECOMP_VA(0xa67435u);\n  u3300_4 = (uint32_t)(EDI + ((uint32_t)0xfffffffcu));\n  ub900_1 = MEMR8(u3300_4);\n",
+     "  RECOMP_VA(0xa67435u);\n  /* LIFT-PATCH 0x00a67435 (round 92): the eight-float viewport scale in the\n     vertex packer. EDI is one past the 0x24-byte element, EDX is the scale\n     object. The lifted SSE from here to 0x00a6756c is that scale; jump to\n     the flag test that follows it. ZF is [ebp-0x38] == 0, as the cmp at\n     0x00a674ec leaves it, and EAX/EDX are the scale pointer the mul loop\n     reloads. */\n  isaac_fast_entity_quad_scale(EDI, EDX);\n  EDX = MEMR32((uint32_t)(ECX + ((uint32_t)0x8u)));\n  EAX = EDX;\n  u3300_4 = MEMR32((uint32_t)(EBP + ((uint32_t)0xffffffc8u)));\n  ZF = (uint8_t)(u3300_4 == ((uint32_t)0x0u));\n  goto L_00a67571;\n  u3300_4 = (uint32_t)(EDI + ((uint32_t)0xfffffffcu));\n  ub900_1 = MEMR8(u3300_4);\n"),
+    ("0x00a676fd",
+     "  RECOMP_VA(0xa676fdu);\n  u3300_4 = (uint32_t)(ESI + ((uint32_t)0x2cu));\n  u5280_4 = MEMR32(u3300_4);\n",
+     "  RECOMP_VA(0xa676fdu);\n  /* LIFT-PATCH 0x00a676fd (round 92): the four-corner tint. Each corner's\n     scalar multiplies its three floats and the dword after the corner is\n     cleared. ESI is the 112-byte quad. The join reloads ESI itself. */\n  isaac_fast_entity_quad_tint(ESI);\n  goto L_00a677fd;\n  u3300_4 = (uint32_t)(ESI + ((uint32_t)0x2cu));\n  u5280_4 = MEMR32(u3300_4);\n"),
+    ("0x00a67571",
+     "  RECOMP_VA(0xa67571u);\n  if (ZF) {\n    goto L_00a676f3;\n  }\n",
+     "L_00a67571: ;\n  /* LIFT-PATCH 0x00a67571 (round 92): landing pad for the quad-scale patch. */\n  RECOMP_VA(0xa67571u);\n  if (ZF) {\n    goto L_00a676f3;\n  }\n"),
     # Round 85: mods. The leading slashes on every mod path (see the marker).
     ("0x00a171a5",
      '  RECOMP_VA(0xa171a5u);\n  u3300_4 = (uint32_t)(EBP + ((uint32_t)0x8u));\n  uba00_4 = MEMR32(u3300_4);\n  ESI = uba00_4;\n',
@@ -427,6 +438,107 @@ WRAP_PATCHES: dict[int, str] = {
   memcpy(&s->ST6[0], &s->ST7[0], 10);
   s->EIP = MEMR32(s->ESP);
   s->ESP += 4u;
+}
+""",
+    # The CRT's x87 float->int32 (round 91), 0x00af0800's twin: ST0 in, EAX
+    # out, ST0 popped, plain ret; the fast path it stands for (`sub esp,4;
+    # fisttp dword [esp]; pop eax; ret`) leaves ECX and EDX alone. Same gate,
+    # same zero exponent word, same "every result is 0". Reached through the
+    # jmp thunk 0x00af0770, which parks recomp_jmp_target and whose ten
+    # callers (eight floor, two ceil) all run the pending trampoline. No
+    # verify mode, for the same reason as 0x00af0800.
+    0x00af0780: """void sub_00af0780(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00af0780: x87 ST0 -> int32 truncation (host_fastpath.c) */
+  /* no verify path, on purpose: the lifted body IS the defect (round 91) */
+  RECOMP_VA(0xaf0780u);
+  if (isaac_fastpath_mode() == 0) { sub_00af0780__lifted(s); return; }
+  s->EAX = (uint32_t)isaac_fast_x87_trunc_i32(recomp_get80(&s->ST0[0]));
+  memcpy(&s->ST0[0], &s->ST1[0], 10);
+  memcpy(&s->ST1[0], &s->ST2[0], 10);
+  memcpy(&s->ST2[0], &s->ST3[0], 10);
+  memcpy(&s->ST3[0], &s->ST4[0], 10);
+  memcpy(&s->ST4[0], &s->ST5[0], 10);
+  memcpy(&s->ST5[0], &s->ST6[0], 10);
+  memcpy(&s->ST6[0], &s->ST7[0], 10);
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u;
+}
+""",
+    # 0x00a112a0 and 0x00a11210 are the same 36-byte copy (round 92). The
+    # second writes constants and then copies over all of them. 24 callers
+    # of the first sit in the room render; the second is the packer's
+    # per-quad call.
+    0x00a112a0: """void sub_00a112a0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a112a0: host 36-byte copy (host_fastpath.c) */
+  RECOMP_VA(0xa112a0u);
+  uint32_t self = s->ECX, src = MEMR32(s->ESP + 4u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_copy36_ok(self, src)) { isaac_fastpath_count(0xa112a0u, 1); sub_00a112a0__lifted(s); return; }
+  if (mode == 2) {
+    uint8_t snap[36], host[36];
+    memcpy(snap, RECOMP_PTR(self), 36u);
+    isaac_fast_copy36(self, src);
+    memcpy(host, RECOMP_PTR(self), 36u);
+    memcpy(RECOMP_PTR(self), snap, 36u);
+    sub_00a112a0__lifted(s);
+    if (!isaac_fast_verify_equal(host, self, 36u)) isaac_fastpath_mismatch("copy36", 36u, 0u);
+    isaac_fastpath_count(0xa112a0u, 2);
+    return;
+  }
+  isaac_fast_copy36(self, src);
+  s->EAX = self;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 4u;
+}
+""",
+    0x00a11210: """void sub_00a11210(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a11210: host 36-byte copy (host_fastpath.c) */
+  RECOMP_VA(0xa11210u);
+  uint32_t self = s->ECX, src = MEMR32(s->ESP + 4u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_copy36_ok(self, src)) { isaac_fastpath_count(0xa11210u, 1); sub_00a11210__lifted(s); return; }
+  if (mode == 2) {
+    uint8_t snap[36], host[36];
+    memcpy(snap, RECOMP_PTR(self), 36u);
+    isaac_fast_copy36(self, src);
+    memcpy(host, RECOMP_PTR(self), 36u);
+    memcpy(RECOMP_PTR(self), snap, 36u);
+    sub_00a11210__lifted(s);
+    if (!isaac_fast_verify_equal(host, self, 36u)) isaac_fastpath_mismatch("copy36b", 36u, 0u);
+    isaac_fastpath_count(0xa11210u, 2);
+    return;
+  }
+  isaac_fast_copy36(self, src);
+  s->EAX = self;
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 4u;
+}
+""",
+    # 0x004071c0 (round 92): 44-byte copy, thiscall, ret 4, EAX = this.
+    # Seventy call sites, five of them in the per-layer sprite draw and
+    # thirteen in the per-entity render. Two movups, a movq and a dword.
+    0x004071c0: """void sub_004071c0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x004071c0: host 44-byte copy (host_fastpath.c) */
+  RECOMP_VA(0x4071c0u);
+  uint32_t self = s->ECX, src = MEMR32(s->ESP + 4u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 0 || !isaac_fast_copy44_ok(self, src)) { isaac_fastpath_count(0x4071c0u, 1); sub_004071c0__lifted(s); return; }
+  if (mode == 2) {
+    uint8_t snap[44], host[44];
+    memcpy(snap, RECOMP_PTR(self), 44u);
+    isaac_fast_copy44(self, src);
+    memcpy(host, RECOMP_PTR(self), 44u);
+    memcpy(RECOMP_PTR(self), snap, 44u);
+    sub_004071c0__lifted(s);
+    if (!isaac_fast_verify_equal(host, self, 44u)) isaac_fastpath_mismatch("copy44", 44u, 0u);
+    isaac_fastpath_count(0x4071c0u, 2);
+    return;
+  }
+  isaac_fast_copy44(self, src);
+  s->EAX = self;
+  /* ret 4: the return address and the source pointer */
+  s->EIP = MEMR32(s->ESP);
+  s->ESP += 4u + 4u;
 }
 """,
     # The vertex-quad copy constructor (round 90d): `this` in ecx, the source

@@ -43,6 +43,7 @@ const probePatches = () => patchesIn('PROBE_PATCHES: dict', 'def apply_wrap_patc
 // must say so in its own body as well.
 const NO_VERIFY = {
   '0x00af0800': 'CRT x87 float->int64: the lifted fallback tests an 80-bit exponent the runtime keeps as zero, so it returns 0 for everything (round 90e)',
+  '0x00af0780': 'CRT x87 float->int32, the same fallback and the same zero exponent word: every floor()/ceil() conversion through 0x00af0770 returned 0 (round 91)',
   '0x00abb750': 'libvorbis mdct_bitreverse guard: it only decides whether the lifted body may run, so there is no host result to compare (round 90)',
 };
 
