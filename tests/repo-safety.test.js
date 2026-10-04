@@ -50,6 +50,47 @@ function withFixture(callback) {
   }
 }
 
+test('repo safety permits only the exact root branding PNG paths', () => {
+  withFixture(({ superproject }) => {
+    for (const path of ['apple-touch-icon.png', 'favicon-32.png']) {
+      commitFile(superproject, path, 'public branding fixture');
+    }
+    const allowed = runGate(superproject);
+    assert.equal(allowed.status, 0, allowed.stderr || allowed.stdout);
+
+    for (const path of [
+      'unrelated.png', 'assets/apple-touch-icon.png', 'assets/favicon-32.png',
+      'extracted_resources/apple-touch-icon.png',
+    ]) {
+      commitFile(superproject, path, 'unapproved PNG fixture');
+    }
+    const rejected = runGate(superproject);
+    assert.equal(rejected.status, 1);
+    for (const path of [
+      'unrelated.png', 'assets/apple-touch-icon.png', 'assets/favicon-32.png',
+      'extracted_resources/apple-touch-icon.png',
+    ]) {
+      assert.ok(rejected.stderr.includes(`${path}: binary/archive/media extension`), rejected.stderr);
+    }
+    assert.ok(rejected.stderr.includes('extracted_resources/apple-touch-icon.png: local/proprietary path'),
+      rejected.stderr);
+  });
+});
+
+test('repo safety retains the size guard for root branding PNG paths', () => {
+  withFixture(({ superproject }) => {
+    for (const path of ['apple-touch-icon.png', 'favicon-32.png']) {
+      commitFile(superproject, path, Buffer.alloc(5 * 1024 * 1024 + 1));
+    }
+    const result = runGate(superproject);
+    assert.equal(result.status, 1);
+    for (const path of ['apple-touch-icon.png', 'favicon-32.png']) {
+      assert.ok(result.stderr.includes(`${path}: 5242881 bytes exceeds 5242880`), result.stderr);
+    }
+    assert.doesNotMatch(result.stderr, /binary\/archive\/media extension/);
+  });
+});
+
 test('repo safety recursively rejects a large tracked file in a submodule', () => {
   withFixture(({ temporary, superproject }) => {
     const moduleSource = join(temporary, 'module-source');

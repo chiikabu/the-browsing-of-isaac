@@ -26,6 +26,11 @@ const forbiddenExtensions = new Set([
   ".wasm", ".wav", ".zip",
 ]);
 
+const trackedExtensionExceptions = new Set([
+  "apple-touch-icon.png",
+  "favicon-32.png",
+]);
+
 // These are explicitly local-only locations. They are evaluated only for
 // untracked/ignored files; a tracked payload under one of these roots still
 // fails the tracked-file policy above.
@@ -78,7 +83,9 @@ function violationsForTracked(path) {
     violations.push("local/proprietary path");
   }
   if (forbiddenExact.has(path)) violations.push("binary-derived/generated file");
-  if (forbiddenExtensions.has(extension(path))) violations.push("binary/archive/media extension");
+  if (forbiddenExtensions.has(extension(path)) && !trackedExtensionExceptions.has(path)) {
+    violations.push("binary/archive/media extension");
+  }
   return violations;
 }
 
