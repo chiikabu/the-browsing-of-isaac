@@ -136,8 +136,10 @@ npm test
 ```
 
 `decomp:status` reports live ABI versions, open boundaries, and verification
-freshness. `repo:check` checks repository safety; `npm test` runs the Node
-suites. These commands do not include a page/assets build.
+freshness. `repo:check` checks repository safety; only the root branding images
+`apple-touch-icon.png` and `favicon-32.png` are exempt from the PNG restriction,
+and the file-size limit still applies. `npm test` runs the Node suites.
+These commands do not include a page/assets build.
 
 Full native/Wasm builds and oracle verification additionally require Python
 3.11+, a legally owned game executable and local assets, Emscripten 6.x
