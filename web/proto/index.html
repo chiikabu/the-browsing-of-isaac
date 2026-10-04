@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Isaac wasm hybrid — one-room tech demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    background: #14161a; color: #d7dae0;
+    font-family: "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; color: #9aa4b2; }
+  #stage { position: relative; }
+  canvas {
+    display: block; image-rendering: pixelated;
+    border: 1px solid #2c313a; border-radius: 4px; background: #000;
+  }
+  #overlay {
+    position: absolute; top: 6px; left: 6px; padding: 6px 10px;
+    font: 12px/1.5 Consolas, monospace; color: #cfd6e4;
+    background: rgba(10, 12, 16, 0.78); border: 1px solid #2c313a; border-radius: 3px;
+    pointer-events: none; white-space: pre;
+  }
+  #status { font-size: 12px; color: #6f7a89; }
+  #status.err { color: #ff6b6b; }
+</style>
+</head>
+  <h1>Isaac wasm hybrid architecture — one-room proof (game-update-slice.wasm, zero imports)</h1>
+  <div id="stage">
+    <canvas id="room" width="588" height="336"></canvas>
+    <div id="overlay">booting…</div>
+  </div>
+  <div id="status">loading module…</div>
+  <script type="module" src="./demo.js"></script>
+</body>
+</html>

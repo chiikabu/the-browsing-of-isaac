@@ -758,6 +758,9 @@ window.isaacGuest = {
     return (H[va] | (H[va + 1] << 8) | (H[va + 2] << 16) | (H[va + 3] << 24)) >>> 0;
   },
 };
+// The guest heap's high-water report on demand, into the log like the one at
+// exit: a long session's peak against the arena without ending the session.
+window.isaacHeapReport = () => { try { m._isaac_heap_report(); return true; } catch (e) { return false; } };
 
 async function stageOk(name, fn) {
   log(`=== ${name} ===`);

@@ -1451,6 +1451,91 @@ void isaac_fast_quad_copy(uint32_t self_va, uint32_t src_va) {
     memcpy(isaac_g(self_va), isaac_g(src_va), 112u);
 }
 
+/* 0x004071c0, the 44-byte copy the per-layer sprite draw and the per-entity
+ * render both call. thiscall, source on the stack, ret 4, EAX = this.
+ * Two movups, one movq, one dword: 16+16+8+4. Nothing else is touched. */
+int isaac_fast_copy44_ok(uint32_t self_va, uint32_t src_va) {
+    if (!isaac_is_guest_va(self_va) || !isaac_is_guest_va(self_va + 43u)) return 0;
+    if (!isaac_is_guest_va(src_va) || !isaac_is_guest_va(src_va + 43u)) return 0;
+    return 1;
+}
+
+void isaac_fast_copy44(uint32_t self_va, uint32_t src_va) {
+    memcpy(isaac_g(self_va), isaac_g(src_va), 44u);
+}
+
+/* 0x00a112a0 is this copy. 0x00a11210 writes a constant block first and then
+ * the same 36 bytes over every one of those stores, so the constants are
+ * dead and the function is this copy too. thiscall, ret 4, EAX = this.
+ * 0x00a112a0's 24 callers are all in the room render; 0x00a11210 is the
+ * per-quad call inside the vertex packer. */
+int isaac_fast_copy36_ok(uint32_t self_va, uint32_t src_va) {
+    if (!isaac_is_guest_va(self_va) || !isaac_is_guest_va(self_va + 35u)) return 0;
+    if (!isaac_is_guest_va(src_va) || !isaac_is_guest_va(src_va + 35u)) return 0;
+    return 1;
+}
+
+void isaac_fast_copy36(uint32_t self_va, uint32_t src_va) {
+    memcpy(isaac_g(self_va), isaac_g(src_va), 36u);
+}
+
+/* ---- per-quad scale inside the vertex packer (0x00a671b0) ---------------
+ *
+ * Round 92. The packer's hot loop walks one 0x24-byte element per quad.
+ * EDI points just past it. When the byte at [EDI-4] is set, the eight floats
+ * at [EDI-0x24] are divided by the viewport width and height, stored as
+ * uint32 at [scale+0x10] and [scale+0x14] and converted the unsigned way
+ * (cvtdq2pd, then +2^32 when the high bit is set, then cvtpd2ps). The byte
+ * is cleared, so a quad is divided once. Then, always, the same eight floats
+ * are multiplied by the two floats at [scale+0x20] and [scale+0x24], x then
+ * y, four corners. That is the body from 0x00a67435 to 0x00a6756c. */
+static float isaac_fast_u32_to_f32(uint32_t bits) {
+    double d = (double)(int32_t)bits;
+    if (bits & 0x80000000u) d += 4294967296.0;
+    return (float)d;
+}
+
+void isaac_fast_entity_quad_scale(uint32_t elem_end, uint32_t scale) {
+    float *p = (float *)isaac_g(elem_end - 0x24u);
+    float mx, my;
+    unsigned i;
+    if (*(uint8_t *)isaac_g(elem_end - 4u) != 0) {
+        float sx = isaac_fast_u32_to_f32(*(uint32_t *)isaac_g(scale + 0x10u));
+        float sy = isaac_fast_u32_to_f32(*(uint32_t *)isaac_g(scale + 0x14u));
+        *(uint8_t *)isaac_g(elem_end - 4u) = 0;
+        for (i = 0; i < 4u; ++i) {
+            p[i * 2u] /= sx;
+            p[i * 2u + 1u] /= sy;
+        }
+    }
+    memcpy(&mx, isaac_g(scale + 0x20u), 4);
+    memcpy(&my, isaac_g(scale + 0x24u), 4);
+    for (i = 0; i < 4u; ++i) {
+        p[i * 2u] *= mx;
+        p[i * 2u + 1u] *= my;
+    }
+}
+
+/* The 112-byte quad's four corners, 0x00a676fd..0x00a677f6. Each corner is
+ * rgb floats followed by a scalar: the scalar multiplies the three floats
+ * and is stored back unchanged, and the dword after the corner is cleared.
+ * Corners sit at +0x20, +0x34, +0x48 and +0x5c. */
+void isaac_fast_entity_quad_tint(uint32_t quad) {
+    static const uint32_t corner[] = { 0x20u, 0x34u, 0x48u, 0x5cu };
+    unsigned i;
+    for (i = 0; i < 4u; ++i) {
+        float rgb[3], a;
+        uint32_t at = quad + corner[i];
+        memcpy(rgb, isaac_g(at), 12);
+        memcpy(&a, isaac_g(at + 0xcu), 4);
+        rgb[0] *= a;
+        rgb[1] *= a;
+        rgb[2] *= a;
+        memcpy(isaac_g(at), rgb, 12);
+        *(uint32_t *)isaac_g(at + 0x10u) = 0;
+    }
+}
+
 /* ---- x87 ST0 -> int64, truncating (the fisttp in 0x00af0800) ------------
  *
  * Round 90e. 0x00af0800 is the CRT's float->int64 conversion (EDX:EAX from
@@ -1486,4 +1571,32 @@ int64_t isaac_fast_x87_trunc_i64(double d) {
     m = (bits & 0x000fffffffffffffull) | 0x0010000000000000ull;
     mag = (e >= 52) ? (m << (e - 52)) : (m >> (52 - e));
     return (bits >> 63) ? -(int64_t)mag : (int64_t)mag;
+}
+
+/* ---- the CRT's x87 float->int32 (0x00af0780) ----------------------------
+ *
+ * Round 91. The 32-bit twin of 0x00af0800, and the only other `fstp xword`
+ * in .text (index: 0x00af079c here, 0x00af0829 in the int64 twin). Same
+ * defect: fisttp runs only when [0xc7162c] >= 2, and the fallback tests the
+ * 80-bit exponent word. recomp_set80 stores a double in bytes 0..7 and
+ * zeroes bytes 8..9; the floor/ceil import shims (ret_d) write those same
+ * 8 bytes and leave the exponent word alone. It stays 0, the "|x| < 1"
+ * branch runs, and the conversion returns 0.
+ *
+ * Reached only through the jmp thunk 0x00af0770, which the lifter parks as
+ * recomp_jmp_target = 0xaf0780; every caller runs the pending trampoline,
+ * so the wrap on this body is the one that runs. All ten sites convert a
+ * floor (import thunk 0x00af0917, eight sites) or a ceil (0x00af0911, both
+ * sites in ScoreSheet::Calculate, 0x009e5d90, exact ZHL). The double at
+ * 0x00baa5a0 added before several of the floors is 0.5. One of those,
+ * 0x00abac17 in 0x00abab70, is log(n)/log(2)+0.5, then floor, then this
+ * conversion, and EAX is stored at [edx+4] -- the log2n round 90 named in
+ * libvorbis mdct_init. Round 90 traced the log/floor shims and saw the
+ * right doubles; this conversion sits after them.
+ *   NaN, +-inf, trunc(d) outside int32 -> 0x80000000 (integer indefinite)
+ *   otherwise                          -> d truncated toward zero */
+int32_t isaac_fast_x87_trunc_i32(double d) {
+    int64_t v = isaac_fast_x87_trunc_i64(d);
+    if (v < (int64_t)INT32_MIN || v > (int64_t)INT32_MAX) return INT32_MIN;
+    return (int32_t)v;
 }
