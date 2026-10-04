@@ -1,6 +1,67 @@
-node_modules/
-.scratch/
-output/
-__pycache__/
-*.pyc
+# Dependencies, caches, and local state
+/node_modules/
+/.scratch/
+/.snapshots/
+/.restore-snap/
+/re/ghidra_project/
+**/__pycache__/
+*.py[cod]
 *.log
+/ResourceExtractor_log.txt
+.DS_Store
+Thumbs.db
+
+# Session scratch — keep the repo root clean; use output/decomp/_scratch/
+/_*
+/.tmp*
+/tmp_*
+/*.bak*
+/*.tmp
+/$null
+/2
+/UsersLuca*
+/section-notes/
+/cpu-dump/
+/*.pid
+/scan.out
+decomp/*.tmp
+scripts/decomp/_*
+scripts/decomp/*.bak*
+scripts/decomp/*.mutbak
+
+# Proprietary/local game inputs and generated packages
+/extracted_resources/
+/extracted_work/
+/tools/
+/output/
+# Local game instance archive auto-mounted by scripts/serve.mjs
+/game-instance/
+
+# Generated runtime/build products (source-only repository)
+/web/isaac-host.js
+/web/isaac-host.wasm
+/native/**/*.dll
+
+# Direct game-binary-derived inventories
+/docs/strings-interesting.txt
+/docs/pe-imports.json
+/docs/phase1-binary-recovery.json
+
+# Local legacy probes outside the curated source snapshot
+/scripts/_*.py
+/scripts/run-*.mjs
+/docs/phase0-baseline.md
+/_*.exe
+
+# optional local Isaac Steam install path for the dev server auto-mount
+/.game-root
+
+# Local Claude Code permissions (machine-specific)
+.claude/settings.local.json
+native/decomp/*.bak*
+native/decomp/*.tmp
+native/decomp/*.new
+
+# mutate.mjs crash-safety trail (local state; stash lives under output/decomp/_scratch/mutants/)
+/.mutation-journal.jsonl
+/.mutation-journal/

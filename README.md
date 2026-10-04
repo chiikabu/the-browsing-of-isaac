@@ -115,6 +115,39 @@ python scripts/recomp/host/build_selftest.py
 Drivers under `scripts/recomp/web` (`drive_boot`, `drive_saves`, `drive_mods`,
 `drive_floors`, `profile_play`, ...) run the real page in headless Chrome.
 
+## Source/decomp tooling
+
+The merged source tree also includes the native/Wasm decomp port:
+`native/decomp/` contains C++ slices, `decomp/` contains port state and oracles,
+`platform/` contains JavaScript platform helpers, `scripts/decomp/` contains
+analysis and verification tools, and `web/` contains the separate browser host.
+These supplement, rather than replace, the `scripts/recomp/` workflow above.
+See `docs/decomp-port.md` and `docs/unit-runbook.md` for port boundaries and
+the per-unit workflow.
+
+### Verify
+
+After `npm install`, run:
+
+```sh
+npm run decomp:status
+npm run repo:check
+npm test
+```
+
+`decomp:status` reports live ABI versions, open boundaries, and verification
+freshness. `repo:check` checks repository safety; `npm test` runs the Node
+suites. These commands do not include a page/assets build.
+
+Full native/Wasm builds and oracle verification additionally require Python
+3.11+, a legally owned game executable and local assets, Emscripten 6.x
+(6.0.5+), and a C++20-capable host clang++. Load the emsdk environment and set
+`EMSDK` as needed; slice builds accept `CLANGXX` and `EMXX` overrides.
+Ghidra analysis requires Ghidra and its supported Java runtime. Browser checks
+require Playwright's Chromium and WebGL2. Keep the Node 20+ requirement above.
+Generated binaries, game data, and oracle inputs remain local; this merge
+does not supply them or rebuild the published page/assets.
+
 ## Notes
 
 `docs/HANDOFF.md` to orient, `docs/recomp-architecture.md` for the long version,

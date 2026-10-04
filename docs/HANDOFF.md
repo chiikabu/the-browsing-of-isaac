@@ -284,9 +284,12 @@ REQUIRE emsdk on PATH:
   now computes `fisttp`'s result from ST0 via `isaac_fast_x87_trunc_i64`. Do **not**
   "fix" this by forcing `0xc7162c` to 2: it has ~20 readers and a real writer
   (`__isa_available_init`), and flipping it re-dispatches the whole CRT.
-  (`missing_fns.c`'s "2 reads / 0 writers" note is wrong.) **Other routines
-  with an x87 `fstp tbyte` + exponent test will have the same defect** — worth
-  a census.
+  (`missing_fns.c`'s "2 reads / 0 writers" note is wrong.) **The census is
+  done (round 91, §21.116):** `.text` has exactly two `fstp xword`, this one
+  and `0x00af0780` (float->int32). That twin is wrapped the same way.
+  `0x00a15040`, the uniform-name scan, stays lifted — round 90d measured it
+  off the top 30, and the 1.5% beside this paragraph is the driver's
+  `readPixels`, not the scan.
   **Item Info (the descriptions unlocked after Mom) is gated by an option.**
   `ItemInfoDisplayEnabled=1` in `options.ini` — the minimal console-only
   options.ini the drivers seed does NOT set it, so the box can never render and

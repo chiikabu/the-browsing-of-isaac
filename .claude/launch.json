@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "isaac-serve",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/serve.mjs"],
+      "port": 8765
+    },
+    {
+      "name": "isaac-play",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/recomp/web/run_web.mjs", "output/recomp/web-live", "100000000", "serve=1", "interactive=1", "port=8099", "fast=1", "instance=.scratch/game-bundle"],
+      "port": 8099
+    }
+  ]
+}

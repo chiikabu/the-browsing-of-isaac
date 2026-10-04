@@ -1,9 +1,30 @@
 {
-  "name": "browsing-of-isaac",
+  "name": "isaac-repentance-wasm",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test --test-concurrency=2 tests/*.test.js"
+    "test": "node --test --test-concurrency=2 tests/*.test.js",
+    "decomp:status": "node scripts/decomp/status.mjs",
+    "decomp:index": "python scripts/decomp/tools/build-pe-index.py",
+    "decomp:gate": "node scripts/decomp/verify-unit.mjs",
+    "decomp:inventory": "node scripts/decomp/run-ghidra.mjs --inventory-only",
+    "decomp:analyze": "node scripts/decomp/run-ghidra.mjs",
+    "decomp:build-slice": "node scripts/decomp/build-game-update-slice.mjs",
+    "decomp:verify-slice": "node --max-old-space-size=1024 scripts/decomp/verify-game-update-slice.mjs",
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "serve": "node scripts/serve.mjs",
+    "phase0": "node scripts/phase0-check.mjs",
+    "browser:check": "node scripts/browser-launch.mjs",
+    "repo:check": "node scripts/check-repo-safety.mjs",
+    "decomp:build-render-slice": "node scripts/decomp/build-game-render-slice.mjs",
+    "decomp:verify-render-slice": "node scripts/decomp/verify-game-render-slice.mjs",
+    "snapshot": "node scripts/decomp/snapshot-decomp.mjs",
+    "snapshot:verify": "node scripts/decomp/snapshot-decomp.mjs --verify",
+    "restore:diff": "node scripts/decomp/restore-decomp.mjs diff"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "devDependencies": {
     "playwright": "1.62.1"

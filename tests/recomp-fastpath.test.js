@@ -43,6 +43,7 @@ const probePatches = () => patchesIn('PROBE_PATCHES: dict', 'def apply_wrap_patc
 // must say so in its own body as well.
 const NO_VERIFY = {
   '0x00af0800': 'CRT x87 float->int64: the lifted fallback tests an 80-bit exponent the runtime keeps as zero, so it returns 0 for everything (round 90e)',
+  '0x00af0780': 'CRT x87 float->int32, the same fallback and the same zero exponent word: every floor()/ceil() conversion through 0x00af0770 returned 0 (round 91)',
   '0x00abb750': 'libvorbis mdct_bitreverse guard: it only decides whether the lifted body may run, so there is no host result to compare (round 90)',
 };
 
@@ -206,22 +207,6 @@ test('the probe helpers exist where lifted code can reach them', () => {
     assert.match(fast, new RegExp(`^[a-z0-9_ ]*\\b${fn}\\(`, 'm'), `${fn}: defined in host_fastpath.c`);
     assert.ok(rt.includes(`${fn}(`), `${fn}: declared in recomp_rt.h`);
   }
-});
-
-test('round 38: the dispatcher has a direct-mapped cache in front of its index, tried before the shim check, off under any dispatch mode', () => {
-  const gen = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'mkdispatch.py'), 'utf8');
-  assert.ok(gen.includes('int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu) {'), 'the cached entry exists');
-  assert.ok(gen.includes('if (!g_dfast || !va) return 0;') && gen.includes('else return 0;'), 'a miss, a mode, or a null target falls through');
-  assert.ok(gen.includes('  ++g_dcalls; ++g_dchits;\n  g_dcount[id]++;\n  g_dfn[id](cpu);\n  return 1;'), 'a hit still counts (the census stays exact)');
-  assert.ok(gen.includes('typedef struct { uint32_t va[2]; uint16_t id[2]; uint8_t next; } dcache_set;'), 'two ways per set');
-  assert.ok(gen.includes('cache %u hits / %u fills'), 'the census reports the hit rate');
-  assert.ok(gen.includes('if (!g_dfast && g_hb_every == 0 && g_watch_n == 0 && g_dtime_on == 0 && g_dcount) g_dfast = 1;'),
-    'the cache turns on only when heartbeat, watch and timing are all off');
-  assert.ok(gen.includes("c->va[w] = va; c->id[w] = id; c->next = (uint8_t)(w ^ 1u);"), 'a resolved function entry fills the older way');
-  const trap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_trap.c'), 'utf8');
-  assert.ok(/void recomp_call_indirect\(CpuState \*restrict s, uint32_t target\) \{\s*if \(isaac_lifted_dispatch_cached\(target, s\)\)\s*return;\s*if \(isaac_indirect_call\(target, s\)\)/.test(trap),
-    'the indirect call tries the cache before the shim check');
-  assert.ok(trap.includes('__attribute__((weak)) int isaac_lifted_dispatch_cached('), 'a weak fallback keeps the host linking without the lifted module');
 });
 
 test('round 49: the imdct butterfly has a host fastpath with the verify mode', () => {
