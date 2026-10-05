@@ -5,6 +5,30 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-05 — Immutable release payload and preserved CDN assets
+
+The portable release uses engine payload commit
+`chiikabu/boi-portable@6d8ba1d61e78bebb6e7389d7421239886beba45b`,
+containing the verified loading module `255e9c7fee33…`. All 28 B chunks remain
+byte-identical to the deployed `@79d199a` payload. The local vanilla bundle is
+not the deployed optimized asset set; 35 production files were restored and
+verified against their full manifest SHA-256 hashes rather than replacing them.
+
+The old page omitted B's `wl`, `wz`, and `win` despite its compressed-window
+payload. The original `79d199a` page supplied the matching 522-window map.
+A full pack with `--window-gz --part-mib 19 --key-of index.html` preserves both
+that encoding and the existing chunk URLs. The default file-count calculation
+alone changed boundaries to 29 chunks; the explicit 19 MiB geometry restores
+the deployed 28. Four A chunks change; every other chunk matches its Git blob.
+
+All four new A chunks served HTTP 200 with matching full SHA-256 hashes.
+The largest is 20,616,794 bytes. An initial preview received HTTP 403 for A2;
+after revalidating the immutable URLs and clearing the private browser cache,
+the muted candidate reached title and live gameplay with advancing GameFrames.
+No new public-CDN loading-speed claim is made: the earlier timing corpus used
+the separate raw-asset distribution. See README's public-release procedure and
+`output/recomp/publish-{payload-integrity,cdn-engine-check,preview-success}.json`.
+
 ## 2026-10-05 — Loading kernels, owned buffers, bounded prefetch, and silent automation
 
 The live loading module is
