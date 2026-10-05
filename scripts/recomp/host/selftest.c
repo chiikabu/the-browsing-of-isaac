@@ -24,6 +24,9 @@ uint32_t isaac_frames_presented(void);   /* host_shims_win.c frame counter */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __EMSCRIPTEN__
+#include <malloc.h>   /* dlmalloc's live-byte census for ownership checks */
+#endif
 /* the client-array emulation's entry points (host_gl_clientarrays.c; GL types spelt out) -- round 53 */
 void isaac_gl_reset_state(void);
 void isaac_gl_enable_vertex_attrib_array(unsigned index);
@@ -51,8 +54,14 @@ void     isaac_module_report(void);
 unsigned isaac_stub_record_count(void);
 uint32_t isaac_call_site_from_return(uint32_t ret);
 
-/* Externs the host layer expects from the lifted module. Standalone build
- * supplies inert versions: nothing here transfers control to guest code. */
+/* Externs the host layer expects from the lifted module. The standalone
+ * dispatcher exposes only the real native destructor used by the thunk test. */
+void sub_00a67fd0(CpuState *restrict cpu);
+int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
+    if (va != 0x00a67fd0u) return 0;
+    sub_00a67fd0(cpu);
+    return 1;
+}
 /* Section 17 (msvcp140) points fake streambuf vtable slots at these marker
  * VAs; a "virtual call" into the guest then answers like the base class:
  * EOF from underflow/uflow/overflow, 0 from sync. */
@@ -133,12 +142,14 @@ static int g_persist_calls, g_unlink_calls;
 static uint32_t g_persist_len;
 static char g_persist_key[256];
 static uint8_t g_persist_data[64];
+static uintptr_t g_persist_pointer;
 static int selftest_persist(const char *key, const char *src, const uint8_t *data, uint32_t len) {
     (void)src;
     ++g_persist_calls;
     g_persist_len = len;
+    g_persist_pointer = (uintptr_t)data;
     snprintf(g_persist_key, sizeof g_persist_key, "%s", key);
-    memcpy(g_persist_data, data, len < sizeof g_persist_data ? len : sizeof g_persist_data);
+    if (len) memcpy(g_persist_data, data, len < sizeof g_persist_data ? len : sizeof g_persist_data);
     return 1;
 }
 static int selftest_unlink(const char *key, const char *src) { (void)key; (void)src; ++g_unlink_calls; return 1; }
@@ -150,6 +161,42 @@ static int selftest_preader(const char *src, uint8_t *dst, uint32_t off, uint32_
     if (len > WIN_FILE_SIZE - off) len = WIN_FILE_SIZE - off;
     for (uint32_t i = 0; i < len; i++) dst[i] = win_byte(off + i);
     return (int)len;
+}
+
+/* Read through the guest API, including EOF. A writable close also lets the
+ * persist hook observe which allocation backs the file, without exposing
+ * private FS entries to the tests. These fixtures fit in the supplied scratch. */
+static int selftest_fs_read_is(uint32_t scratch, const char *path,
+                              const uint8_t *expected, uint32_t len) {
+    uint32_t mode = scratch + 256u, dst = scratch + 272u;
+    memcpy(isaac_g(scratch), path, strlen(path) + 1u);
+    memcpy(isaac_g(mode), "a+b", 4u);
+    memset(isaac_g(dst), 0xa5, len + 1u);
+    CpuState cpu = {0};
+    cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000u;
+    isaac_w32(cpu.ESP, 0xDEADBEEF);
+    isaac_w32(cpu.ESP + 4u, scratch);
+    imp_kernel32__GetFileAttributesA(&cpu);
+    if (cpu.EAX == 0xFFFFFFFFu || (cpu.EAX & 0x10u)) return 0;
+    isaac_w32(cpu.ESP + 8u, mode);
+    imp_api_ms_win_crt_stdio__fopen(&cpu);
+    uint32_t fh = cpu.EAX;
+    if (!fh) return 0;
+    /* Append mode preserves the seed; read it from the beginning. */
+    isaac_w32(cpu.ESP + 4u, fh);
+    isaac_w32(cpu.ESP + 8u, 0u);
+    isaac_w32(cpu.ESP + 12u, 0u);  /* SEEK_SET */
+    imp_api_ms_win_crt_stdio__fseek(&cpu);
+    int seek_ok = cpu.EAX == 0u;
+    isaac_w32(cpu.ESP + 4u, dst);
+    isaac_w32(cpu.ESP + 8u, 1u);
+    isaac_w32(cpu.ESP + 12u, len + 1u);
+    isaac_w32(cpu.ESP + 16u, fh);
+    imp_api_ms_win_crt_stdio__fread(&cpu);
+    int exact = cpu.EAX == len && (!len || memcmp(isaac_g(dst), expected, len) == 0);
+    isaac_w32(cpu.ESP + 4u, fh);
+    imp_api_ms_win_crt_stdio__fclose(&cpu);
+    return seek_ok && exact && cpu.EAX == 0u;
 }
 
 
@@ -572,6 +619,57 @@ int main(int argc, char **argv) {
         check(!ok, "a push ebp prologue is not decoded as a thunk");
     }
 
+    /* Follow two adjustor thunks through the public dispatcher into a real
+     * destructor, including its guest write and RET stack effects. */
+    {
+        extern void recomp_call_indirect(CpuState *restrict s, uint32_t target);
+        const uint32_t first = 0x00401000u, second = 0x00401010u;
+        const uint32_t stack = ISAAC_STACK_TOP_VA - 0x1000;
+        const uint32_t return_va = 0x0040ccd0u;
+        const uint8_t first_code[8] = {0x83, 0xc1, 0xfc, 0xe9, 0, 0, 0, 0};
+        const uint8_t second_code[11] = {
+            0x81, 0xc1, 0x04, 0x01, 0x00, 0x00, 0xe9, 0, 0, 0, 0
+        };
+        uint8_t saved_first[sizeof first_code], saved_second[sizeof second_code];
+        uint32_t object = isaac_guest_alloc(0x10cu);
+        check(object != 0, "allocate a guest object for chained adjustor thunks");
+        if (object) {
+            const uint32_t receiver = object + 0x104u;
+            memcpy(saved_first, isaac_g(first), sizeof saved_first);
+            memcpy(saved_second, isaac_g(second), sizeof saved_second);
+            memcpy(isaac_g(first), first_code, sizeof first_code);
+            memcpy(isaac_g(second), second_code, sizeof second_code);
+            isaac_w32(first + 4, second - (first + sizeof first_code));
+            isaac_w32(second + 7, 0x00a67fd0u - (second + sizeof second_code));
+
+            isaac_w32(receiver - 4, 0x13579bdfu);
+            isaac_w32(receiver, 0x11223344u);
+            isaac_w32(receiver + 4, 0x2468ace0u);
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ECX = receiver - 0x100u;
+            cpu.ESP = stack;
+            cpu.EIP = second;
+            isaac_w32(stack, return_va);
+            recomp_call_indirect(&cpu, first);
+
+            check(isaac_r32(receiver) == 0x00ba04acu,
+                  "chained adjustor thunks execute the real destructor vtable store");
+            check(cpu.ECX == receiver,
+                  "chained adjustor thunks apply signed imm8 and imm32 ECX adjustments");
+            check(cpu.ESP == stack + 4,
+                  "chained adjustor thunk callee RET pops exactly one stack word");
+            check(cpu.EIP == return_va,
+                  "chained adjustor thunk callee RET loads the guest return address");
+            check(isaac_r32(receiver - 4) == 0x13579bdfu &&
+                  isaac_r32(receiver + 4) == 0x2468ace0u,
+                  "chained adjustor thunk destructor preserves adjacent guest words");
+
+            memcpy(isaac_g(first), saved_first, sizeof saved_first);
+            memcpy(isaac_g(second), saved_second, sizeof saved_second);
+            isaac_guest_free(object);
+        }
+    }
+
     /* Host fastpath (boot round 12): exact re-implementations of the three
      * leaf functions that dominate the boot. Spec vectors here; the boot's
      * ISAAC_FASTPATH_VERIFY=1 mode compares against the lifted bodies on
@@ -617,12 +715,42 @@ int main(int argc, char **argv) {
         check(*(uint8_t *)isaac_g(row + 0) == 11 && *(uint8_t *)isaac_g(row + 3) == 44, "PNG Paeth filter");
         /* Paeth tie-break: pb == pc must pick b (the spec's order a, b, c).
          * bpp 1, prev [4, 0], raw [2, 10]: [0] = 2+4 = 6; [1]: a=6 b=0 c=4
-         * p=2 pa=4 pb=2 pc=2 -> b -> 10 (a "pb < pc" mutant picks c -> 14). */
+         * p=2 pa=4 pb=2 pc=2 -> b -> 10; choosing c would produce 14. */
         isaac_w32(info + 4, 2); *(uint8_t *)isaac_g(info + 0xb) = 8;
         *(uint8_t *)isaac_g(prev + 0) = 4; *(uint8_t *)isaac_g(prev + 1) = 0;
         *(uint8_t *)isaac_g(row + 0) = 2; *(uint8_t *)isaac_g(row + 1) = 10;
         isaac_fast_unfilter(info, row, prev, 4);
         check(*(uint8_t *)isaac_g(row + 0) == 6 && *(uint8_t *)isaac_g(row + 1) == 10, "PNG Paeth tie-break prefers b over c");
+        {
+            static const struct { unsigned a, b, c, pred; } cases[] = {
+                { 0u, 3u, 1u, 3u }, { 3u, 0u, 2u, 0u },
+                { 0u, 255u, 85u, 255u }, { 255u, 0u, 170u, 0u },
+                { 0u, 255u, 127u, 127u }, { 255u, 0u, 128u, 128u }
+            };
+            isaac_w32(info + 4u, 2u);
+            *(uint8_t *)isaac_g(info + 0xbu) = 8u;
+            for (unsigned i = 0; i < sizeof cases / sizeof cases[0]; ++i) {
+                unsigned a = cases[i].a, b = cases[i].b, c = cases[i].c;
+                uint8_t raw = (uint8_t)(251u + i);
+                uint8_t guarded_row[4] = { 0x6du, (uint8_t)(a - c), raw, 0xa7u };
+                const uint8_t guarded_prev[4] = { 0xb3u, (uint8_t)c, (uint8_t)b, 0x4eu };
+                uint8_t expected_info[16];
+                char label[144];
+                memcpy(isaac_g(row - 1u), guarded_row, sizeof guarded_row);
+                memcpy(isaac_g(prev - 1u), guarded_prev, sizeof guarded_prev);
+                memcpy(expected_info, isaac_g(info), sizeof expected_info);
+                /* Updating byte zero produces a. Byte one then sees the
+                 * chosen (a,b,c), including modulo-256 sample addition. */
+                guarded_row[1] = (uint8_t)a;
+                guarded_row[2] = (uint8_t)(raw + cases[i].pred);
+                isaac_fast_unfilter(info, row, prev, 4u);
+                snprintf(label, sizeof label, "PNG Paeth (%u,%u,%u) selects %u in a guarded row update", a, b, c, cases[i].pred);
+                check(memcmp(isaac_g(row - 1u), guarded_row, sizeof guarded_row) == 0
+                      && memcmp(isaac_g(prev - 1u), guarded_prev, sizeof guarded_prev) == 0
+                      && memcmp(isaac_g(info), expected_info, sizeof expected_info) == 0,
+                      label);
+            }
+        }
         isaac_w32(info + 4, 6); *(uint8_t *)isaac_g(info + 0xb) = 24;
         /* premultiply with an identity-free table: table[(a<<8)|v] = v/2 */
         uint32_t tbl = ISAAC_STACK_TOP_VA - 0x14000;   /* 64 KB in the guest stack scratch */
@@ -637,6 +765,165 @@ int main(int argc, char **argv) {
         check(isaac_r32(px + 4) == 0, "premultiply zeroes alpha 0 pixels");
         check(*(uint8_t *)isaac_g(px + 8) == 100 && *(uint8_t *)isaac_g(px + 10) == 25 && *(uint8_t *)isaac_g(px + 11) == 0x80,
               "premultiply maps R,G,B through the alpha table and keeps alpha");
+    }
+
+    /* 0x00aa2580, pair accumulation only. Packet/refill behavior stays in
+     * the original decoder; every rejected block must remain untouched. */
+    {
+        uint32_t arena = ISAAC_STACK_TOP_VA - 0x18000u;
+        uint32_t frame = arena + 0x80u, book = arena + 0x100u;
+        uint32_t table = arena + 0x200u, left = arena + 0x300u, right = arena + 0x400u;
+        uint8_t baseline[0x500], expected[0x500], snapshot[0x500];
+        uint32_t last = 0x12345678u;
+        memset(isaac_g(arena), 0xa5, sizeof baseline);
+        isaac_w32(frame - 4u, book);
+        isaac_w32(frame - 8u, 6u);
+        isaac_w32(frame - 0x14u, left - right);
+        isaac_w32(book + 0x1cu, table);
+        {
+            const float source[] = { 999.0f, 1.0f, -2.0f, 3.0f, 4.0f, -5.0f, 6.0f };
+            const float l[] = { 10.0f, 20.0f, 30.0f }, r[] = { 100.0f, 200.0f, 300.0f };
+            const float want_l[] = { 11.0f, 23.0f, 25.0f }, want_r[] = { 98.0f, 204.0f, 306.0f };
+            memcpy(isaac_g(table), source, sizeof source);
+            memcpy(isaac_g(left), l, sizeof l);
+            memcpy(isaac_g(right), r, sizeof r);
+            memcpy(baseline, isaac_g(arena), sizeof baseline);
+            memcpy(expected, baseline, sizeof expected);
+            memcpy(expected + (left - arena), want_l, sizeof want_l);
+            memcpy(expected + (right - arena), want_r, sizeof want_r);
+            check(isaac_fast_aa2580_pairs(frame, right, 4u, 1u, 0u, &last) == 3u
+                  && last == 0x43990000u
+                  && memcmp(isaac_g(arena), expected, sizeof expected) == 0,
+                  "audio pairs: interleaved source offset, left/right order and odd terminal index preserve all other bytes");
+        }
+        memcpy(isaac_g(arena), baseline, sizeof baseline);
+        isaac_w32(frame - 8u, 5u);
+        memcpy(expected, isaac_g(arena), sizeof expected);
+        {
+            const float want_l[] = { 11.0f, 23.0f }, want_r[] = { 98.0f, 204.0f };
+            memcpy(expected + (left - arena), want_l, sizeof want_l);
+            memcpy(expected + (right - arena), want_r, sizeof want_r);
+        }
+        check(isaac_fast_aa2580_pairs(frame, right, 4u, 1u, 0u, &last) == 2u
+              && last == 0x434c0000u && memcmp(isaac_g(arena), expected, sizeof expected) == 0,
+              "audio pairs: equality with the signed loop limit stops before the trailing samples");
+        {
+            /* ADDSS register destination plus m32 source, MXCSR=0x1f80.
+             * Each row is source L/R, destination L/R, expected L/R. */
+            static const uint32_t vectors[][6] = {
+                { 0x80000000u, 0x80000000u, 0x80000000u, 0u, 0u, 0u },
+                { 0x3f800000u, 0x3f800001u, 0x33800000u, 0x33800000u, 0x3f800000u, 0x3f800002u },
+                { 1u, 0x007fffffu, 1u, 1u, 2u, 0x00800000u },
+                { 0x7f812345u, 0x7f800000u, 0xffcabcdeu, 0xff800000u, 0x7fc12345u, 0xffc00000u },
+                { 0xffc12345u, 0x3f800000u, 0x7f856789u, 0xff812345u, 0xffc12345u, 0xffc12345u },
+                { 0x7f7fffffu, 0xff7fffffu, 0x7f7fffffu, 0xff7fffffu, 0x7f800000u, 0xff800000u }
+            };
+            static const char *const names[] = {
+                "audio pairs: the first positive-zero add is observable for negative-zero samples",
+                "audio pairs: halfway sums round to even in float32",
+                "audio pairs: subnormal sums retain gradual underflow",
+                "audio pairs: source SNaN priority and opposite infinities match scalar SSE",
+                "audio pairs: source QNaN priority and destination SNaN sign/payload match scalar SSE",
+                "audio pairs: finite overflow produces the correctly signed infinity"
+            };
+            for (unsigned i = 0; i < sizeof vectors / sizeof vectors[0]; ++i) {
+                const uint32_t *v = vectors[i];
+                memcpy(isaac_g(arena), baseline, sizeof baseline);
+                isaac_w32(frame - 8u, 2u);
+                memcpy(isaac_g(table), v, 8u);
+                memcpy(isaac_g(left), v + 2, 4u);
+                memcpy(isaac_g(right), v + 3, 4u);
+                memcpy(expected, isaac_g(arena), sizeof expected);
+                memcpy(expected + (left - arena), v + 4, 4u);
+                memcpy(expected + (right - arena), v + 5, 4u);
+                check(isaac_fast_aa2580_pairs(frame, right, 0u, 1u, 0u, &last) == 1u
+                      && last == v[5] && memcmp(isaac_g(arena), expected, sizeof expected) == 0,
+                      names[i]);
+            }
+        }
+        {
+            const uint32_t source[] = { 0x3fa00000u, 0x40200000u };
+            const uint32_t l = 0x41200000u, r = 0x41a00000u;
+            const uint32_t want_l = 0x41340000u, want_r = 0x41b40000u;
+            memcpy(isaac_g(arena), baseline, sizeof baseline);
+            isaac_w32(frame - 8u, 4u);
+            memcpy(isaac_g(table + 1u), source, sizeof source);
+            memcpy(isaac_g(left + 1u), &l, 4u);
+            memcpy(isaac_g(right + 1u), &r, 4u);
+            memcpy(expected, isaac_g(arena), sizeof expected);
+            memcpy(expected + (left + 1u - arena), &want_l, 4u);
+            memcpy(expected + (right + 1u - arena), &want_r, 4u);
+            check(isaac_fast_aa2580_pairs(frame, right + 1u, 1u, 2u, 0u, &last) == 1u
+                  && last == want_r && memcmp(isaac_g(arena), expected, sizeof expected) == 0,
+                  "audio pairs: unaligned samples and an even starting index follow the x86 loads and stores");
+        }
+        {
+            static const char *const rejection[] = {
+                "audio pairs: nonzero full-width XMM1 scalar rejects without writes",
+                "audio pairs: frame subtraction reaching zero rejects without writes",
+                "audio pairs: frame crossing the guest limit rejects without writes",
+                "audio pairs: null codebook rejects without writes",
+                "audio pairs: codebook crossing the guest limit rejects without writes",
+                "audio pairs: null sample table rejects without writes",
+                "audio pairs: wrapped sample-table addition rejects without writes",
+                "audio pairs: source span crossing the guest limit rejects without writes",
+                "audio pairs: right span crossing the guest limit rejects without writes",
+                "audio pairs: left span crossing the guest limit rejects without writes",
+                "audio pairs: negative starting index rejects without writes",
+                "audio pairs: negative signed limit rejects without writes",
+                "audio pairs: an already finished loop rejects without writes",
+                "audio pairs: zero loop limit rejects without writes",
+                "audio pairs: signed terminal-index wrap rejects without writes",
+                "audio pairs: source-byte-count overflow rejects without writes",
+                "audio pairs: partially overlapping channel outputs reject without writes",
+                "audio pairs: left output aliasing unread source rejects without writes",
+                "audio pairs: right output aliasing unread source rejects without writes",
+                "audio pairs: left output aliasing the frame rejects without writes",
+                "audio pairs: right output aliasing frame arguments rejects without writes",
+                "audio pairs: left output aliasing the codebook pointer rejects without writes",
+                "audio pairs: right output aliasing the codebook rejects without writes",
+                "audio pairs: null right output rejects without writes",
+                "audio pairs: null left output rejects without writes",
+                "audio pairs: negative-zero XMM1 rejects without writes"
+            };
+            for (unsigned i = 0; i < sizeof rejection / sizeof rejection[0]; ++i) {
+                uint32_t test_frame = frame, test_right = right, offset = 4u, index = 1u, zero = 0u;
+                memcpy(isaac_g(arena), baseline, sizeof baseline);
+                switch (i) {
+                case 0: zero = 0x100u; break;
+                case 1: test_frame = 0x20u; break;
+                case 2: test_frame = ISAAC_GUEST_LIMIT_VA - 0x18u; break;
+                case 3: isaac_w32(frame - 4u, 0u); break;
+                case 4: isaac_w32(frame - 4u, ISAAC_GUEST_LIMIT_VA - 0x1cu); break;
+                case 5: isaac_w32(book + 0x1cu, 0u); break;
+                case 6: offset = UINT32_MAX - table + 1u; break;
+                case 7: isaac_w32(book + 0x1cu, ISAAC_GUEST_LIMIT_VA - 8u); offset = 0u; break;
+                case 8: test_right = ISAAC_GUEST_LIMIT_VA - 8u; break;
+                case 9: isaac_w32(frame - 0x14u, ISAAC_GUEST_LIMIT_VA - 8u - right); break;
+                case 10: index = 0x80000000u; break;
+                case 11: isaac_w32(frame - 8u, 0x80000000u); break;
+                case 12: index = 6u; break;
+                case 13: isaac_w32(frame - 8u, 0u); break;
+                case 14: index = INT32_MAX - 1u; isaac_w32(frame - 8u, INT32_MAX); break;
+                case 15: index = 0u; isaac_w32(frame - 8u, 0x40000000u); break;
+                case 16: isaac_w32(frame - 0x14u, 4u); break;
+                case 17: isaac_w32(frame - 0x14u, table + 4u - right); break;
+                case 18: test_right = table + 4u; isaac_w32(frame - 0x14u, left - test_right); break;
+                case 19: isaac_w32(frame - 0x14u, frame - 0x20u - right); break;
+                case 20: test_right = frame + 0x18u; isaac_w32(frame - 0x14u, left - test_right); break;
+                case 21: isaac_w32(frame - 0x14u, book + 0x1cu - right); break;
+                case 22: test_right = book; isaac_w32(frame - 0x14u, left - test_right); break;
+                case 23: test_right = 0u; break;
+                case 24: isaac_w32(frame - 0x14u, 0u - right); break;
+                case 25: zero = 0x80000000u; break;
+                }
+                memcpy(snapshot, isaac_g(arena), sizeof snapshot);
+                last = 0x12345678u;
+                check(isaac_fast_aa2580_pairs(test_frame, test_right, offset, index, zero, &last) == 0u
+                      && last == 0x12345678u && memcmp(isaac_g(arena), snapshot, sizeof snapshot) == 0,
+                      rejection[i]);
+            }
+        }
     }
 
     /* Host fastpath, round 27 (recomp-architecture.md 21.42): the ISAAC
@@ -754,6 +1041,71 @@ int main(int argc, char **argv) {
             check(!isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in), "inflate: fewer than 10 input bytes is left to the lifted body");
             isaac_w32(in + 4u, 16u); isaac_w32(ist + 0x30u, win + 100u);
             check(!isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in), "inflate: under 258 bytes of room before the reader is left to the lifted body");
+            {
+                static const uint32_t lengths[] = { 3u, 15u, 16u, 17u, 257u, 258u };
+                static const char *const kinds[] = {
+                    "nonuniform disjoint", "exact adjacency", "distance-one repeat",
+                    "short-period overlap", "source wrap split", "source wrap contiguous",
+                    "distance-one wrap"
+                };
+                for (unsigned kind = 0; kind < sizeof kinds / sizeof kinds[0]; ++kind) {
+                    for (unsigned li = 0; li < sizeof lengths / sizeof lengths[0]; ++li) {
+                        uint32_t length = lengths[li], at = 384u + (li & 3u), distance;
+                        uint8_t expected_window[0x420u], expected_stream[16u];
+                        uint32_t expected_state[0x38u / 4u], expected_input[0x1cu / 4u];
+                        char label[160];
+                        switch (kind) {
+                        case 0: distance = length + 37u; break;
+                        case 1: distance = length; break;
+                        case 2: distance = 1u; break;
+                        case 3: distance = 2u; break;
+                        case 4: at = 1u; distance = 3u; break;
+                        case 5: at = 1u; distance = length + 9u; break;
+                        default: at = 0u; distance = 1u; break;
+                        }
+                        memset(isaac_g(ist), 0x53, 0x38u);
+                        memset(isaac_g(in), 0xa7, 0x1cu);
+                        /* LSB first: length (01), distance (0), end (11).
+                         * Nonzero lookahead must remain in hold after put-back. */
+                        INFLATE_RESET(0xd9u, 16u);
+                        *(uint8_t *)isaac_g(ib + 1u) = 0xb6u;
+                        *(uint8_t *)isaac_g(ib + 2u) = 0x92u;
+                        memset(isaac_g(win - 16u), 0x6d, 16u);
+                        for (uint32_t i = 0; i < 0x400u; ++i)
+                            *(uint8_t *)isaac_g(win + i) = (uint8_t)(i * 37u + (i >> 3u) * 11u + 0x93u);
+                        isaac_w32(ist + 0x34u, win + at);
+                        isaac_w32(in + 0x18u, 0xa65c39e7u);
+                        ENT(lc, 0, 1, 'a'); ENT(lc + 8u, 0x10, 2, length);
+                        ENT(lc + 16u, 0, 1, 'a'); ENT(lc + 24u, 0x60, 2, 0u);
+                        ENT(dc, 0x10, 1, distance); ENT(dc + 8u, 0x10, 1, 2u);
+                        /* The trailing guard is the unchanged first 16 bytes
+                         * of ist, immediately after this fixture's window. */
+                        memcpy(expected_window, isaac_g(win - 16u), sizeof expected_window);
+                        memcpy(expected_state, isaac_g(ist), sizeof expected_state);
+                        memcpy(expected_input, isaac_g(in), sizeof expected_input);
+                        memcpy(expected_stream, isaac_g(ib), sizeof expected_stream);
+                        /* Independent scalar ring model: earlier output bytes
+                         * become source bytes for overlapping matches. */
+                        for (uint32_t i = 0; i < length; ++i)
+                            expected_window[16u + at + i] = expected_window[16u + ((at + i + 0x400u - distance) % 0x400u)];
+                        expected_state[0x1cu / 4u] = 3u;
+                        expected_state[0x20u / 4u] = 0x000495b6u;
+                        expected_state[0x34u / 4u] = win + at + length;
+                        expected_input[0] = ib + 1u;
+                        expected_input[1] = 15u;
+                        expected_input[2] = 101u;
+                        int accepted = isaac_fast_inflate_ring_ok(2u, 1u, lc, dc, ist, in);
+                        r = isaac_fast_inflate_ring(2u, 1u, lc, dc, ist, in);
+                        snprintf(label, sizeof label, "inflate: %s length %u preserves bytes, guards, status, state and input", kinds[kind], length);
+                        check(accepted && r == 1
+                              && memcmp(isaac_g(win - 16u), expected_window, sizeof expected_window) == 0
+                              && memcmp(isaac_g(ist), expected_state, sizeof expected_state) == 0
+                              && memcmp(isaac_g(in), expected_input, sizeof expected_input) == 0
+                              && memcmp(isaac_g(ib), expected_stream, sizeof expected_stream) == 0,
+                              label);
+                    }
+                }
+            }
 #undef INFLATE_RESET
 #undef ENT
         }
@@ -1226,7 +1578,6 @@ int main(int argc, char **argv) {
         imp_kernel32__GetStartupInfoW(&cpu);
         check(isaac_r32(sb + 0x100) == 68 && isaac_r32(sb + 0x100 + 64) == 0, "GetStartupInfoW writes cb=68 and zeroes the struct");
         /* _access on a seeded file and a missing one */
-        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
         static const uint8_t one[1] = {7};
         check(isaac_fs_seed("data/access_probe.txt", one, 1) == 1, "seed a file for _access");
         const char *ap1 = "data/access_probe.txt", *ap2 = "data/no_such_file.txt";
@@ -1866,7 +2217,6 @@ int main(int argc, char **argv) {
      * HUD path (the guest fault at 0x009a26c2). Parent dirs must appear so a
      * directory scan sees the file. */
     {
-        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
         static const uint8_t payload[] = {
             'I','S','A','A','C','P','A','K', 0x01, 0x00, 0x00, 0x00,
             0xDE, 0xAD, 0xBE, 0xEF, 0x55, 0xAA, 0x00, 0xFF,
@@ -1924,7 +2274,6 @@ int main(int argc, char **argv) {
 
         /* Round 12f: the key -> slot hash index and lazy bytes. */
         {
-            extern int isaac_fs_seed_lazy(const char *path, uint32_t len);
             typedef int (*isaac_fs_lazy_reader)(const char *src, uint8_t *dst, uint32_t len);
             extern void isaac_fs_set_lazy_reader(isaac_fs_lazy_reader fn);
             extern uint32_t isaac_fs_lazy_loads(void);
@@ -1956,6 +2305,146 @@ int main(int argc, char **argv) {
             check(isaac_fs_seed("data/idx_b.txt", one, 1) == 1, "the deleted key can be seeded again");
             imp_kernel32__GetFileAttributesA(&cpu);
             check(cpu.EAX != 0xFFFFFFFFu, "and is found again");
+
+            /* An owned seed keeps its allocation until replacement/deletion;
+             * rejected input stays entirely with the caller. */
+            {
+                typedef int (*persist_fn)(const char *, const char *, const uint8_t *, uint32_t);
+                typedef int (*unlink_fn)(const char *, const char *);
+                extern void isaac_fs_set_persist_hooks(persist_fn, unlink_fn);
+                static const char path[] = "data/adopt/asset.bin";
+                static const uint8_t adopted[] = { 0x91, 0x00, 0x27, 0xff, 0x43, 0x18, 0xa6 };
+                static const uint8_t original[] = { 'C', 'O', 'P', 'Y' };
+                isaac_fs_set_persist_hooks(selftest_persist, selftest_unlink);
+                isaac_fs_set_lazy_reader(selftest_lazy_reader);
+#ifdef __EMSCRIPTEN__
+                size_t live_before = mallinfo().uordblks;
+#endif
+                uint8_t *owned = (uint8_t *)malloc(sizeof adopted);
+                check(owned != NULL, "allocate an exclusively owned seed buffer");
+                if (owned) {
+                    memcpy(owned, adopted, sizeof adopted);
+#ifdef __EMSCRIPTEN__
+                    size_t live_owned = mallinfo().uordblks;
+#endif
+                    int ok = isaac_fs_seed_adopt("./DATA\\adopt/./asset.bin", owned, sizeof adopted);
+#ifdef __EMSCRIPTEN__
+                    size_t live_seeded = mallinfo().uordblks;
+#endif
+                    check(ok == 1, "adopt seeds a new file with normal path canonicalization");
+                    if (!ok) free(owned);
+                    check(selftest_fs_read_is(pbuf, path, adopted, sizeof adopted),
+                          "the guest reads adopted binary bytes and exact EOF");
+                    check(ok && g_persist_pointer == (uintptr_t)owned,
+                          "the adopted allocation itself backs the file, not a copy");
+#ifdef __EMSCRIPTEN__
+                    check(live_seeded == live_owned, "adoption allocates no second data buffer");
+#endif
+                    check(isaac_fs_seed_adopt(path, NULL, 3u) == 0,
+                          "a nonempty NULL seed is rejected");
+                    check(selftest_fs_read_is(pbuf, path, adopted, sizeof adopted),
+                          "a rejected nonempty NULL seed preserves prior file contents");
+
+                    uint8_t *rejected = (uint8_t *)malloc(sizeof original);
+                    check(rejected != NULL, "allocate caller-owned input for rejected seeds");
+                    if (rejected) {
+                        memcpy(rejected, original, sizeof original);
+#ifdef __EMSCRIPTEN__
+                        size_t live_rejected = mallinfo().uordblks;
+#endif
+                        int bad_path = isaac_fs_seed_adopt(NULL, rejected, sizeof original);
+                        check(bad_path == 0, "adopt rejects an invalid path");
+#ifdef __EMSCRIPTEN__
+                        check(mallinfo().uordblks == live_rejected,
+                              "invalid-path rejection does not free or allocate caller data");
+#endif
+                        int bad_dir = isaac_fs_seed_adopt("data/adopt", rejected, sizeof original);
+                        check(bad_dir == 0, "adopt refuses to replace a directory with file data");
+#ifdef __EMSCRIPTEN__
+                        check(mallinfo().uordblks == live_rejected,
+                              "directory rejection leaves the caller's allocation live");
+#endif
+                        check(memcmp(rejected, original, sizeof original) == 0,
+                              "rejected seed data remains readable and unchanged by the caller");
+                        free(rejected);
+                    }
+                    FS_ATTR("data/adopt"); imp_kernel32__GetFileAttributesA(&cpu);
+                    check(cpu.EAX == 0x10u, "a rejected directory seed preserves the directory");
+                    check(selftest_fs_read_is(pbuf, path, adopted, sizeof adopted),
+                          "rejected paths leave the existing child file unchanged");
+
+                    uint8_t borrowed[sizeof original];
+                    memcpy(borrowed, original, sizeof original);
+                    check(isaac_fs_seed(path, borrowed, sizeof borrowed) == 1,
+                          "the borrowed-data API can replace an adopted file");
+                    memset(borrowed, 0, sizeof borrowed);
+                    check(selftest_fs_read_is(pbuf, path, original, sizeof original),
+                          "borrowed seed bytes remain independent of the caller's storage");
+                    static const uint8_t zeroes[3] = { 0 };
+                    check(isaac_fs_seed(path, NULL, sizeof zeroes) == 1 &&
+                          selftest_fs_read_is(pbuf, path, zeroes, sizeof zeroes),
+                          "the borrowed-data API still zero-fills a nonempty NULL seed");
+
+                    for (unsigned lazy = 0; lazy < 2u; ++lazy) {
+                        if (lazy)
+                            check(isaac_fs_seed_lazy(path, 6u) == 1, "replace eager data with an unread lazy entry");
+                        unsigned lazy_before = g_lazy_calls;
+                        owned = (uint8_t *)malloc(sizeof adopted);
+                        check(owned != NULL, "allocate replacement seed data");
+                        if (!owned) break;
+                        memcpy(owned, adopted, sizeof adopted);
+                        ok = isaac_fs_seed_adopt(path, owned, sizeof adopted);
+                        check(ok == 1, lazy ? "adopt replaces lazy data" : "adopt replaces eager data");
+                        if (!ok) free(owned);
+                        check(selftest_fs_read_is(pbuf, path, adopted, sizeof adopted),
+                              lazy ? "adopted bytes replace the lazy source" : "adopted bytes replace prior eager contents");
+                        check(ok && g_persist_pointer == (uintptr_t)owned && g_lazy_calls == lazy_before,
+                              "replacement retains the owned buffer without fetching a lazy source");
+                    }
+                    check(isaac_fs_seed_lazy(path, 6u) == 1, "register lazy data before materialized replacement");
+                    check(selftest_fs_read_is(pbuf, path, (const uint8_t *)"LAZY!!", 6u),
+                          "the lazy source materializes before replacement");
+                    check(isaac_fs_seed_adopt(path, NULL, 0u) == 1,
+                          "an empty adopted file replaces materialized lazy data");
+                    check(selftest_fs_read_is(pbuf, path, NULL, 0u),
+                          "the replaced empty file opens and immediately reaches EOF");
+                    check(isaac_fs_seed_adopt("data/adopt/empty.bin", NULL, 0u) == 1 &&
+                          selftest_fs_read_is(pbuf, "data/adopt/empty.bin", NULL, 0u),
+                          "a new empty file needs no caller data allocation");
+#ifdef __EMSCRIPTEN__
+                    check(mallinfo().uordblks == live_before,
+                          "replacement frees old eager/lazy buffers and empty seeds allocate no data");
+#endif
+                    FS_ATTR(path); imp_kernel32__DeleteFileA(&cpu);
+                    check(cpu.EAX == 1u, "the empty adopted replacement can be deleted");
+                    FS_ATTR("data/adopt/empty.bin"); imp_kernel32__DeleteFileA(&cpu);
+                    check(cpu.EAX == 1u, "the new empty adopted file can be deleted");
+
+                    owned = (uint8_t *)malloc(sizeof adopted);
+                    check(owned != NULL, "allocate an adopted file for deletion");
+                    if (owned) {
+                        memcpy(owned, adopted, sizeof adopted);
+                        ok = isaac_fs_seed_adopt(path, owned, sizeof adopted);
+                        check(ok == 1, "adopt a file that will be deleted");
+                        if (!ok) free(owned);
+                        FS_ATTR(path); imp_kernel32__DeleteFileA(&cpu);
+                        check(cpu.EAX == 1u, "DeleteFileA removes an adopted file");
+#ifdef __EMSCRIPTEN__
+                        check(mallinfo().uordblks == live_before,
+                              "deleting an adopted file frees its owned allocation");
+#endif
+                    }
+                    FS_ATTR("data/adopt"); imp_kernel32__RemoveDirectoryA(&cpu);
+                    check(cpu.EAX == 1u, "the rejected directory retained no caller buffer when removed");
+#ifdef __EMSCRIPTEN__
+                    check(mallinfo().uordblks == live_before,
+                          "removing the rejected directory cannot free caller-owned data again");
+#endif
+                }
+                isaac_fs_set_lazy_reader(NULL);
+                isaac_fs_set_persist_hooks(NULL, NULL);
+                memcpy(isaac_g(mbuf), "rb", 3u);
+            }
 
             /* Round 31: one display adapter, one monitor, one mode -- what
              * GLFW's monitor poll needs so glfwGetPrimaryMonitor() is not NULL. */
@@ -2168,6 +2657,214 @@ int main(int argc, char **argv) {
                 }
             }
 
+            /* The post-allocation pack block: consumer vertex bytes, holes,
+             * per-quad depth, scratch, and all-or-nothing rejection. */
+            {
+                enum { PACK_QUADS = 4, PACK_STRIDE = 116, PACK_ATTRS = 11 };
+                const uint32_t arena = ISAAC_HEAP_VA + 0x274000u;
+                const uint32_t frame = arena + 0x100u, self = arena + 0x200u;
+                const uint32_t descriptor = arena + 0x240u, attrs = arena + 0x300u;
+                const uint32_t quad = arena + 0x501u, uv = arena + 0x801u, dst = arena + 0xa01u;
+                const uint32_t ox = 0x3f000000u, oy = 0xbe800000u;
+                static const uint32_t formats[PACK_ATTRS] = { 1u, 7u, 2u, 5u, 3u, 6u, 4u, 8u, 5u, 7u, 6u };
+                static const uint32_t targets[8] = {
+                    0x00a67a6cu, 0x00a67a73u, 0x00a67a7au, 0x00a67a81u,
+                    0x00a67a7au, 0x00a67a81u, 0x00a67a73u, 0x00a67a6cu
+                };
+                static const float translated[PACK_QUADS][8] = {
+                    { 1.5f, 1.75f, 3.5f, 3.75f, 5.5f, 5.75f, 7.5f, 7.75f },
+                    { 11.5f, 11.75f, 13.5f, 13.75f, 15.5f, 15.75f, 17.5f, 17.75f },
+                    { 21.5f, 21.75f, 23.5f, 23.75f, 25.5f, 25.75f, 27.5f, 27.75f },
+                    { 31.5f, 31.75f, 33.5f, 33.75f, 35.5f, 35.75f, 37.5f, 37.75f }
+                };
+                static const uint32_t depths[PACK_QUADS] = { 0x3f800000u, 0x3f7d70a4u, 0x3f7ae148u, 0x3f7851ecu };
+                uint32_t saved_table[8], saved_depth = isaac_r32(0x00c798fcu);
+                uint32_t saved_decrement = isaac_r32(0x00baa06cu);
+                uint32_t seed[0x68u / 4u], expected_frame[0x68u / 4u];
+                uint8_t expected[PACK_QUADS * 4u * PACK_STRIDE + 16u], snapshot[0x1400u];
+                memcpy(saved_table, isaac_g(0x00a67bb0u), sizeof saved_table);
+                memcpy(isaac_g(0x00a67bb0u), targets, sizeof targets);
+                isaac_w32(0x00c798fcu, 0x3f800000u);
+                isaac_w32(0x00baa06cu, 0x3c23d70au);
+                memset(isaac_g(arena), 0xcc, sizeof snapshot);
+                memset(seed, 0x5a, sizeof seed);
+                seed[2] = seed[5] = dst;
+                seed[3] = oy; seed[4] = ox; seed[6] = PACK_STRIDE * 3u;
+                seed[7] = uv; seed[8] = seed[15] = quad;
+                seed[9] = PACK_QUADS; seed[10] = PACK_STRIDE;
+                seed[12] = quad + PACK_QUADS * 112u; seed[13] = self;
+                memcpy(isaac_g(frame - 0x50u), seed, sizeof seed);
+                isaac_w32(self + 0x24u, descriptor);
+                isaac_w32(descriptor + 0x0cu, attrs);
+                isaac_w32(descriptor + 0x10u, PACK_ATTRS);
+                for (unsigned i = 0; i < PACK_ATTRS; ++i) {
+                    isaac_w32(attrs + i * 8u, 0xdead0000u + i);  /* Not a format. */
+                    isaac_w32(attrs + i * 8u + 4u, formats[i]);
+                }
+                memset(expected, 0xa5, sizeof expected);
+                memset(isaac_g(dst - 8u), 0xa5, sizeof expected);
+                for (unsigned q = 0; q < PACK_QUADS; ++q) {
+                    for (unsigned corner = 0; corner < 4u; ++corner) {
+                        unsigned id = q * 4u + corner;
+                        float xy[2] = { (float)(q * 10u + corner * 2u + 1u), (float)(q * 10u + corner * 2u + 2u) };
+                        uint32_t color[4] = { 0x7fa10000u + id, 0x80000000u | id, 0x7fc20000u + id, 0x3f000000u + id };
+                        uint32_t texcoord[2] = { 0x7fa30000u + id, 0x80000000u | id };
+                        uint8_t *vertex = expected + 8u + id * PACK_STRIDE;
+                        memcpy(isaac_g(quad + q * 112u + corner * 8u), xy, 8u);
+                        memcpy(isaac_g(quad + q * 112u + 0x20u + corner * 0x14u), color, 16u);
+                        memcpy(isaac_g(uv + q * 36u + corner * 8u), texcoord, 8u);
+                        /* Explicit consumer offsets, not another descriptor walker. */
+                        memcpy(vertex + 4u, texcoord, 8u);
+                        memcpy(vertex + 20u, translated[q] + corner * 2u, 8u);
+                        memcpy(vertex + 28u, &depths[q], 4u);
+                        memcpy(vertex + 44u, color, 16u);
+                        memcpy(vertex + 80u, translated[q] + corner * 2u, 8u);
+                        memcpy(vertex + 88u, &depths[q], 4u);
+                        memcpy(vertex + 92u, texcoord, 8u);
+                        memcpy(vertex + 100u, color, 16u);
+                    }
+                }
+                check(isaac_fast_entity_quad_pack(frame, quad, uv, dst, PACK_STRIDE, ox, oy) == 3
+                      && memcmp(isaac_g(dst - 8u), expected, sizeof expected) == 0,
+                      "quad pack: mixed formats preserve holes, raw payload bits, corner order, duplicate attributes and guards");
+                memcpy(expected_frame, seed, sizeof seed);
+                memcpy(&expected_frame[0], &translated[3][6], 4u);
+                memcpy(&expected_frame[1], &translated[3][7], 4u);
+                expected_frame[5] = dst + PACK_QUADS * 4u * PACK_STRIDE;
+                expected_frame[9] = 0u; expected_frame[14] = PACK_ATTRS;
+                expected_frame[15] = quad + PACK_QUADS * 112u;
+                check(memcmp(isaac_g(frame - 0x50u), expected_frame, sizeof expected_frame) == 0
+                      && isaac_r32(0x00c798fcu) == 0x3f75c290u,
+                      "quad pack: four rounded depth subtractions and final corner scratch leave cleanup metadata intact");
+
+                /* A nonempty layout can consist entirely of reserved holes. */
+                {
+                    static const uint32_t holes[5] = { 1u, 2u, 3u, 4u, 8u };
+                    for (unsigned i = 0; i < 5u; ++i) isaac_w32(attrs + i * 8u + 4u, holes[i]);
+                    isaac_w32(descriptor + 0x10u, 5u);
+                    memcpy(expected_frame, seed, sizeof seed);
+                    expected_frame[6] = 44u * 3u; expected_frame[10] = 44u;
+                    memcpy(isaac_g(frame - 0x50u), expected_frame, sizeof expected_frame);
+                    expected_frame[5] = dst + PACK_QUADS * 4u * 44u;
+                    expected_frame[9] = 0u; expected_frame[14] = 5u;
+                    expected_frame[15] = quad + PACK_QUADS * 112u;
+                    memset(expected, 0xa5, sizeof expected);
+                    memset(isaac_g(dst - 8u), 0xa5, sizeof expected);
+                    isaac_w32(0x00c798fcu, 0x3f800000u);
+                    check(isaac_fast_entity_quad_pack(frame, quad, uv, dst, 44u, ox, oy) == 1
+                          && memcmp(isaac_g(dst - 8u), expected, sizeof expected) == 0
+                          && memcmp(isaac_g(frame - 0x50u), expected_frame, sizeof expected_frame) == 0
+                          && isaac_r32(0x00c798fcu) == 0x3f75c290u,
+                          "quad pack: no-position layouts still advance depth and counters without touching scratch or holes");
+                }
+                isaac_w32(descriptor + 0x0cu, 0u);
+                isaac_w32(descriptor + 0x10u, 0u);
+                memcpy(expected_frame, seed, sizeof seed);
+                expected_frame[2] = expected_frame[5] = 0u;
+                expected_frame[6] = expected_frame[10] = 0u;
+                memcpy(isaac_g(frame - 0x50u), expected_frame, sizeof expected_frame);
+                expected_frame[9] = expected_frame[14] = 0u;
+                expected_frame[15] = quad + PACK_QUADS * 112u;
+                isaac_w32(0x00c798fcu, 0x3f800000u);
+                check(isaac_fast_entity_quad_pack(frame, quad, uv, 0u, 0u, ox, oy) == 1
+                      && memcmp(isaac_g(frame - 0x50u), expected_frame, sizeof expected_frame) == 0
+                      && isaac_r32(0x00c798fcu) == 0x3f75c290u,
+                      "quad pack: empty zero-stride layout accepts null output and still repeats the depth subtraction");
+
+                /* Expected bits come from native register-destination/m32
+                 * ADDSS/SUBSS at MXCSR=0x1f80, not Unicorn's NaN priority.
+                 * Columns: left, right, left+right, right+left, left-right. */
+                {
+                    static const uint32_t arithmetic[][5] = {
+                        { 0x7fc12345u, 0xffc54321u, 0x7fc12345u, 0xffc54321u, 0x7fc12345u },
+                        { 0x7f812345u, 0xffc54321u, 0x7fc12345u, 0xffc54321u, 0x7fc12345u },
+                        { 0x7fc12345u, 0xff854321u, 0x7fc12345u, 0xffc54321u, 0x7fc12345u },
+                        { 0x3f800000u, 0xff854321u, 0xffc54321u, 0xffc54321u, 0xffc54321u },
+                        { 0xff854321u, 0x7fc12345u, 0xffc54321u, 0x7fc12345u, 0xffc54321u },
+                        { 0xffc12345u, 0x7fc12345u, 0xffc12345u, 0x7fc12345u, 0xffc12345u },
+                        { 0x7f800000u, 0xff800000u, 0xffc00000u, 0xffc00000u, 0x7f800000u },
+                        { 0x7f800000u, 0x7f800000u, 0x7f800000u, 0x7f800000u, 0xffc00000u }
+                    };
+                    isaac_w32(descriptor + 0x0cu, attrs);
+                    isaac_w32(descriptor + 0x10u, 1u);
+                    isaac_w32(attrs + 4u, 5u);
+                    for (unsigned i = 0; i < sizeof arithmetic / sizeof arithmetic[0]; ++i) {
+                        const uint32_t *v = arithmetic[i];
+                        uint32_t xy[2] = { v[1], v[0] }, vertex[3] = { v[2], v[3], v[0] };
+                        uint8_t expected_bits[4u * 12u + 16u];
+                        memcpy(isaac_g(frame - 0x50u), seed, sizeof seed);
+                        isaac_w32(frame - 0x2cu, 1u);
+                        isaac_w32(frame - 0x28u, 12u);
+                        isaac_w32(frame - 0x38u, 36u);
+                        isaac_w32(frame - 0x40u, v[0]);
+                        isaac_w32(frame - 0x44u, v[1]);
+                        isaac_w32(0x00c798fcu, v[0]);
+                        isaac_w32(0x00baa06cu, v[1]);
+                        memset(isaac_g(dst - 8u), 0xa5, sizeof expected_bits);
+                        memset(expected_bits, 0xa5, sizeof expected_bits);
+                        for (unsigned corner = 0; corner < 4u; ++corner) {
+                            memcpy(isaac_g(quad + corner * 8u), xy, sizeof xy);
+                            memcpy(expected_bits + 8u + corner * 12u, vertex, sizeof vertex);
+                        }
+                        check(isaac_fast_entity_quad_pack(frame, quad, uv, dst, 12u, v[0], v[1]) == 3
+                              && memcmp(isaac_g(dst - 8u), expected_bits, sizeof expected_bits) == 0
+                              && isaac_r32(frame - 0x50u) == v[2] && isaac_r32(frame - 0x4cu) == v[3]
+                              && isaac_r32(0x00c798fcu) == v[4],
+                              "quad pack: native SSE NaN priority, quieting, sign and infinity results reach vertices, scratch and depth");
+                    }
+                    isaac_w32(0x00baa06cu, 0x3c23d70au);
+                }
+
+                {
+                    static const char *const rejection[] = {
+                        "quad pack: invalid last format rejects before any write",
+                        "quad pack: changed descriptor width rejects before any write",
+                        "quad pack: stale triple stride rejects before any write",
+                        "quad pack: output aliasing quad data rejects before any write",
+                        "quad pack: output aliasing mutable attributes rejects before any write",
+                        "quad pack: changed jump table rejects before any write",
+                        "quad pack: wrapped source span rejects before any write"
+                    };
+                    for (unsigned i = 0; i < sizeof rejection / sizeof rejection[0]; ++i) {
+                        uint32_t test_quad = quad, test_dst = dst, test_stride = PACK_STRIDE, table_before[8];
+                        memcpy(isaac_g(frame - 0x50u), seed, sizeof seed);
+                        isaac_w32(descriptor + 0x0cu, attrs);
+                        isaac_w32(descriptor + 0x10u, PACK_ATTRS);
+                        for (unsigned j = 0; j < PACK_ATTRS; ++j) isaac_w32(attrs + j * 8u + 4u, formats[j]);
+                        memcpy(isaac_g(0x00a67bb0u), targets, sizeof targets);
+                        isaac_w32(0x00c798fcu, 0x3f800000u);
+                        switch (i) {
+                        case 0u: isaac_w32(attrs + (PACK_ATTRS - 1u) * 8u + 4u, 9u); break;
+                        case 1u:
+                            test_stride = PACK_STRIDE + 4u;
+                            isaac_w32(frame - 0x28u, test_stride);
+                            isaac_w32(frame - 0x38u, test_stride * 3u);
+                            break;
+                        case 2u: isaac_w32(frame - 0x38u, PACK_STRIDE * 3u - 1u); break;
+                        case 3u: test_dst = quad; isaac_w32(frame - 0x2cu, 1u); break;
+                        case 4u: test_dst = attrs; isaac_w32(frame - 0x2cu, 1u); break;
+                        case 5u: isaac_w32(0x00a67bb0u, 0x00a67a73u); break;
+                        case 6u: test_quad = UINT32_MAX - 55u; break;
+                        }
+                        isaac_w32(frame - 0x14u, test_quad);
+                        isaac_w32(frame - 0x30u, test_quad);
+                        isaac_w32(frame - 0x3cu, test_dst);
+                        isaac_w32(frame - 0x48u, test_dst);
+                        memcpy(snapshot, isaac_g(arena), sizeof snapshot);
+                        memcpy(table_before, isaac_g(0x00a67bb0u), sizeof table_before);
+                        check(isaac_fast_entity_quad_pack(frame, test_quad, uv, test_dst, test_stride, ox, oy) == 0
+                              && memcmp(isaac_g(arena), snapshot, sizeof snapshot) == 0
+                              && isaac_r32(0x00c798fcu) == 0x3f800000u
+                              && isaac_r32(0x00baa06cu) == 0x3c23d70au
+                              && memcmp(isaac_g(0x00a67bb0u), table_before, sizeof table_before) == 0,
+                              rejection[i]);
+                    }
+                }
+                memcpy(isaac_g(0x00a67bb0u), saved_table, sizeof saved_table);
+                isaac_w32(0x00c798fcu, saved_depth);
+                isaac_w32(0x00baa06cu, saved_decrement);
+            }
+
             /* 0x004071c0: 44 bytes, and the byte after the object stays. */
             {
                 uint32_t dst = ISAAC_HEAP_VA + 0x272000u, src = dst + 0x40u;
@@ -2375,6 +3072,9 @@ int main(int argc, char **argv) {
                 uint32_t big = ISAAC_HEAP_VA + 0x100000u;      /* 300 KB of guest scratch */
                 isaac_fs_set_lazy_preader(selftest_preader);
                 isaac_fs_set_window_min(1u);
+#ifdef __EMSCRIPTEN__
+                size_t live_before_windows = mallinfo().uordblks;
+#endif
                 check(isaac_fs_seed_lazy("data/Win.bin", WIN_FILE_SIZE) == 1, "a 3 MB lazy entry registers by size");
                 uint32_t wbefore = isaac_fs_lazy_windowed(), pbefore = g_pread_calls;
                 const char *wp = "data/Win.bin";
@@ -2424,6 +3124,36 @@ int main(int argc, char **argv) {
                 isaac_w32(cpu.ESP, 0xDEADBEEF);
                 isaac_w32(cpu.ESP + 4, wh);
                 imp_api_ms_win_crt_stdio__fclose(&cpu);
+                static const uint8_t replacement[] = { 0x71, 0x00, 0xc3, 0x22, 0xfe };
+#ifdef __EMSCRIPTEN__
+                size_t live_before_owned = mallinfo().uordblks;
+#endif
+                uint8_t *owned = (uint8_t *)malloc(sizeof replacement);
+                check(owned != NULL, "allocate replacement for cached lazy windows");
+                if (owned) {
+                    memcpy(owned, replacement, sizeof replacement);
+#ifdef __EMSCRIPTEN__
+                    size_t owned_charge = mallinfo().uordblks - live_before_owned;
+#endif
+                    int ok = isaac_fs_seed_adopt(wp, owned, sizeof replacement);
+                    check(ok == 1, "adopt replaces a windowed lazy file");
+                    if (!ok) free(owned);
+#ifdef __EMSCRIPTEN__
+                    check(mallinfo().uordblks == live_before_windows + owned_charge,
+                          "adoption releases cached windows and the old lazy source");
+#endif
+                    uint32_t reads_before = g_pread_calls;
+                    check(selftest_fs_read_is(pbuf, wp, replacement, sizeof replacement) &&
+                          g_pread_calls == reads_before,
+                          "replacing a windowed file reads adopted bytes without another host pread");
+                    FS_ATTR(wp); imp_kernel32__DeleteFileA(&cpu);
+                    check(cpu.EAX == 1u, "delete the adopted window replacement");
+#ifdef __EMSCRIPTEN__
+                    check(mallinfo().uordblks == live_before_windows,
+                          "the adopted window replacement leaves no host allocations after deletion");
+#endif
+                }
+                memcpy(isaac_g(mbuf), "rb", 3u);
                 isaac_fs_set_lazy_preader(NULL);
                 isaac_fs_set_window_min(0u);
             }
@@ -2476,7 +3206,6 @@ int main(int argc, char **argv) {
      * archives "Failed to open" before any fopen (boot round 9). Each check
      * here is one link of that chain against the SAME RAM-FS the game sees. */
     {
-        extern int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
         static const uint8_t payload2[] = { 'A','R','C','H', 2, 0, 0, 0, 0x11, 0x22 };
         check(isaac_fs_seed("resources/packed/animations.a", payload2,
                             (uint32_t)sizeof payload2) == 1,

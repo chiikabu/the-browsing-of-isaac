@@ -24,6 +24,8 @@
 // Writes to <out-dir>: timeline.json (every sample), summary.json, page.log,
 // console.log. Exit 0 when the second window shows sustained energy (at least
 // 80 % of its samples above 0.005 RMS), 1 otherwise.
+// Chromium output is muted. These samples prove a live audio signal, not
+// speaker audibility.
 import { createRequire } from 'node:module';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -44,7 +46,7 @@ mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-         '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'],
+         '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'],
 });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const consoleLines = [];
@@ -132,7 +134,7 @@ const stats = (rows) => {
 };
 const pressEnter = async () => { await page.keyboard.down('Enter'); await sleep(120); await page.keyboard.up('Enter'); };
 
-const summary = { url: URL, firstFrameMs: null, windows: {}, tap: null, error: null, musicHeard: false };
+const summary = { url: URL, firstFrameMs: null, windows: {}, tap: null, error: null, musicSignalPresent: false };
 try {
   for (;;) {
     const s = await state();
@@ -152,7 +154,7 @@ try {
   await pressEnter(); await sleep(1500);
   await pressEnter(); await sleep(1500);
   summary.windows.title = stats(await sampleWindow('title', SECONDS));
-  summary.musicHeard = summary.windows.title.n > 0 && summary.windows.title.aboveThreshold >= 0.8;
+  summary.musicSignalPresent = summary.windows.title.n > 0 && summary.windows.title.aboveThreshold >= 0.8;
 } catch (e) {
   summary.error = e.message;
   console.log(`[audio] ERROR ${e.message}`);
@@ -171,6 +173,6 @@ for (const [name, w] of Object.entries(summary.windows))
   console.log(`[audio] ${name}: ${w.n} samples, rms median ${w.median === null ? '-' : w.median.toFixed(4)} ` +
               `min ${w.min === null ? '-' : w.min.toFixed(4)} max ${w.max === null ? '-' : w.max.toFixed(4)}, ` +
               `${Math.round(w.aboveThreshold * 100)} % above ${RMS_MUSIC}`);
-console.log(`[audio] music heard on the title window: ${summary.musicHeard} (tap ${summary.tap}, ${summary.wallMs} ms)`);
+console.log(`[audio] music signal present in the title window: ${summary.musicSignalPresent} (output muted; tap ${summary.tap}, ${summary.wallMs} ms)`);
 await browser.close();
-process.exit(summary.musicHeard && !summary.error ? 0 : 1);
+process.exit(summary.musicSignalPresent && !summary.error ? 0 : 1);

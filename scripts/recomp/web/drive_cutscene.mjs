@@ -23,7 +23,7 @@ const IDS = (opt.ids || '4').split(',').map((s) => s.trim()).filter(Boolean);
 const WAIT = Number(opt.wait || 20000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const glArgs = (opt.gl || 'hw') === 'hw' ? ['--use-angle=default', '--ignore-gpu-blocklist'] : ['--use-gl=angle', '--use-angle=swiftshader'];
-const browser = await chromium.launch({ headless: true, args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'] });
+const browser = await chromium.launch({ headless: true, args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 960, height: 640 } });
 if (opt.cpu && opt.cpu !== '1') { const c = await page.context().newCDPSession(page); await c.send('Emulation.setCPUThrottlingRate', { rate: Number(opt.cpu) }); }
 const consoleLines = [];

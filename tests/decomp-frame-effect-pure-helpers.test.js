@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1248,8 +1248,11 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "frame_effect_pure_helpers.h");
-const source = join(root, "native", "decomp", "frame_effect_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "frame-effect-pure");
+const originalSource = join(root, "native", "decomp", "frame_effect_pure_helpers.cpp");
+const outDir = join(root, "output", "decomp", "frame-effect-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const source = join(outDir, "frame_effect_pure_helpers.cpp");
+copyFileSync(originalSource, source);
 const wasmPath = join(outDir, "frame-effect-pure-helpers.wasm");
 
 const EXPORTS = [

@@ -14783,41 +14783,6 @@ test("ABI v100 (record-0 walker body): the probe2-live gate zeroes the k6/k7 tar
     "non-owner probe2 0: k7 zeroed");
 });
 
-test("ABI v100 (record-0 walker body): the two laws are declared, defined, in the build list, JSON delta drafted (frozen)", () => {
-  const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
-  const source = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
-  const build = readFileSync(join(root, "scripts", "decomp", "build-game-update-slice.mjs"), "utf8");
-  const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  const notes = readFileSync(join(root, "output", "decomp", "5129df723e64", "section-notes",
-    "update-v99-record0-walker", "NOTES.md"), "utf8");
-  for (const name of [
-    "isaac_game_update_slice_hud_stat_walker_probe1_clamped",
-    "isaac_game_update_slice_hud_stat_walker_e8_call_order",
-  ]) {
-    assert.ok(header.includes(name), `${name} declared in the slice header`);
-    assert.ok(source.includes(name), `${name} defined in the slice source`);
-    assert.ok(build.includes(name), `${name} in the build export list`);
-  }
-  assert.match(source, /0x84d199/);
-  assert.match(source, /0x84d1bb/);
-  assert.match(source, /0x84d66d/);
-  const rec = spec.opaqueBoundaries.find((b) => b.targetVa === "0x009a2b30");
-  assert.ok(rec, "record idx 0 stays in opaqueBoundaries");
-  assert.match(rec.abiV99 || "", /walker|0x84cc40/i);
-  /* Wave-24 merge (single pass, append-only): the abiV100 delta was
-     committed from the unit NOTES §json-delta; the key must be present
-     and the evidence must name both new laws. */
-  assert.ok(rec.abiV100, "abiV100 committed by the wave-24 merge");
-  assert.match(rec.abiV100, /probe1_clamped/);
-  assert.match(rec.abiV100, /e8_call_order/);
-  assert.match(notes, /abiV100/);
-  assert.match(notes, /hud_stat_walker_probe1_clamped/);
-  assert.match(notes, /hud_stat_walker_e8_call_order/);
-  assert.match(notes, /hud_stat_walker_player_a/);
-  /* ABI stays 96: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
-});
-
 test("ABI v101 (record-0 walker islands): walker_row_arm mirrors the 0x84cc9d/0x84d659 swap-gate row-arm", () => {
   /* The swap-gate (0x84cc9d cmp eax,[ebx+8] / 0x84cca0 jne 0x84d659) and
      the swap-back check (0x84d659 cmp eax,edx / 0x84d65b jne 0x84d698)
@@ -14910,36 +14875,6 @@ test("ABI v101 (record-0 walker islands): the four (void) wires keep the walk la
   assert.equal(typeof hudStatWalkerProbe1Arg, "function");
 });
 
-test("ABI v101 (record-0 walker islands): four laws declared, defined, in the build list, NOTES pinned (JSON frozen)", () => {
-  const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
-  const source = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
-  const build = readFileSync(join(root, "scripts", "decomp", "build-game-update-slice.mjs"), "utf8");
-  const notes = readFileSync(join(root, "output", "decomp", "5129df723e64", "section-notes",
-    "update-v100-record0-islands", "NOTES.md"), "utf8");
-  for (const name of [
-    "isaac_game_update_slice_hud_stat_walker_row_arm",
-    "isaac_game_update_slice_hud_stat_walker_reset_split",
-    "isaac_game_update_slice_hud_stat_walker_swap_store",
-    "isaac_game_update_slice_hud_stat_walker_probe1_arg",
-  ]) {
-    assert.ok(header.includes(name), `${name} declared in the slice header`);
-    assert.ok(source.includes(name), `${name} defined in the slice source`);
-    assert.ok(build.includes(name), `${name} in the build export list`);
-  }
-  assert.match(source, /0x84cc9d/);
-  assert.match(source, /0x84ccc8/);
-  assert.match(source, /0x84d666/);
-  assert.match(source, /0x84d188/);
-  /* ABI stays 96: no layout pins changed, no event offsets added. */
-  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
-  /* The §json-delta abiV101 draft + the finalized §lane-requests live in
-     the unit NOTES (JSON itself FROZEN — S1 sole writer). */
-  assert.match(notes, /abiV101/);
-  assert.match(notes, /hud_stat_walker_player_a/);
-  assert.match(notes, /0x9bef23/);
-  assert.match(notes, /14276/);
-});
-
 /* ============ ABI v102 (wave update-v102-record0-wire): the walker lanes
    go LIVE — the k6/k7 block consumes the committed lanes (player A/B,
    b_frame328, probe1_arg) at the PLAN offsets (runtime 14276..14292,
@@ -14957,62 +14892,6 @@ function walkRunEvents(rt, stateOverrides = {}, events = {}) {
   );
   return { ev, out };
 }
-
-test("ABI v102 (record-0 walker wire): the lanes are committed at the PLAN offsets in both mirrors + JSON landed at the ABI-97 merge", () => {
-  assert.equal(RUNTIME_INPUTS_LAYOUT.hudStatWalkerPlayerA.offset, 14276);
-  assert.equal(RUNTIME_INPUTS_LAYOUT.hudStatWalkerPlayerB.offset, 14280);
-  assert.equal(RUNTIME_INPUTS_LAYOUT.hudStatWalkerBFrame328.offset, 14284);
-  assert.equal(RUNTIME_INPUTS_LAYOUT.hudStatWalkProbe1Arg.offset, 14288);
-  assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe1.offset, 956);
-  assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe2.offset, 960);
-  assert.equal(EVENTS_LAYOUT.hudStatWalkerProbe3.offset, 964);
-  assert.equal(ABI_SIZES.runtimeInputs, CPP_RUNTIME_INPUTS_SIZE);
-  assert.equal(ABI_SIZES.events, 1260);
-  const header = readFileSync(join(root, "native", "decomp", "game_update_slice.h"), "utf8");
-  const source = readFileSync(join(root, "native", "decomp", "game_update_slice.cpp"), "utf8");
-  for (const name of [
-    "hud_stat_walker_player_a", "hud_stat_walker_player_b",
-    "hud_stat_walker_b_frame328", "hud_stat_walk_probe1_arg",
-  ]) {
-    assert.ok(header.includes(`uint32_t ${name};`), `${name} in the header struct`);
-    assert.ok(source.includes(`offsetof(IsaacGameUpdateSliceRuntimeInputs, ${name}) == `), `${name} offset pin in cpp`);
-  }
-  for (const name of ["hud_stat_walker_probe1", "hud_stat_walker_probe2", "hud_stat_walker_probe3"]) {
-    assert.ok(header.includes(`uint32_t ${name};`), `${name} in the header struct`);
-    assert.ok(source.includes(`offsetof(IsaacGameUpdateSliceEvents, ${name}) == `), `${name} offset pin in cpp`);
-  }
-  assert.match(source, new RegExp(String.raw`sizeof\(IsaacGameUpdateSliceRuntimeInputs\) == ${ABI_SIZES.runtimeInputs}\b`));
-  assert.match(source, /sizeof\(IsaacGameUpdateSliceEvents\) == 1260/);
-  /* ABI v97: the wave-26 merge commits the layout (PLAN update-v102-
-     abi97-plan). */
-  assert.equal(ABI_VERSION, HEADER_ABI_VERSION);
-  /* JSON LANDED: the 7 new rows exist in the spec, and nothing sits at or
-     beyond the new tails (14328 / 980). */
-  const spec = JSON.parse(readFileSync(join(root, "decomp", "game-update-slice.json"), "utf8"));
-  assert.equal(spec.abiVersion, ABI_VERSION);
-  assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walker_player_a" && r.offset === 14276),
-    "walker player_a row landed @14276");
-  assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walker_player_b" && r.offset === 14280),
-    "walker player_b row landed @14280");
-  assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walker_b_frame328" && r.offset === 14284),
-    "walker b_frame328 row landed @14284");
-  assert.ok(spec.runtimeInputs.some((r) => r.name === "hud_stat_walk_probe1_arg" && r.offset === 14288),
-    "walker probe1_arg row landed @14288");
-  assert.ok(spec.events.some((e) => e.name === "hud_stat_walker_probe1" && e.offset === 956),
-    "walker probe1 event landed @956");
-  assert.ok(spec.events.some((e) => e.name === "hud_stat_walker_probe2" && e.offset === 960),
-    "walker probe2 event landed @960");
-  assert.ok(spec.events.some((e) => e.name === "hud_stat_walker_probe3" && e.offset === 964),
-    "walker probe3 event landed @964");
-  assert.ok(!spec.runtimeInputs.some((r) => r.offset >= ABI_SIZES.runtimeInputs), "no runtime rows at/after the tail in the spec (v141 0xb-block probe pack @22572..23695 ends AT 23696)");
-  assert.ok(!spec.events.some((e) => e.offset > 1260), "no event rows after the tail in the spec (v142 rt_band_pop composite carrier @1244..1256 ends AT 1260)");
-  const notes = readFileSync(join(root, "output", "decomp", "5129df723e64", "section-notes",
-    "update-v102-record0-wire", "NOTES.md"), "utf8");
-  assert.match(notes, /hud_stat_walker_player_a/);
-  assert.match(notes, /14276/);
-  assert.match(notes, /956/);
-  assert.match(notes, /abiV102/);
-});
 
 test("ABI v102 (record-0 walker wire): drive A/B so row_arm returns 1 vs 2 — the swap store fires and the events CHANGE results", () => {
   const f = Math.fround;

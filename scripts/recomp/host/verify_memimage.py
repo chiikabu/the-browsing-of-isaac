@@ -1,10 +1,11 @@
-"""Verify the built linear-memory image against the PE, byte for byte.
+"""Verify the built flat and segmented linear-memory images byte for byte.
 
 A memory image that is subtly wrong produces a lift that fails thousands of
 instructions later with no clue why, so this checks the whole thing rather than
 spot-checking: every section's raw bytes must appear at its VA, every BSS tail
 byte must be zero, and the boot-critical structures must be readable at the
-addresses host_boot.c hard-codes.
+addresses host_boot.c hard-codes. The browser's segmented image must reconstruct
+the same bytes as the zero-extended flat image.
 
 Writes output/recomp/host/memimage-verify.json.
 
@@ -61,6 +62,51 @@ def main():
         if len(got) < n:
             got = got + b"\0" * (n - len(got))
         return got
+
+    # The browser loads ISMG segments, not the flat image checked below.
+    segmented_check = {"check": "segmented image matches flat image",
+                       "bytes": pe.size_of_image, "ok": False}
+    try:
+        packed = (OUT_DIR / "isaac.segs.bin").read_bytes()
+        if len(packed) < 16:
+            raise ValueError("truncated ISMG header")
+        magic, version, count, segment_base = struct.unpack_from("<4sIII", packed)
+        if magic != b"ISMG" or version != 1:
+            raise ValueError("expected ISMG version 1")
+        if segment_base != base:
+            raise ValueError("ISMG image base %s differs from PE base %s" %
+                             (hexva(segment_base), hexva(base)))
+        payload = 16 + count * 8
+        if payload > len(packed):
+            raise ValueError("truncated ISMG segment table")
+        segmented_check["segmentCount"] = count
+        restored = bytearray(pe.size_of_image)
+        for i in range(count):
+            va, size = struct.unpack_from("<II", packed, 16 + i * 8)
+            offset = va - base
+            if offset < 0 or offset + size > pe.size_of_image:
+                raise ValueError("ISMG segment %d lies outside PE image" % i)
+            if payload + size > len(packed):
+                raise ValueError("truncated ISMG segment %d payload" % i)
+            restored[offset:offset + size] = packed[payload:payload + size]
+            payload += size
+        if payload != len(packed):
+            raise ValueError("ISMG has %d bytes beyond declared payload" %
+                             (len(packed) - payload))
+        if len(img) > pe.size_of_image:
+            raise ValueError("flat image exceeds PE SizeOfImage")
+        flat_image = img + b"\0" * (pe.size_of_image - len(img))
+        if restored != flat_image:
+            first = next(i for i, (got, want) in
+                         enumerate(zip(restored, flat_image)) if got != want)
+            segmented_check["firstMismatchVa"] = hexva(base + first)
+            raise ValueError("ISMG bytes differ from flat image at %s" %
+                             hexva(base + first))
+        segmented_check["ok"] = True
+    except (OSError, ValueError, struct.error) as e:
+        segmented_check["error"] = str(e)
+        failures.append("segmented image: %s" % e)
+    checks.append(segmented_check)
 
     # 1. every section's raw bytes appear at its VA
     for s in pe.sections:

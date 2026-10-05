@@ -32,7 +32,7 @@ mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-         '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'],
+         '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'],
 });
 const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const consoleLines = [];

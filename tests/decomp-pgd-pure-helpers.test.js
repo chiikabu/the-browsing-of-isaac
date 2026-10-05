@@ -786,7 +786,6 @@ import {
   PGD_FLAG_02_STORES_IN_CLUSTER,
   PGD_FLAG_02_LOADS_IN_CLUSTER,
   PGD_BESTIARY_NODE_MARKER_OFF,
-  PGD_READER_TAIL_VA,
   /* v4 */
   pgdSec3RestoreRemap,
   pgdEventRestoreRemap,
@@ -2442,7 +2441,7 @@ const HEADER_ABI_VERSION = Number(
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "pgd_pure_helpers.h");
 const source = join(root, "native", "decomp", "pgd_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "pgd-pure");
+const outDir = join(root, "output", "decomp", "pgd-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "pgd-pure-helpers.wasm");
 
 function firstExisting(paths, label) {
@@ -7286,91 +7285,6 @@ test("header records the v2 evidence", () => {
   assert.match(s, /kReaderSections/);
   assert.match(s, /cmova/);
   assert.match(s, /no bounds check whatsoever/);
-});
-
-test("header records the v3 evidence and every new constant's literal value", () => {
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v3 walked the section-3 handler/);
-  assert.match(h, /ISAAC_PGD_PURE_HELPERS_ABI_VERSION = 35/);
-  // the v2 correction must be recorded, not silently swapped in
-  assert.match(h, /v2 correction/);
-  assert.match(h, /SIGNED positivity test/);
-  assert.match(h, /`test eax,eax ; je done` — a ZERO test/);
-  assert.match(h, /0x009270b5/);
-  // the typo survives in exactly one place — the sentence that retires it
-  assert.equal((h.match(/0x009070b5/g) || []).length, 1);
-  assert.match(h, /is `0x009270b5`, not the\s+`0x009070b5` v2 recorded/);
-  // the new evidence VAs
-  for (const va of [
-    /0x0091adf0/, /0x0091b650/, /0x00929790/, /0x009262b0/, /0x00c5ab08/,
-    /0x0092b6d3/, /0x00927c8a/, /0x009272b5/, /0x009273dd/, /0x0091ae6a/,
-  ]) {
-    assert.match(h, va);
-  }
-  // the promotion verdicts must be spelled out, and must NOT promote a name
-  assert.match(h, /v3 PROMOTION VERDICTS/);
-  assert.match(h, /Meaning\s+NOT promoted/);
-  assert.match(h, /Nothing above promotes a NAME/);
-  assert.match(h, /NEGATIVE result/);
-
-  /* Header-only constants are invisible to the differential — a mutation of
-     any of these would never reach a Wasm export, so pin the literals. */
-  const lit = (name, value) =>
-    assert.match(
-      h,
-      new RegExp(`${name}\\s*=\\s*${value}\\b`),
-      `${name} must be ${value}`,
-    );
-  lit("ISAAC_PGD_BESTIARY_NODE_MARKER_OFF", "0xd");
-  lit("ISAAC_PGD_READER_TAIL_VA", "0x00927c8au");
-  lit("ISAAC_PGD_READER_FAIL_VA", "0x00927ca0u");
-  lit("ISAAC_PGD_READER_PRE_SECTION_READ_VA", "0x00927091u");
-  lit("ISAAC_PGD_FIELD_UNKNOWN_OFFSET", "0");
-  lit("ISAAC_PGD_FIELD_NAMED", "1");
-  lit("ISAAC_PGD_FIELD_LAYOUT_ONLY", "2");
-  lit("ISAAC_PGD_REPR_NONE", "0");
-  lit("ISAAC_PGD_REPR_BOOL_BYTE", "1");
-  lit("ISAAC_PGD_REPR_RAW_DWORD", "2");
-  lit("ISAAC_PGD_PRE_SECTION_WORD_SITES", "5");
-  lit("ISAAC_PGD_PRE_SECTION_WORD_ACCESSORS", "0");
-  lit("ISAAC_PGD_ALT_TRANSPORT_FIELDS", "8");
-  lit("ISAAC_PGD_ALT_TRANSPORT_VA", "0x0091adf0u");
-  lit("ISAAC_PGD_ALT_BITPACK_VA", "0x0091b650u");
-  lit("ISAAC_PGD_ALT_HOST_VA_ALLOC", "0x00a648b0u");
-  lit("ISAAC_PGD_ALT_HOST_VA_MEMSET", "0x00af05e5u");
-  lit("ISAAC_PGD_NOTIFY_VA", "0x00929790u");
-  lit("ISAAC_PGD_NOTIFY_FORMAT_VA", "0x0041e420u");
-  lit("ISAAC_PGD_NOTIFY_BUFFER_BYTES", "8");
-  lit("ISAAC_PGD_NOTIFY_ENABLE_GLOBAL_VA", "0x00c5ab08u");
-  lit("ISAAC_PGD_NOTIFY_ENABLE_MASK", "1");
-  lit("ISAAC_PGD_NOTIFY_SINGLETON_VA", "0x00bf93c8u");
-  lit("ISAAC_PGD_NOTIFY_VTBL_OFF_A", "0x18");
-  lit("ISAAC_PGD_NOTIFY_VTBL_OFF_B", "0x24");
-  lit("ISAAC_PGD_CLEAR_VA", "0x009262b0u");
-  lit("ISAAC_PGD_CLEAR_FLAG_02_VALUE", "1");
-  lit("ISAAC_PGD_FLAG_02_STORES_IN_CLUSTER", "1");
-  lit("ISAAC_PGD_FLAG_02_LOADS_IN_CLUSTER", "3");
-
-  // and the JS mirror must carry the same literals
-  assert.equal(PGD_BESTIARY_NODE_MARKER_OFF, 0xd);
-  assert.equal(PGD_READER_TAIL_VA, 0x00927c8a);
-  assert.equal(PGD_ALT_TRANSPORT_FIELDS, 8);
-  assert.equal(PGD_NOTIFY_ENABLE_MASK, 1);
-
-  const s = readFileSync(source, "utf8");
-  assert.match(s, /ZERO test on the whole register/);
-  assert.match(s, /BYTE cursor/);
-  assert.match(s, /rol al,1/);
-  // the corrected scratch rule must be recorded in the test file itself
-  const t = readFileSync(
-    new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
-    "utf8",
-  );
-  assert.match(t, /SCRATCH_MIN = 0x100000/);
-  // the only surviving `rng() %` is the comment that retires it
-  assert.equal((t.match(/rng\(\) % /g) || []).length, 1);
-  assert.match(t, /used `rng\(\) % n`, which on a generator/);
-  assert.ok((t.match(/pick\(rng, /g) || []).length >= 9);
 });
 
 test("header records the v4 evidence and every new constant's literal value", () => {

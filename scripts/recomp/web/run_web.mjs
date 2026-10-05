@@ -143,7 +143,7 @@ const mime = (p) => p.endsWith('.mjs') || p.endsWith('.js') ? 'text/javascript'
 const browser = SERVE ? null : await chromium.launch({
   headless: true,
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
-         '--enable-webgl', '--disable-web-security',
+         '--enable-webgl', '--disable-web-security', '--mute-audio',
          ...(JS_FLAGS.length ? [`--js-flags=${JS_FLAGS.join(' ')}`] : [])],
 });
 const page = SERVE ? null : await browser.newPage({ viewport: { width: 960, height: 540 } });

@@ -41,7 +41,7 @@ const glArgs = GL === 'swiftshader'
 // and the archives in the browser cache -- the warm start a returning player
 // gets. Without it every run is a cold start with a fresh profile.
 const PROFILE_DIR = opt.profile_dir || '';
-const launchArgs = [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'];
+const launchArgs = [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'];
 const context = PROFILE_DIR
   ? await chromium.launchPersistentContext(PROFILE_DIR, { headless: true, args: launchArgs, viewport: { width: 960, height: 540 } })
   : await (await chromium.launch({ headless: true, args: launchArgs })).newContext({ viewport: { width: 960, height: 540 } });

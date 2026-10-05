@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,11 +35,14 @@ import * as RS from "../scripts/decomp/render-shell-pure-model.mjs";
 
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const sliceSource = join(root, "native", "decomp", "game_render_slice.cpp");
+const outDir = join(root, "output", "decomp", "game-render-slice", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "game_render_slice.cpp");
+const sliceSource = join(outDir, "game_render_slice.cpp");
+copyFileSync(originalSource, sliceSource);
 /* Wave-26 hardening (update-v102-hardening GAP D): 120-attempt retried
-   source write so a crashed/failed mutant restore can never strand a
-   mutant in the tracked game_render_slice.cpp (Windows open-lock
-   EUNKNOWN class; room/anm2 convention). */
+   private fixture write for Windows open-lock EUNKNOWN errors (room/anm2
+   convention). */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
     try {
@@ -53,7 +56,6 @@ const writeSourceRetry = (content) => {
   }
 };
 const helperSource = join(root, "native", "decomp", "render_shell_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "game-render-slice");
 const wasmPath = join(outDir, "game-render-slice.wasm");
 const jsonPath = join(root, "decomp", "game-render-slice.json");
 

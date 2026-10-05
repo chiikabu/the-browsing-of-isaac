@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1516,10 +1516,13 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "hud_post_update_pure_helpers.h");
-const source = join(root, "native", "decomp", "hud_post_update_pure_helpers.cpp");
+const outDir = join(root, "output", "decomp", "hud-post-update-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "hud_post_update_pure_helpers.cpp");
+const source = join(outDir, "hud_post_update_pure_helpers.cpp");
+copyFileSync(originalSource, source);
 /* Wave-26 hardening (update-v102-hardening GAP A): 120-attempt retried
-   source write so a crashed/failed mutant restore can never strand a
-   mutant in the tracked hud_post_update_pure_helpers.cpp (Windows open-lock EUNKNOWN class; room/anm2
+   private fixture write for Windows open-lock EUNKNOWN errors (room/anm2
    convention). */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
@@ -1535,7 +1538,6 @@ const writeSourceRetry = (content) => {
 };
 
 const model = join(root, "scripts", "decomp", "hud-post-update-pure-model.mjs");
-const outDir = join(root, "output", "decomp", "hud-post-update-pure");
 const wasmPath = join(outDir, "hud-post-update-pure-helpers.wasm");
 
 function firstExisting(paths, label) {
@@ -1552,7 +1554,7 @@ function buildWasm() {
   withWasmBuildCache({
     tag: "hud-post-update-pure-helpers",
     files: [source, header],
-    extra: typeof EXPORTS !== "undefined" ? JSON.stringify(EXPORTS) : "",
+    extra: JSON.stringify(wasmBuildFlags()),
     wasmPath,
     build: buildWasmUncached,
   });
@@ -1580,11 +1582,23 @@ function buildWasmUncached() {
     "-Werror",
   ], { cwd: root, encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
-  const builtArgs = [
+  // Keep paths out of the response file: the repository may contain spaces.
+  // Only stable flags go through @file, avoiding the Windows 32K command limit.
+  const rspPath = join(outDir, "exports.rsp").replaceAll("\\", "/");
+  writeFileSync(rspPath, wasmBuildFlags().join("\n"), "utf8");
+  const built = spawnSync(emxx, [
     source,
+    "-I", join(root, "native", "decomp"),
+    `@${rspPath}`,
+    "-o", wasmPath,
+  ], { cwd: root, encoding: "utf8" });
+  assert.equal(built.status, 0, built.stderr || built.stdout);
+}
+
+function wasmBuildFlags() {
+  return [
     "-std=c++20",
     "-O2",
-    "-I", join(root, "native", "decomp"),
     "--no-entry",
     "-sSTANDALONE_WASM=1",
     "-sERROR_ON_UNDEFINED_SYMBOLS=1",
@@ -2939,22 +2953,7 @@ function buildWasmUncached() {
     "-Wl,--export=isaac_hud_spanb_farflag_a_va",
     "-Wl,--export=isaac_hud_spanb_farflag_b_va",
     "-Wl,--export=isaac_hud_spanb_runtime_flag_va",
-    "-o", wasmPath,
   ];
-  // Windows CreateProcess caps the command line near 32k; every ABI wave
-  // grows the -Wl,--export list, so spill to a clang response file when
-  // the line approaches the limit (em++ expands @file like the driver).
-  const lineLen = builtArgs.join(" ").length;
-  const rspPath = join(outDir, "exports.rsp");
-  let built;
-  if (lineLen > 30000) {
-    // clang's response-file lexer treats '\' as an escape — use '/' paths.
-    writeFileSync(rspPath, builtArgs.map((a) => a.replaceAll("\\", "/")).join(" "), "utf8");
-    built = spawnSync(emxx, [`@${rspPath}`], { cwd: root, encoding: "utf8" });
-  } else {
-    built = spawnSync(emxx, builtArgs, { cwd: root, encoding: "utf8" });
-  }
-  assert.equal(built.status, 0, built.stderr || built.stdout);
 }
 
 function loadExports() {

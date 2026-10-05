@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -1280,11 +1280,14 @@ import { parsePe } from "../scripts/decomp/pe-signatures.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const header = join(root, "native", "decomp", "anm2_pure_helpers.h");
-const source = join(root, "native", "decomp", "anm2_pure_helpers.cpp");
-/* Windows transient locks (OneDrive/AV) intermittently fail the source
-   write (-4094); retry with a long backoff budget so a mutant can never
-   survive a failed restore (wave-23 render-shell incident; C12-npm3
-   wave-24 recommendation extended to room + anm2). */
+/* Keep mutation fixtures and compiler outputs private to this process. */
+const outDir = join(root, "output", "decomp", "anm2-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "anm2_pure_helpers.cpp");
+const source = join(outDir, "anm2_pure_helpers.cpp");
+copyFileSync(originalSource, source);
+/* Windows transient locks (OneDrive/AV) intermittently fail private fixture
+   writes (-4094); retry so mutation restores tolerate those locks. */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
     try {
@@ -1299,7 +1302,6 @@ const writeSourceRetry = (content) => {
 };
 
 const model = join(root, "scripts", "decomp", "anm2-pure-model.mjs");
-const outDir = join(root, "output", "decomp", "anm2-pure");
 const wasmPath = join(outDir, "anm2-pure-helpers.wasm");
 
 /* Executed-assertion counter: the protocol asks for case counts, not just the
@@ -6985,7 +6987,6 @@ test("v7 load wasm-vs-JS differential (plan + apply, randomized worlds)", () => 
 });
 
 test("v7 load mutations are caught by the pins", () => {
-  const source = join(root, "native", "decomp", "anm2_pure_helpers.cpp");
   /* The cpp is CRLF on this tree; normalize so newline-embedding mutants
      match, and keep the raw text for the restore. */
   const original = readFileSync(source, "utf8");
@@ -7353,7 +7354,6 @@ test("v8 loadgraphics wasm-vs-JS differential (randomized worlds + flags)", () =
 });
 
 test("v8 loadgraphics mutations are caught by the pins", () => {
-  const source = join(root, "native", "decomp", "anm2_pure_helpers.cpp");
   const original = readFileSync(source, "utf8");
   const base = original.replaceAll("\r\n", "\n");
   const withMutantV8 = (label, mutate, check, probe) => {

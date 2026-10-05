@@ -208,7 +208,7 @@ const HEADER_ABI_VERSION = Number(
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "alloc_pure_helpers.h");
 const source = join(root, "native", "decomp", "alloc_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "alloc-pure");
+const outDir = join(root, "output", "decomp", "alloc-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "alloc-pure-helpers.wasm");
 
 function firstExisting(paths, label) {
