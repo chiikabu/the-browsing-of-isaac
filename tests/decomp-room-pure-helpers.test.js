@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2316,11 +2316,14 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "room_pure_helpers.h");
-const source = join(root, "native", "decomp", "room_pure_helpers.cpp");
-/* Windows transient locks (OneDrive/AV) intermittently fail the source
-   write (-4094); retry with a long backoff budget so a mutant can never
-   survive a failed restore (wave-23 render-shell incident; C12-npm3
-   wave-24 recommendation extended to room + anm2). */
+/* Keep mutation fixtures and compiler outputs private to this process. */
+const outDir = join(root, "output", "decomp", "room-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "room_pure_helpers.cpp");
+const source = join(outDir, "room_pure_helpers.cpp");
+copyFileSync(originalSource, source);
+/* Windows transient locks (OneDrive/AV) intermittently fail private fixture
+   writes (-4094); retry so mutation restores tolerate those locks. */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
     try {
@@ -2334,10 +2337,6 @@ const writeSourceRetry = (content) => {
   }
 };
 
-/* PID-scoped build dir: concurrent verification runs (npm test / full
-   suites) otherwise race each other's wasm output on Windows and fail with
-   wasm-ld permission errors. Each process builds into its own scratch. */
-const outDir = join(root, "output", "decomp", "room-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "room-pure-helpers.wasm");
 
 // Wasm scratch base. Low linear memory holds the module's own constant/table

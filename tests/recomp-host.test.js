@@ -13,6 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +109,53 @@ test('memory image: identity addressing, measured size', (t) => {
   assert.ok(flat.brotli < flat.raw * 0.5, 'brotli should halve the image at least');
   if (has('isaac.mem')) {
     assert.equal(statSync(join(host, 'isaac.mem')).size, flat.raw);
+  }
+});
+
+test('memory segments preserve bytes at the zero-run boundary', (t) => {
+  const python = [process.env.PYTHON, 'python3', 'python'].find((p) =>
+    p && spawnSync(p, ['-c', 'import sys; print(sys.version_info[0])'],
+      { encoding: 'utf8', timeout: 10000 }).stdout?.trim() === '3');
+  if (!python) return t.skip('no Python 3 available');
+  const code = [
+    'import json, sys',
+    'sys.path.insert(0, sys.argv[1])',
+    'from memimage import segment, pack_segments',
+    'cases = []',
+    'for n in (255, 256, 257):',
+    '    cases.append((f"interior-{n}", b"\\x7f" + bytes(n) + b"\\x44"))',
+    '    cases.append((f"trailing-{n}", b"\\x7f" + bytes(n)))',
+    'cases.extend([("leading", bytes(257) + b"\\x7f\\x44"), ("empty", b""), ("all-zero", bytes(257))])',
+    'print(json.dumps([{"name": name, "input": data.hex(), "packed": pack_segments(segment(data), 0x400000).hex()} for name, data in cases]))',
+  ].join('\n');
+  const run = spawnSync(python, ['-c', code, src],
+    { cwd: root, encoding: 'utf8', timeout: 10000 });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  for (const row of JSON.parse(run.stdout)) {
+    const input = Buffer.from(row.input, 'hex');
+    const packed = Buffer.from(row.packed, 'hex');
+    const count = packed.readUInt32LE(8);
+    const base = packed.readUInt32LE(12);
+    const restored = Buffer.alloc(input.length);
+    let payload = 16 + count * 8;
+    for (let i = 0; i < count; i++) {
+      const offset = packed.readUInt32LE(16 + i * 8) - base;
+      const length = packed.readUInt32LE(20 + i * 8);
+      assert.ok(offset >= 0 && offset + length <= input.length, row.name);
+      packed.copy(restored, offset, payload, payload + length);
+      payload += length;
+    }
+    assert.deepEqual(restored, input, `${row.name}: roundtrip preserves every byte`);
+    assert.equal(payload, packed.length, `${row.name}: consumes complete payload`);
+    const expectedCount = row.name === 'empty' || row.name === 'all-zero' ? 0
+      : row.name === 'interior-256' || row.name === 'interior-257' ? 2 : 1;
+    assert.equal(count, expectedCount, `${row.name}: splits only runs of at least 256 zeros`);
+    if (row.name === 'interior-255') {
+      assert.equal(packed.readUInt32LE(20), input.length, '255 zeros remain in payload');
+    } else if (row.name === 'interior-256' || row.name === 'interior-257') {
+      assert.equal(packed.readUInt32LE(20), 1, `${row.name}: first nonzero byte survives`);
+      assert.equal(packed.readUInt32LE(28), 1, `${row.name}: final nonzero byte survives`);
+    }
   }
 });
 

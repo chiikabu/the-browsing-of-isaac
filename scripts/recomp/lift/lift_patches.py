@@ -98,6 +98,79 @@ PATCHES: dict[int, tuple[str, str]] = {
 # function, its first block is re-decoded from 0xa2b5c8, and both targets
 # get a case in its re-entry switch.
 BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    # Pure non-sequential pair accumulation; packet reads and scalar edges
+    # stay lifted. Put the guard before the backedge label, as for packing.
+    ("0x00aa27b0",
+     "  RECOMP_VA(0xaa27b0u);\nL_00aa27b0: ;\n",
+     """  RECOMP_VA(0xaa27b0u);
+  /* LIFT-PATCH 0x00aa27b0: the no-call pair loop in 0x00aa2580. Modes
+     0 and 2 retain the original; mode 2 is not a verify-both path here.
+     Rejection leaves memory and CpuState untouched. Preserve the exact
+     loop exit registers, CMP flags and legacy MOVSS upper-lane behavior. */
+  {
+    uint32_t audio_last = 0u;
+    uint32_t audio_pairs = isaac_fastpath_mode() == 1
+      ? isaac_fast_aa2580_pairs(EBP, ECX, EDX, EBX,
+                                recomp_rd32(&s->ZMM1[0]), &audio_last) : 0u;
+    if (audio_pairs) {
+      uint32_t audio_limit = MEMR32(EBP - 8u);
+      EBX += audio_pairs * 2u;
+      ESI += audio_pairs * 2u;
+      EDI += audio_pairs;
+      EDX += audio_pairs * 8u;
+      ECX += audio_pairs * 4u;
+      EAX = MEMR32(MEMR32(EBP - 4u) + 0x1cu);
+      uint32_t audio_difference = EBX - audio_limit;  /* guarded to 0 or 1 */
+      CF = OF = SF = 0u;
+      ZF = PF = (uint8_t)(audio_difference == 0u);
+      /* This lifted function has no AF local; keep the machine flag in s. */
+      s->AF = (uint8_t)(((EBX ^ audio_limit ^ audio_difference) & 0x10u) != 0u);
+      recomp_wr32(&s->ZMM0[0], audio_last);
+      recomp_wr32(&s->ZMM0[4], 0u);
+      recomp_wr32(&s->ZMM0[8], 0u);
+      recomp_wr32(&s->ZMM0[12], 0u);
+      goto L_00aa27f6;
+    }
+  }
+L_00aa27b0: ;
+"""),
+    ("0x00aa27f6",
+     "  RECOMP_VA(0xaa27f6u);\n  u3300_4 = (uint32_t)(EBP + ((uint32_t)0xfffffff4u));\n",
+     "L_00aa27f6: ;\n  /* LIFT-PATCH 0x00aa27f6: pair-loop join, before the original register reloads. */\n  RECOMP_VA(0xaa27f6u);\n  u3300_4 = (uint32_t)(EBP + ((uint32_t)0xfffffff4u));\n"),
+    # Read the post-allocation layout once the original offsets are selected.
+    # The guard precedes the label: rejected backedges must not retry it.
+    ("0x00a678d1",
+     "  RECOMP_VA(0xa678d1u);\nL_00a678d1: ;\n",
+     """  RECOMP_VA(0xa678d1u);
+  /* LIFT-PATCH 0x00a678d1: guarded attribute packing only. Allocation,
+     preparation, offset selection and cleanup remain lifted. Modes 0 and 2
+     keep this original block; mode 2 is NOT a verify-both path for this
+     patch. Rejection performs no writes and preserves the logger path.
+     Materialize the documented pack-block liveouts before cleanup, including
+     XMM0 depth and conditional XMM1 scratch. No verify count is recorded. */
+  int pack_result = isaac_fastpath_mode() == 1
+    ? isaac_fast_entity_quad_pack(EBP, EAX, EDI, ESI, EDX,
+                                  recomp_rd32(&s->ZMM2[0]), recomp_rd32(&s->ZMM3[0])) : 0;
+  if (pack_result & 1) {
+    uint32_t pack_quad_end = MEMR32(EBP - 0x14u);
+    EDI += ((pack_quad_end - EAX) / 112u) * 36u;
+    EAX = pack_quad_end;
+    ESI = MEMR32(EBP - 0x3cu);
+    ECX = ESI - 4u * EDX;  /* EDX already holds the validated saved stride. */
+    CF = OF = SF = AF = 0u;
+    ZF = PF = 1u;
+    recomp_wr32(&s->ZMM0[0], MEMR32(0x00c798fcu));
+    recomp_wr32(&s->ZMM0[4], 0u);
+    recomp_wr32(&s->ZMM0[8], 0u);
+    recomp_wr32(&s->ZMM0[12], 0u);
+    if (pack_result & 2) {
+      memcpy(&s->ZMM1[0], &s->ZMM2[0], 16u);
+      recomp_wr32(&s->ZMM1[0], MEMR32(EBP - 0x50u));
+    }
+    goto L_00a67af5;
+  }
+L_00a678d1: ;
+"""),
     # Round 92: the vertex packer's per-quad scale. Eight divs and eight muls,
     # lifted one SSE instruction at a time, once per tear quad.
     ("0x00a67435",

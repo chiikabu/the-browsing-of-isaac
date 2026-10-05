@@ -4,7 +4,7 @@ This is the union of scripts/recomp/host/build_selftest.py (host sources,
 Lua, identity-address memory flags) and scripts/recomp/lift/build_wasm.py
 (parallel lifted-TU compile). The Aug-10 boot.wasm was produced by an
 ad-hoc bash recipe (output/recomp/lift/boot/link_prof.sh) that was never
-checked in; this script is that recipe, plus _isaac_fs_seed.
+checked in; this script is that recipe, plus owned-buffer RAM-FS seeding.
 
 Default lift tree is output/recomp/lift/gu (23,381 functions, the 271 MB
 module that reached main). output/recomp/lift/full is the earlier 7,963-
@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,9 +46,8 @@ LUA_LIB = OUT_HOST / "lua" / "liblua.a"
 LUA_LIB_WASM_SJLJ = OUT_HOST / "lua-wasmsjlj" / "liblua.a"
 SJLJ_CFLAGS: list = []
 
-# Prior boot export set (link_prof.sh) plus the 2026-08-31 RAM-FS seed hook.
-# boot_integration.mjs is the only JS caller; grep m._isaac_* there before
-# adding more names.
+# Boot exports used by boot_integration.mjs and web/boot_web.mjs.
+# Owned seed buffers transfer directly into the RAM-FS.
 EXPORTED_FUNCTIONS = [
     "_malloc",
     "_free",
@@ -56,13 +57,23 @@ EXPORTED_FUNCTIONS = [
     "_isaac_guard_check",
     "_isaac_run_boot",
     "_isaac_run_main",
-    "_isaac_fs_seed",
+    "_isaac_fs_seed_adopt",
     "_isaac_fs_seed_lazy",
     "_isaac_stub_report",
     "_isaac_dump_va_ring",
     "_isaac_heap_report",
     "_isaac_module_report",
 ]
+
+
+def cached_object_matches(obj: Path, receipt: Path, source_sha: str) -> bool:
+    """Reuse only objects whose input and bytes match a compilation receipt."""
+    try:
+        hashes = receipt.read_text().split()
+        return (len(hashes) == 2 and hashes[0] == source_sha
+                and hashes[1] == hashlib.sha256(obj.read_bytes()).hexdigest())
+    except FileNotFoundError:
+        return False
 
 
 def ensure_emsdk_env():
@@ -107,9 +118,9 @@ def default_lift_dir():
 HOST_CFLAGS = [
     "-O1", "-std=gnu11", "-Wall", "-Wextra", "-Wno-unused-parameter",
 ]
-# Lifted TUs were built -O2 -DRECOMP_MEM_CHECK=1; reuse those objects when
-# present so a relink does not wait on 492 MB of C. Recompile with the same
-# flags if --recompile-lifted or an object is missing.
+# Lifted TUs are reused only when their input fingerprint and object bytes match
+# a successful compilation receipt. Missing or legacy receipts require a rebuild.
+# --recompile-lifted forces a rebuild even when the receipt matches.
 LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=1"]
 
 LDFLAGS = [
@@ -197,6 +208,12 @@ def main():
                          "ring, memory watch or stall tick), objects as lifted_NNN.fast.o, output in "
                          "boot-fast/, wasm-opt link. Faults become raw wasm traps; measure with it, "
                          "debug with the default profile.")
+    ap.add_argument("--thin-lto", action="store_true",
+                    help="enable ThinLTO for lifted/host code with isolated -thin-lto output "
+                         "and .thin-lto.o objects; Lua/prebuilt archives stay unchanged")
+    ap.add_argument("--simd", action="store_true",
+                    help="enable Wasm SIMD for lifted/host code and linking with isolated "
+                         "-simd output and .simd.o objects; combines with --thin-lto")
     args = ap.parse_args()
     global BOOT_OUT, LIFT_CFLAGS, LDFLAGS, HOST_CFLAGS, LUA_LIB, SJLJ_CFLAGS
     lift_obj_suffix = ".o"
@@ -255,6 +272,21 @@ def main():
         HOST_CFLAGS = HOST_CFLAGS + ["-msimd128"]
         lift_obj_suffix = ".fast.o"
         args.fast_link = False
+    if args.thin_lto:
+        LIFT_CFLAGS = LIFT_CFLAGS + ["-flto=thin"]
+        HOST_CFLAGS = HOST_CFLAGS + ["-flto=thin"]
+        LDFLAGS = LDFLAGS + ["-flto=thin", f"-Wl,--thinlto-jobs={args.jobs}"]
+        BOOT_OUT = BOOT_OUT.with_name(BOOT_OUT.name + "-thin-lto")
+        lift_obj_suffix = lift_obj_suffix[:-2] + ".thin-lto.o"
+        host_obj_suffix = host_obj_suffix[:-2] + ".thin-lto.o"
+    if args.simd:
+        LIFT_CFLAGS = LIFT_CFLAGS + ["-msimd128"]
+        if "-msimd128" not in HOST_CFLAGS:
+            HOST_CFLAGS = HOST_CFLAGS + ["-msimd128"]
+        LDFLAGS = LDFLAGS + ["-msimd128"]
+        BOOT_OUT = BOOT_OUT.with_name(BOOT_OUT.name + "-simd")
+        lift_obj_suffix = lift_obj_suffix[:-2] + ".simd.o"
+        host_obj_suffix = host_obj_suffix[:-2] + ".simd.o"
 
     emcc = find_emcc()
     if not emcc:
@@ -391,14 +423,12 @@ def main():
         return 1
     print("host : %d TUs in %.1fs" % (len(host_objs), result["hostCompile_s"]))
 
-    # ---- lifted objects: reuse Aug-10 .o unless asked to rebuild ----
+    # ---- lifted objects: reuse only verified compilation outputs ----
     lifted_cs = sorted(lift_dir.glob("lifted_*.c"))
     lifted_objs = []
     need_compile = []
-    # Round 14g: a TU is recompiled when its (patched) text changed since the
-    # object was built -- sha256 stored beside the object -- so a re-lift
-    # with --split-va rebuilds only the TUs whose functions changed.
-    import hashlib
+    # Receipts bind the source/dependency fingerprint to the compiled object.
+    # Legacy one-hash receipts cannot verify object bytes and require a rebuild.
     # A TU's object also depends on the headers it includes and on the compile
     # flags, neither of which is in its own text: hashing the .c alone made a
     # `recomp_rt.h` edit a silent no-op rebuild (round 15b -- it would have
@@ -425,15 +455,9 @@ def main():
         sha_file = lift_dir / (src.stem + lift_obj_suffix + ".sha")
         sha = text_sha(src)
         lifted_sha[src] = (sha, sha_file)
-        if args.recompile_lifted or not obj.exists():
-            need_compile.append((src, obj))
-        elif sha_file.exists() and sha_file.read_text().strip() == sha:
+        if not args.recompile_lifted and cached_object_matches(obj, sha_file, sha):
             lifted_objs.append(obj)
             skipped_same += 1
-        elif not sha_file.exists():
-            # object from before the hashes existed: trust it once, record it
-            sha_file.write_text(sha)
-            lifted_objs.append(obj)
         else:
             need_compile.append((src, obj))
     if skipped_same:
@@ -454,9 +478,11 @@ def main():
                     lift_fail.append(info)
                     print("FAIL %s\n%s" % (Path(info["src"]).name, info["tail"]))
                 else:
-                    lifted_objs.append(Path(info["obj"]))
+                    obj = Path(info["obj"])
+                    lifted_objs.append(obj)
                     sha, sha_file = lifted_sha[Path(info["src"])]
-                    sha_file.write_text(sha)
+                    object_sha = hashlib.sha256(obj.read_bytes()).hexdigest()
+                    sha_file.write_text(f"{sha} {object_sha}\n")
     result["liftCompile_s"] = round(time.time() - t1, 1)
     result["liftedTUs"] = len(lifted_cs)
     result["liftedRecompiled"] = len(need_compile)
@@ -485,7 +511,7 @@ def main():
     lines += ["-sEXPORTED_FUNCTIONS=@" + str(expo).replace("\\", "/")]
     lines += ["-o", str(out_mjs).replace("\\", "/")]
     lines += [p.replace("\\", "/") for p in link_objs]
-    rsp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    rsp.write_text("\n".join(shlex.quote(arg) for arg in lines) + "\n", encoding="utf-8")
 
     print("link : %d inputs -> %s" % (len(link_objs), out_mjs))
     t2 = time.time()

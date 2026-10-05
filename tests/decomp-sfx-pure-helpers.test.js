@@ -2005,7 +2005,7 @@ function countCase() {
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const header = join(root, "native", "decomp", "sfx_pure_helpers.h");
 const source = join(root, "native", "decomp", "sfx_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "sfx-pure");
+const outDir = join(root, "output", "decomp", "sfx-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "sfx-pure-helpers.wasm");
 
 function firstExisting(paths, label) {

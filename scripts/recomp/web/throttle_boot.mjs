@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 
 const [url, mbpsArg, latArg, maxArg] = process.argv.slice(2);
 const mbps = Number(mbpsArg || 25), lat = Number(latArg || 60), maxS = Number(maxArg || 900);
-const browser = await chromium.launch({ args: ['--use-angle=default', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required', '--enable-precise-memory-info'] });
+const browser = await chromium.launch({ args: ['--use-angle=default', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required', '--enable-precise-memory-info', '--mute-audio'] });
 const ctx = await browser.newContext({ viewport: { width: 960, height: 640 } });
 const page = await ctx.newPage();
 const cdp = await ctx.newCDPSession(page);

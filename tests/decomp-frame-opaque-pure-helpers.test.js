@@ -1680,7 +1680,7 @@ const HEADER_ABI_VERSION = Number(
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "frame_opaque_pure_helpers.h");
 const source = join(root, "native", "decomp", "frame_opaque_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "frame-opaque-pure");
+const outDir = join(root, "output", "decomp", "frame-opaque-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "frame-opaque-pure-helpers.wasm");
 /* The decompiled binary, read once, for independent PE-truth pins
    (raw .data reads via the section table). */

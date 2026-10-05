@@ -30,7 +30,7 @@ console.log(`[portable] ${FILE} (${(size / 1048576).toFixed(1)} MB)`);
 
 const browser = await chromium.launch({
   args: ['--allow-file-access-from-files', '--js-flags=--max-old-space-size=6144',
-         '--use-gl=angle', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'],
+         '--use-gl=angle', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--mute-audio'],
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const errors = [];

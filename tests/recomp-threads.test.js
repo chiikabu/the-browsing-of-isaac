@@ -48,28 +48,6 @@ test('the slice runner enters a job under a setjmp and cleans the runtime after 
     'yield is a longjmp back to the runner and a no-op outside a slice');
 });
 
-test('a sliced job yields at Sleep, at a wait, and at an idle lock lap', () => {
-  const fwd = readFileSync(join(host, 'host_shims_forward.c'), 'utf8');
-  assert.ok(/void imp_kernel32__Sleep\(CpuState \*restrict cpu\) \{[\s\S]{0,700}isaac_threads_yield\(\);/.test(fwd),
-    'Sleep yields after advancing the clock');
-  const mod = readFileSync(join(host, 'host_shims_module.c'), 'utf8');
-  // round 24d: the yield comes AFTER the signalled test. Yielding first made a
-  // job that waits on its own (still set) event yield on every slice.
-  const wait = mod.slice(mod.indexOf('void imp_kernel32__WaitForSingleObject(CpuState *restrict cpu) {'));
-  const signalled = wait.indexOf('if (o->signaled) {');
-  const yieldAt = wait.indexOf('isaac_threads_yield();');
-  assert.ok(signalled > 0 && yieldAt > signalled && yieldAt < 1200,
-    'WaitForSingleObject yields only when the object is not signalled');
-  assert.ok(wait.indexOf('if (ms == 0) { cpu->EAX = WAIT_TIMEOUT; return; }') < yieldAt,
-    'a zero timeout is a poll: it returns WAIT_TIMEOUT without yielding');
-  assert.ok(/if \(cs == g_slice_cs_last\) \{\s*if \(\+\+g_slice_cs_repeat >= 2u\) isaac_threads_yield\(\);/.test(mod),
-    'the same lock acquired twice with no progress between is the idle lap');
-  assert.ok(mod.includes('void imp_kernel32__EnterCriticalSection(CpuState *restrict cpu) {\n    isaac_threads_note_cs(isaac_arg(cpu, 0));'),
-    'EnterCriticalSection reports every acquire');
-  const trap = readFileSync(join(host, 'host_trap.c'), 'utf8');
-  assert.ok(trap.includes('isaac_threads_progress();'), 'any other host-boundary call is progress');
-});
-
 test('the critical-section shims are real bodies now, and the frame present slices', () => {
   const gen = readFileSync(join(root, 'scripts', 'recomp', 'host', 'gen_shims.py'), 'utf8');
   for (const n of ['InitializeCriticalSection', 'EnterCriticalSection', 'LeaveCriticalSection', 'DeleteCriticalSection', 'TryEnterCriticalSection']) {

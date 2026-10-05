@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   RENDER_SHELL_PURE_ABI_VERSION,
   RENDER_SHELL_STAGE_SPECIAL_39,
@@ -2933,16 +2933,20 @@ import {
 } from "../scripts/decomp/render-shell-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const outDir = join(root, "output", "decomp", "render-shell-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const header = join(outDir, "render_shell_pure_helpers.h");
+copyFileSync(join(root, "native", "decomp", "render_shell_pure_helpers.h"), header);
 /* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
    test). The header enum is the deliberate pin; the model constant must
    agree with it — that is the assertion each former literal now makes. */
 const HEADER_ABI_VERSION = Number(
-  readFileSync(join(root, "native", "decomp", "render_shell_pure_helpers.h"), "utf8")
+  readFileSync(header, "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
-const header = join(root, "native", "decomp", "render_shell_pure_helpers.h");
-const source = join(root, "native", "decomp", "render_shell_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "render-shell-pure");
+const originalSource = join(root, "native", "decomp", "render_shell_pure_helpers.cpp");
+const source = join(outDir, "render_shell_pure_helpers.cpp");
+copyFileSync(originalSource, source);
 const wasmPath = join(outDir, "render-shell-pure-helpers.wasm");
 
 function firstExisting(paths, label) {
@@ -4864,13 +4868,13 @@ function buildWasmUncached() {
     "-Wall",
     "-Wextra",
     "-Werror",
-  ], { cwd: root, encoding: "utf8" });
+  ], { cwd: root, encoding: "utf8", shell: false });
   assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
   /* The full EXPORTS list (648 exports) no longer fits the Windows
      command line (spawnSync ENAMETOOLONG), so the export args go
      through a response file (@file) which clang/em++ expand
      natively. */
-  const rspPath = join(outDir, "exports.rsp");
+  const rspPath = join(outDir, "exports.rsp").replaceAll("\\", "/");
   writeFileSync(rspPath, EXPORTS.map((name) => `-Wl,--export=${name}`).join("\n"));
   const built = spawnSync(emxx, [
     source,
@@ -4882,7 +4886,7 @@ function buildWasmUncached() {
     "-sERROR_ON_UNDEFINED_SYMBOLS=1",
     `@${rspPath}`,
     "-o", wasmPath,
-  ], { cwd: root, encoding: "utf8" });
+  ], { cwd: root, encoding: "utf8", shell: false });
   assert.equal(built.status, 0, built.stderr || built.stdout);
 }
 
@@ -26266,7 +26270,7 @@ test("v70 FontSettings trio a1a600/a1a620/a1a630 + host rows close v69 OPEN (ABI
   }
 });
 
-test("v70 FontSettings mutation round-trips (ABI 70)", () => {
+test("v70 FontSettings mutation round-trips (ABI 70)", async () => {
   const src = readFileSync(source, "utf8");
   const modelPath = join(root, "scripts", "decomp", "render-shell-pure-model.mjs");
   const msrc = readFileSync(modelPath, "utf8");
@@ -26292,7 +26296,6 @@ test("v70 FontSettings mutation round-trips (ABI 70)", () => {
       fn();
     } finally {
       writeFile(source, src);
-      writeFile(modelPath, msrc);
     }
   };
   {
@@ -26351,25 +26354,36 @@ test("v70 FontSettings mutation round-trips (ABI 70)", () => {
       });
     }
   }
+  const exp2 = loadExports();
   {
-    /* Mutant 4 (MODEL a1a620 oracle folded to a 3-equality): the JS
-       oracle must diverge from the cpp/wasm truth (cpp says 1). */
+    /* Mutant 4 (MODEL a1a620 oracle folded to a 3-equality): static ESM
+       imports stay cached after file writes. Import a private copy so
+       the mutated oracle runs without touching the tracked model. */
     const mut = msrc.replace(
-      "export function renderShellA1a620IsTruncationEnabled(state8) {\n  return asU32(state8) === RENDER_SHELL_A1A620_CMP_VAL ? 1 : 0;\n}",
-      "export function renderShellA1a620IsTruncationEnabled(state8) {\n  return asU32(state8) === 3 ? 1 : 0;\n}",
+      "  return asU32(state8) === RENDER_SHELL_A1A620_CMP_VAL ? 1 : 0;",
+      "  return asU32(state8) === 3 ? 1 : 0;",
     );
-    if (mut !== msrc) {
-      writeFile(modelPath, mut);
-      assertMutant("model a1a620 oracle -> ==3", () => {
-        assert.equal(
-          renderShellA1a620IsTruncationEnabled(2),
-          0, /* divergent: PE/cpp 1 */
-          "mutant4 (model oracle ==3) not caught",
-        );
-      });
+    assert.notEqual(mut, msrc, "mutant4 oracle replacement did not match");
+    const mutantPath = join(outDir, `render-shell-v70-m4-${Date.now()}.mjs`);
+    try {
+      writeFile(mutantPath, mut);
+      const mutantModel = await import(pathToFileURL(mutantPath).href);
+      const actual = mutantModel.renderShellA1a620IsTruncationEnabled(2);
+      assert.equal(
+        actual,
+        0, /* divergent: PE/cpp 1 */
+        "mutant4 (model oracle ==3) not caught",
+      );
+      assert.notEqual(
+        actual,
+        exp2.isaac_render_shell_a1a620_is_truncation_enabled(2) >>> 0,
+        "mutant4 oracle must disagree with restored WASM",
+      );
+    } finally {
+      rmSync(mutantPath, { force: true });
     }
   }
-  /* Restore checks: byte-identical sha256 + content, BOTH files. */
+  /* Restore/isolation checks: byte-identical sha256 + content, BOTH files. */
   const afterCpp = readFileSync(source, "utf8");
   const afterModel = readFileSync(modelPath, "utf8");
   assert.equal(
@@ -26379,11 +26393,10 @@ test("v70 FontSettings mutation round-trips (ABI 70)", () => {
   assert.equal(afterCpp, src, "cpp content differs after v70 mutants");
   assert.equal(
     digest(afterModel), beforeModel,
-    "model source not restored byte-identical after v70 mutants",
+    "tracked model source changed after v70 mutants",
   );
   assert.equal(afterModel, msrc, "model content differs after v70 mutants");
-  /* Sanity: restored build still produces the oracle values. */
-  const exp2 = loadExports();
+  /* Sanity: restored build and unmodified model still produce oracle values. */
   assert.equal(exp2.isaac_render_shell_a1a620_is_truncation_enabled(2) >>> 0, 1);
   assert.equal(exp2.isaac_render_shell_a1a600_truncation_word(0x12345678) >>> 0, 0x5678);
   assert.equal(exp2.isaac_render_shell_a1a600_state_written() >>> 0, 2);
@@ -26666,7 +26679,6 @@ test("v71 sort-cluster mutation round-trips (ABI 71)", async () => {
   const restore = () => {
     writeFile(source, srcCpp);
     writeFile(header, srcHeader);
-    writeFile(modelPath, msrc);
   };
   const assertMutant = async (name, fn) => {
     try {
@@ -26903,7 +26915,6 @@ test("v72 mutation round-trips (ABI 72)", async () => {
   const restore = () => {
     writeFile(source, srcCpp);
     writeFile(header, srcHeader);
-    writeFile(modelPath, msrc);
   };
   const assertMutant = async (name, fn) => {
     try {
@@ -27245,7 +27256,6 @@ test("v73 mutation round-trips (ABI 73)", async () => {
   const restore = () => {
     writeFile(source, srcCpp);
     writeFile(header, srcHeader);
-    writeFile(modelPath, msrc);
   };
   const assertMutant = async (name, fn) => {
     try {
@@ -27475,7 +27485,6 @@ test("v74 mutation round-trips (ABI 74)", async () => {
   const restore = () => {
     writeFile(source, srcCpp);
     writeFile(header, srcHeader);
-    writeFile(modelPath, msrc);
   };
   const assertMutant = async (name, fn) => {
     try {

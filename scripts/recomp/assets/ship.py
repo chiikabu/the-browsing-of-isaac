@@ -158,6 +158,8 @@ def make_siblings(path: str, size: int, want_brotli: bool, brotli_quality: int, 
             out["br"] = len(br)
         else:
             _unlink(path + ".br")
+    else:
+        _unlink(path + ".br")
     return out
 
 
@@ -267,13 +269,16 @@ def cmd_build(args) -> int:
         return 1
     os.makedirs(dist, exist_ok=True)
     previous: dict[str, dict] = {}
+    previous_manifest: dict = {}
     prev_path = os.path.join(dist, MANIFEST_NAME)
     if os.path.isfile(prev_path):
         try:
             with open(prev_path, encoding="utf-8") as f:
-                previous = {e["path"]: e for e in json.load(f).get("files", [])}
+                previous_manifest = json.load(f)
+                previous = {e["path"]: e for e in previous_manifest.get("files", [])}
         except (OSError, ValueError, KeyError):
             previous = {}
+            previous_manifest = {}
 
     # --- the plan: what lands where
     files: list[dict] = []
@@ -322,6 +327,9 @@ def cmd_build(args) -> int:
     if want_brotli and brotli is None:
         print("brotli: the python module is not importable -- skipping .br siblings (pip install brotli)")
         want_brotli = False
+    brotli_settings = {"available": True, "quality": args.brotli_quality} if want_brotli else {"available": False}
+    same_compression = (previous_manifest.get("brotli") == brotli_settings
+                        and previous_manifest.get("gzip_level") == args.gzip_level)
     notes = []
     for e in files:
         rel, size, full = e["path"], e["size"], os.path.join(dist, e["path"])
@@ -336,13 +344,14 @@ def cmd_build(args) -> int:
                 _unlink(full + SIBLING_SUFFIX[enc])
             notes.append("%s: windowed (%s bytes >= %s): served as byte slices, no sibling" % (rel, fmt(size), fmt(args.window_min)))
             continue
-        # unchanged since the last build (same sha256, every recorded sibling still there at its
-        # size): keep the siblings and the verdict, unless brotli is wanted now and was not there
+        # A skipped file is not a negative compression verdict. Reuse only a completed
+        # probe under the same encoding policy, with every advertised sibling still present.
         prev = previous.get(rel)
-        reuse = (prev is not None and prev.get("sha256") == e["sha256"] and isinstance(prev.get("encodings"), dict)
-                 and all(os.path.isfile(full + SIBLING_SUFFIX[k]) and os.stat(full + SIBLING_SUFFIX[k]).st_size == v
-                         for k, v in prev["encodings"].items())
-                 and (not want_brotli or "br" in prev["encodings"] or not prev["encodings"]))
+        reuse = (same_compression and prev is not None and prev.get("probed") is True
+                 and prev.get("sha256") == e["sha256"] and isinstance(prev.get("encodings"), dict)
+                 and all(k in ENCODINGS and (want_brotli or k != "br")
+                         and os.path.isfile(full + SIBLING_SUFFIX[k]) and os.stat(full + SIBLING_SUFFIX[k]).st_size == v
+                         for k, v in prev["encodings"].items()))
         if reuse:
             e["encodings"] = dict(prev["encodings"])
             e["probed"] = bool(prev.get("probed"))
@@ -385,7 +394,7 @@ def cmd_build(args) -> int:
             "web": web.replace("\\", "/"),
         },
         "window_min": args.window_min,
-        "brotli": {"available": brotli is not None, "quality": args.brotli_quality} if want_brotli else {"available": False},
+        "brotli": brotli_settings,
         "gzip_level": args.gzip_level,
         "files": files,
         "totals": totals_of(files),
@@ -524,7 +533,7 @@ def main(argv=None) -> int:
     p.add_argument("--dist", default=DEFAULTS["dist"], help="the output folder, default .scratch/game-dist")
     p.add_argument("--copy", action="store_true", help="copy the bundle's files instead of hard-linking them")
     p.add_argument("--trail", default=DEFAULTS["trail"], help="a boot trail (drive_boot.mjs writes <out>/boot-trail.json) shipped as /boot-trail.json: "
-                   "a first visit's reader fetches the windows it names ahead of the engine "
+                   "when explicitly requested with ?trail=1, a first visit's reader fetches the windows it names ahead of the engine "
                    "(default: scripts/recomp/assets/boot-trail.json, recorded against this archive layout)")
     p.add_argument("--no-trail", action="store_true", help="ship no boot trail at all (a chunked page built from "
                    "such a dist prefetches the whole payload before its first frame)")

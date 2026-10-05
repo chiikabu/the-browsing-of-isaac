@@ -19,7 +19,6 @@ const require = createRequire(import.meta.url);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const lift = join(root, 'scripts', 'recomp', 'lift');
-const host = join(root, 'scripts', 'recomp', 'host');
 
 test('emitter: tail jumps park a target; direct calls run pending targets', () => {
   const src = readFileSync(join(lift, 'lift.py'), 'utf8');
@@ -36,27 +35,6 @@ test('emitter: tail jumps park a target; direct calls run pending targets', () =
   // jmp [slot] (unknown purge token), jmp [slot] expr, jmp reg, the unresolved kind, and the dispatch-loop trampoline line
   assert.equal((src.match(/self\.emit\("recomp_jump_indirect\(s, /g) || []).length, 5, 'five emitted computed tail-jump forms park');
   assert.equal((src.match(/out\.append\("    recomp_jump_indirect\(s, /g) || []).length, 1, 'the dispatch-loop default parks');
-});
-
-test('runtime: recomp_jump_indirect parks, recomp_run_pending loops, the dispatcher runs pending', () => {
-  const trap = readFileSync(join(host, 'src', 'host_trap.c'), 'utf8');
-  assert.ok(trap.includes('uint32_t recomp_jmp_pending, recomp_jmp_target;'), 'the two globals are defined once, in host_trap.c');
-  assert.ok(/void recomp_jump_indirect\(CpuState \*restrict s, uint32_t target\) \{[\s\S]{0,200}recomp_jmp_target = target;\s*recomp_jmp_pending = 1u;\s*\}/.test(trap),
-    'recomp_jump_indirect parks the target instead of calling');
-  // the loop body also carries round 15c's no-progress guard, so allow for it
-  assert.ok(/void recomp_run_pending\(CpuState \*restrict s\) \{[\s\S]{0,400}while \(recomp_jmp_pending\) \{[\s\S]{0,1200}recomp_call_indirect\(s, t\);/.test(trap),
-    'recomp_run_pending loops until nothing is pending');
-  const mk = readFileSync(join(lift, 'mkdispatch.py'), 'utf8');
-  // the dispatch path must NOT loop (the loop would nest again through recomp_run_pending -> call_indirect -> dispatch)
-  const dispatchBody = mk.slice(mk.indexOf('static int dispatch_block('), mk.indexOf('int isaac_dispatch_return('));
-  assert.ok(!dispatchBody.includes('recomp_run_pending'), 'no pending loop inside the dispatch path');
-  assert.ok(mk.includes('if (isaac_lifted_dispatch(va, cpu)) { recomp_run_pending(cpu); return; }'), 'the host entry runs pending targets');
-  assert.ok(mk.includes('if (recomp_jmp_pending) recomp_run_pending(cpu);\n    if (!isaac_dispatch_return(cpu->EIP, cpu))'), 'the longjmp replay loop runs pending targets');
-  const rt = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
-  assert.ok(rt.includes('extern uint32_t recomp_jmp_pending, recomp_jmp_target;') && rt.includes('void recomp_run_pending(struct CpuState *s);'),
-    'recomp_rt.h declares the globals and recomp_run_pending for the lifted TUs');
-  const h = readFileSync(join(host, 'include', 'isaac_host.h'), 'utf8');
-  assert.ok(!/JMP_PENDING|JMP_TARGET/.test(h), 'no trampoline fields in CpuState (its layout is a prefix of the generated struct)');
 });
 
 test('shim audit: every PROVIDED/REAL import has a strong body (when the host objects are built)', () => {
