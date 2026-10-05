@@ -482,19 +482,66 @@ https://chiikabu.github.io/the-browsing-of-isaac/
 
 ```sh
 # single .html, payload inline, no network
-python scripts/recomp/assets/portable.py offline .scratch/game-dist out/isaac.html
+python scripts/recomp/assets/portable.py offline .scratch/game-dist .scratch/isaac.html
 
 # page + payload beside it, for a static host
-python scripts/recomp/assets/portable.py chunks .scratch/game-dist out/ --chunks 33 \
+python scripts/recomp/assets/portable.py chunks .scratch/game-dist .scratch/portable-local --chunks 33 \
     --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c
 ```
 
 Payload is split by access pattern, not size. Whole-read files are gzipped; the
 four windowed archives are stored raw on 1 MiB boundaries and fetched with
 `Range`, the range carried in the URL fragment. Hosts that ignore `Range` get
-whole chunks instead. `--chunks 33` keeps every file under jsDelivr's 20 MB
-limit. Chunks are XOR-scrambled and the inlined modules minified by default;
-`--plain` disables both.
+whole chunks instead. Check actual chunk sizes against jsDelivr's 20 MB limit;
+`--chunks 33` is not a guarantee for arbitrary asset sets. Chunks are
+XOR-scrambled and the inlined modules minified by default; `--plain` disables both.
+
+### Updating the public release
+
+This repository's `main` serves the page through GitHub Pages.
+`chiikabu/boi-portable` stores the payload; binary chunks never belong in this
+source repository. A local vanilla bundle is not the deployed optimized bundle.
+Compare every instance file against the deployed manifest before replacing it.
+
+For the existing production asset set, assemble from its byte-verified bundle:
+
+```sh
+python scripts/recomp/assets/ship.py build --bundle .scratch/publish-bundle \
+    --dist .scratch/publish-dist --copy --no-compress
+python scripts/recomp/assets/ship.py check .scratch/publish-dist
+python scripts/recomp/assets/portable.py chunks .scratch/publish-dist .scratch/publish-chunks \
+    --chunks 33 --part-mib 19 --window-gz --key-of index.html \
+    --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c \
+    --base-b https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@79d199a/c \
+    --catalogue https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/mods
+```
+
+The portable packer supplies compression; separate `.br`/`.gz` dist siblings
+are not consumed here. Preserve the key, 19 MiB B chunk geometry, and window
+compression. Keep `@79d199a` only after all 28 rebuilt B chunks match the
+published bytes. Changing only the file-count option changes chunk boundaries.
+
+Commit A chunks first, then pin the generated page's A base to that immutable
+payload commit. Preserve its commit ancestry when merging. Copy the same
+generated page to both repositories and merge their release PRs. Retain
+`wl`, `wz`, and `win` for compressed B windows: the historical `--html-only`
+path can drop those fields. Regenerate the full pack rather than using that
+path for a compressed-window release.
+
+Purge mutable `@main` URLs, not immutable payload commits, then compare served
+bytes. A successful push or purge response is not deployment proof:
+
+```sh
+node scripts/recomp/assets/purge_cdn.mjs .scratch/publish-chunks gh/chiikabu/boi-portable@main
+node scripts/recomp/assets/check_deployed.mjs \
+    https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@6d8ba1d61e78bebb6e7389d7421239886beba45b \
+    https://chiikabu.github.io/the-browsing-of-isaac/ .scratch/publish-chunks
+```
+
+The verifier checks A in full and B by 64 KiB prefixes. Also run a muted public
+browser smoke through title and playable gameplay. Loading timings above use
+the separate raw-asset test distribution, not this portable CDN layout.
+
 
 ## Mods
 
