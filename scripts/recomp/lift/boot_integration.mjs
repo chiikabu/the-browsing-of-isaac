@@ -80,7 +80,7 @@ if (stage === 'layout') { console.log(`\nRESULT: layout ${layoutBad ? 'FAIL' : '
 // resources/packed/graphics.a through the game's own fopen/fread; an empty
 // FS returns NULL and the guest faults at 0x009a26c2. Seed the archives the
 // game opens from the locally-owned instance BEFORE main so the KAGE loader
-// finds them. Requires the boot module to export _isaac_fs_seed (add it to
+// finds them. Requires the boot module to export _isaac_fs_seed_adopt (add it to
 // the boot link's EXPORTED_FUNCTIONS). music.a/videos.a are seeded LAZILY
 // (LAZY_ARCHIVES below): they are not on the boot path, but the game does open
 // them once it is playing.
@@ -137,12 +137,22 @@ const LAZY_ARCHIVES = ['music.a', 'videos.a', 'afterbirth.a', 'afterbirthp.a'];
 function seedFile(relPath, bytes) {
   const pathBytes = Buffer.from(relPath + '\0', 'utf8');
   const pp = m._malloc(pathBytes.length);
-  const dp = m._malloc(bytes.length || 1);
-  m.HEAPU8.set(pathBytes, pp);
-  if (bytes.length) m.HEAPU8.set(bytes, dp);
-  const ok = m._isaac_fs_seed(pp, dp, bytes.length);
-  m._free(pp); m._free(dp);
-  return ok;
+  if (!pp) throw new Error('path allocation failed');
+  let dp = 0;
+  try {
+    m.HEAPU8.set(pathBytes, pp);
+    if (bytes.length) {
+      dp = m._malloc(bytes.length);
+      if (!dp) throw new Error('seed data allocation failed');
+      m.HEAPU8.set(bytes, dp);
+    }
+    const ok = m._isaac_fs_seed_adopt(pp, dp, bytes.length);
+    if (ok) dp = 0; // The filesystem owns the allocation after success.
+    return ok;
+  } finally {
+    if (dp) m._free(dp);
+    m._free(pp);
+  }
 }
 // Round 12f: the extracted tree is seeded LAZILY. Each file's size is
 // registered (directory scans, stat and GetFileSize see it); the bytes are
@@ -194,15 +204,15 @@ m.isaacLazyRead = (src, dst, len) => {
   }
 };
 function seedLazy(relPath, size) {
-  if (typeof m._isaac_fs_seed_lazy !== 'function') {
-    return seedFile(relPath, readFileSync(`${INSTANCE_DIR}/${relPath}`));
-  }
   const pathBytes = Buffer.from(relPath + '\0', 'utf8');
   const pp = m._malloc(pathBytes.length);
-  m.HEAPU8.set(pathBytes, pp);
-  const ok = m._isaac_fs_seed_lazy(pp, size);
-  m._free(pp);
-  return ok;
+  if (!pp) throw new Error('path allocation failed');
+  try {
+    m.HEAPU8.set(pathBytes, pp);
+    return m._isaac_fs_seed_lazy(pp, size);
+  } finally {
+    m._free(pp);
+  }
 }
 // Round 24e: windowed reads. A lazy file at or above ISAAC_FS_WINDOW_MIN MiB
 // (default 32) is never loaded whole -- the RAM-FS keeps a 1 MB window per
@@ -360,7 +370,7 @@ if (consoleCommands.length) {
   const consoleHow = consoleMode === 'typed' ? 'typed (WM_CHAR from TranslateMessage)' : consoleMode === 'type' ? 'typed first, history recall as the fallback' : 'by history recall';
   console.log(`  ISAAC_CONSOLE: ${consoleCommands.length} command(s) through the debug console, ${explorer ? `${consoleDelay} frames after the run starts` : `at frame ${consoleAt}`}, ${consoleHow}`);
 }
-if (typeof m._isaac_fs_seed === 'function') {
+{
   stageOk('seed packed archives', () => {
     let seeded = 0;
     for (const name of BOOT_ARCHIVES) {
@@ -477,8 +487,6 @@ if (typeof m._isaac_fs_seed === 'function') {
       return n;
     });
   }
-} else {
-  console.log('  (seed skipped: boot module has no _isaac_fs_seed export — rebuild the boot link)');
 }
 
 // --- host boot: IAT, TEB, TLS, _initterm -------------------------------
@@ -488,7 +496,7 @@ console.log(`  isaac_boot_init -> ${bootRc}`);
 let g = m._isaac_guard_check();
 console.log(`  guard after boot: ${g ? g + ' words CORRUPTED' : 'intact'}`);
 if (bootRc === null) { console.log('\nRESULT: boot trapped'); process.exit(1); }
-if (stage === 'boot') { console.log(`\nRESULT: boot rc=${bootRc}`); process.exit(bootRc ? 1 : 0); }
+if (stage === 'boot') { console.log(`\nRESULT: boot rc=${bootRc}`); process.exit(bootRc === 1 ? 0 : 1); }
 
 // --- main --------------------------------------------------------------
 const mainRc = stageOk('main @ 0x00931050', () => m._isaac_run_main());

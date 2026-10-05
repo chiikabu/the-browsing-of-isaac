@@ -38,7 +38,7 @@ const glArgs = GL === 'swiftshader'
 // and the archives in the browser cache -- the warm start a returning player
 // gets. Without it every run is a cold start with a fresh profile.
 const PROFILE_DIR = opt.profile_dir || '';
-const launchArgs = [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'];
+const launchArgs = [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'];
 // js_flags=<v8 flags> (round 40): e.g. --wasm-num-compilation-tasks=2 to stand in
 // for a four-core machine's background compiler (the CPU throttle does not).
 if (opt.js_flags) launchArgs.push(`--js-flags=${opt.js_flags}`);

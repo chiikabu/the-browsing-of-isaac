@@ -280,6 +280,15 @@ int  isaac_boot_run_tls(void);                       /* step 5                  
 int  isaac_boot_run_initterms(void);                 /* step 6                       */
 int  isaac_boot_call_main(int argc, char **argv);    /* step 7                       */
 
+/* RAM-FS seeding returns 1 on success, 0 on rejection.
+ * The copy API borrows data; NULL fills a nonempty file with zeroes.
+ * The adopt API takes an exclusively owned, malloc-compatible buffer only on
+ * success. On rejection the caller still owns it and existing bytes survive.
+ * NULL data is valid only when len == 0 for adoption. Neither API keeps path. */
+int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len);
+int isaac_fs_seed_adopt(const char *path, uint8_t *data, uint32_t len);
+int isaac_fs_seed_lazy(const char *path, uint32_t len);
+
 /* Transfers control to a guest VA. Implemented over the lifter's VA -> wasm
  * function dispatch table (dispatch_tbl.h: g_dva/g_dfn). */
 static inline const char *isaac_guest_cstr(uint32_t va, char *buf,
@@ -359,6 +368,9 @@ void isaac_fast_imdct_r_loop_range(uint32_t lim, uint32_t e_va, uint32_t d0, uin
 int  isaac_fast_imdct_r_loop_ok(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off, uint32_t a_va, uint32_t k1, uint32_t *lo, uint32_t *len);
 void isaac_fast_inverse_mdct(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);   /* round 50 */
 int  isaac_fast_inverse_mdct_ok(uint32_t buf_va, uint32_t n, uint32_t f_va, uint32_t bt);
+/* Pure pair loop 0x00aa27b0..0x00aa27f6; zero rejects without guest/output writes. */
+uint32_t isaac_fast_aa2580_pairs(uint32_t frame, uint32_t right, uint32_t source_offset,
+                                uint32_t index, uint32_t zero_bits, uint32_t *last_bits);
 /* libvorbis mdct_bitreverse's lookup, checked before the lifted body runs */
 int  isaac_fast_vorbis_bitrev_ok(uint32_t init_va, uint32_t x_va);
 int  isaac_fast_quad_copy_ok(uint32_t self_va, uint32_t src_va);
@@ -371,6 +383,10 @@ void isaac_fast_copy36(uint32_t self_va, uint32_t src_va);
 void isaac_fast_entity_quad_scale(uint32_t elem_end, uint32_t scale);
 /* Four-corner tint of a 112-byte quad, 0x00a676fd (round 92). */
 void isaac_fast_entity_quad_tint(uint32_t quad);
+/* Pack loop 0x00a678d1..0x00a67aef: 0 rejects without guest writes;
+ * 1 handles no-position layouts, 3 handles layouts containing format 5. */
+int  isaac_fast_entity_quad_pack(uint32_t frame, uint32_t quad, uint32_t uv,
+                                 uint32_t dst, uint32_t stride, uint32_t ox_bits, uint32_t oy_bits);
 /* x87 ST0 -> int64 / int32 truncation, fisttp's result without the ISA gate (0x00af0800 / 0x00af0780) */
 int64_t isaac_fast_x87_trunc_i64(double d);
 int32_t isaac_fast_x87_trunc_i32(double d);

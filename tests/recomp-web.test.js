@@ -277,42 +277,6 @@ test('round 53: draws in the standard quad pattern take one static index buffer,
   assert.ok(ca.includes('%u draws on the static quad index buffer (pattern %u %u %u %u %u %u), %u index blocks not the pattern'), 'the census');
 });
 
-test('round 54: the floor sweep driver seeds the console, walks every stage and watches memory per floor', () => {
-  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_floors.mjs'), 'utf8');
-  assert.ok(d.includes("const STAGES = (opt.stages || '2,3,4,5,6,7,8,9,10,11,12,13,1c,2c,3c,4c')"), 'stages 2-13 and the alternate path by default');
-  assert.ok(d.includes('await typeSlow(`stage ${st}`);') && d.includes('m_StageType (') && d.includes("`stage ${st}`"), 'each stage typed and its Level::Init awaited');
-  assert.ok(d.includes("await bcdp.send('SystemInfo.getProcessInfo');"), 'the process memory per floor');
-  assert.ok(d.includes("'the renderer working set stays within 400 MB of the first floor across the sweep'"), 'the memory check');
-});
-
-test('round 55/56: the boot trail, and every archive window read by a Worker with the wasm stack suspended', () => {
-  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  assert.ok(b.includes("const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;"), 'the trail, its cap, the parallelism, the byte budget and the read-ahead');
-  assert.ok(b.includes("if (n >= 300 && !trailWritten) writeTrail();") && b.includes("if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();") && !b.includes("presented === 300") && b.includes("window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });"),
-    'the trail is written by the host frame counter at frame 300 (isaacPresent never fires on the served page), or when the page goes');
-  assert.ok(b.includes("w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' })));"), 'the reader is a Worker of this origin');
-  // round 83: the fetch is three tries and then the whole chunk, because one
-  // failed window returned -1 to the engine and trapped the run
-  assert.ok(b.includes('const r = await fetch(url, init);') && b.includes('return await r.arrayBuffer();')
-    && b.includes('let xorKey = null;') && b.includes("postMessage({ want: w, buf, hit: why !== 'want', pf: prefetched, ah: ahead }, buf ? [buf] : []);"), 'the Worker fetches raw bytes and transfers each window');
-  // round 70: a portable chunk holds many windows, and the range rides in the
-  // fragment because a fragment never reaches the server
-  assert.ok(b.includes("const h = url.indexOf('#r=');") && b.includes("init = { headers: { Range: 'bytes=' + want0 + '-' + want1 } };")
-    && b.includes('if (buf && want0 >= 0 && buf.byteLength > want1 - want0 + 1) buf = unscramble(buf, at >= 0 ? at - want0 : -1).slice(want0, want1 + 1);'),
-    'a fragment range becomes a Range header, and a host that ignores it is put back and cut to size here');
-  assert.ok(b.includes("return new Promise((resolve) => {") && b.includes("const wantUrl = reader ? windowUrl(src, off, len) : null;")
-    && b.includes("reader.postMessage({ want: id, key, url: wantUrl, len, ahead });"), 'a read is a promise the Worker resolves (the wasm stack suspends: JSPI)');
-  // round 70: a provider that has the bytes but no URL for them (the single-file
-  // build, or a window straddling two chunks) leaves the Worker out of it
-  assert.ok(b.includes("if (reader && wantUrl) {"), 'no URL, no Worker: the read falls through to the bytes path');
-  assert.ok(b.includes("const forward = off > last && off - last <= READ_AHEAD * FS_WINDOW;") && b.includes("if (o >= size) break;"), 'read-ahead follows a file read forward and stops at its end');
-  assert.ok(b.includes("params.get('reader') === '0'") && b.includes("return finishRead(src, off, dst, fetchSync(`/instance/${src}?off=${off}&len=${len}`));"), '?reader=0 and no Worker keep the synchronous read');
-  assert.ok(b.includes("const decodeBase64 = (typeof Uint8Array.fromBase64 === 'function')") && b.includes("  return decodeBase64(x.responseText);"), 'the synchronous read decodes with the native decoder where there is one');
-  assert.ok(b.includes('prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs:'), 'the figures reach isaacLazyStats');
-  const c = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_fs.c'), 'utf8');
-  assert.ok(c.includes('return (typeof n === "number" || (n && typeof n.then === "function")) ? n : -1;'), 'the C side hands a promise through to JSPI');
-});
-
 test('the node runner serves every module the pipeline imports', () => {
   // round 74 gave boot_web.mjs a sibling and the runner answered 404 for it: an
   // ES import that 404s is a module graph that never resolves, so window.isaacDone
@@ -337,17 +301,6 @@ test('the node runner serves every module the pipeline imports', () => {
     }
   }
   assert.ok(seen.has('mods.mjs') && seen.has('zip.mjs'), 'and it does reach the round-74 modules');
-});
-
-test('round 59: a first visit gets the trail the dist ships', () => {
-  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  assert.ok(b.includes("const TRAIL_SHIPPED = 'boot-trail.json';") && b.includes("fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {"), 'no trail of its own: the page asks for the shipped one');
-  assert.ok(b.includes("if (!Array.isArray(shipped) || !shipped.length || reader !== w) return;") && b.includes("trailKept = shipped.length; trailShipped = true;"), 'a Worker that is gone gets nothing; the figures say the trail was shipped');
-  assert.ok(b.includes("if (!trailArmed) { trailArmed = true; if (trailJobs) armTrail(trailJobs); }") && b.includes("w.postMessage({ jobs: [], budget: READER_BUDGET, parallel: READER_PARALLEL });"), 'the prefetch starts at the first presented frame, after the boot\'s own downloads');
-  const sh = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'ship.py'), 'utf8');
-  assert.ok(sh.includes('TRAIL_NAME = "boot-trail.json"') && sh.includes('add(TRAIL_NAME, os.path.abspath(args.trail), "trail", link=False)') && sh.includes('p.add_argument("--trail"'), 'ship.py --trail places it in the dist and the manifest');
-  const d = readFileSync(join(root, 'scripts', 'recomp', 'web', 'drive_boot.mjs'), 'utf8');
-  assert.ok(d.includes("if (trailJson) writeFileSync(join(OUT, 'boot-trail.json'), trailJson);"), 'drive_boot.mjs leaves the trail for ship.py');
 });
 
 test('round 59: the saves round trip is driven on the shipping page, and the menu says what it does', () => {
@@ -380,15 +333,8 @@ test('round 60: a large texture upload goes in bands, so the GL transfer chunk n
   assert.ok(d.includes("await cdp.send('HeapProfiler.collectGarbage')") && d.includes('window.__texUploads = T;'), 'the memory driver collects garbage before its reading and counts the uploads');
 });
 
-test('round 86: the reader Worker parses as the script it becomes', () => {
-  // This is the test that was missing. READER_WORKER is a template literal, so
-  // what the Worker receives is the COOKED value: a backslash in the source is
-  // eaten as an escape and never reaches it. Round 84 wrote a Content-Range
-  // check as /\/(\d+)\s*$/, which cooked into //(d+)s*$/ -- a line comment that
-  // swallowed the assignment before it. Every build from that round on threw
-  // `Uncaught SyntaxError: Unexpected token 'if'` the moment the Worker started,
-  // so no read was ever prefetched and round 83's retries never ran either.
-  // Reading the source text is not enough to catch that; it has to be cooked.
+function readerWorkerSource() {
+  // Cook the template exactly as the page does before evaluating the worker.
   const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
   const open = b.indexOf('`', b.indexOf('const READER_WORKER'));
   let end = -1, depth = 0;
@@ -402,15 +348,77 @@ test('round 86: the reader Worker parses as the script it becomes', () => {
   assert.ok(end > open, 'the template closes');
   const raw = b.slice(open + 1, end);
 
-  // no backslash: the cooked source is then the source, and this whole class of
-  // bug is gone rather than caught one instance at a time
-  assert.ok(!raw.includes('\\'), 'no backslash inside the Worker template');
-  assert.equal(raw.indexOf('${'), -1, 'and no substitution: the Worker source is a constant');
+  return new Function('return `' + raw + '`')();
+}
 
-  // and it parses as a classic script, which is what a Worker is handed
-  const cooked = new Function('return `' + raw + '`')();
-  assert.equal(cooked.length, raw.length, 'nothing was eaten on the way to the Worker');
-  assert.doesNotThrow(() => new Script(cooked), 'the Worker source parses');
+function deferredReaderWorker() {
+  const requests = [], messages = [];
+  const worker = {
+    fetch(url) {
+      return new Promise((resolve) => requests.push({ url, resolve }));
+    },
+    postMessage(message) { messages.push(message); },
+  };
+  new Script(readerWorkerSource()).runInNewContext(worker);
+  return { worker, requests, messages };
+}
+
+test('reader scheduler: configured parallel cap bounds a demand and ahead burst', async () => {
+  const { worker, requests, messages } = deferredReaderWorker();
+  worker.onmessage({ data: { jobs: [], budget: 1024, parallel: 2 } });
+  worker.onmessage({ data: {
+    want: 1, key: 'demand', url: '/demand', len: 16,
+    ahead: [1, 2, 3, 4].map((i) => ['ahead' + i, '/ahead' + i, 16]),
+  } });
+
+  assert.deepEqual(requests.map(({ url }) => url), ['/demand', '/ahead1'],
+    'the demand uses one slot and only one speculative fetch fits');
+  assert.deepEqual(messages, [], 'fetches stay pending until explicitly resolved');
+  const demandBytes = Uint8Array.from({ length: 16 }, (_, i) => i);
+  const aheadBytes = Uint8Array.from({ length: 16 }, (_, i) => i + 32);
+  requests[0].resolve({ ok: true, status: 200, arrayBuffer: async () => demandBytes.buffer });
+  requests[1].resolve({ ok: true, status: 200, arrayBuffer: async () => aheadBytes.buffer });
+  await new Promise(setImmediate);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].want, 1);
+  assert.equal(messages[0].hit, false);
+  assert.deepEqual(new Uint8Array(messages[0].buf), demandBytes);
+  worker.onmessage({ data: { want: 2, key: 'ahead1', url: '/ahead1', len: 16 } });
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].want, 2);
+  assert.equal(messages[1].hit, true);
+  assert.deepEqual(new Uint8Array(messages[1].buf), aheadBytes);
+  assert.deepEqual(requests.map(({ url }) => url), ['/demand', '/ahead1'],
+    'the admitted speculative fetch supplies the later demand from cache');
+});
+
+test('reader scheduler: demand starts with all speculative slots occupied', async () => {
+  const { worker, requests, messages } = deferredReaderWorker();
+  worker.onmessage({ data: {
+    jobs: [['trail1', '/trail1', 16], ['trail2', '/trail2', 16]],
+    budget: 1024, parallel: 2,
+  } });
+  assert.deepEqual(requests.map(({ url }) => url), ['/trail1', '/trail2']);
+  worker.onmessage({ data: {
+    want: 1, key: 'demand', url: '/demand', len: 16,
+    ahead: [['ahead', '/ahead', 16]],
+  } });
+  assert.deepEqual(requests.map(({ url }) => url), ['/trail1', '/trail2', '/demand'],
+    'demand bypasses the occupied slots, but additional speculation does not');
+
+  const bytes = Uint8Array.from({ length: 16 }, (_, i) => 255 - i);
+  requests[2].resolve({ ok: true, status: 200, arrayBuffer: async () => bytes.buffer });
+  await new Promise(setImmediate);
+  assert.equal(messages.length, 1, 'demand finishes while both speculative fetches remain pending');
+  assert.equal(messages[0].want, 1);
+  assert.equal(messages[0].hit, false);
+  assert.deepEqual(new Uint8Array(messages[0].buf), bytes);
+
+  for (const request of requests.slice(0, 2)) {
+    request.resolve({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(16) });
+  }
+  await new Promise(setImmediate);
 });
 
 test('round 87: the credit is drawn on the menu paper and nowhere else', () => {

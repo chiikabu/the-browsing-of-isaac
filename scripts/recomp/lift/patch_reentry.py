@@ -5,9 +5,9 @@ return-address unwind after a longjmp resume at *mid-function* VAs, but the
 generated dispatch table only maps function ENTRY VAs.  This pass:
 
   1. computes the exact set of guest return addresses = (call instruction
-     address + size) over the whole .text image (capstone linear decode,
-     resync at undecodable bytes), normally written by this script into
-     call_cont.txt;
+     address + size) from the canonical PE's masked linear instruction index
+     at output/decomp/<hash12>/index/pe-index.sqlite, normally written by this
+     script into call_cont.txt;
   2. for every lifted function, adds a label `L_%08x: ;` at each block that
      is a call continuation;
   3. inserts a prologue guard that, when the dispatcher sets g_reentry_eip
@@ -28,7 +28,9 @@ import argparse
 import glob
 import os
 import re
+import sqlite3
 import sys
+from pathlib import Path
 
 RE_FN = re.compile(rb"^void (?:sub_)([0-9a-f]{8})\(")
 RE_DECL = re.compile(rb"^  (uint32_t|uint8_t) [A-Za-z0-9_]+ = .*;$")
@@ -38,26 +40,27 @@ RE_LBL = re.compile(rb"^L_([0-9a-f]{8}): ;$")
 
 
 def census_continuations(exe_path):
-    from capstone import Cs, CS_ARCH_X86, CS_MODE_32
-    raw = open(exe_path, "rb").read()
-    # .text: va 0x401000, raw ptr 0x400, raw size 0x716200 (section table)
-    code = raw[0x400:0x400 + 0x716134]
-    base = 0x401000
-    md = Cs(CS_ARCH_X86, CS_MODE_32)
-    md.skipdata = True
-    cont = set()
-    pos = 0
-    N = len(code)
-    while pos < N:
-        insns = list(md.disasm(code[pos:pos + 16], base + pos))
-        if not insns:
-            pos += 1
-            continue
-        for ins in insns:
-            if ins.mnemonic == "call":
-                cont.add(ins.address + ins.size)
-        pos += sum(i.size for i in insns)
-    return cont
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    from scripts.decomp.tools.pe import PEImage, index_db_path
+
+    pe = PEImage(Path(exe_path))
+    path = index_db_path(pe)
+    build = "python scripts/decomp/tools/build-pe-index.py"
+    if not path.is_file():
+        raise FileNotFoundError(f"index missing: {path}\nbuild it: {build}")
+    db = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    try:
+        meta = dict(db.execute("SELECT key, value FROM meta"))
+        if meta.get("sha256", "").upper() != pe.sha256:
+            raise RuntimeError(f"index PE hash mismatch: {path}\nrebuild it: {build}")
+        if meta.get("decode_config", "").split()[:2] != [
+                "linear+skipdata+jtab-mask", "v2"]:
+            raise RuntimeError(
+                f"index requires masked linear decode config v2: {path}\n"
+                f"rebuild it: {build}")
+        return {va for (va,) in db.execute("SELECT va + size FROM insn WHERE mn = 'call'")}
+    finally:
+        db.close()
 
 
 def patch_file(path, cont):

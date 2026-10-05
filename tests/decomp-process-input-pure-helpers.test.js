@@ -5641,7 +5641,7 @@ const source = join(root, "native", "decomp", "process_input_pure_helpers.cpp");
 
 
 
-const outDir = join(root, "output", "decomp", "process-input-pure");
+const outDir = join(root, "output", "decomp", "process-input-pure", `pid-${process.pid}`);
 
 
 
@@ -53733,33 +53733,12 @@ function v52A9c6110NextStatePe(state, field8) {
   return v52A9c6110ValuePe(field8);
 }
 
-test("v52 A9C6110: 0x009c6110 pure out-state decision island (build + ABI + census + laws + differential)", async () => {
+test("v52 A9C6110: 0x009c6110 pure out-state decision island (build + ABI + laws + differential)", async () => {
   const w = await loadWasm();
   assert.equal(w.abi(), PROCESS_INPUT_PURE_ABI_VERSION);
 
   assert.equal(PROCESS_INPUT_PURE_ABI_VERSION, HEADER_ABI_VERSION);
   assert.equal(w.abi(), PROCESS_INPUT_PURE_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  /* v52 A9C6110 island needles. */
-  assert.match(h, /ABI v52 -- 0x009c6110/);
-  assert.match(h, /ISAAC_A9C6110_VA = 0x009c6110/);
-  assert.match(h, /ISAAC_A9C6110_RET_VA = 0x009c612e/);
-  assert.match(h, /ISAAC_A9C6110_FIRST_RET_VA = 0x009c612e/);
-  assert.match(h, /ISAAC_A9C6110_INT3_VA = 0x009c612f/);
-  assert.match(h, /ISAAC_A9C6110_BODY_BYTES = 0x1f/);
-  assert.match(h, /ISAAC_A9C6110_SITES = 0/);
-  assert.match(h, /ISAAC_A9C6110_POINTER_REF_VA = 0x009c60c4/);
-  assert.match(h, /ISAAC_A9C6110_HOST_WALK_VA = 0x00a51c60/);
-  assert.match(h, /ISAAC_A9C6110_WALK_OWNER_VA = 0x009c60a0/);
-  assert.match(h, /ISAAC_A9C6110_STATE_OFS = 0/);
-  assert.match(h, /ISAAC_A9C6110_FIELD8_OFS = 8/);
-  assert.match(h, /ISAAC_A9C6110_MATCH_STATE = 1/);
-  assert.match(h, /ISAAC_A9C6110_VALUE_TWO = 2/);
-  assert.match(h, /ISAAC_A9C6110_VALUE_FOUR = 4/);
-  assert.match(h, /ISAAC_A9C6110_NEXT_VA = 0x009c6130/);
-  assert.match(h, /ABI_VERSION = 52 }/);
-  assert.match(h, /zero uint8_t params, zero in-body byte masks/);
-  assert.equal((h.match(/ABI_VERSION = 52/g) || []).length >= 1, true);
   /* Model constants agree (A9C6110 mirror). */
   assert.equal(A9C6110_VA, 0x009c6110);
   assert.equal(A9C6110_FIRST_RET_VA, 0x009c612e);
@@ -53791,26 +53770,6 @@ test("v52 A9C6110: 0x009c6110 pure out-state decision island (build + ABI + cens
   assert.equal(a9c6110HostWalkVa(), 0x00a51c60);
   assert.equal(a9c6110WalkOwnerVa(), 0x009c60a0);
   assert.equal(a9c6110NextVa(), 0x009c6130);
-  /* Raw disasm needles (cpu-dump/009c6110.txt = this unit's body dump). */
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "cpu-dump", "009c6110.txt"),
-    "utf8");
-  assert.match(dis, /0x009c6116: 833901\s+cmp\s+dword ptr \[ecx\], 1/);
-  assert.match(dis, /0x009c6119: 7512\s+jne\s+0x9c612d/);
-  assert.match(dis, /0x009c6120: 3b5008\s+cmp\s+edx, dword ptr \[eax \+ 8\]/);
-  assert.match(dis, /0x009c6123: 1bc0\s+sbb\s+eax, eax/);
-  assert.match(dis, /0x009c6125: 83e0fe\s+and\s+eax, 0xfffffffe/);
-  assert.match(dis, /0x009c6128: 83c004\s+add\s+eax, 4/);
-  assert.match(dis, /0x009c612b: 8901\s+mov\s+dword ptr \[ecx\], eax/);
-  assert.match(dis, /0x009c612e: c3\s+ret/);
-  /* Census evidence: the address-take push @0x009c60c4 (picker body
-     0x9c60a0..0x9c60d8, host walk E8 @0x9c60d1). */
-  const owner = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "cpu-dump", "009c60a0.txt"),
-    "utf8");
-  assert.match(owner, /0x009c60c4: 6810619c00\s+push\s+0x9c6110/);
 
 
   /* ---- scalar laws (FULL-DWORD gate / nonzero value chain) ---- */

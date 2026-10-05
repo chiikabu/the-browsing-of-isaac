@@ -5,6 +5,234 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-05 — Immutable release payload and preserved CDN assets
+
+The portable release uses engine payload commit
+`chiikabu/boi-portable@6d8ba1d61e78bebb6e7389d7421239886beba45b`,
+containing the verified loading module `255e9c7fee33…`. All 28 B chunks remain
+byte-identical to the deployed `@79d199a` payload. The local vanilla bundle is
+not the deployed optimized asset set; 35 production files were restored and
+verified against their full manifest SHA-256 hashes rather than replacing them.
+
+The old page omitted B's `wl`, `wz`, and `win` despite its compressed-window
+payload. The original `79d199a` page supplied the matching 522-window map.
+A full pack with `--window-gz --part-mib 19 --key-of index.html` preserves both
+that encoding and the existing chunk URLs. The default file-count calculation
+alone changed boundaries to 29 chunks; the explicit 19 MiB geometry restores
+the deployed 28. Four A chunks change; every other chunk matches its Git blob.
+
+All four new A chunks served HTTP 200 with matching full SHA-256 hashes.
+The largest is 20,616,794 bytes. An initial preview received HTTP 403 for A2;
+after revalidating the immutable URLs and clearing the private browser cache,
+the muted candidate reached title and live gameplay with advancing GameFrames.
+No new public-CDN loading-speed claim is made: the earlier timing corpus used
+the separate raw-asset distribution. See README's public-release procedure and
+`output/recomp/publish-{payload-integrity,cdn-engine-check,preview-success}.json`.
+
+## 2026-10-05 — Loading kernels, owned buffers, bounded prefetch, and silent automation
+
+The live loading module is
+`255e9c7fee333892cf91021bd9d56baae36db03f829bcc55a9fea298cb582008`
+(55,556,882 bytes). Hand-decomp ABI **101**, open boundaries **24**, resolved
+boundaries **27**: unchanged. This unit tunes existing host implementations;
+it removes no additional whole guest-call boundary.
+
+- `isaac_fast_inflate_ring` (`0x00adb9c0` wrapper) uses `memcpy` for valid
+  nonwrapping disjoint matches and `memset` for distance-one runs. Scalar
+  behavior remains for overlap, wrapping, and malformed lengths.
+- `isaac_fast_unfilter` (`0x00ab2d80` wrapper) replaces Paeth absolute-value
+  arithmetic with equivalent bounded integer comparisons, preserving ties
+  and load/store ordering.
+- `isaac_fs_seed_adopt` transfers ownership only on success. Browser and Node
+  temporary-buffer callers use it; borrowed C callers keep the copying API.
+  This removes 44,349,021 aggregate eager-archive copy bytes/temporary
+  allocations per boot, not a measured peak-memory saving. Mod Lua buffers
+  remain attached for their MEMFS consumer.
+- `ship.py` no longer treats an unprobed no-compression build as a cached
+  incompressible verdict. Compression policy changes and missing/truncated
+  siblings regenerate; disabling Brotli removes stale siblings. Actual HTTP
+  Brotli bodies were 7,961,218 bytes for Wasm and 2,967,425 for the image;
+  both decoded to the recorded source hashes.
+- Reader read-ahead no longer bypasses its existing parallel cap. A
+  deterministic demand-plus-ahead burst previously started five requests
+  with capacity two; the fix starts two. Demand remains uncapped for forward
+  progress. No window-format, cache-capacity, or asset-content change.
+- A first visit no longer downloads the generic shipped boot trace unless
+  `?trail=1` is requested. Origin-local recorded trails remain automatic;
+  a real retained-profile run preserved all 477 recorded entries.
+- All automated game Chromium launch sites now pass `--mute-audio`, per the
+  user's request. Mixing and WebAudio remain active. `drive_audio` calls its
+  receipt field `musicSignalPresent`; six muted-run samples all exceeded
+  0.005 RMS. This is signal evidence, not speaker audibility.
+- The Node boot-only CLI now maps successful `isaac_boot_init()==1` to exit
+  zero. A real seeded 121-initializer boot passed with its guard intact;
+  that smoke did not call `main()`.
+
+Two raw-serving cold/warm pairs per module, reversed module order,
+CPU4/hardware GL/profiling off: mean title readiness **25.699→23.985 s cold**
+and **22.496→21.276 s warm**. First-playable means **35.780→35.481 s cold**
+and **33.738→33.902 s warm** establish no meaningful playable gain.
+These measurements precede the reader-cap change. A native-seeded four-floor
+sweep matched stage seeds; its small differences are not a repeatable
+all-floor claim. Separate attribution profiles measured ring self time
+2,161.7→1,501.1 ms and unfilter 1,366.3→1,093.7 ms; profiling perturbs execution.
+
+The reader cap alone showed no meaningful latency improvement. Declining
+the generic shipped trace did: two cold runs per policy, reversed order,
+same compressed Wasm and reader, CPU4/CDP `net=25`/20 ms latency, measured
+mean title **205.584→172.438 s (16.1%)** and playable
+**218.417→189.318 s (13.3%)**. Server-accounted response bodies fell
+**533.696→457.019 MB**, exactly 76,677,561 bytes less per pair.
+Those counters cover the whole driver, not readiness-only physical wire
+traffic; page-target throttling is not a verified worker/process link cap.
+An unthrottled cold pair did not regress, but is not repeated speedup proof.
+The earlier raw run's 180 s timeout is retained as failure, never substituted
+for readiness. A final default-policy native-seeded floor sweep passed
+**9/9 checks** across stages 2/8/2/8 with the console closed.
+
+Verification: `host/build_selftest.py` **574 checks, zero failures/warnings**;
+20 native, seven compression-cache, and one reader-scheduler behavioral
+mutants killed/restored. Paeth arithmetic: all 16,777,216 byte triples.
+`run_web.mjs` mode-2 startup returned zero after six presentations and
+reported zero mismatches, including **45,136** archive-ring comparisons.
+Live shipping UI: enabled Lua mod executed through MEMFS, movement/firing,
+pause/resume, and nonzero running audio behind output mute. Existing
+Bloom/Hallucination shader diagnostics remain; not full-game/mod/save or
+Chromebook verification, and no FPS improvement is claimed.
+
+Handoff repair found a persistent M22-shaped HUD mutation: the PE store at
+`0x0084d708` writes timer150; the tail then decrements to149, not29. Restored
+that store without changing the model or verifier. Logger source and its
+canonical Wasm/response file were all NUL. Source was recovered from the
+intact index; exact corrupt bytes remain under ignored
+`output/decomp/_scratch/log_pure_helpers.cpp.corrupt-369124abd62a.bin`.
+No vanished unindexed edits were recoverable, and the zeroing mechanism is
+unproven. Ten family suites now compile PID-private mutable source copies;
+eight more isolate artifact output. Tracked translations and canonical
+consumer modules are no longer test scratch. HUD source/include/output paths
+now stay separate compiler arguments rather than unquoted response-file tokens;
+both affected behavioral tests passed in the spaced checkout. Removed
+obsolete source/planning-note tests and private dump/header-text assertions
+from 31 mixed tests. Retained runtime ABI agreement, PE tables and behavioral
+corpora. FontSettings v70 now executes a private mutated oracle instead of
+calling its cached original import; v71–v74 no longer rewrite the tracked model.
+Render header and bridge mutants now use private fixtures; bridge import or
+capture errors no longer count as successful mutant kills.
+Failed gate stages now retain captured logs under `output/decomp/unit-gate/`.
+NUL-source preflight
+regression passed and killed its guard-removal mutant with byte-identical
+restoration. Canonical companions rebuilt cleanly and loaded at ABI25/44.
+The separate missing legacy host test artifact was built. These repaired
+hand-decomp files do not link into the measured static-recomp module.
+
+Final `verify-unit.mjs --handoff` **PASS**: full npm suite 4,085 passed,
+zero failed; differential 5,392 cases passed; slice ABI101, 685 exports,
+zero imports. The 72 watched files (19 C++, 19 headers, 19 models, bridge,
+14 canonical Wasm companions) retained SHA-256 hashes with zero write events.
+Receipt: `output/recomp/load-handoff-verification.json`.
+
+Readiness tools now distinguish real title/gameplay from presentation
+counters; `drive_floors timing=1 seed=3JY16FLR` closes the console and checks
+native seed/level logs plus advancing gameplay. `ISAAC_EPOCH` alone does
+not fix a run seed. Archive-window consumption is not wire traffic because
+hashed slice URLs are HTTP-cacheable.
+
+Evidence and reproduction: README loading section;
+`output/recomp/load-native-comparison.json`,
+`load-native-mutations/receipt.json`, `load-compression-mutations.json`,
+`load-reader-cap-mutation.json`, `load-compressed-http.json`,
+`load-reader-{network,repeat}-comparison.json`,
+`load-floor-final-default/floors.json`, `load-original-verify/web-run.log`,
+`load-live-ui/summary.json`, and `load-muted-audio-final/summary.json`.
+
+Next unported runtime VA remains **`0x00a14c00`**, versioned shader-uniform
+storage; require a fresh whole-process profile before attempting that
+stateful translation. Preserve historical versions until `0x00a150d0`
+consumes them. Already-native loading helpers are not newly open boundaries.
+
+## 2026-10-05 — Runtime kernels and dispatch layout; performance target remains open
+
+Two allocation-free host blocks now replace lifted instruction sequences in
+the fast recomp module:
+
+- `isaac_fast_entity_quad_pack`: `0x00a678d1..0x00a67af5`, stop exclusive,
+  143 indexed instructions. Preserves attribute holes, raw color/UV bits,
+  float32 position additions, repeated depth subtraction, frame scratch and
+  join liveouts. Allocation, preparation, unsupported-format logging and
+  cleanup remain lifted.
+- `isaac_fast_aa2580_pairs`: `0x00aa27b0..0x00aa27f6`, stop exclusive,
+  20 indexed instructions. Preserves the ordered stereo sample additions,
+  signed loop limits and register/flag/SIMD liveouts. Packet refill, codebook
+  lookup, sequential accumulation, scalar head/tail and error paths remain
+  lifted; `0x00aa1b10` was not replaced by an unproven memory-reader shortcut.
+
+Both blocks preflight ranges and aliases without writes. Modes 0 and 2 use
+the original block; mode 2 is **not** a compare-both implementation for these
+new blocks. An isolated menu/intro `--wrap` diagnostic observed 1,906,664
+accepted packing calls and zero rejects. Its timing is not a performance result.
+
+Verification: `build_selftest.py` passed 479 checks with zero compile warnings.
+`quad_pack.py` passed 671 original-PE cases and 53 rejection cases in native
+and Wasm. `audio_pairs.py` passed 1,914 original-PE cases and 249 rejection
+cases in native and Wasm, including the actual integration patch; modes 0/2
+check bypass behavior, not the complete decoder. Journaled mutation checks
+killed 19 packing mutants, 27 audio mutants, one logger mutant and two
+dispatch mutants. The audio false-success mutant failed all 35 new audio
+assertions. Clean artifacts were rebuilt after restoration.
+Seven focused Node suites passed 85 tests; no full-repository test pass is claimed.
+
+Unicorn 2.1.4 disagreed with physical SSE on NaN propagation. Both oracles use
+an independent native `ADDSS`/`SUBSS` witness for those cases, recording the
+AuthenticAMD CPU identity and MXCSR `0x1f80`. No alternate-rounding, FTZ/DAZ,
+or MXCSR exception-status equivalence is claimed. See
+`scripts/recomp/oracle/SPEC_FORMAT.md` for commands and exact scope.
+
+`host_trap.c` also emits timestamp and diagnostic body together in the web
+logger, eliminating the unflushed stderr-prefix buffer without reducing
+message capacity. This small retention defect is not evidence for the
+reported general FPS decline; the proposed WebAudio disconnect change was
+not adopted because retained-growth evidence did not support it.
+
+The indirect-dispatch hot path now calls a separate no-inline cold helper
+for adjustor thunks and unresolved-call diagnostics. Linked Wasm inspection
+shows a 43-byte hot function instead of 2,711 bytes, with its former
+512-byte stack reservation removed. Lookup/cache policy and call order are
+unchanged. A real destructor reached through chained signed imm8/imm32
+adjustor thunks verifies the store, ECX, ESP, EIP and neighboring words.
+Skipping the cold call fails four assertions; shifting its ECX adjustment
+fails three. Both mutations compiled warning-free and restored byte-exactly.
+
+The cold split did not improve the scattered base-weapon fixture: pooled
+49.37 FPS before versus 49.24 after. The bounded explosive arena likewise
+showed no gain against the original module: 31.08 versus 30.81 FPS.
+Each comparison used two reversed-order 900-interval runs per module,
+CPU4/hardware GL, with room identity and 450 GameFrames checked per run.
+
+The stress driver verifies seed, inventory, spawn results, logical room
+identity and simulation-frame deltas. `scatter=1` places Hosts through Lua
+and checks the native count; `arena=1` removes benchmark-room doors and
+checks that none remain. Neither changes production geometry or player
+physics. Default input fires without WASD; `move=1` explicitly selects a
+moving-floor workload. Any room transition still invalidates a stationary
+sample. Original instructions at `0x009551cf`, `0x00955231`, `0x00955580`
+and `0x006fb9f7..0x006fba0b` explain the observed two presentations per
+simulation tick; cadence was not changed to inflate the FPS counter.
+Performance results, compiler experiments and reproduction commands belong
+in the README optimization section. Consistent 60 FPS remains unproven.
+
+The current default module passed a separate 60-floor-load sweep through
+ten cycles of stages 2/4/6/8/10/12 (65 checks). Positive process counters
+and fresh native stage logs were checked independently of the driver's
+PASS line. Renderer working set was 1,300→1,182 MiB, with post-startup
+samples spanning 1,164–1,253 MiB and repeated drops. The console remained
+open; its FPS is not gameplay evidence. No forced GC/private-byte/guest-heap
+measurement was taken in this sweep, so it does not exclude slow or
+mod/combat-specific leaks. The user's general slowdown remains unisolated.
+
+Update ABI remains 101; open/resolved boundaries remain 24/27. This unit
+removes **zero guest-call boundaries**. Gameplay rules, resolution, shaders,
+particle limits and audio quality settings are unchanged.
+
 ## CURRENT STATE — do not read this file for the live numbers
 
 This file is a **chronological log** (newest entries near the top). Every

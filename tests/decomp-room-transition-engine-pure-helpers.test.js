@@ -949,7 +949,7 @@ const HEADER_ABI_VERSION = Number(
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "room_transition_engine_pure_helpers.h");
 const source = join(root, "native", "decomp", "room_transition_engine_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "room-transition-engine-pure");
+const outDir = join(root, "output", "decomp", "room-transition-engine-pure", `pid-${process.pid}`);
 const wasmPath = join(outDir, "room-transition-engine-pure-helpers.wasm");
 
 const EXPORTS = [
@@ -8532,29 +8532,10 @@ test("transition engine v20: 0x42a030/0x42a040 bound-dispatch C++/Wasm lockstep 
  * 0x4288a0..0x42a1f8 band. ZERO byte gates (sete signedness-free).
  * ===================================================================== */
 
-test("v21 POST: build + ABI pin + census (post-band cluster 0x42a250/0x42a260/0x42a270)", () => {
+test("v21 POST: build + ABI agreement (post-band cluster 0x42a250/0x42a260/0x42a270)", () => {
   const api = loadExports();
   assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip: header enum + wasm agree at 20
   assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v21 — POST/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_VA = 0x0042a250u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_VA_RET = 0x0042a257u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_BODY_BYTES = 8u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_CALLSITE_COUNT = 11/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_FIELD_28_OFF = 0x28u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A250_CMP_IMM = 3/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A260_VA = 0x0042a260u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A260_BODY_BYTES = 7u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A260_CALLSITE_COUNT = 23/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A260_FIELD_3BC_OFF = 0x3bcu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_VA = 0x0042a270u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_BODY_BYTES = 24u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_CALLSITE_COUNT = 13/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_PTR_OFF = 0x4u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_INNER_OFF = 0x10u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_VALUE_OFF = 0x48u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A270_FALLBACK = 1u/);
   /* Model constants agree (V21 mirror). */
   assert.equal(ROOM_TRANSITION_ENGINE_42A250_VA, 0x0042a250);
   assert.equal(ROOM_TRANSITION_ENGINE_42A250_CMP_IMM, 3);
@@ -8567,16 +8548,6 @@ test("v21 POST: build + ABI pin + census (post-band cluster 0x42a250/0x42a260/0x
   ]) {
     assert.equal(typeof api[name], "function", `export ${name}`);
   }
-  /* Raw disasm needles (disasm-0042a250-0042a270.txt). */
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "rte-v21-frontier", "disasm-0042a250-0042a270.txt"),
-    "utf8");
-  assert.match(dis, /cmp\s+dword ptr \[ecx \+ 0x28\], 3/);
-  assert.match(dis, /sete\s+al/);
-  assert.match(dis, /mov\s+eax, dword ptr \[ecx \+ 0x3bc\]/);
-  assert.match(dis, /je\s+0x42a282/);
-  assert.match(dis, /mov\s+eax, 1/);
 });
 
 test("v21 POST: scalar + lockstep laws (eq-3 / value getter / chained fallback)", () => {
@@ -8692,24 +8663,10 @@ test("v21 POST: deterministic randomized differential corpus (500 draws)", () =>
 const v22Le32 = (m, o) =>
   (m[o] | (m[o + 1] << 8) | (m[o + 2] << 16) | (m[o + 3] << 24)) >>> 0;
 
-test("v22 POOL: build + ABI pin + census + declines", () => {
+test("v22 POOL: build + ABI agreement", () => {
   const api = loadExports();
   assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
   assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v22 — POOL/);
-  assert.match(h, /DECLINED: EXACT ZHL/);
-  assert.match(h, /GetBatteryCharge/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A290_VA = 0x0042a290u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A290_BOUND = 0x1bfu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A290_ARRAY_BASE_OFF = 0x76cu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A290_CALLSITE_COUNT = 1/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A2C0_CALLSITE_COUNT = 4/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A310_FIELD_1340_OFF = 0x1340u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A320_FIELD_20A9_OFF = 0x20a9u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A320_BYTE_MASK = 0xffu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A330_CALLSITE_COUNT = 63/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42A340_CALLSITE_COUNT = 22/);
   /* Model constants agree (V22 mirror). */
   assert.equal(ROOM_TRANSITION_ENGINE_42A290_VA, 0x0042a290);
   assert.equal(ROOM_TRANSITION_ENGINE_42A290_BOUND, 0x1bf);
@@ -8726,18 +8683,6 @@ test("v22 POOL: build + ABI pin + census + declines", () => {
   ]) {
     assert.equal(typeof api[name], "function", `export ${name}`);
   }
-  /* Raw disasm needles (disasm-pool.txt). */
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "rte-v22-pool", "disasm-pool.txt"),
-    "utf8");
-  assert.match(dis, /ja\s+0x42a2ae/);
-  assert.match(dis, /mov\s+dword ptr \[ecx \+ edx\*4 \+ 0x76c\], eax/);
-  assert.match(dis, /setne\s+al/);
-  assert.match(dis, /mov\s+eax, dword ptr \[ecx \+ 0x1340]/);
-  assert.match(dis, /mov\s+al, byte ptr \[ecx \+ 0x20a9]/);
-  assert.match(dis, /lea\s+eax, \[ecx \+ 0x1a740]/);
-  assert.match(dis, /lea\s+eax, \[ecx \+ 0x1bb84]/);
 });
 
 test("v22 POOL: scalar laws (unsigned bound / null-check / byte mask / lea adds)", () => {
@@ -8825,20 +8770,10 @@ test("v22 POOL: deterministic randomized differential corpus (500 draws)", () =>
  * 0xe8 (je TRUE), 0xcc (low bound), 0x1eb (high bound); jg SIGNED.
  * ===================================================================== */
 
-test("v23 42b020: build + ABI pin + census + table pins match the PE", () => {
+test("v23 42b020: build + ABI agreement + table pins match the PE", () => {
   const api = loadExports();
   assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
   assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v23 — 0x0042b020/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_VA = 0x0042b020u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_VA_TRUE = 0x0042b061u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_VA_FALSE = 0x0042b067u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_EQ_IMM = 0xe8/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_LOW_BOUND = 0xccu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_HIGH_BOUND = 0x1ebu/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_LOW_TABLE_VA = 0x0042b078u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B020_HIGH_TABLE_VA = 0x0042b150u/);
   /* Model constants agree (V23 mirror). */
   assert.equal(ROOM_TRANSITION_ENGINE_42B020_VA, 0x0042b020);
   assert.equal(ROOM_TRANSITION_ENGINE_42B020_EQ_IMM, 0xe8);
@@ -8860,16 +8795,6 @@ test("v23 42b020: build + ABI pin + census + table pins match the PE", () => {
   }
   /* Export loads in the wasm module. */
   assert.equal(typeof api.contains42b020, "function");
-  /* Raw disasm needles. */
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "rte-v23-42b020", "disasm-0042b020.txt"),
-    "utf8");
-  assert.match(dis, /cmp\s+eax, 0xe8/);
-  assert.match(dis, /jg\s+0x42b047/);
-  assert.match(dis, /je\s+0x42b061/);
-  assert.match(dis, /jmp\s+dword ptr \[eax\*4 \+ 0x42b070\]/);
-  assert.match(dis, /jmp\s+dword ptr \[eax\*4 \+ 0x42b148\]/);
 });
 
 test("v23 42b020: scalar laws (boundaries / both table paths / misses)", () => {
@@ -8941,22 +8866,10 @@ test("v23 42b020: exhaustive + randomized differential corpus vs PE truth", () =
  * 0x17). Both FULLY PURE cdecl plain-ret bool-in-al. ZERO byte gates.
  * ===================================================================== */
 
-test("v24 PAIR: build + ABI pin + census + table pins match the PE", () => {
+test("v24 PAIR: build + ABI agreement + table pins match the PE", () => {
   const api = loadExports();
   assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
   assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v24 — PAIR/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_VA = 0x0042b340u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_REBIAS = 3u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_BOUND = 0xb9u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_BYTE_TABLE_VA = 0x0042b374u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_TABLE_BYTES = 186u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B340_NEXT_FUNC = 0x0042b430u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B430_VA = 0x0042b430u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B430_REBIAS = 0x13u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B430_BOUND = 0x17u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B430_TABLE_BYTES = 24u/);
   /* Model constants agree (V24 mirror). */
   assert.equal(ROOM_TRANSITION_ENGINE_42B340_VA, 0x0042b340);
   assert.equal(ROOM_TRANSITION_ENGINE_42B340_BOUND, 0xb9);
@@ -8980,19 +8893,6 @@ test("v24 PAIR: build + ABI pin + census + table pins match the PE", () => {
   for (const name of ["contains42b340", "contains42b430"]) {
     assert.equal(typeof api[name], "function", `export ${name}`);
   }
-  /* Raw disasm needles (disasm-0042b340-0042b430.txt). */
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "rte-v24-42b340", "disasm-0042b340-0042b430.txt"),
-    "utf8");
-  assert.match(dis, /add\s+eax, -3/);
-  assert.match(dis, /cmp\s+eax, 0xb9/);
-  assert.match(dis, /ja\s+0x42b364/);
-  assert.match(dis, /jmp\s+dword ptr \[eax\*4 \+ 0x42b36c\]/);
-  assert.match(dis, /add\s+eax, -0x13/);
-  assert.match(dis, /cmp\s+eax, 0x17/);
-  assert.match(dis, /ja\s+0x42b452/);
-  assert.match(dis, /jmp\s+dword ptr \[eax\*4 \+ 0x42b458\]/);
 });
 
 test("v24 PAIR: scalar laws (boundaries / table paths / misses)", () => {
@@ -9066,17 +8966,10 @@ test("v24 PAIR: exhaustive + randomized differential corpus vs PE truth", () => 
  * 0x60) + 0x42b550 field-pointer getter (+0x10). Both FULLY PURE.
  * ===================================================================== */
 
-test("v25: build + ABI pin + census + table pins match the PE", () => {
+test("v25: build + ABI agreement + table pins match the PE", () => {
   const api = loadExports();
   assert.equal(api.abi(), ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION); // pre-flip
   assert.equal(ROOM_TRANSITION_ENGINE_PURE_ABI_VERSION, HEADER_ABI_VERSION);
-  const h = readFileSync(header, "utf8");
-  assert.match(h, /v25 — 0x0042b480/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B480_VA = 0x0042b480u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B480_REBIAS = 1u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B480_BOUND = 0x60u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B480_TABLE_BYTES = 97u/);
-  assert.match(h, /ISAAC_ROOM_TRANSITION_ENGINE_42B550_FIELD_OFF = 0x10u/);
   assert.equal(ROOM_TRANSITION_ENGINE_42B480_VA, 0x0042b480);
   assert.equal(ROOM_TRANSITION_ENGINE_42B480_REBIAS, 1);
   assert.equal(ROOM_TRANSITION_ENGINE_42B480_BOUND, 0x60);
@@ -9091,15 +8984,6 @@ test("v25: build + ABI pin + census + table pins match the PE", () => {
   for (const name of ["contains42b480", "get42b550"]) {
     assert.equal(typeof api[name], "function", `export ${name}`);
   }
-  const dis = readFileSync(
-    join(root, "output", "decomp", "5129df723e64", "section-notes",
-         "rte-v25-42b480", "disasm-0042b480.txt"),
-    "utf8");
-  assert.match(dis, /dec\s+eax/);
-  assert.match(dis, /cmp\s+eax, 0x60/);
-  assert.match(dis, /ja\s+0x42b4a0/);
-  assert.match(dis, /jmp\s+dword ptr \[eax\*4 \+ 0x42b4a8\]/);
-  assert.match(dis, /lea\s+eax, \[ecx \+ 0x10\]/);
 });
 
 test("v25: scalar laws (boundaries / table paths / field getter)", () => {

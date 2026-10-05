@@ -12,7 +12,7 @@ const opt = Object.fromEntries(rest.map((a) => a.split('=')));
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const glArgs = (opt.gl || 'hw') === 'hw' ? ['--use-angle=default', '--ignore-gpu-blocklist', '--enable-unsafe-webgpu'] : ['--use-gl=angle', '--use-angle=swiftshader'];
-const browser = await chromium.launch({ headless: true, args: [...glArgs, '--disable-gpu-vsync'] });
+const browser = await chromium.launch({ headless: true, args: [...glArgs, '--disable-gpu-vsync', '--mute-audio'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e)));

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,10 +9,13 @@ import { fileURLToPath } from "node:url";
 import * as MODEL from "../scripts/decomp/game-state-pure-model.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const source = join(root, "native", "decomp", "game_state_pure_helpers.cpp");
+const originalSource = join(root, "native", "decomp", "game_state_pure_helpers.cpp");
 const header = join(root, "native", "decomp", "game_state_pure_helpers.h");
-const outDir = join(root, "output", "decomp", "game-state-pure");
-const wasmPath = join(outDir, `game-state-pure-helpers-${process.pid}.wasm`); /* pid-unique: concurrent suites must not share one artifact */
+const outDir = join(root, "output", "decomp", "game-state-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const source = join(outDir, "game_state_pure_helpers.cpp");
+copyFileSync(originalSource, source);
+const wasmPath = join(outDir, "game-state-pure-helpers.wasm");
 
 function firstExisting(candidates, label) {
   for (const c of candidates) {
@@ -1463,7 +1466,7 @@ function buildWasmUncached() {
   // flat -Wl,--export=... argv exceeds the Windows 32K CreateProcess
   // command-line limit (ENAMETOOLONG), so keep the argv short and let
   // emcc/clang expand the @-file (one flag per line, no quoting needed).
-  const flagsFile = join(outDir, `export-flags-${process.pid}.rsp`); /* pid-unique: concurrent suites must not share one rsp */
+  const flagsFile = join(outDir, "export-flags.rsp");
   writeFileSync(
     flagsFile,
     EXPORTS.map((name) => `-Wl,--export=${name}`).join("\n") + "\n",

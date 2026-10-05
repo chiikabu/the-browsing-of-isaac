@@ -159,7 +159,11 @@ void isaac_log(const char *fmt, ...) {
         stamp = (e && *e && *e != '0');
         t0 = emscripten_get_now();
     }
+#ifdef __EMSCRIPTEN__
+    double elapsed_ms = stamp ? emscripten_get_now() - t0 : 0;
+#else
     if (stamp) fprintf(stderr, "[%9.1f] ", emscripten_get_now() - t0);
+#endif
     { extern double recomp_last_log_ms; recomp_last_log_ms = emscripten_get_now(); }
     char buf[1024];
     va_list ap;
@@ -167,9 +171,13 @@ void isaac_log(const char *fmt, ...) {
     vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
 #ifdef __EMSCRIPTEN__
-    /* console.warn keeps these out of the ordinary stdout stream so they are
-     * still visible when the game is spamming its own logging. */
-    EM_ASM({ console.warn(UTF8ToString($0)); }, buf);
+    /* Keep the timestamp and body on the same path: Emscripten buffers stderr
+     * until a newline, while console.warn emits the diagnostic immediately. */
+    EM_ASM({
+        var body = UTF8ToString($0);
+        if ($1) body = '[' + ($2).toFixed(1).padStart(9, ' ') + '] ' + body;
+        console.warn(body);
+    }, buf, stamp, elapsed_ms);
 #else
     fputs(buf, stderr);
     fputc('\n', stderr);
@@ -535,13 +543,7 @@ int isaac_decode_thunk(uint32_t va, int32_t *ecx_delta, uint32_t *dest) {
     return isaac_in_image(*dest);
 }
 
-void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
-    if (isaac_lifted_dispatch_cached(target, s))
-        return;
-    if (isaac_indirect_call(target, s))
-        return;
-    if (isaac_lifted_dispatch(target, s))
-        return;
+static __attribute__((noinline,cold)) void recomp_call_indirect_slow(CpuState *restrict s, uint32_t target) {
     {
         /* an unlifted thunk: apply its ECX adjustment and follow the jump
          * (at most a few hops; the destination's own ret pops the return
@@ -585,6 +587,16 @@ void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
     }
     isaac_shutdown("unresolved indirect call");
     abort();
+}
+
+void recomp_call_indirect(CpuState *restrict s, uint32_t target) {
+    if (isaac_lifted_dispatch_cached(target, s))
+        return;
+    if (isaac_indirect_call(target, s))
+        return;
+    if (isaac_lifted_dispatch(target, s))
+        return;
+    recomp_call_indirect_slow(s, target);
 }
 
 /* Round 14d: the tail-jump trampoline. A guest jmp that leaves the current

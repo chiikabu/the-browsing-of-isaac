@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1212,8 +1212,11 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "exit_pure_helpers.h");
-const source = join(root, "native", "decomp", "exit_pure_helpers.cpp");
-const outDir = join(root, "output", "decomp", "exit-pure");
+const outDir = join(root, "output", "decomp", "exit-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "exit_pure_helpers.cpp");
+const source = join(outDir, "exit_pure_helpers.cpp");
+copyFileSync(originalSource, source);
 const wasmPath = join(outDir, "exit-pure-helpers.wasm");
 
 function firstExisting(paths, label) {
@@ -1961,9 +1964,11 @@ function buildWasmUncached() {
     "-Wall",
     "-Wextra",
     "-Werror",
-  ], { cwd: root, encoding: "utf8" });
+  ], { cwd: root, encoding: "utf8", shell: false });
   assert.equal(syntax.status, 0, syntax.stderr || syntax.stdout);
   const exportFlags = EXPORTS.flatMap((name) => [`-Wl,--export=${name}`]);
+  const rspPath = join(outDir, "exports.rsp").replaceAll("\\", "/");
+  writeFileSync(rspPath, exportFlags.join("\n"), "utf8");
   const built = spawnSync(emxx, [
     source,
     "-std=c++20",
@@ -1972,9 +1977,9 @@ function buildWasmUncached() {
     "--no-entry",
     "-sSTANDALONE_WASM=1",
     "-sERROR_ON_UNDEFINED_SYMBOLS=1",
-    ...exportFlags,
+    `@${rspPath}`,
     "-o", wasmPath,
-  ], { cwd: root, encoding: "utf8" });
+  ], { cwd: root, encoding: "utf8", shell: false });
   assert.equal(built.status, 0, built.stderr || built.stdout);
 }
 

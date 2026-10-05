@@ -223,7 +223,7 @@ const windowsSeen = new Set();
 // 300th frame (localStorage, this origin) and the next visit fetches them
 // ahead. Round 56: a Worker reads every window (below).
 const TRAIL_KEY = 'isaac-boot-trail', TRAIL_MAX = 512, READER_PARALLEL = 6, READER_BUDGET = 128 << 20, READ_AHEAD = 4;
-const TRAIL_SHIPPED = 'boot-trail.json';                  // round 59: the dist's own trail (ship.py --trail), for a first visit
+const TRAIL_SHIPPED = 'boot-trail.json';                  // round 59: the dist's own trail (ship.py --trail), for a first visit opting in with ?trail=1
 const READER_PLAY_BUDGET = 8 << 20, READER_CLEAR_FRAME = 600;   // round 60: after the boot the Worker keeps only a little read-ahead
 const FS_WINDOW = 1 << 20;                                // the host's window (FS_WIN in host_shims_fs.c)
 const trail = [];                                         // [src, off, len] in read order, until written
@@ -388,7 +388,7 @@ onmessage = (e) => {
   if (buf) { cache.delete(d.key); held -= buf.byteLength; done.add(d.key); postMessage({ want: d.want, buf, hit: true, pf: prefetched, ah: ahead }, [buf]); }
   else if (inflight.has(d.key)) inflight.set(d.key, d.want);
   else start(d.key, d.url, d.len, 'want', d.want);
-  for (const [k, u, l] of d.ahead || []) if (held < budget && !cache.has(k) && !inflight.has(k) && !done.has(k)) start(k, u, l, 'ahead', 0);
+  for (const [k, u, l] of d.ahead || []) if (inflight.size < parallel && held < budget && !cache.has(k) && !inflight.has(k) && !done.has(k)) start(k, u, l, 'ahead', 0);
   pump();
 };
 `;
@@ -459,10 +459,10 @@ function startReader() {
   };
   w.postMessage({ jobs: [], budget: READER_BUDGET, parallel: READER_PARALLEL });
   if (jobs.length) armTrail(jobs);
-  if (!list.length && params.get('trail') !== '0') {
-    // a first visit: the dist may ship the trail its own boot leaves (drive_boot.mjs
-    // records it, ship.py --trail places it); it arrives while the module compiles
-    // (?trail=0 declines it: the A/B)
+  if (!list.length && params.get('trail') === '1') {
+    // Shipped trails are opt-in: their speculative windows compete with cold
+    // demand reads on capped links. This origin's recorded trail stays enabled.
+    // drive_boot records trails; ship.py --trail supplies the optional trace.
     let url = TRAIL_SHIPPED;
     if (hooks.url) url = hooks.url(url);
     // round 70: a portable build carries the trail in the page, so there is
@@ -776,8 +776,31 @@ async function stageOk(name, fn) {
 function cstr(s) {
   const bytes = new TextEncoder().encode(s + '\0');
   const p = m._malloc(bytes.length);
-  m.HEAPU8.set(bytes, p);
-  return p;
+  if (!p) throw new Error('path allocation failed');
+  try {
+    m.HEAPU8.set(bytes, p);
+    return p;
+  } catch (e) {
+    m._free(p);
+    throw e;
+  }
+}
+function seedFile(path, bytes) {
+  const pp = cstr(path);
+  let dp = 0;
+  try {
+    if (bytes.length) {
+      dp = m._malloc(bytes.length);
+      if (!dp) throw new Error('seed data allocation failed');
+      m.HEAPU8.set(bytes, dp);
+    }
+    const ok = m._isaac_fs_seed_adopt(pp, dp, bytes.length);
+    if (ok) dp = 0; // The filesystem owns the allocation after success.
+    return ok;
+  } finally {
+    if (dp) m._free(dp);
+    m._free(pp);
+  }
 }
 
 const done = { mainRc: null, bootRc: null, presented: 0, lazyReads: 0, lazyBytes: 0 };
@@ -812,11 +835,10 @@ try {
       const rel = `resources/packed/${name}`;
       let bytes;
       try { bytes = await fetchBytes(`/instance/${rel}`); } catch { log(`  (skip ${name}: not served)`); continue; }
-      const pp = cstr(rel), dp = m._malloc(bytes.length || 1);
-      m.HEAPU8.set(bytes, dp);
-      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
-      m._free(pp); m._free(dp);
-      log(`  seed ${rel} ${bytes.length} bytes -> ${ok ? 'ok' : 'FAIL'}`);
+      const size = bytes.length;
+      let ok;
+      try { ok = seedFile(rel, bytes); } finally { dropBody(bytes); }
+      log(`  seed ${rel} ${size} bytes -> ${ok ? 'ok' : 'FAIL'}`);
       n += ok ? 1 : 0;
     }
     return n;
@@ -831,8 +853,11 @@ try {
       // for. Node does the same (round 15d).
       if (rel.startsWith('resources/packed/') && !LAZY_ARCHIVES.has(rel)) continue;
       const pp = cstr(rel);
-      if (m._isaac_fs_seed_lazy(pp, size)) { files += 1; bytes += size; }
-      m._free(pp);
+      try {
+        if (m._isaac_fs_seed_lazy(pp, size)) { files += 1; bytes += size; }
+      } finally {
+        m._free(pp);
+      }
     }
     log(`  registered ${files} files lazily (${(bytes / 1048576).toFixed(1)} MB)`);
     return files;
@@ -847,12 +872,11 @@ try {
     let n = 0;
     for (const { key, src, bytes } of saved) {
       const rel = src || key;
-      const pp = cstr(rel), dp = m._malloc(bytes.length || 1);
-      m.HEAPU8.set(bytes, dp);
-      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
-      m._free(pp); m._free(dp);
+      const size = bytes.length;
+      let ok;
+      try { ok = seedFile(rel, bytes); } finally { dropBody(bytes); }
       if (ok) n += 1;
-      log(`  restored ${rel} (${bytes.length} bytes) -> ${ok ? 'ok' : 'FAIL'}`);
+      log(`  restored ${rel} (${size} bytes) -> ${ok ? 'ok' : 'FAIL'}`);
     }
     log(`  ${n} saved file(s) restored from the store`);
     return n;
@@ -883,10 +907,7 @@ try {
       } catch (e) { log(`  ${at}: ${e.message}`); }
     };
     const seed = (path, bytes) => {
-      const pp = cstr(path), dp = m._malloc(bytes.length || 1);
-      m.HEAPU8.set(bytes, dp);
-      const ok = m._isaac_fs_seed(pp, dp, bytes.length);
-      m._free(pp); m._free(dp);
+      const ok = seedFile(path, bytes);
       if (ok) memfs(path, bytes);
       return !!ok;
     };

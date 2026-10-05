@@ -27,7 +27,7 @@
 // fail en masse without it). Exit code 0 only when every gate passed.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,8 +70,18 @@ function summarize(ok, text) {
       text.match(/Built [^\n]*/);
     return m ? m[0].replace(/\n/g, "  ").replace(/ℹ /g, "") : "";
   }
-  const failLines = text.split("\n").filter((l) => /✖|not ok|Error|error:|FAIL|AssertionError|mismatch/.test(l)).slice(0, 5);
-  return (failLines.length ? failLines : text.split("\n").filter(Boolean).slice(-6)).join("\n    ");
+  const failLines = text.split("\n").filter((l) => !/^\s*✔/.test(l) && /✖|not ok|Error|error:|FAIL|AssertionError|mismatch/.test(l)).slice(0, 5);
+  const detail = (failLines.length ? failLines : text.split("\n").filter(Boolean).slice(-6)).join("\n    ");
+  const logPath = join("output", "decomp", "unit-gate", `failure-${process.pid}-${Date.now()}-${results.length}.log`);
+  let logDetail;
+  try {
+    mkdirSync(join(ROOT, "output", "decomp", "unit-gate"), { recursive: true });
+    writeFileSync(join(ROOT, logPath), text);
+    logDetail = `captured log: ${logPath}`;
+  } catch (error) {
+    logDetail = `failure log could not be written: ${error.message}`;
+  }
+  return `${detail}\n    ${logDetail}`;
 }
 function gateSync(name, cmd, cmdArgs, { timeoutMs = 15 * 60 * 1000 } = {}) {
   const t0 = Date.now();
