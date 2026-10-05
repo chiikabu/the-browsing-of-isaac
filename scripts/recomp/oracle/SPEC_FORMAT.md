@@ -37,6 +37,70 @@ write one hoping to hit a magic constant — the miner already tried.
 
 ---
 
+## Focused block verification
+
+`python scripts/recomp/oracle/quad_pack.py` compares the original PE block
+`0x00a678d1..0x00a67af5` (stop exclusive) with the actual quad-pack helper in
+`host_fastpath.c`, compiled for native Windows and Node/Wasm. It requires
+Python `unicorn`, the canonical private PE and existing `pequery` index,
+LLVM-MinGW, Emscripten, and Node. Tool paths can be supplied with `--clang`,
+`--emcc`, and `--node`; `--target native|wasm` selects one backend.
+
+Accepted cases execute the original PE with no guest calls, call models, or
+stubs. The local Unicorn backend has an observed NaN payload defect, so the
+command first compiles and runs `quad_pack_sse_witness.c`: independent real
+`ADDSS`/`SUBSS`, not the helper or a C arithmetic model. At the nine original
+scalar instruction PCs, NaN operands are looked up by their actual raw bits.
+Only witnessed result/MXCSR discrepancies are corrected after the instruction
+and before its consumers. Finite arithmetic is unmodified. This is explicitly
+hardware-calibrated PE execution, **not pure Unicorn proof**. Receipts include
+CPU/CPUID/MXCSR, witness hashes, and correction counts/PCs. The native compiler
+is therefore required even with `--target wasm`.
+
+Fixtures cover all eight formats, holes, duplicate/reordered
+attributes, zero stride, repeated depth subtraction, unaligned data, and
+bit-exact floating-point edge cases. Independent invalid fixtures require
+rejection without memory changes. Return flags are checked separately:
+`0` rejects, `1` handles without format 5, and `3` handles with format 5.
+Input, destination, frame, depth, and guard bytes are compared exactly.
+The native runner uses aborting harness tripwires for two unrelated COFF
+link dependencies, `isaac_log` and `isaac_threads_note_cs`; reaching either
+fails verification. They never supply behavior to the helper under test.
+
+Generated fixtures, case records, build/run logs, and `receipt.json` stay in
+the ignored `output/recomp/oracle/quad-pack/` directory. A mismatch exits
+nonzero and reports its case, guest address, and exact expected/actual bits;
+NaNs are never normalized or compared with a tolerance.
+
+### Audio pair loop
+
+`python scripts/recomp/oracle/audio_pairs.py` compares the original
+`0x00aa27b0..0x00aa27f6` block (stop exclusive: 70 bytes, 20 instructions)
+with `host_fastpath.c` and the actual entry/join `BLOCK_PATCHES` fragments,
+compiled for native Windows and Node/Wasm. It uses the prerequisites above
+and the generated `recomp_state.h` (`--state-dir` overrides its directory).
+
+The recorded native/Wasm run passes 1,914 accepted and 249 rejection fixtures.
+Mode 1 compares all six 64-KiB watched memory windows, helper return/outparam,
+GPRs, EFLAGS, and XMM0..7 against original-PE execution. Remaining `CpuState`
+bytes, including upper ZMM lanes, are preservation checks. Invalid guards
+must return zero without changing memory or the outparam. Modes 0 and 2
+check only that the patch fragment bypasses without memory/state changes;
+they are **not full-decoder original-execution comparisons**.
+
+The existing real SSE witness calibrates NaN results on `AuthenticAMD` with
+MXCSR `0x1f80`: round-nearest-even, FTZ/DAZ disabled. Witnessed NaN
+result/status discrepancies are corrected after each original `ADDSS`,
+before its consumer; finite result discrepancies fail. This is not pure
+Unicorn proof. Original MXCSR is recorded, but exception sticky-status
+equivalence is excluded because the lifted SSE runtime does not model it.
+Neither this block comparison nor the bypass checks prove a full frame.
+
+Artifacts stay under ignored `output/recomp/oracle/audio-pairs/`.
+`receipt.json` records corpus/source/binary hashes, canonical PE and index
+metadata, hardware identity, and NaN correction counts/PCs. Compilation,
+runtime, and comparison failures exit nonzero.
+
 ## 1. Contract
 
 Drop a module in `scripts/recomp/oracle/specs/`. It must export:

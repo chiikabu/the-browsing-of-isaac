@@ -510,9 +510,9 @@ void isaac_fast_unfilter(uint32_t row_info_va, uint32_t row_va, uint32_t prev_va
             row[i] = (uint8_t)(row[i] + (prev ? prev[i] : 0u));
         for (i = bpp; i < rowbytes; i++) {
             int a = row[i - bpp], b = prev ? prev[i] : 0, c = prev ? prev[i - bpp] : 0;
-            int p = a + b - c;
-            int pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
-            int pred = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+            int lo = a < b ? a : b, hi = a > b ? a : b;
+            int threshold = 3 * c - a - b;
+            int pred = threshold <= lo ? hi : (threshold >= hi ? lo : c);
             row[i] = (uint8_t)(row[i] + pred);
         }
         break;
@@ -971,6 +971,19 @@ int isaac_fast_inflate_ring(uint32_t lenbits, uint32_t distbits, uint32_t lcode,
                     do { M8(out) = M8(from); out++; from++; } while (--avail);
                     from = base;
                     do { M8(out) = M8(from); out++; from++; } while (--rest);
+                    goto next_symbol;
+                }
+            } else if (len >= 3u && len <= 258u && from < out && out <= end - len) {
+                /* The entry gate guarantees a window of at least 258 bytes.
+                 * Keep malformed lengths and address wraps on the scalar path. */
+                if (dist >= len) {
+                    memcpy(isaac_g(out), isaac_g(from), len);
+                    out += len;
+                    goto next_symbol;
+                }
+                if (dist == 1u) {
+                    memset(isaac_g(out), M8(from), len);
+                    out += len;
                     goto next_symbol;
                 }
             }
@@ -1534,6 +1547,248 @@ void isaac_fast_entity_quad_tint(uint32_t quad) {
         memcpy(isaac_g(at), rgb, 12);
         *(uint32_t *)isaac_g(at + 0x10u) = 0;
     }
+}
+
+/* The allocation and offset selection precede this block (0x00a678d1..
+ * 0x00a67aef). Read the current descriptor here, never across those calls.
+ * Rejection is read-only: unsupported formats must still reach the original
+ * logger and its potentially mutating callbacks. Accepted layouts make no
+ * guest calls and have no writes aliasing their inputs, so metadata and depth
+ * can stay in host locals until the join. This assumes no concurrent guest
+ * writer, as does the lifted renderer.
+ * Return 0 without writes on rejection, 1 when handled without positions,
+ * or 3 when handled with format 5 (bit 1 tells the patch to restore XMM1).
+ *
+ * Finite arithmetic follows the recomp_f32 convention, with one subtraction
+ * per quad. NaN results use the native scalar-SSE operand priority below;
+ * guest MXCSR exception flags and nondefault modes remain unmodeled.
+ * Formats 6/7 are raw copies, including NaN payloads. */
+static inline uint32_t isaac_fast_pack_r32(uint32_t va) {
+    uint32_t bits;
+    memcpy(&bits, isaac_g(va), 4u);
+    return bits;
+}
+
+/* Native ADDSS/SUBSS with a register destination and m32 source, MXCSR=0x1f80,
+ * chooses the destination NaN first (even SNaN versus QNaN), then the source
+ * NaN, and quiets the chosen payload without changing its sign. Invalid
+ * infinity arithmetic returns the negative indefinite. The hardware witness
+ * distinguishes this from Unicorn's larger-payload propagation. C/Wasm may
+ * commute NaN operands, so consult the original bits only for a NaN result. */
+static inline uint32_t isaac_fast_pack_nan32(uint32_t destination, uint32_t source) {
+    if ((destination & 0x7fffffffu) > 0x7f800000u) return destination | 0x00400000u;
+    if ((source & 0x7fffffffu) > 0x7f800000u) return source | 0x00400000u;
+    return 0xffc00000u;
+}
+
+static inline uint32_t isaac_fast_pack_add32(uint32_t left, uint32_t right) {
+    float a, b, result;
+    uint32_t bits;
+    memcpy(&a, &left, 4u);
+    memcpy(&b, &right, 4u);
+    result = a + b;
+    memcpy(&bits, &result, 4u);
+    if ((bits & 0x7fffffffu) > 0x7f800000u) return isaac_fast_pack_nan32(left, right);
+    return bits;
+}
+
+static inline uint32_t isaac_fast_pack_sub32(uint32_t left, uint32_t right) {
+    float a, b, result;
+    uint32_t bits;
+    memcpy(&a, &left, 4u);
+    memcpy(&b, &right, 4u);
+    result = a - b;
+    memcpy(&bits, &result, 4u);
+    if ((bits & 0x7fffffffu) > 0x7f800000u) return isaac_fast_pack_nan32(left, right);
+    return bits;
+}
+
+/* Both nonempty intervals have already passed the nonwrapping range guard. */
+static inline int isaac_fast_pack_overlap(uint32_t a, uint32_t an, uint32_t b, uint32_t bn) {
+    return an && bn && a < b + bn && b < a + an;
+}
+
+static inline int isaac_fast_pack_input_alias(uint32_t va, uint32_t len,
+                                            uint32_t frame_lo, uint32_t dst, uint32_t dst_len) {
+    return isaac_fast_pack_overlap(va, len, frame_lo, 0x68u)
+        || isaac_fast_pack_overlap(va, len, dst, dst_len)
+        || isaac_fast_pack_overlap(va, len, 0x00c798fcu, 4u);
+}
+
+int isaac_fast_entity_quad_pack(uint32_t frame, uint32_t quad, uint32_t uv,
+                                uint32_t dst, uint32_t stride, uint32_t ox_bits, uint32_t oy_bits) {
+    static const uint8_t widths[8] = { 4u, 8u, 12u, 16u, 12u, 16u, 8u, 4u };
+    static const uint32_t targets[8] = {
+        0x00a67a6cu, 0x00a67a73u, 0x00a67a7au, 0x00a67a81u,
+        0x00a67a7au, 0x00a67a81u, 0x00a67a73u, 0x00a67a6cu
+    };
+    if (frame <= 0x50u || !isaac_fast_guest_range(frame - 0x50u, 0x68u)) return 0;
+    uint32_t frame_lo = frame - 0x50u;
+    uint32_t count = isaac_fast_pack_r32(frame - 0x2cu);
+    if (!count) return 0;
+    uint64_t quad_bytes = (uint64_t)count * 112u, uv_bytes = (uint64_t)count * 36u;
+    if (quad_bytes > UINT32_MAX || uv_bytes > UINT32_MAX || !quad || !uv
+        || !isaac_fast_guest_range(quad, (uint32_t)quad_bytes)
+        || !isaac_fast_guest_range(uv, (uint32_t)uv_bytes)) return 0;
+    /* The count bound above also makes this product fit uint64_t. */
+    uint64_t dst_bytes = (uint64_t)stride * 4u * count;
+    if (dst_bytes > UINT32_MAX || (dst_bytes && !dst)
+        || !isaac_fast_guest_range(dst, (uint32_t)dst_bytes)) return 0;
+    uint32_t dst_len = (uint32_t)dst_bytes;
+    if (isaac_fast_pack_r32(frame - 0x14u) != quad
+        || isaac_fast_pack_r32(frame - 0x30u) != quad
+        || isaac_fast_pack_r32(frame - 0x34u) != uv
+        || isaac_fast_pack_r32(frame - 0x3cu) != dst
+        || isaac_fast_pack_r32(frame - 0x48u) != dst
+        || isaac_fast_pack_r32(frame - 0x28u) != stride
+        || isaac_fast_pack_r32(frame - 0x38u) != (uint64_t)stride * 3u
+        || isaac_fast_pack_r32(frame - 0x40u) != ox_bits
+        || isaac_fast_pack_r32(frame - 0x44u) != oy_bits) return 0;
+    uint32_t self = isaac_fast_pack_r32(frame - 0x1cu);
+    if (!self || !isaac_fast_guest_range(self, 0x28u)) return 0;
+    uint32_t descriptor = isaac_fast_pack_r32(self + 0x24u);
+    if (!descriptor || !isaac_fast_guest_range(descriptor, 0x14u)) return 0;
+    uint32_t attrs = isaac_fast_pack_r32(descriptor + 0x0cu);
+    uint32_t attr_count = isaac_fast_pack_r32(descriptor + 0x10u);
+    uint64_t attr_bytes = (uint64_t)attr_count * 8u;
+    if (attr_bytes > UINT32_MAX || (attr_count && (!attrs
+        || !isaac_fast_guest_range(attrs, (uint32_t)attr_bytes)))) return 0;
+
+    /* Protect cleanup metadata as well as the loop's controls and scratch.
+     * Using the whole frame and source records is deliberately conservative. */
+    if (isaac_fast_pack_overlap(dst, dst_len, frame_lo, 0x68u)
+        || isaac_fast_pack_overlap(dst, dst_len, 0x00c798fcu, 4u)
+        || isaac_fast_pack_overlap(frame_lo, 0x68u, 0x00c798fcu, 4u)
+        || isaac_fast_pack_input_alias(quad, (uint32_t)quad_bytes, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(uv, (uint32_t)uv_bytes, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(self + 0x24u, 4u, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(descriptor + 0x0cu, 8u, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(attrs, (uint32_t)attr_bytes, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(0x00baa06cu, 4u, frame_lo, dst, dst_len)
+        || isaac_fast_pack_input_alias(0x00a67bb0u, 32u, frame_lo, dst, dst_len)) return 0;
+    for (uint32_t i = 0; i < 8u; ++i)
+        if (isaac_fast_pack_r32(0x00a67bb0u + i * 4u) != targets[i]) return 0;
+    uint64_t width_sum = 0u;
+    int has_position = 0;
+    for (uint32_t i = 0; i < attr_count; ++i) {
+        uint32_t format = isaac_fast_pack_r32(attrs + i * 8u + 4u);
+        if (format < 1u || format > 8u) return 0;
+        width_sum += widths[format - 1u];
+        if (width_sum > stride) return 0;
+        has_position |= format == 5u;
+    }
+    if (width_sum != stride) return 0;
+
+    uint32_t depth = isaac_fast_pack_r32(0x00c798fcu);
+    uint32_t decrement = isaac_fast_pack_r32(0x00baa06cu);
+    uint32_t last_x = 0u, last_y = 0u;
+    uint32_t quad_stride = stride * 4u;
+    for (uint32_t remaining = count; remaining; --remaining) {
+        const uint8_t *q = (const uint8_t *)isaac_g(quad);
+        const uint8_t *u = (const uint8_t *)isaac_g(uv);
+        uint8_t *attribute = (uint8_t *)isaac_g(dst);
+        for (uint32_t i = 0; i < attr_count; ++i) {
+            uint32_t format = isaac_fast_pack_r32(attrs + i * 8u + 4u);
+            switch (format) {
+            case 5u:
+                for (uint32_t corner = 0; corner < 4u; ++corner) {
+                    uint32_t x, y;
+                    uint8_t *vertex = attribute + corner * stride;
+                    memcpy(&y, q + corner * 8u + 4u, 4u);
+                    memcpy(&x, q + corner * 8u, 4u);
+                    y = isaac_fast_pack_add32(oy_bits, y);
+                    x = isaac_fast_pack_add32(ox_bits, x);
+                    memcpy(vertex, &x, 4u);
+                    memcpy(vertex + 4u, &y, 4u);
+                    memcpy(vertex + 8u, &depth, 4u);
+                    last_x = x;
+                    last_y = y;
+                }
+                break;
+            case 6u:
+                for (uint32_t corner = 0; corner < 4u; ++corner)
+                    memcpy(attribute + corner * stride, q + 0x20u + corner * 0x14u, 16u);
+                break;
+            case 7u:
+                for (uint32_t corner = 0; corner < 4u; ++corner)
+                    memcpy(attribute + corner * stride, u + corner * 8u, 8u);
+                break;
+            default:
+                break;  /* Formats 1/2/3/4/8 reserve bytes without writing them. */
+            }
+            attribute += widths[format - 1u];
+        }
+        quad += 112u;
+        uv += 36u;
+        dst += quad_stride;
+        depth = isaac_fast_pack_sub32(depth, decrement);
+    }
+    uint32_t zero = 0u;
+    memcpy(isaac_g(frame - 0x14u), &quad, 4u);
+    memcpy(isaac_g(frame - 0x18u), &attr_count, 4u);
+    memcpy(isaac_g(frame - 0x2cu), &zero, 4u);
+    memcpy(isaac_g(frame - 0x3cu), &dst, 4u);
+    if (has_position) {
+        memcpy(isaac_g(frame - 0x50u), &last_x, 4u);
+        memcpy(isaac_g(frame - 0x4cu), &last_y, 4u);
+    }
+    memcpy(isaac_g(0x00c798fcu), &depth, 4u);
+    return 1 | (has_position << 1);
+}
+
+/* 0x00aa2580's non-sequential pair loop, 0x00aa27b0..0x00aa27f6.
+ * The bit reader, codebook lookup, scalar head/tail, and packet/error paths
+ * remain lifted. At entry EBX is the next odd/even bound index, ECX the right
+ * output, EDX the byte offset in [book+0x1c], and XMM1.low32 is positive zero.
+ * Return the number of pairs, with the last right result for XMM0, or zero
+ * without writes. The patch advances the six loop registers and restores
+ * the final CMP flags before the original join. No guest calls or ret occur.
+ *
+ * Preflight excludes wrap and output aliases that could change a later load
+ * or loop bound. It is independent of the samples: the packer's existing
+ * ADDSS helper preserves both roundings, signed zero and native SSE NaN
+ * priority without a second sample scan. As in the lifted SSE runtime, the
+ * arithmetic contract is round-nearest-even with FTZ/DAZ disabled. */
+uint32_t isaac_fast_aa2580_pairs(uint32_t frame, uint32_t right, uint32_t source_offset,
+                                uint32_t index, uint32_t zero_bits, uint32_t *last_bits) {
+    if (zero_bits != 0u || frame <= 0x20u
+        || !isaac_fast_guest_range(frame - 0x20u, 0x3cu)) return 0u;
+    uint32_t limit = isaac_fast_pack_r32(frame - 8u);
+    if (index > INT32_MAX || limit > INT32_MAX || index >= limit) return 0u;
+    uint32_t pairs = (limit - index + 1u) / 2u;
+    if (index + pairs * 2u > INT32_MAX || pairs > UINT32_MAX / 8u) return 0u;
+    uint32_t book = isaac_fast_pack_r32(frame - 4u);
+    if (!book || !isaac_fast_guest_range(book, 0x20u)) return 0u;
+    uint32_t table = isaac_fast_pack_r32(book + 0x1cu);
+    if (!table || source_offset > UINT32_MAX - table) return 0u;
+    uint32_t source = table + source_offset;
+    uint32_t left = right + isaac_fast_pack_r32(frame - 0x14u);
+    uint32_t source_bytes = pairs * 8u, output_bytes = pairs * 4u;
+    if (!left || !right
+        || !isaac_fast_guest_range(source, source_bytes)
+        || !isaac_fast_guest_range(left, output_bytes)
+        || !isaac_fast_guest_range(right, output_bytes)) return 0u;
+    if (isaac_fast_pack_overlap(left, output_bytes, right, output_bytes)
+        || isaac_fast_pack_overlap(left, output_bytes, source, source_bytes)
+        || isaac_fast_pack_overlap(right, output_bytes, source, source_bytes)
+        || isaac_fast_pack_overlap(left, output_bytes, frame - 0x20u, 0x3cu)
+        || isaac_fast_pack_overlap(right, output_bytes, frame - 0x20u, 0x3cu)
+        || isaac_fast_pack_overlap(left, output_bytes, book, 0x20u)
+        || isaac_fast_pack_overlap(right, output_bytes, book, 0x20u)) return 0u;
+    uint32_t last = 0u;
+    for (uint32_t i = 0u; i < pairs; ++i) {
+        uint32_t value = isaac_fast_pack_add32(isaac_fast_pack_r32(source), 0u);
+        value = isaac_fast_pack_add32(value, isaac_fast_pack_r32(left));
+        memcpy(isaac_g(left), &value, 4u);
+        value = isaac_fast_pack_add32(isaac_fast_pack_r32(source + 4u), 0u);
+        last = isaac_fast_pack_add32(value, isaac_fast_pack_r32(right));
+        memcpy(isaac_g(right), &last, 4u);
+        source += 8u;
+        left += 4u;
+        right += 4u;
+    }
+    *last_bits = last;
+    return pairs;
 }
 
 /* ---- x87 ST0 -> int64, truncating (the fisttp in 0x00af0800) ------------

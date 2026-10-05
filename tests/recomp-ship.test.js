@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { request } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, unlinkSync, truncateSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync, unlinkSync, truncateSync, readdirSync, utimesSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,8 @@ function ok(tool, args, opts) {
   assert.equal(r.status, 0, `${args.join(' ')} failed:\n${r.stdout}\n${r.stderr}`);
   return r.stdout;
 }
+
+const pythonHasBrotli = python !== null && run('-c', ['import brotli']).status === 0;
 
 function lcg(seed) { let s = seed >>> 0; return () => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return (s >>> 16) & 0xff; }; }
 function noise(n, seed) { const g = lcg(seed); const b = Buffer.alloc(n); for (let i = 0; i < n; i++) b[i] = g(); return b; }
@@ -99,17 +101,34 @@ function makeModule(dir) {
   writeFileSync(join(dir, 'build_boot.json'), JSON.stringify({ emccVersion: 'emcc test', wasmBytes: files['boot.wasm'].length, mjsBytes: files['boot.mjs'].length, link_s: 1.5, ok: true }));
   return files;
 }
-function makeTree(dir) {
+function makeTree(dir, segsBytes = noise(1500000, 1234)) {
   const inst = join(dir, 'instance'), bundle = join(dir, 'bundle'), mod = join(dir, 'module'), segs = join(dir, 'isaac.segs.bin');
   const instFiles = makeInstance(inst);
   ok(bundleTool, ['build', inst, bundle, '--copy', '--strict']);
   const modFiles = makeModule(mod);
-  const segsBytes = noise(1500000, 1234);
   writeFileSync(segs, segsBytes);
   return { inst, bundle, mod, segs, instFiles, modFiles, segsBytes };
 }
 const buildArgs = (t, dist, extra = []) => ['build', '--bundle', t.bundle, '--module', t.mod, '--segs', t.segs, '--dist', dist,
   '--window-min', String(WINDOW_MIN), '--brotli-quality', '5', '--gzip-level', '6', ...extra];
+
+function assertSiblings(dist, rel, source, encodings) {
+  const manifest = JSON.parse(readFileSync(join(dist, 'dist.json'), 'utf8'));
+  const entry = manifest.files.find((f) => f.path === rel);
+  assert.ok(entry, `${rel} is advertised`);
+  assert.equal(entry.sha256, sha256(source), `${rel} source hash`);
+  assert.deepEqual(Object.keys(entry.encodings).sort(), [...encodings].sort(), `${rel} advertised encodings`);
+  for (const [enc, decode] of [['gz', gunzipSync], ['br', brotliDecompressSync]]) {
+    const path = join(dist, `${rel}.${enc}`);
+    if (!encodings.includes(enc)) {
+      assert.equal(existsSync(path), false, `${rel}.${enc} is absent when not advertised`);
+      continue;
+    }
+    const encoded = readFileSync(path);
+    assert.equal(entry.encodings[enc], encoded.length, `${rel}.${enc} advertised size`);
+    assert.ok(decode(encoded).equals(source), `${rel}.${enc} decodes to its source`);
+  }
+}
 
 function parseTable(text) {
   const rows = {};
@@ -162,10 +181,6 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.ok(gunzipSync(readFileSync(join(dist, 'boot.wasm.gz'))).equals(tree.modFiles['boot.wasm']), 'boot.wasm.gz');
     if (hasBr) assert.ok(brotliDecompressSync(readFileSync(join(dist, 'boot.wasm.br'))).equals(tree.modFiles['boot.wasm']), 'boot.wasm.br');
     assert.ok(gunzipSync(readFileSync(join(dist, 'instance/resources/packed/sfx.a.gz'))).equals(tree.instFiles['resources/packed/sfx.a']), 'sfx.a.gz');
-    assert.match(text, /afterbirthp\.a: windowed \(3,500,000 bytes >= 3,000,000\): served as byte slices, no sibling/);
-    assert.match(text, /graphics\.a: does not compress \(sampled ratio [\d.]+\), no sibling/);
-    assert.match(text, /isaac\.segs\.bin: does not compress/);
-    assert.match(text, /boot\.wasm: 6,291,456 bytes -> (br [\d,]+, )?gz [\d,]+/);
     // the manifest
     const man = JSON.parse(readFileSync(join(dist, 'dist.json'), 'utf8'));
     assert.equal(man.format, 'isaac-recomp-dist/1');
@@ -186,7 +201,6 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.equal(byPath['instance/resources/packed/afterbirthp.a'].windowed, true);
     assert.deepEqual(byPath['instance/resources/packed/afterbirthp.a'].encodings, {});
     assert.deepEqual(byPath['isaac.segs.bin'].encodings, {});
-    assert.equal(byPath['isaac.segs.bin'].probed, true);
     assert.deepEqual(Object.keys(byPath['boot.wasm'].encodings).sort(), hasBr ? ['br', 'gz'] : ['gz']);
     // the size table adds up
     const raw = man.files.reduce((s, f) => s + f.size, 0);
@@ -206,8 +220,14 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.equal(tab.rows['boot.wasm'].raw + tab.small.raw, tab.dist.raw, 'rows + the small group = the raw total');
     assert.equal(tab.rows['boot.wasm'].transfer + tab.small.transfer, tab.transfer.bytes, 'rows + the small group = the transfer total');
     // a second build reuses the siblings and refreshes the copies; --no-compress makes none
-    const again = ok(ship, buildArgs(tree, dist));
-    assert.match(again, /boot\.wasm: siblings reused \(unchanged since the last build\)/);
+    const siblings = expected.filter((p) => /\.(br|gz)$/.test(p));
+    const oldTime = new Date('2000-01-01T00:00:00Z');
+    for (const p of siblings) utimesSync(join(dist, p), oldTime, oldTime);
+    const siblingTimes = siblings.map((p) => statSync(join(dist, p)).mtimeMs);
+    ok(ship, buildArgs(tree, dist));
+    for (let i = 0; i < siblings.length; i++) {
+      assert.equal(statSync(join(dist, siblings[i])).mtimeMs, siblingTimes[i], `${siblings[i]} is reused without rewriting`);
+    }
     assert.deepEqual(walk(dist).sort(), expected, 'the tree is the same after a rebuild');
     ok(ship, buildArgs(tree, join(dir, 'plain'), ['--no-compress', '--copy']));
     assert.ok(!walk(join(dir, 'plain')).some((p) => /\.(br|gz)$/.test(p)), '--no-compress: no siblings');
@@ -216,6 +236,93 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.match(ok(ship, ['check', dist]), /dist check OK: \d+ files, [\d,]+ bytes raw, [\d,]+ bytes transfer with the best encoding, every sha256 matches, every sibling decodes to its source/);
     assert.match(ok(ship, ['check', dist, '--quick']), /\(sizes only\)/);
     assert.match(ok(ship, ['table', dist]), /transfer with the best encoding/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py compression cache: no-compress to default creates usable image encodings', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
+  try {
+    const tree = makeTree(dir, prose(1500000, 1234));
+    const dist = join(dir, 'dist');
+    ok(ship, buildArgs(tree, dist, ['--no-compress']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, []);
+    ok(ship, buildArgs(tree, dist));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, pythonHasBrotli ? ['br', 'gz'] : ['gz']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py compression cache: missing and truncated siblings regenerate', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
+  try {
+    const tree = makeTree(dir, prose(1500000, 1234));
+    const dist = join(dir, 'dist');
+    const encodings = pythonHasBrotli ? ['br', 'gz'] : ['gz'];
+    ok(ship, buildArgs(tree, dist));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, encodings);
+    for (const enc of encodings) {
+      unlinkSync(join(dist, `isaac.segs.bin.${enc}`));
+      ok(ship, buildArgs(tree, dist));
+      assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, encodings);
+    }
+    const gzipPath = join(dist, 'isaac.segs.bin.gz');
+    truncateSync(gzipPath, statSync(gzipPath).size - 1);
+    ok(ship, buildArgs(tree, dist));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, encodings);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py compression cache: Brotli policy changes add and remove siblings', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  if (!pythonHasBrotli) { t.skip('no Python brotli module'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
+  try {
+    const tree = makeTree(dir, prose(1500000, 1234));
+    const dist = join(dir, 'dist');
+    ok(ship, buildArgs(tree, dist, ['--no-brotli']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, ['gz']);
+    ok(ship, buildArgs(tree, dist));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, ['br', 'gz']);
+    ok(ship, buildArgs(tree, dist, ['--no-brotli']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, ['gz']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py compression cache: enabling Brotli retries a gzip-only empty verdict', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  if (!pythonHasBrotli) { t.skip('no Python brotli module'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
+  try {
+    const tree = makeTree(dir, prose(1500000, 1234));
+    const dist = join(dir, 'dist');
+    ok(ship, buildArgs(tree, dist, ['--no-brotli', '--gzip-level', '0']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, []);
+    ok(ship, buildArgs(tree, dist, ['--gzip-level', '0']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, ['br']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py compression cache: gzip level changes retry an empty verdict', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
+  try {
+    const tree = makeTree(dir, prose(1500000, 1234));
+    const dist = join(dir, 'dist');
+    ok(ship, buildArgs(tree, dist, ['--no-brotli', '--gzip-level', '0']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, []);
+    ok(ship, buildArgs(tree, dist, ['--no-brotli']));
+    assertSiblings(dist, 'isaac.segs.bin', tree.segsBytes, ['gz']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

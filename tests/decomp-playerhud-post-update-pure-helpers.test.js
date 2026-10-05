@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PLAYERHUD_ACTIVE_IMAGE_SP_BASE,
@@ -1091,6 +1091,8 @@ import {
 } from "../scripts/decomp/playerhud-post-update-pure-model.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const outDir = join(root, "output", "decomp", "playerhud-post-update-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
 /* Symbolic ABI pin (AGENTS.md: never hardcode the current ABI number in a
    test). The header enum is the deliberate pin; the model constant must
    agree with it — that is the assertion each former literal now makes. */
@@ -1099,11 +1101,11 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "playerhud_post_update_pure_helpers.h");
-const source = join(root, "native", "decomp", "playerhud_post_update_pure_helpers.cpp");
-/* Wave-26 hardening (update-v102-hardening GAP C): 120-attempt retried
-   source write so a crashed/failed mutant restore can never strand a
-   mutant in the tracked playerhud_post_update_pure_helpers.cpp (Windows open-lock EUNKNOWN class; room/anm2
-   convention). */
+const originalSource = join(root, "native", "decomp", "playerhud_post_update_pure_helpers.cpp");
+const source = join(outDir, basename(originalSource));
+copyFileSync(originalSource, source);
+/* Wave-26 hardening (update-v102-hardening GAP C): retry private source
+   writes for Windows open-lock EUNKNOWN errors (room/anm2 convention). */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
     try {
@@ -1117,7 +1119,6 @@ const writeSourceRetry = (content) => {
   }
 };
 
-const outDir = join(root, "output", "decomp", "playerhud-post-update-pure");
 const wasmPath = join(outDir, "playerhud-post-update-pure-helpers.wasm");
 const sliceCpp = join(root, "native", "decomp", "game_update_slice.cpp");
 const sliceJson = join(root, "decomp", "game-update-slice.json");
@@ -1136,7 +1137,7 @@ function buildWasm(outFile = wasmPath, srcFile = source) {
   withWasmBuildCache({
     tag: "playerhud-post-update-pure-helpers",
     files: [srcFile, header],
-    extra: `out:${outFile === wasmPath ? "" : outFile}`,
+    extra: `out:${outFile === wasmPath ? "" : basename(outFile)}`,
     wasmPath: outFile,
     build: () => buildWasmUncached(outFile, srcFile),
   });

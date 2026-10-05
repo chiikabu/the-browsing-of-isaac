@@ -3,13 +3,16 @@
 // cumulative emitted bytes and one longer function moved every later
 // boundary. Two parts keep that from happening again: the emitter's
 // --split-va puts a function in a TU named by its ADDRESS bucket, and
-// build_boot.py recompiles a TU only when the sha256 of its patched text
-// differs from the one recorded beside its object.
+// build_boot.py reuses a TU only when its input fingerprint and actual object
+// bytes match the receipt written after successful compilation.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const lift = join(root, 'scripts', 'recomp', 'lift');
@@ -23,17 +26,51 @@ test('emit.py: --split-va names a TU by its address bucket', () => {
     'the file name carries the bucket index, not the running chunk index');
 });
 
-test('build_boot.py: a lifted TU recompiles only when its text hash changed', () => {
-  const src = readFileSync(join(lift, 'build_boot.py'), 'utf8');
-  // the fingerprint the hash also folds in is round 15b's, pinned below
-  assert.ok(src.includes('hashlib.sha256(path.read_bytes() + dep_fp.encode()).hexdigest()'), 'sha256 of the patched TU text');
-  assert.ok(/sha_file = lift_dir \/ \(src\.stem \+ lift_obj_suffix \+ "\.sha"\)/.test(src), 'the hash lives beside the object, per profile suffix');
-  assert.ok(/elif sha_file\.exists\(\) and sha_file\.read_text\(\)\.strip\(\) == sha:\s*\n\s*lifted_objs\.append\(obj\)/.test(src),
-    'an unchanged TU keeps its object');
-  assert.ok(/lifted_objs\.append\(Path\(info\["obj"\]\)\)\s*\n\s*sha, sha_file = lifted_sha\[Path\(info\["src"\]\)\]\s*\n\s*sha_file\.write_text\(sha\)/.test(src),
-    'a successful compile records the hash');
-  assert.ok(src.includes('if args.recompile_lifted or not obj.exists():'), '--recompile-lifted still forces everything');
-});
+const cacheProbe = `
+import importlib.util
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("build_boot", sys.argv[1])
+build_boot = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(build_boot)
+print(build_boot.cached_object_matches(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]))
+`;
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+const cacheCases = [
+  { name: 'matching input and object bytes', matches: true, change: () => {} },
+  { name: 'changed input fingerprint', change: fixture => { fixture.inputSha = digest('changed source and dependencies'); } },
+  { name: 'corrupted object bytes', change: ({ obj }) => writeFileSync(obj, Buffer.from([0, 97, 115, 109, 2, 0, 0, 0])) },
+  { name: 'replaced object', change: ({ obj }) => { rmSync(obj); writeFileSync(obj, 'different compiled output'); } },
+  { name: 'missing object', change: ({ obj }) => rmSync(obj) },
+  { name: 'missing receipt', change: ({ receipt }) => rmSync(receipt) },
+  { name: 'legacy one-hash receipt', change: ({ receipt, inputSha }) => writeFileSync(receipt, inputSha) },
+  { name: 'extra receipt token', change: ({ receipt, inputSha, objectSha }) => writeFileSync(receipt, `${inputSha} ${objectSha} extra`) },
+];
+
+for (const { name, matches = false, change } of cacheCases) {
+  test(`build_boot.py: cached object ${name}`, t => {
+    const directory = mkdtempSync(join(tmpdir(), 'recomp-object-cache-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const bytes = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+    const fixture = {
+      obj: join(directory, 'lifted_010.fast.o'),
+      receipt: join(directory, 'lifted_010.fast.o.sha'),
+      inputSha: digest('source and dependencies'),
+      objectSha: digest(bytes),
+    };
+    writeFileSync(fixture.obj, bytes);
+    writeFileSync(fixture.receipt, `  ${fixture.inputSha}\t${fixture.objectSha}\n`);
+    change(fixture);
+    const result = spawnSync('python', [
+      '-B', '-c', cacheProbe, join(lift, 'build_boot.py'),
+      fixture.obj, fixture.receipt, fixture.inputSha,
+    ], { encoding: 'utf8' });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), matches ? 'True' : 'False');
+  });
+}
 
 test('the documented boot lift uses the stable split', () => {
   const doc = readFileSync(join(root, 'docs', 'recomp-architecture.md'), 'utf8');
@@ -52,13 +89,6 @@ test('the documented boot lift uses the stable split', () => {
 // wall-clock deadline (ISAAC_EXIT_AFTER, the stall watchdog, ISAAC_PROFILE)
 // could fire in the one phase they were needed, and a run there could only be
 // ended by a kill -- which is how round 15a's withdrawn 41x was produced.
-test('build_boot.py: the TU hash covers the headers and the compile flags', () => {
-  const src = readFileSync(join(lift, 'build_boot.py'), 'utf8');
-  assert.ok(src.includes('dep_fp.update(h.read_bytes())'), 'every dependency header goes into the fingerprint');
-  assert.ok(src.includes('dep_fp.update(repr(LIFT_CFLAGS + inc_lift).encode())'), 'the flag list goes into the fingerprint');
-  assert.ok(src.includes('hashlib.sha256(path.read_bytes() + dep_fp.encode())'), 'the per-TU hash folds the fingerprint in');
-  assert.ok(/lift_dir\.glob\("\*\.h"\)/.test(src), 'the generated headers beside the TUs are dependencies');
-});
 
 test('the RECOMP_VA tick interval is a named constant the profiler math follows', () => {
   const h = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');

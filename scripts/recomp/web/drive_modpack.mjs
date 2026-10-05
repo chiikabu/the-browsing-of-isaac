@@ -85,7 +85,7 @@ const glArgs = (opt.gl || 'hw') === 'hw'
   : ['--use-gl=angle', '--use-angle=swiftshader'];
 const browser = await chromium.launch({
   headless: true,
-  args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'],
+  args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'],
 });
 
 // ---- one run: install `mod` (or nothing, for the baseline) and play

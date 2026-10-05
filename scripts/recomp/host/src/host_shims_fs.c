@@ -475,15 +475,15 @@ static void fs_parent_key(const char *key, char *out, size_t cap) {
  * NULL and the lifted code dereferences it (guest fault at 0x009a26c2).
  * The fix is to make the packed archives real files the game opens and
  * parses itself (KAGE reads resources/packed/ .a archives via fopen/fread) — NOT to
- * fake LoadImage. The boot harness calls isaac_fs_seed() for each archive
+ * fake LoadImage. The boot harness calls isaac_fs_seed_adopt() for each archive
  * before main(); paths normalize exactly as fopen's argument does, so a
  * relative "resources/packed/graphics.a" lands on the same key the game
  * later opens (c:/isaac/resources/packed/graphics.a).
  *
- * Bytes are copied into the entry's own host-heap buffer (like a written
- * file), so the caller's source buffer can be freed after the call.
+ * Owned malloc buffers are adopted without a second allocation or copy;
+ * borrowed buffers can still be copied with isaac_fs_seed().
  * Parent directories are materialised so FindFirstFileA/dir scans see the
- * file. Returns 1 on success, 0 on bad path / table full / OOM. */
+ * file. Both APIs return 1 on success, 0 on bad path / table full / OOM. */
 static int fs_ensure_dirs(const char *key) {
     /* create every ancestor directory entry of `key` (idempotent). */
     char dir[256];
@@ -502,13 +502,27 @@ static int fs_ensure_dirs(const char *key) {
     return 1;
 }
 
-int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
+static fs_entry *fs_seed_entry(const char *path) {
     char key[256];
-    if (!path || !fs_key(path, key, sizeof key) || !key[0]) return 0;
-    if (!fs_ensure_dirs(key)) return 0;
+    if (!path || !fs_key(path, key, sizeof key) || !key[0]) return NULL;
+    if (!fs_ensure_dirs(key)) return NULL;
     fs_entry *e = fs_new(key, 0);
+    return e && !e->is_dir ? e : NULL;
+}
+
+static void fs_seed_replace(fs_entry *e, uint8_t *data, uint32_t len) {
+    if (e->data) free(e->data);
+    if (e->src) { free(e->src); e->src = NULL; }
+    fs_window_drop(e);
+    e->lazy = 0;
+    e->data = data;
+    e->size = len;
+    e->cap = len;
+}
+
+int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
+    fs_entry *e = fs_seed_entry(path);
     if (!e) return 0;
-    if (e->is_dir) return 0;              /* a dir already owns this key */
     uint8_t *buf = NULL;
     if (len) {
         buf = (uint8_t *)malloc(len);
@@ -516,13 +530,17 @@ int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
         if (data) memcpy(buf, data, len);
         else memset(buf, 0, len);
     }
-    if (e->data) free(e->data);
-    if (e->src) { free(e->src); e->src = NULL; }
-    fs_window_drop(e);
-    e->lazy = 0;
-    e->data = buf;
-    e->size = len;
-    e->cap = len;
+    fs_seed_replace(e, buf, len);
+    return 1;
+}
+
+/* Only a successful call transfers ownership of the caller's malloc buffer.
+ * A NULL buffer is valid for an empty file, but not for nonempty data. */
+int isaac_fs_seed_adopt(const char *path, uint8_t *data, uint32_t len) {
+    if (len && !data) return 0;
+    fs_entry *e = fs_seed_entry(path);
+    if (!e) return 0;
+    fs_seed_replace(e, data, len);
     return 1;
 }
 
@@ -531,11 +549,8 @@ int isaac_fs_seed(const char *path, const uint8_t *data, uint32_t len) {
  * `path` is kept verbatim as the loader's argument, so case and separators
  * are the driver's own, not the normalised key's. */
 int isaac_fs_seed_lazy(const char *path, uint32_t len) {
-    char key[256];
-    if (!path || !fs_key(path, key, sizeof key) || !key[0]) return 0;
-    if (!fs_ensure_dirs(key)) return 0;
-    fs_entry *e = fs_new(key, 0);
-    if (!e || e->is_dir) return 0;
+    fs_entry *e = fs_seed_entry(path);
+    if (!e) return 0;
     if (e->data) { free(e->data); e->data = NULL; }
     fs_window_drop(e);
     if (e->src) free(e->src);

@@ -5,6 +5,7 @@
 //  - stranded mutant: a mutation cycle died between write(mutant) and
 //    restore(); the cpp sat inverted on disk with a /* MUTANT */ marker and
 //    the next build shipped it (ABI 101, 2026-08-31).
+//  - NUL-corrupted C++ source silently passed marker checks before a build.
 //  - hardcoded ABI pins: `assert.equal(spec.abiVersion, 100)` x72 left the
 //    slice suite 93-red after the 101 bump; the room suite sat 82-red once.
 //  - header/model/JSON version skew, cpp struct-size pin disagreement.
@@ -99,10 +100,13 @@ export async function runConsistencyChecks(ROOT, { strict = false } = {}) {
     if (evPins.length && (!evPins.every((p) => p === evPins[0]) || evPins[0] !== model.ABI_SIZES.events)) errors.push(`cpp sizeof(Events) pins ${[...new Set(evPins)].join(",")} vs model ${model.ABI_SIZES.events}`);
   }
 
-  // 3. stranded mutants: MUTANT markers in translation sources, journal, backup files
+  // 3. corrupted sources and stranded mutants: NUL bytes, markers, journal, backups
   const markerFiles = [];
   for (const f of Object.values(fams)) for (const p of [f.header, f.source, f.model]) {
-    if (p && /\bMUTANT\b/.test(readFileSync(p, "utf8"))) markerFiles.push(rel(ROOT, p));
+    if (!p) continue;
+    const text = readFileSync(p, "utf8");
+    if (p === f.source && text.includes("\0")) errors.push(`${rel(ROOT, p)}: C++ implementation contains NUL bytes`);
+    if (/\bMUTANT\b/.test(text)) markerFiles.push(rel(ROOT, p));
   }
   if (markerFiles.length) errors.push(`MUTANT marker left in tracked source (a mutation cycle did not restore): ${markerFiles.join(", ")}`);
   const journal = join(ROOT, ".mutation-journal.jsonl");

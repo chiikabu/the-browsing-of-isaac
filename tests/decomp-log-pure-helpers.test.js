@@ -2,7 +2,7 @@ import test from "node:test";
 import rawAssert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1893,10 +1893,13 @@ const HEADER_ABI_VERSION = Number(
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .match(/ISAAC_[A-Z0-9_]*ABI_VERSION\s*=\s*(\d+)/)[1]);
 const header = join(root, "native", "decomp", "log_pure_helpers.h");
-const source = join(root, "native", "decomp", "log_pure_helpers.cpp");
+const outDir = join(root, "output", "decomp", "log-pure", `pid-${process.pid}`);
+mkdirSync(outDir, { recursive: true });
+const originalSource = join(root, "native", "decomp", "log_pure_helpers.cpp");
+const source = join(outDir, "log_pure_helpers.cpp");
+copyFileSync(originalSource, source);
 /* Wave-26 hardening (update-v102-hardening GAP B): 120-attempt retried
-   source write so a crashed/failed mutant restore can never strand a
-   mutant in the tracked log_pure_helpers.cpp (Windows open-lock EUNKNOWN class; room/anm2
+   private fixture write for Windows open-lock EUNKNOWN errors (room/anm2
    convention). */
 const writeSourceRetry = (content) => {
   for (let attempt = 0; ; ++attempt) {
@@ -1911,7 +1914,6 @@ const writeSourceRetry = (content) => {
   }
 };
 
-const outDir = join(root, "output", "decomp", "log-pure");
 const wasmPath = join(outDir, "log-pure-helpers.wasm");
 
 function firstExisting(paths, label) {

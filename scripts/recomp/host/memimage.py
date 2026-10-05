@@ -112,7 +112,7 @@ def segment(img, threshold=ZERO_RUN_THRESHOLD):
             else:
                 run0 = 0
             j += 1
-        end = j - run0 if run0 >= threshold else j
+        end = j - run0 + 1 if run0 >= threshold else j
         segs.append((start, bytes(img[start:end])))
         i = j
     return segs

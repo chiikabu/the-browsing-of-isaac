@@ -52,7 +52,7 @@ const glArgs = GL === 'swiftshader'
   ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
   : ['--use-gl=angle', '--use-angle=d3d11', '--ignore-gpu-blocklist'];
 const HEADED = opt.headed === '1';
-const browser = await chromium.launch({ headless: !HEADED, args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync'] });
+const browser = await chromium.launch({ headless: !HEADED, args: [...glArgs, '--autoplay-policy=no-user-gesture-required', '--disable-gpu-vsync', '--mute-audio'] });
 const context = await browser.newContext({ viewport: { width: 960, height: 540 } });
 const page = await context.newPage();
 const consoleLines = [];
@@ -159,7 +159,7 @@ try {
   check(fpsBack > 20, 'back in front: full rate resumes', `${fpsBack.toFixed(1)} fps; 250 ms samples ${samples.join(' ')}`);
   check(stalled <= 1, 'back in front: no catch-up stall', `${stalled} empty 250 ms sample(s) after the first two`);
   check(aBack && aBack.state === 'running' && (aBack.rms == null || aBack.rms > 0.002 || (a0 && a0.rms <= 0.002)),
-        'back in front: music is audible again', aBack && `${aBack.state}, rms ${aBack.rms != null ? aBack.rms.toFixed(4) : 'n/a'} (before ${a0 && a0.rms != null ? a0.rms.toFixed(4) : 'n/a'})`);
+        'back in front: audio context resumes (speaker output muted)', aBack && `${aBack.state}, rms ${aBack.rms != null ? aBack.rms.toFixed(4) : 'n/a'} (before ${a0 && a0.rms != null ? a0.rms.toFixed(4) : 'n/a'})`);
   // ---- 5. no animation frames while visible --------------------------------------
   const noRaf0 = await page.evaluate(() => { window.__isaacRaf = window.requestAnimationFrame; window.requestAnimationFrame = () => 0; return window.isaacYieldNoRaf || 0; });
   await sleep(1500);
