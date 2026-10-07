@@ -361,52 +361,42 @@ def page_source(dist: str) -> str:
 
 PROVIDER_JS = r"""
 (function () {
-  var P = window.__isaacPortableData;
-  var S = P.streams;                                  // one per byte run: {tag,size,gz}
-  var WIN = 1048576;                                  // the engine's window (FS_WIN), and the read granularity
-  var cache = new Map(), inline = P.blobs || null, ranges = true;
-  // Round 89f: this Map had no ceiling. Every chunk it held was a rebuilt
-  // ~19.9 MB array and nothing ever left, so a session that saw the payload sat
-  // on 631 MB of JS heap -- measured, and a forced GC did not move it. It is an
-  // LRU with a byte budget now. Evicting is safe whenever: a caller has already
-  // awaited its chunk and copies out of it, and the array lives as long as that
-  // reference does, whether or not the Map still names it.
-  // Two budgets, because the boot and the game want different things. The boot
-  // reads a known set -- the trail's chunks -- and a ceiling below that set just
-  // evicts what it has not finished with and makes it fetch the same 19 MB
-  // twice: measured at 3.7 s added to frame 300. So the boot gets a budget
-  // sized to its own working set, and once the boot is over (BOOT_OVER_FRAME)
-  // that drops to STEADY and the LRU drains.
-  var CACHE_STEADY = 256 * 1048576;
-  var CACHE_MAX = CACHE_STEADY, cacheBytes = 0;
-  // boot_web.mjs's READER_CLEAR_FRAME: the title is up and its resources read
-  var BOOT_OVER_FRAME = 600;
-  // Round 90f: evict what a read has already taken, not simply the oldest. The
-  // prefetch inserts in trail order and a read moves its chunk to the young
-  // end, so the OLDEST entries are the prefetched chunks nothing has read yet --
-  // the very next ones the boot asks for. Oldest-first threw out exactly the
-  // next chunk, its re-fetch evicted the one after it, and on a CDN each of
-  // those is a 19 MB GET. An unread chunk goes only when nothing read is left.
-  var readOnce = Object.create(null);
-  // Round 90g: an instrument, not a policy. `evicted` is what trim() dropped,
-  // why, and at which frame; `headLeft` the trail chunks nothing has read yet.
-  // Together they answered 90g: every trail chunk is read before the first
-  // frame, and the one chunk fetched twice is read AGAIN at the title and was
-  // dropped in between as an ordinary read chunk -- see recomp-architecture
-  // §21.115 before trying another eviction policy.
-  var headLeft = Object.create(null), evicted = [];
+  var P = window.__isaacPortableData, S = P.streams;
+  var WIN = 1048576, CACHE_MAX = 256 * WIN, AHEAD = 8, STREAM_WIDTH = 6;
+  // Whole-read chunks are unwrapped once. Windowed chunks keep their stored,
+  // scrambled bytes: only a demanded window is copied, unscrambled and inflated.
+  var cache = new Map(), cacheBytes = 0, flight = new Map();
+  var inline = P.blobs || null, ranges = true;
+  var readOnce = Object.create(null), headLeft = Object.create(null), evicted = [];
+  var unread = new Map(), waiting = [];
+  function wake() {
+    var w = waiting; waiting = [];
+    for (var j = 0; j < w.length; j++) w[j]();
+  }
+  function markRead(k) { if (unread.delete(k)) wake(); }
+  function forget(k) {
+    var old = cache.get(k);
+    if (old) { cacheBytes -= old.length; cache.delete(k); }
+    delete readOnce[k];
+    markRead(k);
+  }
+  function evict(k) {
+    if (evicted.length < 64) {
+      evicted.push(k + (readOnce[k] ? ' read' : headLeft[k] ? ' trail' : ' other')
+        + ' @' + (window.isaacFrame || 0));
+    }
+    forget(k);
+  }
   function trim() {
     while (cacheBytes > CACHE_MAX && cache.size > 1) {
-      var victim = null, it = cache.keys(), k;
-      for (k = it.next(); !k.done; k = it.next()) if (readOnce[k.value]) { victim = k.value; break; }
-      if (victim === null) victim = cache.keys().next().value;
-      if (evicted.length < 64) {
-        evicted.push(victim + (readOnce[victim] ? ' read' : headLeft[victim] ? ' trail' : ' other')
-          + ' @' + (window.isaacFrame || 0));
+      var victim = null;
+      for (var k of cache.keys()) if (readOnce[k]) { victim = k; break; }
+      // Do not sacrifice the unconsumed engine to archive lookahead.
+      if (victim === null) {
+        for (var k of cache.keys()) if (!S[Number(k.split(':')[0])].gz) { victim = k; break; }
       }
-      cacheBytes -= cache.get(victim).length;
-      cache.delete(victim);
-      delete readOnce[victim];
+      if (victim === null) victim = cache.keys().next().value;
+      evict(victim);
     }
   }
   function remember(key, u) {
@@ -416,15 +406,16 @@ PROVIDER_JS = r"""
     trim();
     return u;
   }
-  // a hit moves the chunk to the young end, which is what makes it an LRU
   function touch(key) {
     var v = cache.get(key);
     if (v !== undefined) { cache.delete(key); cache.set(key, v); }
     return v;
   }
-  // round 77: the chunks are XORed with a seekable keystream so a file on a CDN
-  // is not a recognisable archive. Reversible from any offset, which is what a
-  // range read needs. The key is in this page, as it has to be.
+  function wasRead(k) {
+    if (cache.has(k)) readOnce[k] = 1;
+    delete headLeft[k];
+    markRead(k);
+  }
   var KEY = P.key ? (function () {
     var b = atob(P.key), a = new Uint8Array(b.length);
     for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i);
@@ -438,71 +429,135 @@ PROVIDER_JS = r"""
     }
     return bytes;
   }
+  function count(s) { return S[s].stored.length; }
+  function chunkLen(s, i) { return S[s].stored[i]; }
+  function name(s, i, windowRange) {
+    var v = S[s].v && S[s].v[i];
+    var url = (S[s].base || P.base) + '/' + S[s].tag + i + '.bin' + (v ? '?v=' + v : '');
+    // Keep immutable range identities separate in Chromium's HTTP cache.
+    return windowRange ? url + (v ? '&' : '?') + 'w=' + windowRange.from + '-' + windowRange.to : url;
+  }
+  function canonical(url) {
+    var u = new URL(url, location.href);
+    u.hash = ''; u.searchParams.delete('w');
+    return u.href;
+  }
+  var downloads = [], byURL = new Map(), received = 0, total = 0, chunks = 0;
   var loaded = Object.create(null), loadedN = 0;
-  // Round 89d: the bar counts what the first frame is waiting for. That used to
-  // be every chunk; now it is the ones the boot trail names, and the ones that
-  // come down afterwards must not push the count past its own total or keep
-  // writing "loading 21 / 32" over the status line while the game is running.
-  var awaiting = 0, quiet = false;
-  function note(s, i) {
-    var k = s + ':' + i;
-    if (loaded[k]) return;
-    loaded[k] = 1; loadedN += 1;
-    if (quiet || !P.onChunk) return;
-    var tot = awaiting || P.chunks || 0;
-    try { P.onChunk(Math.min(loadedN, tot), tot); } catch (e) { /* the readout is decoration */ }
+  for (var s = 0; s < S.length; s++) {
+    downloads[s] = [];
+    for (var i = 0; i < count(s); i++) {
+      var d = { s: s, i: i, size: chunkLen(s, i), received: 0, spans: [] };
+      downloads[s][i] = d;
+      total += d.size; chunks++;
+      if (P.base) byURL.set(canonical(name(s, i)), d);
+      else { d.received = d.size; loaded[s + ':' + i] = 1; loadedN++; }
+    }
+  }
+  if (!P.base) received = total;
+  function progress() { return { received: received, total: total }; }
+  function note(d) {
+    var k = d.s + ':' + d.i;
+    if (loaded[k] || d.received !== d.size) return;
+    loaded[k] = 1; loadedN++;
+    if (P.onChunk) { try { P.onChunk(loadedN, chunks); } catch (e) { /* decoration */ } }
+  }
+  // Union stored-byte intervals, including failed attempts' received prefixes.
+  // A retry or a worker's overlapping range cannot count the same bytes twice.
+  function record(d, from, to, complete) {
+    if (!d || !Number.isSafeInteger(from) || !Number.isSafeInteger(to)
+        || from < 0 || to <= from || to > d.size) return;
+    var spans = d.spans, a = 0, b, added = to - from;
+    while (a < spans.length && spans[a][1] < from) a++;
+    b = a;
+    while (b < spans.length && spans[b][0] <= to) {
+      added -= Math.max(0, Math.min(to, spans[b][1]) - Math.max(from, spans[b][0]));
+      from = Math.min(from, spans[b][0]); to = Math.max(to, spans[b][1]);
+      b++;
+    }
+    spans.splice(a, b - a, [from, to]);
+    if (added) {
+      d.received += added; received += added;
+      if (P.onProgress) { try { P.onProgress(progress()); } catch (e) { /* decoration */ } }
+    }
+    if (complete) note(d);
+  }
+  function recordDownload(url, from, to) {
+    var d;
+    try { d = byURL.get(canonical(url)); } catch (e) { return; }
+    record(d, from, to, true);
+  }
+  function lengthHeader(r, size) {
+    var h = r.headers.get('content-length');
+    return h === null || (/^\d+$/.test(h) && Number(h) === size);
+  }
+  function wholeHeader(r, size) {
+    // Fetch exposes decoded bytes, but encoded responses retain their wire length.
+    var encoding = (r.headers.get('content-encoding') || 'identity').trim().toLowerCase();
+    return r.status === 200 && !r.headers.get('content-range')
+      && (encoding !== 'identity' || lengthHeader(r, size));
+  }
+  function rangeHeader(r, from, to, size) {
+    var m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(r.headers.get('content-range') || '');
+    return r.status === 206 && m && Number(m[1]) === from && Number(m[2]) === to - 1
+      && Number(m[3]) === size && lengthHeader(r, to - from);
+  }
+  async function discard(r) {
+    if (!r.body) return;
+    try { await r.body.cancel(); } catch (e) { /* retain the original response error */ }
+  }
+  async function body(r, s, i, from, size) {
+    var d = downloads[s][i], u, n = 0;
+    if (r.body && r.body.getReader) {
+      var reader = r.body.getReader();
+      u = new Uint8Array(size);
+      try {
+        for (;;) {
+          var part = await reader.read();
+          if (part.done) break;
+          if (n + part.value.length > size) throw new Error('piece ' + s + ':' + i + ': wrong body length');
+          u.set(part.value, n); n += part.value.length;
+          // Do not claim the entire response until EOF validates its length.
+          if (n < size) record(d, from, from + n, false);
+        }
+      } catch (e) {
+        try { await reader.cancel(); } catch (ignored) { /* the failed stream is already closed */ }
+        throw e;
+      } finally { reader.releaseLock(); }
+    } else {
+      u = new Uint8Array(await r.arrayBuffer()); n = u.length;
+    }
+    if (n !== size) throw new Error('piece ' + s + ':' + i + ': wrong body length');
+    record(d, from, from + size, true);
+    return u;
   }
   function decode(b) {
     return (typeof Uint8Array.fromBase64 === 'function')
       ? Uint8Array.fromBase64(b)
       : (function () { var s = atob(b), a = new Uint8Array(s.length); for (var k = 0; k < s.length; k++) a[k] = s.charCodeAt(k); return a; })();
   }
-  // the pieces a read of [a,b) in stream s touches
   function span(s, a, b) {
     var st = S[s], parts = [], o = 0;
     for (var pos = a; pos < b;) {
       var i = Math.floor(pos / st.size), within = pos % st.size;
       var take = Math.min(st.size - within, b - pos);
+      if (st.wl) take = Math.min(take, st.win - within % st.win);
       parts.push({ s: s, i: i, within: within, take: take, at: o });
       o += take; pos += take;
     }
     return parts;
   }
-  // the token comes from the chunk's own bytes, so a chunk that changed has a
-  // URL that changed and a browser holding the old one under a week-long
-  // max-age cannot splice it into this build (round 86d)
-  // Round 90f: a stream may carry its own base. Part B has not changed since
-  // round 89b, but with one base pinned to each deploy's commit every deploy
-  // moved all 32 URLs, and a returning visitor fetched 512 MB their cache
-  // already held. Pinned to the commit that last changed it, part B keeps its
-  // URLs until its bytes change.
-  function name(s, i, windowRange) {
-    var v = S[s].v && S[s].v[i];
-    var url = (S[s].base || P.base) + '/' + S[s].tag + i + '.bin' + (v ? '?v=' + v : '');
-    // Concurrent ranges sharing one URL do not survive Chromium's HTTP cache.
-    // Give each immutable stored window its own cache entry.
-    return windowRange ? url + (v ? '&' : '?') + 'w=' + windowRange.from + '-' + windowRange.to : url;
-  }
-  // Is chunk i of stream s actually compressed? A stream may be gzipped and
-  // still hold raw chunks: a window of Theora or Vorbis gives nothing back, so
-  // it is stored as it is and costs no inflate here (round 89). Without the
-  // per-chunk mark the whole stream is compressed, which is what part A is.
   function packed(s, i) {
     if (!S[s].gz) return false;
-    var z = S[s].z;
-    return z ? z.charAt(i) === '1' : true;
+    return S[s].z ? S[s].z.charAt(i) === '1' : true;
   }
-  // Round 89: a window-compressed stream. `wl` is the stored length of every
-  // window in order, so every offset follows from a prefix sum; `wz` says which
-  // of them really are compressed. The chunk still holds a whole number of
-  // windows and still rebuilds to the bytes it always held.
-  var WOFF = null;
+  var WOFF = [];
   function woff(s) {
-    if (WOFF) return WOFF;
+    if (WOFF[s]) return WOFF[s];
     var wl = S[s].wl, a = new Array(wl.length + 1);
     a[0] = 0;
     for (var k = 0; k < wl.length; k++) a[k + 1] = a[k] + wl[k];
-    WOFF = a;
+    WOFF[s] = a;
     return a;
   }
   function perChunk(s) { return S[s].size / S[s].win; }
@@ -510,148 +565,85 @@ PROVIDER_JS = r"""
     return new Uint8Array(await new Response(
       new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
   }
-  // one window, from its own stored bytes
   async function window1(s, k, stored) {
     return S[s].wz.charAt(k) === '1' ? await inflate(stored) : stored;
   }
-  // a whole chunk, rebuilt from the windows it holds
-  async function rebuild(s, i, stored) {
-    var off = woff(s), per = perChunk(s), base = i * per;
-    var first = off[base], parts = [], total = 0;
-    for (var k = base; k < off.length - 1 && k < base + per; k++) {
-      var b = stored.subarray(off[k] - first, off[k + 1] - first);
-      var w = await window1(s, k, b);
-      parts.push(w); total += w.length;
-    }
-    var out = new Uint8Array(total), at = 0;
-    for (var j = 0; j < parts.length; j++) { out.set(parts[j], at); at += parts[j].length; }
-    return out;
+  async function unpackWhole(s, i, raw) {
+    if (S[s].wl) return raw;
+    unscramble(raw, i * S[s].size);
+    return packed(s, i) ? await inflate(raw) : raw;
   }
-  // Round 89d: two callers can want the same chunk at once now -- the boot
-  // reading it and the background prefetch pulling it -- and each was a whole
-  // 19 MB GET of its own. One request, both waiters.
-  var flight = new Map();
-  // `pre` marks a call made by a prefetcher rather than by a read: 1 for the
-  // boot's head, 2 for the paced stream behind the game. A prefetch is never a
-  // read -- trim() spares chunks nothing has read, and a head fetch counted as
-  // a read would make the chunks the boot has not reached look finished. Only
-  // the stream is paced: a chunk it fetched that nobody has read yet is what it
-  // may not pile up.
   function piece(s, i, pre) {
     var key = s + ':' + i, hit = touch(key);
     if (hit) { if (!pre) wasRead(key); return Promise.resolve(hit); }
-    var busy = flight.get(key);
-    if (busy) return pre ? busy : busy.then(function (u) { wasRead(key); return u; });
-    var pr = piece1(s, i);
-    flight.set(key, pr);
-    pr = pr.then(function (u) { flight.delete(key); return u; },
-                 function (e) { flight.delete(key); throw e; });
-    if (pre) { pr.then(function () { if (pre === 2) markUnread(key); }, function () {}); return pr; }
-    return pr.then(function (u) { wasRead(key); return u; });
-  }
-  // How far the streamer may run ahead of the reader. Chunks it has fetched
-  // that nothing has read yet are the only ones that MUST stay resident, so
-  // this number, times ~19.9 MB, is what running ahead costs.
-  // AHEAD is the whole trade. At 4 the stream ran no faster than the boot read,
-  // which serialised the two: the game reached its first frame in 11 s and then
-  // sat at frame 2 for another 165 while chunks arrived one every ten seconds.
-  // The fetching has to happen ALONGSIDE the boot, not in lockstep with it, so
-  // this is the number of chunks the streamer may hold unread -- 8 x 19.9 MB --
-  // and the cache budget below is sized to leave room for them.
-  var AHEAD = 8, HEAD_ARCHIVE = 3, STREAM_WIDTH = 6;
-  var unread = Object.create(null), unreadN = 0, waiting = [];
-  function markUnread(k) { if (!unread[k]) { unread[k] = 1; unreadN += 1; } }
-  function markRead(k) {
-    if (!unread[k]) return;
-    delete unread[k]; unreadN -= 1;
-    var w = waiting; waiting = [];
-    for (var j = 0; j < w.length; j++) w[j]();
-  }
-  // a read took this chunk: trim() may have it now, and the stream's count of
-  // chunks nobody has read goes down
-  function wasRead(k) {
-    if (cache.has(k)) readOnce[k] = 1;
-    delete headLeft[k];
-    markRead(k);
-  }
-  // resolves when there is room to fetch another, or after a second regardless:
-  // the trail is the LAST boot's reads and this one may not want all of them,
-  // in which case nothing would ever mark them read and the stream would stop.
-  function room() {
-    if (unreadN < AHEAD) return Promise.resolve();
-    return new Promise(function (res) {
-      var done = false;
-      var go = function () { if (!done) { done = true; res(); } };
-      waiting.push(go);
-      setTimeout(go, 1000);
-    });
+    var pr = flight.get(key);
+    if (!pr) {
+      pr = piece1(s, i).then(function (u) { flight.delete(key); return u; },
+                             function (e) { flight.delete(key); throw e; });
+      flight.set(key, pr);
+    }
+    return pre ? pr : pr.then(function (u) { wasRead(key); return u; });
   }
   async function piece1(s, i) {
-    var key = s + ':' + i;
-    var r = await fetch(name(s, i));
-    if (!r.ok) throw new Error('piece ' + key + ': HTTP ' + r.status);
-    note(s, i);
-    var at = S[s].wl ? woff(s)[i * perChunk(s)] : i * S[s].size;
-    var raw = unscramble(new Uint8Array(await r.arrayBuffer()), at);
-    var u = S[s].wl ? await rebuild(s, i, raw)
-      : (packed(s, i)
-        ? new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
-        : raw);
-    remember(key, u);
-    return u;
+    var r = await fetch(name(s, i)), size = chunkLen(s, i);
+    if (!r.ok) {
+      await discard(r);
+      throw new Error('piece ' + s + ':' + i + ': HTTP ' + r.status);
+    }
+    if (!wholeHeader(r, size)) {
+      await discard(r);
+      throw new Error('piece ' + s + ':' + i + ': invalid whole response');
+    }
+    return remember(s + ':' + i, await unpackWhole(s, i, await body(r, s, i, 0, size)));
   }
-  // where a read lands when the chunk's windows are compressed one by one:
-  // which window, how far into it, and where that window is stored
   function inWindow(p) {
     var st = S[p.s];
     if (!st.wl) return null;
-    var per = perChunk(p.s), k = p.i * per + Math.floor(p.within / st.win);
+    var k = p.i * perChunk(p.s) + Math.floor(p.within / st.win);
     var at = p.within % st.win;
-    if (at + p.take > st.win) return null;          // straddles two windows
-    var off = woff(p.s), base = off[p.i * per];
+    if (at + p.take > st.win) return null;
+    var off = woff(p.s), base = off[p.i * perChunk(p.s)];
     return { k: k, at: at, from: off[k] - base, to: off[k + 1] - base - 1, abs: off[k] };
   }
-  async function ranged(p) {
-    // a window is a byte range inside a large chunk, so the chunk's size costs
-    // nothing; a host that ignores Range answers 200 and we slice it ourselves
-    if (!ranges) return (await piece(p.s, p.i)).subarray(p.within, p.within + p.take);
+  async function slicePiece(p, u) {
     var w = inWindow(p);
-    if (w) {
-      var rw = await fetch(name(p.s, p.i, w), { headers: { Range: 'bytes=' + w.from + '-' + w.to } });
-      if (!rw.ok) throw new Error('range ' + p.s + ':' + p.i + ': HTTP ' + rw.status);
-      note(p.s, p.i);
-      var stored = unscramble(new Uint8Array(await rw.arrayBuffer()), w.abs);
-      var win = await window1(p.s, w.k, stored);
-      return win.subarray(w.at, w.at + p.take);
+    if (!w) return u.subarray(p.within, p.within + p.take);
+    var stored = u.subarray(w.from, w.to + 1);
+    // Unscrambling a shared subarray would corrupt every subsequent read.
+    if (KEY) stored = unscramble(stored.slice(), w.abs);
+    var win = await window1(p.s, w.k, stored);
+    return win.subarray(w.at, w.at + p.take);
+  }
+  async function ranged(p) {
+    var key = p.s + ':' + p.i;
+    if (!ranges || cache.has(key) || flight.has(key)) return slicePiece(p, await piece(p.s, p.i));
+    var w = inWindow(p), cut = w || { from: p.within, to: p.within + p.take - 1 };
+    var r = await fetch(name(p.s, p.i, cut), { headers: { Range: 'bytes=' + cut.from + '-' + cut.to } });
+    if (!r.ok) {
+      await discard(r);
+      throw new Error('range ' + key + ': HTTP ' + r.status);
     }
-    var rawRange = { from: p.within, to: p.within + p.take - 1 };
-    var r = await fetch(name(p.s, p.i, rawRange), { headers: { Range: 'bytes=' + rawRange.from + '-' + rawRange.to } });
-    if (!r.ok) throw new Error('range ' + p.s + ':' + p.i + ': HTTP ' + r.status);
-    var u = new Uint8Array(await r.arrayBuffer());
-    note(p.s, p.i);
-    // the total the host puts in Content-Range has to be the chunk's length: on a
-    // host that answers ranges with the wrong bytes that is the only tell, and the
-    // length of the answer is right even when its contents are not
-    var claim = /\/(\d+)\s*$/.exec(r.headers.get('content-range') || '');
-    var told = claim ? Number(claim[1]) : -1;
-    var mine = chunkLen(p.s, p.i);
-    if (r.status === 206 && u.length === p.take && (mine < 0 || told === mine)) {
-      return unscramble(u, p.i * S[p.s].size + p.within);
+    var u, whole = false;
+    try {
+      if (rangeHeader(r, cut.from, cut.to + 1, chunkLen(p.s, p.i))) {
+        u = await body(r, p.s, p.i, cut.from, cut.to - cut.from + 1);
+      } else if (wholeHeader(r, chunkLen(p.s, p.i))) {
+        u = await body(r, p.s, p.i, 0, chunkLen(p.s, p.i)); whole = true;
+      } else await discard(r);
+    } catch (e) { /* a short or failed range must not poison the whole-chunk cache */ }
+    if (!u || whole) {
+      ranges = false;
+      if (whole) {
+        u = remember(key, await unpackWhole(p.s, p.i, u));
+        wasRead(key);
+        return slicePiece(p, u);
+      }
+      return slicePiece(p, await piece(p.s, p.i));
     }
-    // Round 83: the answer is not the window that was asked for. A host that
-    // ignores Range sends the whole chunk (200, the chunk's length) and that can
-    // be sliced; one that answers 206 with the wrong bytes cannot, and slicing it
-    // returned nothing -- and left that short buffer in the cache under the
-    // chunk's key, so every later window in the chunk came back empty too.
-    ranges = false;
-    var whole = chunkLen(p.s, p.i);
-    if (r.status === 200 && whole >= 0 && u.length === whole) {
-      u = unscramble(u, p.i * S[p.s].size);
-      remember(p.s + ':' + p.i, u);
-      return u.subarray(p.within, p.within + p.take);
-    }
-    if (cache.has(p.s + ':' + p.i)) { cacheBytes -= cache.get(p.s + ':' + p.i).length; cache.delete(p.s + ':' + p.i); }
-    return (await piece(p.s, p.i)).subarray(p.within, p.within + p.take);
+    unscramble(u, w ? w.abs : p.i * S[p.s].size + p.within);
+    if (!w) return u;
+    var win = await window1(p.s, w.k, u);
+    return win.subarray(w.at, w.at + p.take);
   }
   async function gather(parts) {
     var total = parts.reduce(function (n, p) { return n + p.take; }, 0);
@@ -661,7 +653,8 @@ PROVIDER_JS = r"""
         var k = next++;
         if (k >= parts.length) return;
         var p = parts[k];
-        var bytes = S[p.s].gz ? (await piece(p.s, p.i)).subarray(p.within, p.within + p.take) : await ranged(p);
+        var bytes = S[p.s].gz ? await slicePiece(p, await piece(p.s, p.i)) : await ranged(p);
+        if (bytes.length !== p.take) throw new Error('piece ' + p.s + ':' + p.i + ': short decoded read');
         out.set(bytes, p.at);
       }
     }
@@ -676,219 +669,110 @@ PROVIDER_JS = r"""
     var end = len ? Math.min(off + len, f.size) : f.size;
     return span(f.s, f.at + off, f.at + end);
   }
-  // How long chunk i of stream s is on disk. Only meaningful for a raw stream:
-  // a gzipped one is compressed per chunk and its length is not arithmetic.
-  function chunkLen(s, i) {
-    var st = S[s];
-    if (st.wl) {                       // stored length: the windows it holds
-      var off = woff(s), per = perChunk(s);
-      var a = i * per, b = Math.min(off.length - 1, a + per);
-      return off[b] - off[a];
-    }
-    if (st.gz || typeof st.bytes !== 'number') return -1;
-    var left = st.bytes - i * st.size;
-    return left > st.size ? st.size : left;
-  }
-  // Round 78: one question before any window is handed out as a range, and it has
-  // to be a question a lying host fails. A host that ignores Range answers with a
-  // whole chunk, which the old probe (206 and two bytes) caught. jsDelivr does
-  // worse: it answers 206 with a Content-Range, then returns bytes from the wrong
-  // offset (4 bytes early at 1 MiB; unrelated at 5 MiB) and claims a total 37
-  // bytes over the file. A prefix length check passes. The page already knows
-  // how long the chunk is, so the probe requires that the total in Content-Range
-  // equals that length. Missing the header, or a mismatch, drops to whole GETs,
-  // which are exact on that host.
-  // Round 89d: a probe is only worth asking where the answer holds. Measured on
-  // this project's CDN: every ranged read comes back FOUR bytes short of what
-  // was asked for -- 64 -> 60, 65536 -> 65532, every chunk, wrong bytes -- and
-  // half an hour later, from another edge, the same probe returns its 64 bytes
-  // and the right Content-Range total and passes. A pass therefore says nothing
-  // about the read that follows it, and the run pays for that discovery in the
-  // middle of a room. Where the host is known to do this, do not ask.
+  // This CDN has returned inconsistent, four-byte-short ranges even after a
+  // successful probe. Whole immutable chunks are reliable there.
   var NO_RANGES = /(^|\.)jsdelivr\.net$/i;
   function hostOf(u) {
-    try { return new URL(u, typeof location !== 'undefined' ? location.href : undefined).hostname; }
-    catch (e) { return ''; }
-  }
-  // ?noranges=1 forces the whole-chunk path, which is what the CDN build runs.
-  // Without it that path can only be tested by deploying, and it is the half
-  // that the trail-driven prefetch lives in.
-  function forcedOff() {
-    try { return new URLSearchParams(location.search).get('noranges') === '1'; }
-    catch (e) { return false; }
+    try { return new URL(u, location.href).hostname; } catch (e) { return ''; }
   }
   async function probeRanges() {
-    if (!P.base) return false;
-    if (forcedOff()) { ranges = false; P.rangesWhy = 'ranges turned off by ?noranges=1'; return false; }
-    if (NO_RANGES.test(hostOf(P.base))) {
+    if (new URLSearchParams(location.search).get('noranges') === '1') {
+      ranges = false; P.rangesWhy = 'ranges turned off by ?noranges=1'; return false;
+    }
+    var b = S.findIndex(function (st) { return !st.gz && st.stored.length; });
+    if (b < 0) return ranges;
+    if (NO_RANGES.test(hostOf(S[b].base || P.base))) {
       ranges = false;
       P.rangesWhy = 'this CDN answers ranges four bytes short, and not every time (rounds 84, 89d)';
       return false;
     }
-    var b = S.findIndex(function (st) { return !st.gz; });
-    if (b < 0) return false;
-    // Round 84: four chunks, not one. jsDelivr answers a range with the wrong
-    // bytes and a total a few dozen over the file -- and not consistently: the
-    // same chunk gave the right total an hour before it gave a wrong one. One
-    // question is a coin toss; every one of these has to come back right.
     var n = count(b), picks = [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1]
       .filter(function (v, i, a) { return v >= 0 && v < n && a.indexOf(v) === i; });
     var failures = new Array(picks.length);
-    function failed(k, why) { failures[k] = why; return false; }
-    // Each pair stays sequential so its overlap checks the first response.
-    // The at-most-four independent pairs can share the network wait.
     var checked = await Promise.all(picks.map(async function (i, k) {
       try {
-        var want = chunkLen(b, i);
-        if (want < 0) return failed(k, 'chunk ' + i + ': length unknown');
-        // 1 KiB, not 64 bytes: the deficit that gave this away was four bytes,
-        // and a 64-byte answer that is four short still looks like a plausible
-        // read. The bigger ask costs nothing and fails louder.
-        var r = await fetch(name(b, i), { headers: { Range: 'bytes=0-1023' } });
-        if (r.status !== 206) return failed(k, 'chunk ' + i + ': the host answered ' + r.status + ' for a range');
-        var head = new Uint8Array(await r.arrayBuffer());
-        var cr = r.headers.get('content-range') || '';
-        var total = /\/(\d+)\s*$/.exec(cr);
-        var claimed = total ? Number(total[1]) : -1;
-        if (head.length !== 1024 || claimed !== want) {
-          return failed(k, 'chunk ' + i + ': a 1024-byte range came back as ' + head.length + ' byte(s)'
-            + (claimed >= 0 ? ' and the host calls that file ' + claimed + ' bytes, not ' + want : ' with no Content-Range total'));
+        var size = chunkLen(b, i), r = await fetch(name(b, i), { headers: { Range: 'bytes=0-1023' } });
+        if (!rangeHeader(r, 0, 1024, size)) {
+          await discard(r);
+          throw new Error('invalid first range response');
         }
-        // and the same bytes have to come back from a range that merely
-        // overlaps them. A host serving from the wrong offset answers both
-        // with the right LENGTH and disagrees with itself about the contents.
+        var head = await body(r, b, i, 0, 1024);
         var r2 = await fetch(name(b, i), { headers: { Range: 'bytes=512-1535' } });
-        if (r2.status !== 206) return failed(k, 'chunk ' + i + ': the host answered ' + r2.status + ' for the second range');
-        var mid = new Uint8Array(await r2.arrayBuffer());
-        if (mid.length !== 1024) {
-          return failed(k, 'chunk ' + i + ': an overlapping 1024-byte range came back as ' + mid.length + ' byte(s)');
+        if (!rangeHeader(r2, 512, 1536, size)) {
+          await discard(r2);
+          throw new Error('invalid overlapping range response');
         }
+        var mid = await body(r2, b, i, 512, 1024);
         for (var q = 0; q < 512; q++) {
-          if (mid[q] !== head[512 + q]) {
-            return failed(k, 'chunk ' + i + ': two ranges over the same bytes disagree at ' + (512 + q));
-          }
+          if (mid[q] !== head[512 + q]) throw new Error('two ranges over the same bytes disagree at ' + (512 + q));
         }
         return true;
-      } catch (e) { return failed(k, 'chunk ' + i + ': ' + (e.message || String(e))); }
+      } catch (e) { failures[k] = 'chunk ' + i + ': ' + (e.message || String(e)); return false; }
     }));
     ranges = checked.every(function (ok) { return ok; });
     if (!ranges) P.rangesWhy = failures.find(function (why) { return why; });
     return ranges;
   }
-  function count(s) {
-    var st = S[s];
-    if (typeof st.n === 'number') return st.n;
-    if (typeof st.bytes === 'number' && st.size) return Math.ceil(st.bytes / st.size);
-    return 0;
+  async function room(key) {
+    while (unread.size >= AHEAD) {
+      await new Promise(function (res) {
+        var done = false, timer;
+        var go = function () {
+          if (done) return;
+          done = true; clearTimeout(timer);
+          var at = waiting.indexOf(go);
+          if (at >= 0) waiting.splice(at, 1);
+          res();
+        };
+        waiting.push(go);
+        timer = setTimeout(function () {
+          // An old trail can name chunks this run never reads. Reclaim one
+          // completed speculative chunk, never a pending demand, to keep going.
+          for (var entry of unread) if (entry[1]) { evict(entry[0]); break; }
+          go();
+        }, 1000);
+      });
+    }
+    if (!loaded[key]) unread.set(key, false);
   }
-  // When ranges cannot be trusted every window is a whole GET of a 19 MB piece,
-  // so the pieces are pulled up front rather than one per stall in a room.
-  function fetchList(jobs, width, paced) {
+  async function fetchList(jobs, width, paced) {
     var next = 0;
     async function worker() {
       for (;;) {
         var k = next++;
         if (k >= jobs.length) return;
-        // paced: never hold more than AHEAD chunks nothing has read yet
-        if (paced) await room();
-        try { await piece(jobs[k][0], jobs[k][1], paced ? 2 : 1); } catch (e) { /* a later read asks again */ }
+        var s = jobs[k][0], i = jobs[k][1], key = s + ':' + i;
+        if (loaded[key]) continue;
+        if (paced) await room(key);
+        if (loaded[key]) { markRead(key); continue; }
+        try {
+          await piece(s, i, true);
+          if (unread.has(key)) { unread.set(key, true); wake(); }
+        } catch (e) { markRead(key); /* a later demand retries the cleared flight */ }
       }
     }
-    var crew = [], w;
-    for (w = 0; w < Math.min(width, jobs.length); w++) crew.push(worker());
-    return Promise.all(crew);
+    var crew = [];
+    for (var w = 0; w < Math.min(width, jobs.length); w++) crew.push(worker());
+    await Promise.all(crew);
   }
-  // Which chunks the boot itself reads. The trail is the list of reads the last
-  // boot made, in order, and the layout puts them near each other -- so this is
-  // a real subset, not a formality: 15 chunks of 28 on the build that added it.
-  function trailChunks() {
-    var t = P.trail;
-    if (!t || !t.length || !P.files) return null;
-    var need = [], seen = {}, j, i;
-    // Part A first, whatever the trail says. It is read whole, it holds the
-    // module, and nothing runs until it is here -- it must not be queued behind
-    // the archive at the background width.
-    for (j = 0; j < S.length; j++) {
-      if (!S[j].gz || S[j].size <= WIN) continue;
-      for (i = 0; i < count(j); i++) { seen[j + ':' + i] = 1; need.push([j, i]); }
+  function prefetchAll() {
+    var jobs = [], seen = Object.create(null), trail = P.trail || [], trailN = 0;
+    function add(s, i, fromTrail) {
+      var key = s + ':' + i;
+      if (seen[key] || S[s].gz || S[s].size <= WIN || i >= count(s)) return;
+      seen[key] = 1; jobs.push([s, i]);
+      if (fromTrail) { headLeft[key] = 1; trailN++; }
     }
-    for (j = 0; j < t.length; j++) {
-      var f = P.files[t[j][0]];
+    for (var j = 0; j < trail.length; j++) {
+      var f = P.files[trail[j][0]];
       if (!f) continue;
-      var st = S[f.s];
-      if (!st || st.size <= WIN) continue;
-      var a = f.at + t[j][1], b = a + t[j][2] - 1;
-      for (i = Math.floor(a / st.size); i <= Math.floor(b / st.size); i++) {
-        var k = f.s + ':' + i;
-        if (!seen[k] && i < count(f.s)) { seen[k] = 1; need.push([f.s, i]); }
-      }
+      var a = f.at + trail[j][1], b = a + trail[j][2] - 1;
+      for (var i = Math.floor(a / S[f.s].size); i <= Math.floor(b / S[f.s].size); i++) add(f.s, i, true);
     }
-    return need.length ? { need: need, seen: seen } : null;
-  }
-  // Round 89d: this used to pull every chunk before the first frame -- 532 MB
-  // of stream b to serve the 175 MB the boot actually reads. The trail says
-  // which 285 MB of that the boot will touch; those are what the first frame
-  // waits for. The rest is what a run might later wander into, and it comes
-  // down behind the game rather than in front of it.
-  async function prefetchAll() {
-    var all = [], s, i, n;
-    for (s = 0; s < S.length; s++) {
-      // Round 89: a stream whose piece IS a window has nothing to amortise -- a
-      // whole GET costs exactly what the read wanted. Pulling all of those
-      // would fetch the entire payload to serve the ~180 windows a boot
-      // touches: measured at 724 MB against 175.
-      if (S[s].size <= WIN) continue;
-      n = count(s);
-      for (i = 0; i < n; i++) all.push([s, i]);
-    }
-    var t = trailChunks();
-    if (!t) { await fetchList(all, 6); return null; }
-    var rest = [];
-    for (i = 0; i < all.length; i++) if (!t.seen[all[i][0] + ':' + all[i][1]]) rest.push(all[i]);
-
-    // Round 89f: 89d had the first frame wait for all 19 trail chunks, which is
-    // 380 MB that has to be RESIDENT at once because nothing has read any of it
-    // yet -- half of the 631 MB heap this build was measured holding. The boot
-    // does not need them all at once; it needs them in order, a little ahead of
-    // where it is reading. So only the head is waited on -- part A, because the
-    // module is in it and nothing runs otherwise, and the first few archive
-    // chunks so the early reads hit -- and the remainder streams behind the
-    // reader, never more than AHEAD chunks in front of it.
-    // Round 89f, second attempt. Streaming the boot's chunks past the reader
-    // bounded the memory and cost the game: the first frame came in 11 s and
-    // then sat at frame 2 for another three minutes. rebuild() inflates
-    // nineteen windows per chunk on the main thread, and once main() is running
-    // the engine owns that thread -- so a fetch that arrives during the boot
-    // rebuilds at a crawl, and widening the stream did not move it. The
-    // fetching has to finish BEFORE the engine starts, which is what 89d had.
-    //
-    // What bounds the memory now is the cache alone. (This said the least
-    // recently used chunk is one the boot has already read. It is not: a read
-    // moves its chunk to the young end, so the oldest are the ones not read
-    // yet, and oldest-first eviction took the boot's next chunk every time.
-    // Round 90f: trim() evicts read chunks first.)
-    var head = t.need;
-    for (i = 0; i < head.length; i++) headLeft[head[i][0] + ':' + head[i][1]] = 1;
-    // The boot's own ceiling: none. Round 90f: this was the head's size plus
-    // one spare, summed from S[].size -- the STORED size, and part A is stored
-    // gzipped, so the chunks it inflates to overran the budget during the
-    // prefetch itself and evicted part A before the module had been read out
-    // of it (measured: a0-a3 each fetched twice, the second time just before
-    // the first frame). The head IS what the boot is about to read; holding
-    // it is the point. STEADY comes back when the boot is over.
-    var want = 0;
-    for (i = 0; i < head.length; i++) want += S[head[i][0]].size;
-    CACHE_MAX = Infinity;
-    P.prefetch = { head: head.length, rest: rest.length, of: all.length, headMB: Math.round(want / 1048576) };
-    awaiting = head.length;
-    await fetchList(head, 6);
-    // the wait is over: say so once, then stop talking. What follows is not
-    // something the player is waiting on and must not read as loading.
-    if (P.onChunk) { try { P.onChunk(awaiting, awaiting); } catch (e) { /* decoration */ } }
-    quiet = true;
-    // the chunks no boot reads are for a run that wanders: paced, so they
-    // cannot pile up unread, and idle, so they do not fetch during the intro
-    return rest.length ? function () { return fetchList(rest, 2, true); } : null;
+    for (var s = 0; s < S.length; s++) for (var i = 0; i < count(s); i++) add(s, i, false);
+    P.prefetch = { head: trailN, rest: jobs.length - trailN, of: jobs.length };
+    // Observed inside fetchList; failed prefetches remain retryable by demands.
+    fetchList(jobs, STREAM_WIDTH, true);
   }
   window.isaacPortable = {
     manifest: P.manifest,
@@ -896,105 +780,41 @@ PROVIDER_JS = r"""
     trail: P.trail || null,
     status: P.status,
     ready: (async function () {
-      // Round 84: only a build that fetches. The single-file build carries its
-      // payload inline and has no base, and prefetching it asked the page for
-      // `null/a0.bin` -- eight of those, no frames, a build that did not run.
       if (!P.base) return ranges;
-      // These whole compressed chunks are required engine bytes, not archive
-      // speculation. Start them alongside the probes; piece() shares each
-      // request with the consumer, which need not wait for unrelated chunks.
       var required = [];
       for (var s = 0; s < S.length; s++) {
-        if (!S[s].gz || S[s].size <= WIN) continue;
+        if (!S[s].gz) continue;
         for (var i = 0; i < count(s); i++) required.push([s, i]);
       }
       fetchList(required, 4);
       await probeRanges();
-      // Exact ranges need only the archive windows the engine requests.
-      if (ranges) return ranges;
-      // Hosts without exact ranges still need the whole-chunk path.
-      var more = await prefetchAll();
-      // Round 90f: this block used to sit under `if (more)`. With the boot's
-      // budget uncapped, a build whose trail touches every chunk would then
-      // never leave it; the switch to STEADY has to happen either way, and only
-      // the leftover stream needs something left to stream.
-      {
-        // Round 89d: the ones no boot reads, not before the game is up.
-        // Between ready and the first frame the module still has to compile and
-        // the engine still has to mount its archives, and a 19 MB GET with
-        // nineteen window inflates behind it takes main-thread time in the
-        // middle of exactly that -- a white screen for as long as it lasts.
-        // requestIdleCallback fires once the frame loop is yielding, which is
-        // the game running; the timeout is the backstop for a page that never
-        // goes idle.
-        // and not on idle alone. The boot spends most of its time waiting on
-        // its own reads, which looks idle, so requestIdleCallback fired during
-        // the boot and pulled thirteen more chunks through the cache --
-        // evicting the trail chunks the boot had not finished with, which it
-        // then fetched again. Round 90f: and not on the FIRST frame either.
-        // The trail holds the reads up to frame 300 and the title's resources
-        // come after it; boot_web.mjs calls the boot over at frame 600
-        // (READER_CLEAR_FRAME), and so does this. At frame 1 the boot is still
-        // reading its trail, and dropping to STEADY then evicted the chunks it
-        // had not reached -- each one a 19 MB GET again on a CDN.
-        var later = function () { if (more) more(); };
-        var t0 = Date.now();
-        var whenRunning = function () {
-          if ((window.isaacFrame || 0) >= BOOT_OVER_FRAME || Date.now() - t0 > 300000) {
-            // the boot is done with its working set: give the memory back
-            CACHE_MAX = CACHE_STEADY; trim();
-            if (typeof requestIdleCallback === 'function') requestIdleCallback(later, { timeout: 30000 });
-            else setTimeout(later, 5000);
-            return;
-          }
-          setTimeout(whenRunning, 1000);
-        };
-        setTimeout(whenRunning, 1000);
-      }
+      if (!ranges) prefetchAll();
       return ranges;
     })(),
     ranges: function () { return ranges; },
     prefetch: function () { return P.prefetch || null; },
     key: KEY,
-    chunks: P.chunks || 0,
+    chunks: chunks,
     rangesWhy: function () { return P.rangesWhy || null; },
     loaded: function () { return loadedN; },
-    // round 90f: what the chunk cache holds, for a driver measuring the loader
+    progress: progress,
+    recordDownload: recordDownload,
     cache: function () {
-      return { mb: Math.round(cacheBytes / 1048576), n: cache.size,
-               maxMB: CACHE_MAX === Infinity ? null : Math.round(CACHE_MAX / 1048576),
+      return { mb: Math.round(cacheBytes / WIN), n: cache.size, maxMB: Math.round(CACHE_MAX / WIN),
                trailUnread: Object.keys(headLeft).length, evicted: evicted.slice() };
     },
-    // a window inside one raw chunk is a URL with the range in its fragment; the
-    // reader Worker strips it and sends a Range header (boot_web.mjs)
     urlFor: P.base ? function (rel, off, len) {
-      if (!len) return null;
+      if (!len || !ranges) return null;
       var parts = locate(rel, off, len);
       if (!parts || parts.length !== 1) return null;
       var p = parts[0];
-      // Round 89: a gzipped chunk is one window, so there is no range to ask
-      // for -- the Worker takes the whole file, unscrambles it from the chunk's
-      // own start, gunzips, and cuts the slice the read wanted. `@pos` is what
-      // the keystream needs; the range before it is inside the WINDOW, not
-      // inside the chunk, which is why this is a different fragment from #r=.
-      if (S[p.s].gz) return null;   // part A is read whole by the page itself
-      if (!ranges) return null;
-      // Round 89: the window's own stored bytes are a range like any other --
-      // shorter, and the Worker unwraps them. `!z` says whether this particular
-      // window is compressed at all, and `*at-take` is the cut inside it.
+      if (S[p.s].gz) return null;
       if (S[p.s].wl) {
         var w = P.workerWindows ? inWindow(p) : null;
-        if (w) {
-          return name(p.s, p.i, w) + '#w=' + w.from + '-' + w.to + '@' + w.abs
-            + '!' + (S[p.s].wz.charAt(w.k) === '1' ? 1 : 0)
-            + '*' + w.at + '-' + p.take;
-        }
-        return null;              // the bytes path rebuilds the chunk instead
+        if (!w) return null;
+        return name(p.s, p.i, w) + '#w=' + w.from + '-' + w.to + '@' + w.abs
+          + '!' + (S[p.s].wz.charAt(w.k) === '1' ? 1 : 0) + '*' + w.at + '-' + p.take;
       }
-      // the range rides in the fragment, which no server sees; `@pos` after it is
-      // where those bytes start in the stream, which is what unscrambles them
-      // `!len` is the chunk's own length: the Worker has nothing else to check a
-      // Content-Range against, and on this host that check is the whole defence
       var rawRange = { from: p.within, to: p.within + p.take - 1 };
       return name(p.s, p.i, rawRange) + '#r=' + rawRange.from + '-' + rawRange.to
         + '@' + (p.i * S[p.s].size + p.within) + '!' + chunkLen(p.s, p.i);
@@ -1007,8 +827,9 @@ PROVIDER_JS = r"""
           var total = parts.reduce(function (n, q) { return n + q.take; }, 0);
           var out = new Uint8Array(total);
           for (var k = 0; k < parts.length; k++) {
-            var q = parts[k], key = q.s + ':' + q.i, u = cache.get(key);
-            if (!u) { u = decode(inline[S[q.s].first + q.i]); cache.set(key, u); if (cache.size > 24) cache.delete(cache.keys().next().value); }
+            var q = parts[k], key = q.s + ':' + q.i, u = touch(key);
+            if (!u) u = remember(key, decode(inline[S[q.s].first + q.i]));
+            wasRead(key);
             out.set(u.subarray(q.within, q.within + q.take), q.at);
           }
           return out;
@@ -1050,16 +871,12 @@ def inject_at_end(html: str, tail: str) -> str:
 
 
 def cmd_chunks(args) -> int:
-    # Round 90f: without a boot trail the page cannot tell the chunks the boot
-    # reads from the rest, so it prefetches all of them before the first frame
-    # -- 543 MB where the boot needs ~330 -- through a cache sized for the steady
-    # state. Rounds 90 to 90e shipped exactly that: the dist had been built
-    # without ship.py --trail, and nothing said so.
+    # The trail orders bounded background archive prefetch ahead of likely reads.
     has_trail = os.path.isfile(os.path.join(args.dist, "boot-trail.json"))
     if not has_trail and not args.no_trail:
         raise SystemExit("%s has no boot-trail.json: rebuild it with ship.py (which ships "
                          "scripts/recomp/assets/boot-trail.json by default), or pass --no-trail "
-                         "to build a page that prefetches the whole payload" % args.dist)
+                         "to build a page without trail-directed prefetch" % args.dist)
     files = plan(args.dist, set(args.skip or []))
     whole, windowed = split_parts(files)
     table = {}
@@ -1191,6 +1008,8 @@ def cmd_chunks(args) -> int:
                 "v": chunk_tokens("b", n_b)}]
     # a compressed stream carries which of its chunks really are compressed
     for st in streams:
+        st["stored"] = [os.path.getsize(os.path.join(data_dir, "%s%d.bin" % (st["tag"], i)))
+                        for i in range(st["n"])]
         if st["gz"] and zflag.get(st["tag"]):
             st["z"] = "".join(str(x) for x in zflag[st["tag"]])
     # a window-compressed stream carries the length of every window instead: the
@@ -1234,7 +1053,7 @@ def cmd_chunks(args) -> int:
     print("  page %s (%s) -- %s"
           % (os.path.join(out_dir, "index.html"), human(len(html.encode("utf-8"))),
              "the modules and the boot trail (%d reads) are in it, nothing else is needed" % len(data["trail"])
-             if "trail" in data else "the modules are in it and NO boot trail: it prefetches the whole payload"))
+             if "trail" in data else "the modules are in it and NO boot trail: archive prefetch uses file order"))
     print("  base URL: %s" % data["base"])
     if n_a + n_b > 64:
         print("  %d files: no range is needed at this size, which suits a host whose ranges cannot be trusted"
@@ -1254,15 +1073,18 @@ def cmd_offline(args) -> int:
     a_len = lay_out(whole, table, 0)
     b_len = lay_out(windowed, table, 1, WINDOW)
     piece = args.piece_mib * MIB
-    blobs = []
+    blobs, stored = [], []
 
     def emit(_i, b):
         blobs.append(base64.b64encode(b).decode("ascii"))
+        stored.append(len(b))
 
     n_a = cut(whole, piece, emit)
     n_b = cut(windowed, piece, emit)
-    streams = [{"tag": "a", "size": piece, "gz": False, "n": n_a, "first": 0},
-               {"tag": "b", "size": piece, "gz": False, "n": n_b, "first": n_a}]
+    streams = [{"tag": "a", "size": piece, "gz": False, "n": n_a, "first": 0,
+                "bytes": a_len, "stored": stored[:n_a]},
+               {"tag": "b", "size": piece, "gz": False, "n": n_b, "first": n_a,
+                "bytes": b_len, "stored": stored[n_a:]}]
     data = {"streams": streams, "files": table, "base": None,
             "index": index_for(args.dist, files), "manifest": manifest_for(args.dist, files),
             "status": "loading"}
@@ -1331,8 +1153,7 @@ def main(argv=None) -> int:
     p.add_argument("--catalogue", help="where modpack.py's catalogue is served from; without one the "
                                        "page offers no MOD BROWSER row")
     p.add_argument("--no-trail", action="store_true",
-                   help="build even though the dist has no boot-trail.json (the page then prefetches the "
-                        "whole payload before its first frame; round 90f)")
+                   help="build without boot-trail.json; bounded background archive prefetch then uses file order")
     p.set_defaults(fn=cmd_chunks)
     p = sub.add_parser("offline")
     p.add_argument("dist"); p.add_argument("out")

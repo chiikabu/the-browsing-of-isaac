@@ -5,6 +5,33 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-06 — Byte-based percentage and background archive startup
+
+The loading bar and Team Meat bitmap-font percentage now share one rendered
+snapshot of unique received payload bytes over a fixed stored-byte total.
+Streamed prefixes count as they arrive; headers, decoded engine stages, retries
+and overlapping worker reads cannot inflate the percentage. HTTP content
+encoding is distinct from payload compression: Fetch returns decoded response
+bytes, so an encoded Content-Length is not the payload size. Inline builds are
+already downloaded, but still retain the native readiness and audio gate.
+
+The engine no longer waits for the archive head on whole-chunk fallback hosts.
+Bounded background prefetch shares requests with demand reads, protects unread
+engine chunks, and caches compressed archive windows without eagerly decoding
+them. Exact-range hosts retain on-demand window streaming. Rejected response
+bodies are cancelled before advancing the pool or falling back. Immutable asset
+URLs, payload bytes, simulation, original Enter input and output-audio gating
+are unchanged; no native boundary was removed and Update ABI remains 101.
+
+The four affected Node suites passed 113 tests after 61 journaled behavioral
+mutants were killed and restored byte-identically. All 25 new or updated
+behavioral tests discriminated; no stranded mutants remain. Cold/warm browsers
+reached native title and live gameplay before the payload was fully downloaded,
+with matching visible percentage/bar state and zero destination audio under
+the loader. Verification artifacts remain under `.scratch/loading-progress/`.
+These observations do not establish an FPS gain, a repeatable timing speedup,
+full-game/save/mod equivalence or physical-device coverage.
+
 ## 2026-10-06 — Native loader, output-audio gate and bounded downloads
 
 The portable page now uses the minimal native-style loading screen and waits for

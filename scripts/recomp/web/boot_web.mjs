@@ -330,21 +330,41 @@ function start(key, url, len, why, want) {
         if (r.ok) {
           // the host's own answer says which file it thinks it is serving. The
           // total is read by hand: a regex would need backslashes, and see above.
-          if (r.status === 206 && chunkBytes > 0) {
-            const cr = r.headers.get('content-range') || '', sl = cr.lastIndexOf('/');
+          if (r.status === 206 && want0 >= 0) {
+            const cr = (r.headers.get('content-range') || '').trim(), sl = cr.lastIndexOf('/');
             const total = sl < 0 ? NaN : Number(cr.slice(sl + 1).trim());
-            if (Number.isFinite(total) && total !== chunkBytes) { last = 'the host calls that chunk ' + total + ' bytes, not ' + chunkBytes; break; }
+            if (chunkBytes > 0 && Number.isFinite(total) && total !== chunkBytes) {
+              if (r.body) await r.body.cancel().catch(() => {});
+              last = 'the host calls that chunk ' + total + ' bytes, not ' + chunkBytes; break;
+            }
+            const dash = cr.indexOf('-', 6);
+            if (!cr.toLowerCase().startsWith('bytes ') || dash <= 6 || sl <= dash + 1 ||
+                Number(cr.slice(6, dash)) !== want0 || Number(cr.slice(dash + 1, sl)) !== want1) {
+              if (r.body) await r.body.cancel().catch(() => {});
+              throw new Error('the host returned a different byte range');
+            }
           }
-          return await r.arrayBuffer();
+          const buf = await r.arrayBuffer();
+          if (r.status === 206 && want0 >= 0) {
+            if (buf.byteLength !== want1 - want0 + 1) throw new Error('short or oversized range body');
+            postMessage({ download: { url, from: want0, to: want1 + 1 } });
+          } else if (r.status === 200) postMessage({ download: { url, from: 0, to: buf.byteLength } });
+          return buf;
         }
         last = 'HTTP ' + r.status;
+        if (r.body) await r.body.cancel().catch(() => {});
       } catch (e) { last = (e && e.message) || 'fetch failed'; }
     }
     if (want0 < 0) throw new Error(last || 'fetch failed');
     // no range this time: the whole chunk, cut here
     const r = await fetch(url);
-    if (!r.ok) throw new Error('whole chunk: HTTP ' + r.status);
-    return await r.arrayBuffer();
+    if (!r.ok) {
+      if (r.body) await r.body.cancel().catch(() => {});
+      throw new Error('whole chunk: HTTP ' + r.status);
+    }
+    const buf = await r.arrayBuffer();
+    if (r.status === 200) postMessage({ download: { url, from: 0, to: buf.byteLength } });
+    return buf;
   };
   tries().then(async (buf) => {
     if (buf && winAt >= 0) {
@@ -441,6 +461,7 @@ function startReader() {
   reader = w;
   w.onmessage = (e) => {
     const d = e.data;
+    if (d.download && hooks.onDownload) hooks.onDownload(d.download.url, d.download.from, d.download.to);
     if (!d.want) return;
     const p = pendingReads.get(d.want);
     if (!p) return;
