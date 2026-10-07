@@ -31,11 +31,16 @@ skips the original intro. Add `?autoplay=0` to start with a Play button instead.
 Click the game if it does not have keyboard focus. Browser audio policies may
 require a click or keypress before sound can play.
 
+The loading bar and Isaac-font percentage count received payload bytes against
+a fixed total, including cached downloads. They do not estimate engine
+initialization time. The game can appear below 100%: remaining assets continue
+downloading in the background or stream when needed.
+
 Engine downloads and independent range checks overlap with bounded concurrency.
-Exact-range hosts stream archive windows; unreliable range hosts use the
-whole-chunk path. Immutable window URLs preserve the browser's download cache.
-Add `?stats=1` for loading diagnostics. Network conditions still dominate cold
-starts; repeat visits retain the browser cache.
+Exact-range hosts stream archive windows; unreliable range hosts download whole
+chunks in the background without blocking startup on the full archive set.
+Compressed archive windows decode only when read. Immutable window URLs preserve
+the browser's download cache. Add `?stats=1` for loading diagnostics.
 
 ### Saves and mods
 
@@ -131,6 +136,9 @@ npm run repo:check
 npm test
 python scripts/recomp/host/build_selftest.py
 python scripts/recomp/assets/ship.py check .scratch/game-dist
+
+# Loading progress, background downloads, worker reads and output-audio gate
+node --test tests/recomp-portable.test.js tests/recomp-audio.test.js tests/recomp-web.test.js tests/recomp-ship.test.js
 
 # Real-page smoke with save persistence disabled
 node scripts/recomp/web/drive_interactive.mjs "http://127.0.0.1:8200/?frames=1500&persist=0" output/recomp/local-smoke

@@ -105,21 +105,28 @@ function render() {
         : s.total ? `${mb(s.done ? s.total : s.received)} / ${mb(s.total)} MB` : (s.received ? `${mb(s.received)} MB` : '');
       n.className = 'name' + (s.done ? ' done' : s.received ? ' active' : '');
     }
-    // the one bar: the bytes of the three fetch stages, the boot as the last per
-    // cent. On a chunked build the chunk count is the better measure early on,
-    // because a byte total is not known until the piece holding it has arrived,
-    // so the bar takes whichever of the two is further along.
-    let tot = 0, got = 0;
-    for (const name of ['module', 'image', 'archives']) { const s = stages[name]; if (s.total) { tot += s.total; got += s.done ? s.total : Math.min(s.received, s.total); } }
-    const byBytes = tot ? 100 * got / tot : 0;
-    const c = stages.chunks;
-    const byChunks = c.total ? 100 * Math.min(c.received, c.total) / c.total : 0;
-    const pct = gameReady ? 100 : Math.min(99, Math.max(byBytes, byChunks));
-    $('bar-fill').style.width = `${pct.toFixed(1)}%`;
+    // Chunked builds count stored payload bytes, including background assets.
+    // Served builds use their fixed boot-file totals and actual response bytes.
+    const download = portable && typeof portable.progress === 'function' ? portable.progress() : null;
+    let total = 0, received = 0;
+    if (download) { total = download.total; received = download.received; }
+    else for (const name of ['module', 'image', 'archives']) {
+      const s = stages[name];
+      total += s.total;
+      received += Math.min(s.received, s.total);
+    }
+    const pct = total ? Math.max(0, Math.min(100, Math.floor(100 * received / total))) : download ? 100 : 0;
+    const text = `${pct}%`;
+    $('bar-fill').style.width = text;
+    $('bar').setAttribute('aria-valuenow', String(pct));
+    $('bar').setAttribute('aria-valuetext', text);
+    $('percentage').textContent = text;
+    // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
+    $('percentage').style.backgroundPosition = `${-pct * 50}px 0px`;
   });
 }
-// Native-style loading text stays unchanged while preparation has no known
-// percentage. Technical details are visible only with ?stats=1.
+// Engine preparation does not change the download percentage. Technical details
+// are visible only with ?stats=1.
 function setStatus(text, detail) {
   statusEl.textContent = STATS ? (detail || text)
     : gameReady || overlay.classList.contains('ready-to-play') ? '' : 'Loading...';
@@ -132,6 +139,8 @@ function setStatus(text, detail) {
 // chunked build, so the reader Worker still fetches in parallel) or with bytes (the
 // single-file build, which has them inline). Absent, everything below is unchanged.
 const portable = (typeof window !== 'undefined' && window.isaacPortable) || null;
+if (portable && typeof portable.progress === 'function' && window.__isaacPortableData)
+  window.__isaacPortableData.onProgress = render;
 
 // ---- manifest + index: the totals, the versions ------------------------------
 let manifest = null;
@@ -172,6 +181,8 @@ else setStatus('loading', manifest ? null : 'no dist.json: sizes unknown');
 let streamed = 0, streamedRequests = 0;
 const hooks = {};
 hooks.params = pageDefaults;
+if (portable && typeof portable.recordDownload === 'function')
+  hooks.onDownload = (url, from, to) => portable.recordDownload(url, from, to);
 // Called before the output is connected, including delayed audio initialization
 // and context recreation. Only the destination is muted; the mixer stays live.
 hooks.onAudioReady = (A) => {
@@ -181,9 +192,7 @@ hooks.onAudioReady = (A) => {
 // a single-file build answers with bytes, not URLs: the reader Worker would have
 // nothing to fetch, so it is not started
 hooks.noReader = !!(portable && !portable.urlFor);
-// round 77: a chunked build says which chunk it is on. Hook this before ready:
-// when ranges cannot be trusted, ready waits until every chunk is fetched, and
-// the status line is the only progress that exists for that wait.
+// Chunk counts remain an opt-in diagnostic, separate from stored-byte progress.
 if (portable && portable.chunks) {
   stages.chunks.total = portable.chunks;
   // round 82: the grid is an instrument. It used to be shown here, which put all
@@ -194,12 +203,8 @@ if (portable && portable.chunks) {
     stages.chunks.received = got;
     stages.chunks.total = total || stages.chunks.total;
     stages.chunks.done = got >= stages.chunks.total;
-    // Round 89e: once the fetching is done the engine still has a module to
-    // compile and archives to mount, and that is ten seconds or more. Leaving
-    // the count up said LOADING 19 / 19 for all of it, which reads as a load
-    // that finished and then hung.
-    setStatus(stages.chunks.done ? 'starting' : `loading ${got} / ${stages.chunks.total}`,
-              stages.chunks.done ? `${got} chunk(s) fetched; compiling and mounting` : null);
+    if (!gameReady)
+      setStatus('loading', `${got} / ${stages.chunks.total} chunk(s) fetched`);
     render();
   };
 }

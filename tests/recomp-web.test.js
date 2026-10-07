@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
+import { gzipSync } from 'node:zlib';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const hostSrc = join(root, 'scripts', 'recomp', 'host', 'src');
@@ -343,15 +344,22 @@ function readerWorkerSource() {
 }
 
 function deferredReaderWorker() {
-  const requests = [], messages = [];
+  const requests = [], messages = [], downloads = [], timers = [];
+  let complete;
+  const completed = new Promise((resolve) => { complete = resolve; });
   const worker = {
-    fetch(url) {
-      return new Promise((resolve) => requests.push({ url, resolve }));
+    Blob, Response, DecompressionStream,
+    fetch(url, init) {
+      return new Promise((resolve) => requests.push({ url, init, resolve }));
     },
-    postMessage(message) { messages.push(message); },
+    setTimeout(callback) { timers.push(callback); },
+    postMessage(message) {
+      if (message.download) downloads.push({ ...message.download });
+      else { messages.push(message); complete(message); }
+    },
   };
   new Script(readerWorkerSource()).runInNewContext(worker);
-  return { worker, requests, messages };
+  return { worker, requests, messages, downloads, timers, completed };
 }
 
 test('reader scheduler: configured parallel cap bounds a demand and ahead burst', async () => {
@@ -411,6 +419,135 @@ test('reader scheduler: demand starts with all speculative slots occupied', asyn
   }
   await new Promise(setImmediate);
 });
+
+test('reader downloads: compressed ranges count stored bytes, not decoded output', async () => {
+  const { worker, requests, messages, downloads, completed } = deferredReaderWorker();
+  const plain = Uint8Array.from({ length: 32 }, (_, i) => i * 3);
+  const packed = gzipSync(plain);
+  const key = Uint8Array.from({ length: 256 }, (_, i) => 255 - i);
+  const stored = Uint8Array.from(packed, (byte, i) => byte ^ key[(256 + i) & 255] ^ (((256 + i) >> 8) & 255));
+  const url = 'https://assets.example/stream.bin?v=immutable&w=8';
+  const windowUrl = url + '#w=8-' + (8 + stored.length - 1) + '@256!1*2-4';
+  worker.onmessage({ data: { xorKey: key } });
+  worker.onmessage({ data: { jobs: [['window', windowUrl, 4]], budget: 1024, parallel: 2 } });
+  assert.deepEqual(requests.map(({ url }) => url), [url]);
+  assert.equal(requests[0].init.headers.Range, 'bytes=8-' + (8 + stored.length - 1));
+  assert.deepEqual(downloads, []);
+  requests[0].resolve(new Response(stored, {
+    status: 206, headers: { 'content-range': 'bytes 8-' + (8 + stored.length - 1) + '/128' },
+  }));
+  // Attach demand while decompression is in flight.
+  worker.onmessage({ data: { want: 1, key: 'window', url: windowUrl, len: 4 } });
+  await completed;
+  assert.deepEqual(downloads, [{ url, from: 8, to: 8 + stored.length }]);
+  assert.deepEqual(Array.from(new Uint8Array(messages[0].buf)), Array.from(plain.slice(2, 6)));
+});
+
+test('reader downloads: completed speculative response is not counted again on cached demand', async () => {
+  const { worker, requests, messages, downloads } = deferredReaderWorker();
+  const bytes = Uint8Array.from([9, 7, 5, 3]);
+  const url = 'https://assets.example/stream.bin?v=immutable&w=20';
+  const rangeUrl = url + '#r=20-23!32';
+  worker.onmessage({ data: { jobs: [['cached', rangeUrl, 4]], budget: 1024, parallel: 2 } });
+  requests[0].resolve(new Response(bytes, { status: 206, headers: { 'content-range': 'bytes 20-23/32' } }));
+  await new Promise(setImmediate);
+  assert.deepEqual(messages, [], 'background download has no waiting engine read');
+  assert.deepEqual(downloads, [{ url, from: 20, to: 24 }]);
+  worker.onmessage({ data: { want: 1, key: 'cached', url: rangeUrl, len: 4 } });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(downloads, [{ url, from: 20, to: 24 }]);
+  assert.equal(messages[0].hit, true);
+  assert.deepEqual(Array.from(new Uint8Array(messages[0].buf)), Array.from(bytes));
+});
+
+test('reader downloads: failed and short bodies earn no credit before existing retry succeeds', async () => {
+  const { worker, requests, messages, downloads, timers } = deferredReaderWorker();
+  const url = 'https://assets.example/stream.bin?v=immutable&w=20';
+  const bytes = Uint8Array.from([2, 4, 6, 8]);
+  worker.onmessage({ data: { want: 1, key: 'retry', url: url + '#r=20-23!32', len: 4 } });
+  let rejectBody;
+  requests[0].resolve({
+    ok: true, status: 206, headers: new Headers({ 'content-range': 'bytes 20-23/32' }),
+    arrayBuffer: () => new Promise((resolve, reject) => { rejectBody = reject; }),
+  });
+  await new Promise(setImmediate);
+  assert.deepEqual(downloads, [], 'response headers are not downloaded bytes');
+  rejectBody(new Error('connection closed'));
+  await new Promise(setImmediate);
+  assert.deepEqual(downloads, []);
+  timers.shift()();
+  await new Promise(setImmediate);
+  requests[1].resolve(new Response(bytes.slice(0, 3), {
+    status: 206, headers: { 'content-range': 'bytes 20-23/32' },
+  }));
+  await new Promise(setImmediate);
+  assert.deepEqual(downloads, []);
+  assert.deepEqual(messages, [], 'short body does not reach engine');
+  timers.shift()();
+  await new Promise(setImmediate);
+  requests[2].resolve(new Response(bytes, {
+    status: 206, headers: { 'content-range': 'bytes 20-23/32' },
+  }));
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 3, 'the existing three-attempt budget is unchanged');
+  assert.deepEqual(downloads, [{ url, from: 20, to: 24 }]);
+  assert.deepEqual(Array.from(new Uint8Array(messages[0].buf)), Array.from(bytes));
+});
+
+test('reader downloads: wrong response offsets are cancelled before retrying the requested range', async () => {
+  const { worker, requests, messages, downloads, timers } = deferredReaderWorker();
+  const url = 'https://assets.example/stream.bin?v=immutable&w=20';
+  const bytes = Uint8Array.from([2, 4, 6, 8]);
+  worker.onmessage({ data: { want: 1, key: 'offset', url: url + '#r=20-23!32', len: 4 } });
+  let cancelled = false;
+  const wrongBody = new ReadableStream({
+    start(controller) { controller.enqueue(bytes); },
+    cancel() { cancelled = true; },
+  });
+  requests[0].resolve(new Response(wrongBody, {
+    status: 206, headers: { 'content-range': 'bytes 24-27/32' },
+  }));
+  await new Promise(setImmediate);
+  assert.equal(cancelled, true, 'rejected range stops downloading before retry');
+  assert.deepEqual(downloads, []);
+  assert.deepEqual(messages, [], 'the wrong bytes never reach the engine');
+  timers.shift()();
+  await new Promise(setImmediate);
+  requests[1].resolve(new Response(bytes, {
+    status: 206, headers: { 'content-range': 'bytes 20-23/32' },
+  }));
+  await new Promise(setImmediate);
+  assert.deepEqual(downloads, [{ url, from: 20, to: 24 }]);
+  assert.deepEqual(Array.from(new Uint8Array(messages[0].buf)), Array.from(bytes));
+});
+
+for (const fallback of [false, true]) {
+  test('reader downloads: whole 200 ' + (fallback ? 'fallback' : 'range response') + ' counts full body and returns requested slice', async () => {
+    const { worker, requests, messages, downloads } = deferredReaderWorker();
+    const url = 'https://assets.example/stream.bin?v=immutable&w=8';
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) => i + 10);
+    worker.onmessage({ data: { want: 1, key: 'whole', url: url + '#r=8-11!32', len: 4 } });
+    if (fallback) {
+      let cancelled = false;
+      const wrongBody = new ReadableStream({
+        start(controller) { controller.enqueue(bytes.slice(8, 12)); },
+        cancel() { cancelled = true; },
+      });
+      requests[0].resolve(new Response(wrongBody, {
+        status: 206, headers: { 'content-range': 'bytes 8-11/64' },
+      }));
+      await new Promise(setImmediate);
+      assert.equal(cancelled, true, 'wrong-total response stops downloading before fallback');
+      assert.deepEqual(downloads, [], 'a response for the wrong chunk earns no credit');
+      assert.equal(requests.length, 2);
+      assert.equal(requests[1].init, undefined, 'fallback requests the whole chunk');
+    }
+    requests[requests.length - 1].resolve(new Response(bytes));
+    await new Promise(setImmediate);
+    assert.deepEqual(downloads, [{ url, from: 0, to: 32 }]);
+    assert.deepEqual(Array.from(new Uint8Array(messages[0].buf)), Array.from(bytes.slice(8, 12)));
+  });
+}
 
 test('round 87: the credit is drawn on the menu paper and nowhere else', () => {
   // Bottom-left of the picture, in the game's own font. #stage IS the 16:9

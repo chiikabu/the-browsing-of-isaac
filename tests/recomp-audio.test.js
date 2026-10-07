@@ -368,9 +368,16 @@ function pageAudio(api, hooks = {}) {
   return window;
 }
 
-async function loadingPage(search = '') {
+async function loadingPage(search = '', { received = 0, total = 1000, portable = true } = {}) {
   const elements = new Map(), intervals = [], frames = [], words = new Map(), events = new Map();
   let now = 0;
+  const downloaded = { received, total };
+  const manifest = { files: [{ path: 'boot.wasm', size: 100 }, { path: 'isaac.segs.bin', size: 600 }] };
+  const index = [{ p: 'resources/packed/graphics.a', s: 300 }];
+  const responses = new Map([
+    ['/dist.json', JSON.stringify(manifest)], ['/instance_index.json', JSON.stringify(index)],
+    ['/isaac.segs.bin', new Uint8Array(600)], ['/instance/resources/packed/graphics.a', new Uint8Array(300)],
+  ]);
   const document = {
     hidden: false,
     getElementById: (id) => elements.get(id),
@@ -378,11 +385,12 @@ async function loadingPage(search = '') {
   };
   const html = readFileSync(join(web, 'play.html'), 'utf8');
   for (const [, tag, id] of html.matchAll(/(<[^>]*\bid="([^"]+)"[^>]*>)/g)) {
-    const classes = new Set(), listeners = new Map(), attributes = new Map();
+    const classes = new Set(), listeners = new Map();
+    const attributes = new Map([...tag.matchAll(/\b([\w-]+)="([^"]*)"/g)].map(([, key, value]) => [key, value]));
     const element = {
       hidden: /\bhidden\b/.test(tag), open: false, style: {}, textContent: '', title: '',
       classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
-      setAttribute: (key, value) => attributes.set(key, value),
+      setAttribute: (key, value) => attributes.set(key, String(value)),
       removeAttribute: (key) => attributes.delete(key),
       getAttribute: (key) => attributes.get(key),
       addEventListener: (event, fn) => listeners.set(event, fn),
@@ -394,7 +402,8 @@ async function loadingPage(search = '') {
   }
   const window = {
     AudioContext: FakeContext,
-    isaacPortable: { manifest: { files: [] }, index: [], bytesFor: async () => new Uint8Array() },
+    __isaacPortableData: {},
+    isaacPortable: portable ? { manifest, index, chunks: 4, progress: () => ({ ...downloaded }), bytesFor: async () => new Uint8Array() } : null,
     isaacGuest: { u32: (address) => words.get(address) || 0, u8: (address) => (words.get(address) || 0) & 255 },
     addEventListener: (event, fn) => events.set(event, fn),
     isaacFrame: 0,
@@ -404,6 +413,11 @@ async function loadingPage(search = '') {
     window, document, location: new URL(`https://game.invalid/play.html${search}`), navigator: {},
     URL, URLSearchParams, TextEncoder, TextDecoder, performance: { now: () => now },
     console,
+    fetch: async (url) => {
+      const path = new URL(url, 'https://game.invalid/').pathname;
+      if (!responses.has(path)) throw new Error(`unexpected page fetch: ${path}`);
+      return new Response(responses.get(path));
+    },
     requestAnimationFrame: (fn) => frames.push(fn),
     setInterval: (fn, ms) => { intervals.push({ fn, ms, next: now + ms }); },
     createEditFileMenu: () => menu, createPaperMenu: () => ({}), createModsMenu: () => menu,
@@ -412,18 +426,79 @@ async function loadingPage(search = '') {
     .replace(/^import .+ from '.+';\r?$/gm, '')
     .replace("import('./boot_web.mjs')", 'Promise.resolve()');
   await new Script(`(async () => {\n${source}\n})()`).runInNewContext(context);
+  const paint = () => { for (const fn of frames.splice(0)) fn(now); };
   return {
     window, elements, words, hooks: window.isaacPageHooks,
+    paint,
+    download(bytes) { downloaded.received = bytes; window.__isaacPortableData.onProgress?.(); },
     error: () => events.get('error')({ message: 'engine failed before readiness' }),
     menu: (screen = 1, manager = 0x1000) => { words.set(0x00c72a20, manager); words.set(manager + 0x40, screen); },
     advance(frame) {
       window.isaacFrame = frame;
       now += 500;
       for (const timer of intervals) if (now >= timer.next) { timer.next += timer.ms; timer.fn(); }
-      for (const fn of frames.splice(0)) fn(now);
+      paint();
     },
   };
 }
+
+function assertDownloadProgress(page, percent) {
+  const bar = page.elements.get('bar');
+  assert.equal(bar.getAttribute('role'), 'progressbar');
+  assert.equal(bar.getAttribute('aria-valuemin'), '0');
+  assert.equal(bar.getAttribute('aria-valuemax'), '100');
+  assert.equal(bar.getAttribute('aria-valuenow'), String(percent));
+  assert.equal(bar.getAttribute('aria-valuetext'), `${percent}%`);
+  assert.equal(page.elements.get('percentage').textContent, `${percent}%`);
+  assert.equal(Number.parseFloat(page.elements.get('bar-fill').style.width), percent);
+}
+
+test('download percentage snapshots prior bytes and ignores decoded stages and chunk counts', async () => {
+  const page = await loadingPage('', { received: 371, total: 1000 });
+  page.paint();
+  assertDownloadProgress(page, 37);
+  page.window.__isaacPortableData.onChunk(4, 4);
+  page.hooks.onLog('=== layout ===');
+  page.hooks.onLog('=== host boot (IAT + TEB + TLS + _initterm) ===');
+  page.paint();
+  assertDownloadProgress(page, 37);
+  page.download(749);
+  page.download(754);
+  page.paint();
+  assertDownloadProgress(page, 75);
+  page.download(999);
+  page.paint();
+  assertDownloadProgress(page, 99);
+  page.download(1000);
+  page.paint();
+  assertDownloadProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, false, 'all downloaded bytes do not imply native readiness');
+});
+
+test('served builds count response bytes without completing downloads from stage markers', async () => {
+  const page = await loadingPage('', { portable: false });
+  await page.hooks.fetchBytes('/isaac.segs.bin');
+  page.paint();
+  assertDownloadProgress(page, 60);
+  page.hooks.onLog('=== layout ===');
+  page.hooks.onLog('=== host boot (IAT + TEB + TLS + _initterm) ===');
+  page.paint();
+  assertDownloadProgress(page, 60);
+  await page.hooks.fetchBytes('/instance/resources/packed/graphics.a');
+  page.paint();
+  assertDownloadProgress(page, 90);
+});
+
+test('inline payload is fully downloaded while native readiness still gates audio and the loader', async () => {
+  const page = await loadingPage('', { received: 0, total: 0 }), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  for (const frame of [1, 3, 20]) page.advance(frame);
+  assertDownloadProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0);
+});
 
 function playTone(api, gain = 0.6) {
   stereoChunk(api, 1, 1024);
@@ -432,12 +507,13 @@ function playTone(api, gain = 0.6) {
 }
 
 test('loading keeps mixer energy but silences output until a stable native menu is visible', async () => {
-  const page = await loadingPage(), api = backend(), meter = pageAudio(api, page.hooks);
+  const page = await loadingPage('', { received: 371, total: 1000 }), api = backend(), meter = pageAudio(api, page.hooks);
   await page.hooks.beforeMain(api.Module);
   const ctx = playTone(api);
   page.hooks.onLog('=== main @ 0x00931050 ===');
   for (const frame of [1, 3, 20]) page.advance(frame);
   assert.equal(page.elements.get('overlay').hidden, false, 'early presentations are not readiness');
+  assertDownloadProgress(page, 37);
   assert.ok(near(meter.isaacAudioLevel().rmsNow, 0.3), 'real PCM still reaches the mixer analyser');
   assert.equal(ctx.level(), 0, 'no PCM reaches the destination under the loader');
   page.menu();
@@ -451,6 +527,11 @@ test('loading keeps mixer energy but silences output until a stable native menu 
   assert.equal(page.elements.get('overlay').hidden, true);
   assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
   assert.ok(near(ctx.level(), 0.3), 'the same source becomes audible without restarting');
+  assertDownloadProgress(page, 37);
+  page.download(826);
+  page.advance(24);
+  assertDownloadProgress(page, 82);
+  assert.equal(page.elements.get('overlay').hidden, true, 'background progress does not cover the ready game');
   api.gain(10, 0.25);
   assert.ok(near(ctx.level(), 0.125), 'normal volume still controls output');
   api.stop(10);
