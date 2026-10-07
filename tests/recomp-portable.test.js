@@ -279,6 +279,92 @@ test('portable byte progress measures streamed prefixes with a fixed unequal-siz
   assert.ok(updates.every((p) => p.total === 14 && p.received <= 14));
 });
 
+test('portable boot progress excludes archive probes and worker ranges while deduplicating streamed retries', { timeout: 5000 }, async () => {
+  const data = chunkData(2, 1), updates = [];
+  const first = Buffer.from([3, 5, 7, 11, 13]), second = Buffer.from([17, 19, 23, 29, 31, 37, 41, 43, 47]);
+  const archive = Buffer.alloc(2048, 59);
+  data.streams[0].stored = [first.length, second.length];
+  data.streams[1].stored = [archive.length];
+  data.files.engine0.size = first.length; data.files.engine1.size = second.length;
+  data.files['resources/packed/archive.a'].size = archive.length;
+  data.onProgress = (value) => updates.push({ ...value });
+  const h = deferredPortable(data);
+  assert.deepEqual(h.provider.progress('boot'), { received: 0, total: 14 },
+    'bootstrap denominator uses stored lengths, not logical bytes or archive lengths');
+  assert.deepEqual(h.provider.progress(), { received: 0, total: 2062 });
+  await answerProbes(h, [archive]);
+  assert.equal(await h.provider.ready, true);
+  assert.deepEqual(h.provider.progress('boot'), { received: 0, total: 14 });
+  assert.deepEqual(h.provider.progress(), { received: 1536, total: 2062 },
+    'full diagnostics retain the union of overlapping probe bytes');
+
+  const firstRead = h.provider.bytesFor('engine0', 0, 0);
+  const failed = assert.rejects(firstRead, /disconnected/);
+  const one = pending(h, 'a0.bin', null).stream();
+  one.enqueue(first.subarray(0, 3));
+  await turn();
+  assert.deepEqual(h.provider.progress('boot'), { received: 3, total: 14 });
+  assert.deepEqual(h.provider.progress(), { received: 1539, total: 2062 });
+  one.error(new Error('disconnected'));
+  await failed;
+  const retry = h.provider.bytesFor('engine0', 0, 0);
+  const again = pending(h, 'a0.bin', null).stream();
+  again.enqueue(first.subarray(0, 2));
+  await turn();
+  assert.deepEqual(h.provider.progress('boot'), { received: 3, total: 14 },
+    'retry prefix cannot advance bootstrap twice');
+
+  const worker = deferredReaderWorker(h.provider);
+  const url = h.provider.urlFor('resources/packed/archive.a', 1024, 768);
+  const workerRead = worker.read(url, 768);
+  answerRange(pending(worker, 'b0.bin', 'bytes=1024-1791'), archive);
+  assert.deepEqual(Buffer.from((await workerRead).buf), archive.subarray(1024, 1792));
+  assert.deepEqual(h.provider.progress('boot'), { received: 3, total: 14 });
+  assert.deepEqual(h.provider.progress(), { received: 1795, total: 2062 },
+    'worker completion overlaps probes without entering bootstrap progress');
+
+  again.enqueue(first.subarray(2)); again.close();
+  assert.deepEqual(Buffer.from(await retry), first);
+  assert.deepEqual(h.provider.progress('boot'), { received: 5, total: 14 },
+    'one of two unequal bootstrap chunks is not fifty percent');
+  const lastRead = h.provider.bytesFor('engine1', 0, 0);
+  pending(h, 'a1.bin', null).reply(second);
+  assert.deepEqual(Buffer.from(await lastRead), second);
+  assert.deepEqual(h.provider.progress('boot'), { received: 14, total: 14 });
+  assert.deepEqual(h.provider.progress(), { received: 1806, total: 2062 },
+    'bootstrap finishes while future archive bytes remain');
+
+  const endURL = h.provider.urlFor('resources/packed/archive.a', 1280, 768);
+  const endRead = worker.read(endURL, 768);
+  answerRange(pending(worker, 'b0.bin', 'bytes=1280-2047'), archive);
+  assert.deepEqual(Buffer.from((await endRead).buf), archive.subarray(1280));
+  assert.deepEqual(h.provider.progress('boot'), { received: 14, total: 14 });
+  assert.deepEqual(h.provider.progress(), { received: 2062, total: 2062 });
+  assert.deepEqual(updates.at(-1), { received: 2062, total: 2062 },
+    'progress callbacks retain their full-payload contract');
+  assert.ok(updates.every((value) => value.total === 2062 && value.received <= 2062));
+});
+
+test('portable inline boot progress requires no download while full progress retains embedded bytes before and after reads', async () => {
+  const data = chunkData(1, 1);
+  const engine = Buffer.from([3, 5, 7, 11, 13]), archive = Buffer.from([17, 19, 23, 29, 31, 37, 41]);
+  delete data.base;
+  data.blobs = [engine.toString('base64'), archive.toString('base64')];
+  Object.assign(data.streams[0], { first: 0, stored: [engine.length] });
+  Object.assign(data.streams[1], { first: 1, stored: [archive.length] });
+  data.files.engine0.size = engine.length;
+  data.files['resources/packed/archive.a'].size = archive.length;
+  const h = deferredPortable(data);
+  await h.provider.ready;
+  assert.deepEqual(h.provider.progress('boot'), { received: 0, total: 0 });
+  assert.deepEqual(h.provider.progress(), { received: 12, total: 12 });
+  assert.deepEqual(Buffer.from(h.provider.bytesFor('engine0', 1, 3)), engine.subarray(1, 4));
+  assert.deepEqual(Buffer.from(h.provider.bytesFor('resources/packed/archive.a', 2, 4)), archive.subarray(2, 6));
+  assert.deepEqual(h.provider.progress('boot'), { received: 0, total: 0 });
+  assert.deepEqual(h.provider.progress(), { received: 12, total: 12 });
+  assert.equal(h.requests.length, 0);
+});
+
 test('portable worker intervals preserve version identity and union overlaps across all stored chunks', async () => {
   const data = chunkData(0, 2);
   data.streams[1].stored = [100, 300];
