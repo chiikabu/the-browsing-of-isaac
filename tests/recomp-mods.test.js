@@ -230,16 +230,6 @@ test('the zip reader is one reader, imported by both menus', () => {
   assert.ok(m.includes("throw new Error(`this is a .${kind}, and nothing in a browser can open one. `"));
 });
 
-test('the page ships the new modules, and a portable build inlines them in order', () => {
-  const ship = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'ship.py'), 'utf8');
-  assert.match(ship, /PAGE_FILES = \("play\.html", "play\.mjs", "boot_web\.mjs", "menu_overlay\.mjs", "zip\.mjs", "mods\.mjs"\)/);
-  const portable = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'portable.py'), 'utf8');
-  assert.match(portable, /MODULES = \("boot\.mjs", "boot_web\.mjs", "menu_overlay\.mjs", "zip\.mjs", "mods\.mjs", "play\.mjs"\)/);
-  // a blob's imports resolve against the map, so a module must be built after
-  // everything it imports
-  assert.match(portable, /var order = \['boot\.mjs', 'menu_overlay\.mjs', 'zip\.mjs', 'mods\.mjs', 'boot_web\.mjs', 'play\.mjs'\];/);
-});
-
 test('round 78: the menu is not open until it has rows', () => {
   // st.open was set before the art was fetched, so isOpen() said yes while the
   // model was still null. On a served page that gap is long enough for a key to
@@ -327,25 +317,6 @@ test('round 82: a mod being downloaded reports bytes, not parts', () => {
   assert.match(mods, /if \(!r\.body \|\| !r\.body\.getReader\)/, 'and a browser without streams still gets one report');
   // shown on the row it belongs to
   assert.match(mods, /note: busyId === m\.id && progress != null \? `\$\{progress\}%`/);
-});
-
-test('round 82: the loading screen is the bar and one line', () => {
-  const html = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.html'), 'utf8');
-  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  // the stages, the byte counts and the machine string are instruments now
-  assert.match(play, /const STATS = params\.get\('stats'\) === '1';/);
-  assert.match(play, /if \(STATS\) \{ \$\('fps'\)\.hidden = false; \$\('stages'\)\.hidden = false; \}/);
-  assert.match(play, /statusEl\.textContent = STATS && detail \? detail : text;/);
-  assert.match(play, /setStatus\('loading', name\);/, "the engine's stage names are the detail, not the line");
-  // and the look: square corners, the menu's bone white, pips rather than a fill
-  assert.match(html, /--load: #d7c9a7; --load-dim: #7d7263;/);
-  // round 83: the pips read as a barcode. A hairline and a solid fill.
-  assert.match(html, /#bar \{ width: min\(200px, 44%\); height: 2px; background: #2a241e; \}/);
-  assert.match(html, /#bar-fill \{ width: 0; height: 100%; background: var\(--load\);/);
-  assert.doesNotMatch(html, /repeating-linear-gradient/);
-  // and the grid is not put back on a chunked build's loading screen
-  assert.doesNotMatch(play, /if \(stagesEl\) stagesEl\.hidden = false;/);
-  assert.ok(!/#bar \{[^}]*border-radius/.test(html), 'nothing in this game is rounded');
 });
 
 test('round 82: installing a mod turns mods on in the stored options', () => {

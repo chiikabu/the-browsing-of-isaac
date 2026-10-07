@@ -368,19 +368,34 @@ function pageAudio(api, hooks = {}) {
   return window;
 }
 
-async function loadingPage(search = '', { received = 0, total = 1000, portable = true } = {}) {
-  const elements = new Map(), intervals = [], frames = [], words = new Map(), events = new Map();
-  let now = 0;
+async function loadingPage(search = '', {
+  received = 0, total = 1000, bootReceived = received, bootTotal = total,
+  portable = true, knownTotals = true, holdCompilation = false,
+} = {}) {
+  const elements = new Map(), intervals = [], frames = [], words = new Map(), events = new Map(), injectedKeys = [];
+  const memoryReads = new Set(), main = { appendChild(element) { element.parentElement = main; } };
+  let now = 0, readTouchState;
   const downloaded = { received, total };
-  const manifest = { files: [{ path: 'boot.wasm', size: 100 }, { path: 'isaac.segs.bin', size: 600 }] };
-  const index = [{ p: 'resources/packed/graphics.a', s: 300 }];
+  const bootstrap = { received: bootReceived, total: bootTotal };
+  // A valid empty module with a custom section keeps the served fixture at 100 bytes.
+  const moduleBytes = new Uint8Array(100);
+  moduleBytes.set([0, 97, 115, 109, 1, 0, 0, 0, 0, 90, 0]);
+  const manifest = knownTotals ? { files: [{ path: 'boot.wasm', size: 100 }, { path: 'isaac.segs.bin', size: 600 }] } : null;
+  const index = knownTotals ? [{ p: 'resources/packed/graphics.a', s: 300 }] : [];
   const responses = new Map([
     ['/dist.json', JSON.stringify(manifest)], ['/instance_index.json', JSON.stringify(index)],
+    ['/boot.wasm', moduleBytes],
     ['/isaac.segs.bin', new Uint8Array(600)], ['/instance/resources/packed/graphics.a', new Uint8Array(300)],
   ]);
+  let compilationStarted, finishCompilation, moduleDelivered;
+  const compiling = new Promise((resolve) => { compilationStarted = resolve; });
+  const compilation = new Promise((resolve) => { finishCompilation = resolve; });
+  const moduleDownloaded = new Promise((resolve) => { moduleDelivered = resolve; });
+  if (!holdCompilation) finishCompilation();
   const document = {
     hidden: false,
     getElementById: (id) => elements.get(id),
+    createElement: () => ({ getContext: (kind) => kind === 'webgl2' ? { getExtension: () => null } : null }),
     addEventListener() {},
   };
   const html = readFileSync(join(web, 'play.html'), 'utf8');
@@ -389,13 +404,20 @@ async function loadingPage(search = '', { received = 0, total = 1000, portable =
     const attributes = new Map([...tag.matchAll(/\b([\w-]+)="([^"]*)"/g)].map(([, key, value]) => [key, value]));
     const element = {
       hidden: /\bhidden\b/.test(tag), open: false, style: {}, textContent: '', title: '',
-      classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+      classList: {
+        add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name),
+        toggle: (name, force = !classes.has(name)) => {
+          if (force) classes.add(name); else classes.delete(name);
+          return force;
+        },
+      },
       setAttribute: (key, value) => attributes.set(key, String(value)),
       removeAttribute: (key) => attributes.delete(key),
-      getAttribute: (key) => attributes.get(key),
+      getAttribute: (key) => attributes.get(key) ?? null,
       addEventListener: (event, fn) => listeners.set(event, fn),
       focus: () => { document.activeElement = element; },
       getContext: () => null,
+      closest: (selector) => selector === 'main' ? main : null,
       click: () => listeners.get('click')?.(),
     };
     elements.set(id, element);
@@ -403,24 +425,64 @@ async function loadingPage(search = '', { received = 0, total = 1000, portable =
   const window = {
     AudioContext: FakeContext,
     __isaacPortableData: {},
-    isaacPortable: portable ? { manifest, index, chunks: 4, progress: () => ({ ...downloaded }), bytesFor: async () => new Uint8Array() } : null,
-    isaacGuest: { u32: (address) => words.get(address) || 0, u8: (address) => (words.get(address) || 0) & 255 },
+    isaacPortable: portable ? {
+      manifest, index, chunks: 4,
+      progress: (scope) => ({ ...(scope === 'boot' ? bootstrap : downloaded) }),
+      bytesFor: async (rel) => rel === 'boot.wasm' ? moduleBytes : new Uint8Array(),
+    } : null,
+    isaacGuest: {
+      u32: (address) => { memoryReads.add(address); return words.get(address) || 0; },
+      u8: (address) => { memoryReads.add(address); return (words.get(address) || 0) & 255; },
+    },
     addEventListener: (event, fn) => events.set(event, fn),
     isaacFrame: 0,
+    isaacInjectKey: (...args) => injectedKeys.push(args),
   };
-  const menu = { isOpen: () => false, setFps() {}, setScreen() {} };
+  const makeMenu = () => ({
+    open: false, isOpen() { return this.open; }, setFps() {}, setScreen() {},
+  });
+  const editMenu = makeMenu(), modsMenu = makeMenu();
   const context = {
     window, document, location: new URL(`https://game.invalid/play.html${search}`), navigator: {},
     URL, URLSearchParams, TextEncoder, TextDecoder, performance: { now: () => now },
     console,
+    WebAssembly: {
+      Suspending: function () {},
+      promising: (fn) => fn,
+      async instantiate(bytes, imports) {
+        compilationStarted();
+        await compilation;
+        return WebAssembly.instantiate(bytes, imports);
+      },
+      async instantiateStreaming(response, imports) {
+        compilationStarted();
+        await compilation;
+        return WebAssembly.instantiateStreaming(response, imports);
+      },
+    },
     fetch: async (url) => {
       const path = new URL(url, 'https://game.invalid/').pathname;
       if (!responses.has(path)) throw new Error(`unexpected page fetch: ${path}`);
-      return new Response(responses.get(path));
+      const response = new Response(responses.get(path), { headers: { 'Content-Type': path.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream' } });
+      if (path === '/boot.wasm') {
+        const clone = response.clone.bind(response);
+        response.clone = () => {
+          const reader = clone().body.getReader();
+          return { body: { getReader: () => ({
+            async read() {
+              const next = await reader.read();
+              if (next.done) moduleDelivered();
+              return next;
+            },
+          }) } };
+        };
+      }
+      return response;
     },
     requestAnimationFrame: (fn) => frames.push(fn),
     setInterval: (fn, ms) => { intervals.push({ fn, ms, next: now + ms }); },
-    createEditFileMenu: () => menu, createPaperMenu: () => ({}), createModsMenu: () => menu,
+    createEditFileMenu: () => editMenu, createPaperMenu: () => ({}), createModsMenu: () => modsMenu,
+    createTouchControls: ({ readState }) => { readTouchState = readState; return { destroy() {} }; },
   };
   const source = readFileSync(join(web, 'play.mjs'), 'utf8')
     .replace(/^import .+ from '.+';\r?$/gm, '')
@@ -428,76 +490,253 @@ async function loadingPage(search = '', { received = 0, total = 1000, portable =
   await new Script(`(async () => {\n${source}\n})()`).runInNewContext(context);
   const paint = () => { for (const fn of frames.splice(0)) fn(now); };
   return {
-    window, elements, words, hooks: window.isaacPageHooks,
-    paint,
-    download(bytes) { downloaded.received = bytes; window.__isaacPortableData.onProgress?.(); },
+    window, elements, words, memoryReads, injectedKeys, hooks: window.isaacPageHooks,
+    readTouchState, editMenu, modsMenu,
+    paint, compiling, finishCompilation, moduleDownloaded,
+    instantiate: () => new Promise((resolve) => window.isaacPageHooks.instantiateWasm({}, (instance, module) => resolve({ instance, module }))),
+    download(bytes, scope = 'all') {
+      (scope === 'boot' ? bootstrap : downloaded).received = bytes;
+      window.__isaacPortableData.onProgress?.();
+    },
     error: () => events.get('error')({ message: 'engine failed before readiness' }),
     menu: (screen = 1, manager = 0x1000) => { words.set(0x00c72a20, manager); words.set(manager + 0x40, screen); },
-    advance(frame) {
+    cutscene({ shell = 0x500000, state = 3, loaded = 1, id = 1 } = {}) {
+      words.set(0x00c7169c, shell);
+      words.set(shell + 8, state);
+      words.set(shell + 0x20dd0, loaded);
+      words.set(shell + 0x215d8, id);
+    },
+    advance(frame, { paint: flushPaint = true } = {}) {
       window.isaacFrame = frame;
       now += 500;
       for (const timer of intervals) if (now >= timer.next) { timer.next += timer.ms; timer.fn(); }
-      paint();
+      if (flushPaint) paint();
     },
   };
 }
 
-function assertDownloadProgress(page, percent) {
-  const bar = page.elements.get('bar');
+function assertStartupProgress(page, percent) {
+  const bar = page.elements.get('bar'), percentage = page.elements.get('percentage');
+  assert.equal(bar.classList.contains('indeterminate'), false);
+  assert.equal(percentage.hidden, false);
   assert.equal(bar.getAttribute('role'), 'progressbar');
+  assert.match(bar.getAttribute('aria-label'), /startup/i);
   assert.equal(bar.getAttribute('aria-valuemin'), '0');
   assert.equal(bar.getAttribute('aria-valuemax'), '100');
   assert.equal(bar.getAttribute('aria-valuenow'), String(percent));
-  assert.equal(bar.getAttribute('aria-valuetext'), `${percent}%`);
-  assert.equal(page.elements.get('percentage').textContent, `${percent}%`);
+  const valueText = bar.getAttribute('aria-valuetext');
+  assert.match(valueText, /startup/i);
+  assert.equal(Number(/(\d+)%/.exec(valueText)?.[1]), percent);
+  assert.equal(percentage.textContent, `${percent}%`);
+  assert.equal(percentage.style.backgroundPosition, `${-percent * 50}px 0px`);
   assert.equal(Number.parseFloat(page.elements.get('bar-fill').style.width), percent);
 }
 
-test('download percentage snapshots prior bytes and ignores decoded stages and chunk counts', async () => {
-  const page = await loadingPage('', { received: 371, total: 1000 });
+function assertInitializing(page) {
+  const bar = page.elements.get('bar');
+  assert.equal(bar.classList.contains('indeterminate'), true);
+  assert.equal(bar.getAttribute('aria-valuenow'), null);
+  assert.equal(page.elements.get('percentage').hidden, true);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'true');
+}
+
+test('bootstrap progress is fractional and ignores background downloads, chunk counts and logs', async () => {
+  const page = await loadingPage('', { total: 4000, bootTotal: 1000 });
   page.paint();
-  assertDownloadProgress(page, 37);
+  assertStartupProgress(page, 0);
+  page.download(371, 'boot');
+  page.download(371);
+  page.paint();
+  assertStartupProgress(page, 9);
+  page.download(3000);
   page.window.__isaacPortableData.onChunk(4, 4);
-  page.hooks.onLog('=== layout ===');
-  page.hooks.onLog('=== host boot (IAT + TEB + TLS + _initterm) ===');
+  for (const line of [
+    '=== layout ===', '=== host boot (IAT + TEB + TLS + _initterm) ===',
+    '=== main @ 0x00931050 ===', 'isaac_boot_init -> 0',
+  ]) page.hooks.onLog(line);
+  for (const frame of [1, 100, 1000]) page.advance(frame);
+  assertStartupProgress(page, 9);
+  page.download(754, 'boot');
   page.paint();
-  assertDownloadProgress(page, 37);
-  page.download(749);
-  page.download(754);
+  assertStartupProgress(page, 18);
+  page.download(999, 'boot');
   page.paint();
-  assertDownloadProgress(page, 75);
-  page.download(999);
+  assertStartupProgress(page, 24);
+  page.download(1000, 'boot');
   page.paint();
-  assertDownloadProgress(page, 99);
-  page.download(1000);
+  assertStartupProgress(page, 25);
+  page.download(1100, 'boot');
   page.paint();
-  assertDownloadProgress(page, 100);
-  assert.equal(page.elements.get('overlay').hidden, false, 'all downloaded bytes do not imply native readiness');
+  assertStartupProgress(page, 25);
+  assert.equal(page.elements.get('overlay').hidden, false);
 });
 
-test('served builds count response bytes without completing downloads from stage markers', async () => {
-  const page = await loadingPage('', { portable: false });
+test('bootstrap delivery and compilation retain measured progress until native initialization starts', async () => {
+  const page = await loadingPage('', { received: 1000, holdCompilation: true });
+  page.paint();
+  assertStartupProgress(page, 25);
+  const instantiated = page.instantiate();
+  await page.compiling;
+  page.paint();
+  assertStartupProgress(page, 25);
+  page.finishCompilation();
+  await instantiated;
+  page.paint();
+  assertStartupProgress(page, 50);
+  page.hooks.onLog('=== host boot (IAT + TEB + TLS + _initterm) ===');
+  page.hooks.onLog('=== main @ 0x00931050 ===');
+  page.hooks.onLog('isaac_boot_init -> 0');
+  page.paint();
+  assertStartupProgress(page, 50);
+  await page.hooks.beforeMain({});
+  assertInitializing(page);
+});
+
+test('served startup uses fixed boot-file totals and waits for streaming instantiation', async () => {
+  const page = await loadingPage('', { portable: false, holdCompilation: true });
+  page.paint();
+  assertStartupProgress(page, 0);
   await page.hooks.fetchBytes('/isaac.segs.bin');
   page.paint();
-  assertDownloadProgress(page, 60);
+  assertStartupProgress(page, 15);
   page.hooks.onLog('=== layout ===');
   page.hooks.onLog('=== host boot (IAT + TEB + TLS + _initterm) ===');
   page.paint();
-  assertDownloadProgress(page, 60);
+  assertStartupProgress(page, 15);
   await page.hooks.fetchBytes('/instance/resources/packed/graphics.a');
   page.paint();
-  assertDownloadProgress(page, 90);
+  assertStartupProgress(page, 22);
+  const instantiated = page.instantiate();
+  await page.moduleDownloaded;
+  await page.compiling;
+  page.paint();
+  assertStartupProgress(page, 25);
+  page.finishCompilation();
+  await instantiated;
+  page.paint();
+  assertStartupProgress(page, 50);
+  await page.hooks.beforeMain({});
+  assertInitializing(page);
 });
 
-test('inline payload is fully downloaded while native readiness still gates audio and the loader', async () => {
-  const page = await loadingPage('', { received: 0, total: 0 }), api = backend();
+test('inline delivery still requires compilation, CRT and native readiness before completion or audio', async () => {
+  const page = await loadingPage('', { received: 0, total: 0, holdCompilation: true }), api = backend();
   pageAudio(api, page.hooks);
+  page.paint();
+  assertStartupProgress(page, 25);
+  const instantiated = page.instantiate();
+  await page.compiling;
+  page.paint();
+  assertStartupProgress(page, 25);
+  page.finishCompilation();
+  await instantiated;
+  page.paint();
+  assertStartupProgress(page, 50);
   await page.hooks.beforeMain(api.Module);
   const ctx = playTone(api);
   for (const frame of [1, 3, 20]) page.advance(frame);
-  assertDownloadProgress(page, 100);
-  assert.equal(page.elements.get('overlay').hidden, false);
+  assertInitializing(page);
   assert.equal(ctx.level(), 0);
+  page.cutscene();
+  page.advance(21);
+  page.advance(22);
+  assertInitializing(page);
+  assert.equal(ctx.level(), 0);
+  page.advance(23, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('manual Play switches from waiting progress to immediate activity, then restores ready progress', async () => {
+  const page = await loadingPage('?autoplay=0', { received: 1000 });
+  await page.instantiate();
+  let started = false;
+  const starting = page.hooks.beforeMain({}).then(() => { started = true; });
+  page.paint();
+  assertStartupProgress(page, 75);
+  assert.equal(page.elements.get('play').hidden, false);
+  assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
+  assert.equal(started, false);
+  page.menu();
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assertStartupProgress(page, 75);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  page.elements.get('play').click();
+  assertInitializing(page);
+  assert.equal(page.elements.get('play').hidden, true);
+  assert.equal(started, false, 'activity begins before main resumes or another paint runs');
+  await starting;
+  assert.equal(started, true);
+  page.advance(4);
+  page.advance(5);
+  assertInitializing(page);
+  page.advance(6, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
+  assert.deepEqual(page.injectedKeys, []);
+});
+
+test('a fully downloaded payload stays indeterminate through early frames until stable native readiness', async () => {
+  const page = await loadingPage('', { received: 1000 });
+  await page.instantiate();
+  await page.hooks.beforeMain({});
+  assertInitializing(page);
+  for (const frame of [1, 3, 20]) page.advance(frame);
+  assertInitializing(page);
+  page.menu();
+  page.advance(21);
+  page.advance(22);
+  assertInitializing(page);
+  page.download(1000);
+  page.advance(23, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  page.paint();
+  assertStartupProgress(page, 100);
+});
+
+test('background downloads preserve native activity and cannot lower completed startup', async () => {
+  const page = await loadingPage('', { received: 1000, total: 4000, bootReceived: 1000, bootTotal: 1000 });
+  await page.instantiate();
+  await page.hooks.beforeMain({});
+  page.download(2400);
+  page.window.__isaacPortableData.onChunk(4, 4);
+  page.hooks.onLog('isaac_boot_init -> 0');
+  page.paint();
+  assertInitializing(page);
+  page.cutscene();
+  page.advance(1);
+  page.advance(2);
+  assertInitializing(page);
+  page.advance(3, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  page.download(3000);
+  page.paint();
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+});
+
+test('unknown served totals earn no delivery progress but native readiness still completes startup', async () => {
+  const page = await loadingPage('', { portable: false, knownTotals: false });
+  page.paint();
+  assertStartupProgress(page, 0);
+  await page.instantiate();
+  await page.moduleDownloaded;
+  page.paint();
+  assertStartupProgress(page, 25);
+  await page.hooks.beforeMain({});
+  assertInitializing(page);
+  page.menu();
+  page.advance(1);
+  page.advance(2);
+  assertInitializing(page);
+  page.advance(3, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
 });
 
 function playTone(api, gain = 0.6) {
@@ -513,7 +752,6 @@ test('loading keeps mixer energy but silences output until a stable native menu 
   page.hooks.onLog('=== main @ 0x00931050 ===');
   for (const frame of [1, 3, 20]) page.advance(frame);
   assert.equal(page.elements.get('overlay').hidden, false, 'early presentations are not readiness');
-  assertDownloadProgress(page, 37);
   assert.ok(near(meter.isaacAudioLevel().rmsNow, 0.3), 'real PCM still reaches the mixer analyser');
   assert.equal(ctx.level(), 0, 'no PCM reaches the destination under the loader');
   page.menu();
@@ -527,10 +765,8 @@ test('loading keeps mixer energy but silences output until a stable native menu 
   assert.equal(page.elements.get('overlay').hidden, true);
   assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
   assert.ok(near(ctx.level(), 0.3), 'the same source becomes audible without restarting');
-  assertDownloadProgress(page, 37);
   page.download(826);
   page.advance(24);
-  assertDownloadProgress(page, 82);
   assert.equal(page.elements.get('overlay').hidden, true, 'background progress does not cover the ready game');
   api.gain(10, 0.25);
   assert.ok(near(ctx.level(), 0.125), 'normal volume still controls output');
@@ -544,11 +780,135 @@ test('loading keeps mixer energy but silences output until a stable native menu 
   assert.ok(near(ctx.level(), 0.125), 'context unlock does not reset the ready output gate');
 });
 
-test('audio initialized or recreated after readiness starts audible; raw boot needs no page hook', async () => {
+test('loaded native cutscene reveals and unmutes after two new presentations without input or logs', async () => {
+  const page = await loadingPage('', { received: 381, total: 1000 }), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  page.advance(40);
+  assert.equal(page.elements.get('overlay').hidden, false, 'blank presentations do not reveal the game');
+  assert.equal(ctx.level(), 0);
+  page.cutscene();
+  page.advance(41);
+  page.advance(42);
+  assert.equal(page.elements.get('overlay').hidden, false, 'a loaded entry still needs two later presentations');
+  assert.equal(ctx.level(), 0);
+  page.advance(43);
+  assert.equal(page.elements.get('overlay').hidden, true, 'the intro does not need a menu manager');
+  assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
+  assert.ok(near(ctx.level(), 0.3), 'the playing intro becomes audible without restarting its source');
+  assert.deepEqual(page.injectedKeys, [], 'readiness never sends a key to skip the intro');
+});
+
+for (const [name, native] of [
+  ['missing shell manager', { shell: 0 }],
+  ['inactive shell state', { state: 2 }],
+  ['entry load still pending', { loaded: 0 }],
+  ['entry state other than loaded', { loaded: 2 }],
+  ['zero cutscene ID', { id: 0 }],
+]) {
+  test(`${name} keeps the native cutscene covered and muted`, async () => {
+    const page = await loadingPage(), api = backend();
+    pageAudio(api, page.hooks);
+    await page.hooks.beforeMain(api.Module);
+    const ctx = playTone(api);
+    page.cutscene(native);
+    if ('loaded' in native || 'id' in native) page.menu();
+    for (const frame of [40, 41, 42]) page.advance(frame);
+    assert.equal(page.elements.get('overlay').hidden, false, 'an incomplete active cutscene cannot borrow retained menu readiness');
+    assert.equal(ctx.level(), 0);
+  });
+}
+
+test('a loaded cutscene takes precedence over retained run state', async () => {
   const page = await loadingPage(), api = backend();
   pageAudio(api, page.hooks);
   await page.hooks.beforeMain(api.Module);
-  page.menu();
+  const ctx = playTone(api), game = 0x100000;
+  page.menu(5);
+  page.words.set(0x00c71678, game);
+  page.words.set(game + 0x1b83c, 1);
+  page.words.set(game + 0x264f8, 10);
+  page.cutscene();
+  page.advance(1);
+  page.advance(2);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0);
+  page.advance(3);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3), 'the active native view is the loaded cutscene, not the retained run');
+});
+
+test('stalled and reset presentations cannot reveal a loaded cutscene early', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  page.cutscene();
+  for (const frame of [10, 10, 10, 11]) page.advance(frame);
+  assertInitializing(page);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'timer polls do not count as new presentations');
+  for (const frame of [1, 1, 2]) page.advance(frame);
+  assertInitializing(page);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'a reset presentation counter restarts the gate');
+  page.advance(3);
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('changing cutscene identity restarts presentation stabilization', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  page.cutscene();
+  page.advance(1);
+  page.advance(2);
+  page.cutscene({ id: 2 });
+  page.advance(3);
+  page.advance(4);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'another cutscene ID cannot inherit the previous entry presentations');
+  page.cutscene({ shell: 0x600000, id: 2 });
+  page.advance(5);
+  page.advance(6);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'a replacement shell cannot inherit the previous object presentations');
+  page.advance(7);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('an interrupted cutscene entry load discards earlier ready presentations', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  page.cutscene();
+  page.advance(1);
+  page.advance(2);
+  page.cutscene({ loaded: 0 });
+  page.advance(3);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0);
+  page.cutscene();
+  page.advance(4);
+  page.advance(5);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'the completed load needs two new presentations');
+  page.advance(6);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('audio initialized or recreated after cutscene readiness starts audible; raw boot needs no page hook', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  page.cutscene();
   for (const frame of [1, 2, 3]) page.advance(frame);
   assert.equal(page.elements.get('overlay').hidden, true);
   const ctx = playTone(api);
@@ -582,16 +942,27 @@ test('unlock and replacement audio contexts remain silent before native readines
 });
 
 for (const failure of ['error', 'ended']) {
-  test(`${failure} before readiness keeps existing and delayed audio silent`, async () => {
+  test(`${failure} before readiness stops startup activity and keeps existing and delayed audio silent`, async () => {
     const page = await loadingPage(), api = backend();
     pageAudio(api, page.hooks);
     await page.hooks.beforeMain(api.Module);
     const ctx = playTone(api);
-    page.menu();
+    page.cutscene();
     page.advance(1);
+    page.advance(2);
+    assertInitializing(page);
     if (failure === 'error') page.error();
-    else page.window.isaacDone = { mainRc: 0, presented: 1 };
-    for (const frame of [2, 3, 4]) page.advance(frame);
+    else {
+      page.window.isaacDone = { mainRc: 0, presented: 2 };
+      page.advance(3, { paint: false });
+    }
+    assert.equal(page.elements.get('bar').classList.contains('indeterminate'), false);
+    assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
+    page.download(1000);
+    page.window.__isaacPortableData.onChunk(4, 4);
+    for (const frame of [4, 5, 6]) page.advance(frame);
+    assert.equal(page.elements.get('bar').classList.contains('indeterminate'), false, 'later renders cannot restart failed initialization');
+    assert.notEqual(page.elements.get('bar').getAttribute('aria-valuenow'), '100');
     assert.equal(page.elements.get('overlay').hidden, false);
     assert.equal(ctx.level(), 0);
     ctx.setState('closed');
@@ -618,6 +989,10 @@ test('screen-5 character selection opens output after stable presentations witho
   page.advance(3);
   assert.equal(page.elements.get('overlay').hidden, true);
   assert.ok(near(ctx.level(), 0.3), 'allocated Game and an empty player vector do not block the menu');
+  const state = page.readTouchState();
+  assert.equal(state.ready, true);
+  assert.equal(state.running, false, 'menu 5 alone cannot enable gameplay controls');
+  assert.equal(state.twins, false);
 });
 
 test('a starting run overrides a retained menu before its first game frame', async () => {
@@ -695,4 +1070,118 @@ test('manual Play and a reset presentation counter cannot bypass readiness', asy
   page.advance(3);
   assert.equal(page.elements.get('overlay').hidden, true);
   assert.ok(near(ctx.level(), 0.3));
+});
+
+async function liveTouchPage() {
+  const page = await loadingPage();
+  await page.hooks.beforeMain({});
+  const game = 0x100000, room = 0x200000, players = 0x300000, player = 0x400000, shell = 0x500000;
+  page.menu(5);
+  for (const [address, value] of [
+    [0x00c71678, game], [0x00c7169c, shell], [game + 0x18300, room],
+    [game + 0x1baa8, players], [game + 0x1baac, players + 4], [players, player],
+    [player + 0x28, 1], [room + 0xc, 13], [room + 0x10, 7],
+  ]) page.words.set(address, value);
+  return { page, game, players, player, shell };
+}
+
+test('touch state reads live twin types and Better controls, not linked-player pointers', async () => {
+  const { page, game, player, shell } = await liveTouchPage();
+  page.words.set(player + 0x13c0, 19);
+  assert.equal(page.readTouchState().ready, false, 'native allocation is not surface readiness');
+  for (const frame of [1, 2, 3]) {
+    page.words.set(game + 0x264f8, frame);
+    page.advance(frame);
+  }
+  let state = page.readTouchState();
+  assert.equal(state.ready, true);
+  assert.equal(state.running, true, 'validated gameplay takes precedence over retained menu 5');
+  assert.equal(state.twins, true, 'Jacob needs no linked-player pointer');
+  assert.equal(state.better, false);
+  page.words.set(player + 0x13c0, 20);
+  page.words.set(shell + 0x2a3d4, 1);
+  state = page.readTouchState();
+  assert.equal(state.twins, true, 'Esau also enables twin controls');
+  assert.equal(state.better, true, 'live option changes apply without another presentation');
+  page.words.set(player + 0x13c0, 37);
+  page.words.set(player + 0x1e68, 0x600000);
+  page.words.set(shell + 0x2a3d4, 0);
+  state = page.readTouchState();
+  assert.equal(state.running, true);
+  assert.equal(state.twins, false, 'a linked non-Jacob/Esau player is not a twin control scheme');
+  assert.equal(state.better, false, 'turning Better controls off is also observed immediately');
+});
+
+test('touch state rejects invalid gameplay and follows the native pause menu predicate', async () => {
+  const { page, game, players, player, shell } = await liveTouchPage();
+  page.words.set(player + 0x13c0, 19);
+  for (const frame of [1, 2, 3]) {
+    page.words.set(game + 0x264f8, frame);
+    page.advance(frame);
+  }
+  assert.equal(page.readTouchState().paused, false);
+  page.words.set(game + 0x23a74, 2);
+  assert.equal(page.readTouchState().paused, true);
+  const participants = 0x600000;
+  page.words.set(shell + 0x4b3d8, participants);
+  page.words.set(shell + 0x4b3dc, participants + 4);
+  assert.equal(page.readTouchState().paused, true, 'one participant retains the pause menu');
+  page.words.set(shell + 0x4b3dc, participants + 8);
+  assert.equal(page.readTouchState().paused, false, 'two participants fail the native pause menu gate');
+  page.words.set(shell + 0x4b3dc, participants);
+  page.words.set(game + 0x23a74, 0xffffffff);
+  assert.equal(page.readTouchState().paused, true, 'the native predicate accepts any nonzero state');
+  page.words.set(game + 0x23a74, 0);
+  assert.equal(page.readTouchState().paused, false);
+  page.words.set(player + 0x173, 1);
+  assert.equal(page.readTouchState().running, false, 'dead primary players do not retain gameplay controls');
+  assert.equal(page.readTouchState().twins, false);
+  page.words.set(player + 0x173, 0);
+  page.words.set(players, 0);
+  page.memoryReads.clear();
+  let state = page.readTouchState();
+  assert.equal(state.running, false);
+  assert.equal(state.twins, false);
+  assert.equal(page.memoryReads.has(0x13c0), false, 'null player is not dereferenced for its type');
+  page.words.set(0x00c71678, 0);
+  page.words.set(0x00c7169c, 0);
+  page.memoryReads.clear();
+  state = page.readTouchState();
+  assert.equal(state.ready, true, 'the revealed menu remains available after a run ends');
+  assert.equal(state.running, false, 'menu 5 without a native game is character selection');
+  assert.equal(state.twins, false);
+  assert.equal(state.better, false);
+  for (const offset of [0x13c0, 0x23a74, 0x2a3d4, 0x4b3d8, 0x4b3dc])
+    assert.equal(page.memoryReads.has(offset), false, `null owners are not dereferenced at ${offset.toString(16)}`);
+});
+
+test('touch state routes paper menus without blocking and blocks the saves dialog', async () => {
+  const { page, game } = await liveTouchPage();
+  for (const frame of [1, 2, 3]) {
+    page.words.set(game + 0x264f8, frame);
+    page.advance(frame);
+  }
+  page.editMenu.open = true;
+  let state = page.readTouchState();
+  assert.equal(state.menu, 'edit-file');
+  assert.equal(state.running, false);
+  assert.equal(state.blocked, false, 'touch navigation must remain available on the paper menu');
+  page.modsMenu.open = true;
+  state = page.readTouchState();
+  assert.equal(state.menu, 'mods', 'the foreground mods menu overrides Edit File');
+  assert.equal(state.running, false);
+  assert.equal(state.blocked, false);
+  page.elements.get('saves').open = true;
+  assert.equal(page.readTouchState().blocked, true);
+  page.elements.get('saves').open = false;
+  page.modsMenu.open = false;
+  page.editMenu.open = false;
+  state = page.readTouchState();
+  assert.equal(state.running, true, 'closing menus restores the live run');
+  assert.equal(state.blocked, false);
+  page.error();
+  state = page.readTouchState();
+  assert.equal(state.ready, false, 'a fatal error revokes previously revealed readiness');
+  assert.equal(state.running, false);
+  assert.equal(state.blocked, true);
 });

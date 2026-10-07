@@ -647,9 +647,22 @@ let inputsDelivered = 0;
 // here and are delivered ahead of the scripted timeline. Keys map through the
 // same table by event.code (KeyA -> a, ArrowUp -> up, Enter, Space, ...).
 const live = [];
-// round 52: the page presses a key for the player (the EDIT FILE menu's Delete
-// hands the flow back to the engine with a confirm), by the key table's name
-window.isaacInjectKey = (name, down) => { const k = KEYS[String(name).toLowerCase()]; if (k) live.push([1, k[0], k[1] | (k[2] << 8), down ? 1 : 0]); };
+// Live keyboard and injected input own their holds independently. A touch reset
+// must not release a physical key, or another injected source's key.
+const keyOwners = new Map(), physicalKeys = new Map();
+function nativeKey(name, down, source) {
+  let owners = keyOwners.get(name);
+  if (down) {
+    if (owners) { owners.add(source); return; }
+    keyOwners.set(name, new Set([source]));
+  } else {
+    if (!owners || !owners.delete(source)) return;
+    if (owners.size) return;
+    keyOwners.delete(name);
+  }
+  const [vk, sc, ext] = KEYS[name];
+  live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);
+}
 const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
   ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave',
@@ -663,17 +676,53 @@ function keyName(ev) {
   if (/^F([1-4])$/.test(c)) return c.toLowerCase();
   return null;
 }
+const KEY_TO_CODE = {};
+for (const [code, name] of Object.entries(CODE_TO_KEY)) {
+  if (!KEY_TO_CODE[name]) KEY_TO_CODE[name] = code;
+}
+const KEY_VALUE = { space: ' ', ctrl: 'Control', shift: 'Shift', alt: 'Alt' };
+function injectedEvent(name) {
+  const code = KEY_TO_CODE[name] || (/^[a-z]$/.test(name) ? `Key${name.toUpperCase()}`
+    : /^[0-9]$/.test(name) ? `Digit${name}` : name.toUpperCase());
+  return { code, key: KEY_VALUE[name] || (name.length === 1 ? name : code), repeat: false, preventDefault() {} };
+}
+window.isaacInjectKey = (name, down, source = 'injected') => {
+  name = String(name).toLowerCase();
+  if (!KEYS[name]) return;
+  // Release native ownership before capture: a menu can open after key-down.
+  if (!down) nativeKey(name, false, source);
+  if (source === 'touch' && typeof window.isaacKeyCapture === 'function'
+    && window.isaacKeyCapture(injectedEvent(name), !!down)) return;
+  // The original two-argument API deliberately bypasses capture: EDIT FILE's
+  // Delete confirmation is addressed to the native menu, not the JS paper.
+  if (down) nativeKey(name, true, source);
+};
 const canvasEl = document.getElementById('canvas');
 function onKey(ev, down) {
-  // round 52: a page menu that is up takes the keys (the engine sees none of them)
+  const k = keyName(ev), source = `keyboard:${ev.code}`;
+  if (!down && k) {
+    nativeKey(k, false, source);
+    physicalKeys.delete(source);
+  }
+  const target = ev.target, saves = document.getElementById('saves');
+  if (ev.defaultPrevented || (saves && saves.open) || (target && (target.isContentEditable
+    || (target.closest && target.closest('input, textarea, select, [data-touch-ui]'))))) return;
+  // Page menus may repeat navigation keys, but native input remains edge-based.
   if (typeof window.isaacKeyCapture === 'function' && window.isaacKeyCapture(ev, down)) { ev.preventDefault(); return; }
-  const k = keyName(ev);
   if (!k || !KEYS[k]) return;
   if (ev.repeat) { ev.preventDefault(); return; }
-  const [vk, sc, ext] = KEYS[k];
-  live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);
+  if (down) {
+    physicalKeys.set(source, k);
+    nativeKey(k, true, source);
+  }
   ev.preventDefault();
 }
+function releasePhysicalKeys() {
+  for (const [source, name] of physicalKeys) nativeKey(name, false, source);
+  physicalKeys.clear();
+}
+window.addEventListener('blur', releasePhysicalKeys);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releasePhysicalKeys(); });
 // Autoplay policy: an AudioContext created before the first user gesture
 // starts suspended, and resume() is honoured once the page has a user
 // activation. The first key press (or click) is that activation; resume
@@ -735,7 +784,8 @@ window.isaacAudioLevel = () => {
 };
 window.addEventListener('keydown', (ev) => { resumeAudio(); onKey(ev, true); });
 window.addEventListener('pointerdown', resumeAudio);
-window.addEventListener('keyup', (ev) => onKey(ev, false));
+// Capture key-up before a focused page dialog can stop propagation.
+window.addEventListener('keyup', (ev) => onKey(ev, false), true);
 canvasEl.addEventListener('mousemove', (ev) => {
   const r = canvasEl.getBoundingClientRect();
   const x = Math.round((ev.clientX - r.left) * canvasEl.width / r.width);

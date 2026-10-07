@@ -5,6 +5,289 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-07 — Computed-jump ownership and continuation closure
+
+The machine lifter now consumes the canonical read-only PE index, retains
+complete local switch cases, and closes known direct/table/fallthrough exits
+recursively across serial and parallel generation. Census compartments are
+not independent ABI frames. Continuations preserve the original registers,
+flags, ESP, and EBP; byte coverage does not replace a dispatch entry.
+
+Actual failures identified the sacrifice converter's `0x00a2c680` switch,
+Gate's ordinary-shot `0x004603ed` switch, Mega Maw's second FireRing
+`0x0045f80b` switch, and Greed Fistuloid's natural VIS `39/22/1` cleanup
+switch at `0x0052c6a8`. The first ownership-aware module then failed during
+startup at missing continuation `0x009b1030`; global static-exit closure
+fixes that separate delivery defect rather than adding an address shim.
+
+The final full `--follow` generation emits 26,578 definitions. It rejects
+55 initial indexed-data addresses instead of translating them as functions.
+The web build rebuilds all 38 lifted translation units, retains the existing
+host fastpaths, and produces 26,587 dispatch entries and 159,434 continuation
+blocks. Its module is 58,424,784 bytes, SHA-256
+`8a347997e7e929f9d4834aefd6e0ad5d955d16597c12b764b891e8ef42fa2326`;
+matching raw glue SHA-256 is
+`ad174316c7ed018c17785f89ee97c81d19e3c554c0f619f72b57616efb212c8d`.
+
+Verification: the three compiled compiler suites pass 20 tests without
+skips. Thirty-one journaled behavioral mutants are killed and restored to
+identical source bytes. `npm test` passes 4,187 of 4,196 tests, with nine
+skips and zero failures; repository safety passes. A fresh Chromium run of
+the final module reaches the original Isaac room, advances exactly 200
+native updates, and shows a living player and actual rendered room.
+
+The encrypted release preserves all unrelated HTML, other modules, Stream B,
+asset keys, mobile controls, Specialist animation, and card metadata.
+All three live entry pages now use the verified immutable native payload;
+their private originals are retained for rollback. A fresh-profile live
+Chromium run binds the actual instantiated memory to the final module,
+renders the original room, consumes trusted simultaneous move/fire/release,
+creates original tear projectiles, plays nonzero native PCM, and advances
+200 further native updates without page errors or native faults.
+Ordinary Greed Fistuloid dies through nine native 3.5-damage tears; its
+original Eject sequence creates VIS `39/22/1`, which removes itself
+naturally. All five projectiles disappear and 603 further native updates
+complete with a living player. Dogma's original video 25 reaches EOF and
+destruction, then the native Beast encounter advances 602 updates. Both
+receipts bind the final module to its actual exported memory; screenshots
+show the empty Greed room and rendered lava/harbingers respectively.
+The unchanged preceding module already passed this Dogma EOF/Beast path;
+the final result is compatibility proof, not a newly attributed decoder fix.
+Mega Maw performs two original State 9 FireRing attacks, each creating
+nine distinct fire projectiles. The game advances 120 uninterrupted native
+updates after the first attack, including the entire second attack. Gate
+performs its original State 8 red laser and State 9 ordinary shot, then
+advances 121 native updates. Both receipts bind actual exported memory to
+the final module; player, world, room, stage, and health invariants hold.
+Seven actual sacrifice-spike hits in a generated positive-index room advance
+the original counter from zero to seven and consume fourteen half-hearts.
+The fifth hit visibly renders `YOU FEEL BLESSED!` through the previously
+faulting converter; the sixth creates a chest and the seventh an Angel item.
+The original game then advances 123 native updates with a living player.
+No raw payout-counter, RNG, attack-phase, or HP writes are used. A second
+generated-room seed also takes the original sixth-hit Angel teleport and
+returns through its original door; counter six survives and hit seven pays
+a Soul Heart, followed by 123 living native updates.
+All 24 ending-chest cases pass genuine player collision, original Open
+frame six, opened flag, and type-four transition predicates. Twenty-two
+original endings reach visible credits and the natural title screen;
+Negative/Polaroid branches instead generate their proper next floors and
+complete 74/75 native updates with actual movement. Womb save counts and
+the Greedier unlock are isolated pre-start fixtures, not earned progression.
+Earlier console, sprite-reader, and entrance-prerequisite fixture failures
+are preserved separately; none is counted as an engine crash or a pass.
+Encounter and survival-health setup uses original native APIs in isolated
+profiles; these are crash-path fixtures, not unmodified full playthroughs.
+
+Passing unit report:
+`.scratch/mobile-port/crashes/final-native-crash-unit-verification-20261007.json`.
+It indexes the actual 24-route receipts/visuals, both sacrifice branches,
+boss receipts, and fresh live browser acceptance. Compiler mutation receipts
+and the immutable release producer receipt remain separate private evidence;
+the producer's `runtimeVerified: false` is not rewritten as browser proof.
+Update ABI 101/open 24/resolved 27 and next VA `0x00a14c00` are unchanged.
+No full-game, actual X-client, physical-phone, or FPS improvement claim.
+Early narrative-video intervals remain black; visible credits and natural
+EOF/title are verified, not narrative footage. Owned public candidate and
+local crash-comparison servers are removed/stopped; rollback evidence stays
+private. No GitHub push.
+
+## 2026-10-07 — Looping Specialist loader
+
+Replaced the static loader with the public solo [Specialist dance GIF by dazlex](https://tenor.com/view/isaac-tboi-dance-gif-7352492888219360785).
+The DOM picture selects animation only for `prefers-reduced-motion: no-preference`;
+reduced motion retains a static poster. The bitmap font, measured progress,
+native activity state, readiness and audio gates are unchanged.
+
+Distribution assembly downloads the selected public GIF into an ignored cache
+or resolves a local template override, copies it into the distribution, and
+rewrites the picture source. Portable output embeds the GIF so it does not add
+a runtime network dependency. Source matching excludes spoof `data-id`,
+`data-type` and `data-srcset` attributes and leaves unrelated pictures alone.
+Both packaging suites passed 68 tests; nine journaled behavioral mutants were
+killed and restored to identical source bytes.
+
+All three live entries now use a transparent 96-square derivative: 409,106 bytes,
+164 stored frames, the original 8,350 ms total duration and infinite looping.
+The reduced-motion poster is static. Actual Chromium screenshots showed changing
+pixels beyond one loop, no GIF request on initial reduced-motion load, a live
+preference switch, and loader geometry at 390x844, 480x270 and 640x360. Trusted
+Play still hid the overlay on native readiness with a 960x540 native canvas;
+the isolated candidate and deployed root had no page errors.
+
+The actual `portable.page_source` fragment was also consumed by headed Chromium:
+the authentic embedded 498-square GIF animated beyond 8,350 ms with zero runtime
+image requests, while both reduced-motion captures remained pixel-identical.
+Only the picture changed; native modules, font, bar and readiness stayed intact.
+This is isolated source-picture proof, not a full offline-game run. Evidence:
+`.scratch/mobile-port/specialist-release/source-offline/`.
+
+Evidence: `.scratch/mobile-port/specialist-release/` and
+`.scratch/mobile-port/specialist-live-root-browser-proof-20261007/`.
+No engine, memory image, provider stream, APK asset or native boundary changed
+in this loader unit. Update ABI 101/open 24/resolved 27 and next VA `0x00a14c00`
+remain unchanged. Desktop emulation, not physical-device or full-game proof.
+
+## 2026-10-07 — Touch controls and native modifier lookahead
+
+Added owner-counted touch input and a mobile control surface to the existing
+browser frame path: movement/fire pads, menu navigation, seed/text entry,
+pause, tools, lifecycle release, and independent Jacob/Esau items and pockets.
+Controls read the native Classic/Better setting and do not bundle APK assets
+or libraries. Browser support requires JSPI and WebGL2, not a user-agent list.
+
+The live twin consumable failure was a platform queue defect, not a game
+cooldown: `PeekMessageW` ignored `PM_NOREMOVE`. The original Ctrl AltGr
+lookahead at `0x00a5c101` deleted the next Space message. The queue now copies
+without consuming or updating synchronous key state on a peek, filters virtual
+window/message requests, and removes only matching messages when requested.
+Frame-cap quit messages remain available until removal. No input retries,
+Lua-driven production actions, or game-physics changes were introduced.
+
+The compiled Win32 regression failed before the fix and passed all four
+behavioral subcases afterward; nine journaled mutants failed assertions and
+restored identical bytes. The combined affected suites passed 197 tests.
+Full desktop Chromium mobile emulation passed native menus, seed entry,
+simultaneous movement/fire, cancellation, actual hidden/visible tab transitions,
+both twins' movement and sixteen Classic/Better held/unheld action cases.
+Playwright WebKit passed 23 supported cases, including eight unheld twin actions,
+Forgotten/Soul swaps and Tainted Isaac inventory cycling. WebKit's held and
+multi-touch cases are explicitly unsupported by that harness, not simulated.
+
+Two fixture corrections preserve original behavior: Ctrl suppresses Esau's
+input but native twin repulsion can still push him (`0x00785c64..0x00785db8`);
+Forgotten/Soul swaps require the signed cooldown at player `+0x1614` to expire
+after the original 15-GameFrame write (`0x007cc2ec`). Verification moves away
+from Esau and waits for the native cooldown before the second single swap.
+Playwright's visibility-pinning focus emulation is disabled in its owning
+session before the real background-tab check.
+
+The rebuilt engine is `dd61420ce417a63c03f9e45b957ef6d2a03da075201643552be8313c03baeba8`.
+Its matching glue uses successful seed adoption rather than the older copy API.
+The initial input candidate preserves the exact production memory image
+`d3e4e20369918f7c83b5840b7e654e50c3ae96e7cd56c494b81eac74959b4ce9`
+and all nonengine assets. Evidence: `.scratch/mobile-port/`.
+Update ABI 101 and 24 open boundaries are unchanged; next native target remains
+`0x00a14c00`. No physical-device, OS-keyboard, FPS, full-game/mod/save or
+social-platform acceptance claim.
+
+## 2026-10-07 — Replace the native-initialization percentage plateau
+
+Preparation retains measured startup progress. Entering native `main` now
+synchronously switches to an indeterminate activity segment instead of leaving
+75% visible. The numeric glyph and `aria-valuenow` are absent while the remaining
+work is unknown. The existing readiness gate restores 100% before revealing the
+native surface. Errors and normal termination stop activity immediately, and
+later download callbacks cannot restart it. Reduced-motion preferences disable
+the animation without inventing a numeric completion value.
+
+The audio/portable/web/ship suites passed 130 tests. All 17 journaled behavioral
+mutants failed assertions and restored identical source bytes, covering the ten
+changed lifecycle tests; the final clean audio/portable run passed 93 tests.
+Fresh-profile and retained-profile browser visits passed on both exact-range
+and generic CDN delivery. They observed changing segment positions, no visible
+numeric percentage during initialization, synchronous 100% at native reveal,
+ordinary Enter, movement, shooting, silent loading output and running audio
+afterward. Manual Play and the reduced-motion browser preference also passed.
+
+Generic loading changes include the previously unpublished native-intro reveal
+and bootstrap-scoped progress work. Each distribution retains its existing
+engine, assets, URLs, keys and stream geometry. No native boundary was removed;
+Update ABI 101 and the 24 open boundaries are unchanged. Next native target is
+still `0x00a14c00`. Evidence: `.scratch/loading-activity/`. These are correctness
+smokes, not speed/FPS, mobile, full-game/mod/save or social-platform acceptance
+claims.
+
+## 2026-10-06 — Make loading completion mean native readiness
+
+The loader now counts four equal startup phases rather than the entire streamed
+game library. Bootstrap delivery contributes its actual received-byte fraction;
+successful WebAssembly instantiation, entry to `beforeMain`, and the existing
+stable native readiness gate complete the other phases. Native readiness paints
+100% synchronously before revealing the canvas. Background archives do not move
+the startup counter. Native initialization can hold it at 75%; this is not a
+time estimate or a synthetic animation.
+
+`portable.progress('boot')` scopes the existing stored-byte interval union to
+eager bootstrap streams. `progress()` retains whole-library diagnostics,
+including inline embedded-byte totals. Inline bootstrap delivery is already
+complete; served builds retain fixed boot-file totals. No engine, payload,
+reader concurrency, native visibility predicate, input or audio gate changed.
+The generated generic page is synchronized locally; no GitHub push occurred.
+
+The audio/portable/web/ship suites passed 130 tests. Seventeen journaled mutants
+failed behavioral assertions and restored source bytes identically, covering
+all ten new or replaced progress tests. The final clean audio/portable run
+passed 93 tests. A real cross-origin sandboxed Chromium frame started without
+a second Play click, displayed the original intro, reached a live room, moved,
+fired and produced running audio at 640x360 and 480x270. Startup was 100% while
+only part of the whole library was downloaded. This is not proof of acceptance
+by any social platform, a speed/FPS improvement, or full-game/device coverage.
+
+The final exact-range and generic CDN whole-chunk browser checks passed both
+fresh-profile and retained-profile visits. Each kept early frames covered,
+reached 100% at the first visible native surface, exercised ordinary Enter,
+movement and shooting, and checked silent output while loading. The initial
+failed smoke used a whole-chunk expectation on the exact-range host; that
+receipt remains separate. Final receipts are `production-verified` and
+`public-verified` under the evidence directory below.
+
+Evidence: `.scratch/startup-progress/` contains source-preserving page candidates,
+mutation receipts and browser observations. Update ABI 101 and the 24 open
+boundaries remain unchanged; next native target remains `0x00a14c00`.
+
+## 2026-10-06 — Reveal the native intro instead of hiding its playback
+
+A whole-browser startup trace showed a loaded intro at about 43 seconds, but the
+HTML loader stayed visible until the title at 197.673 seconds. The byte counter
+was not an engine-readiness counter: the apparent 38% stall included native
+intro playback behind the overlay. Earlier verification pressed Enter while
+the canvas was hidden and therefore masked this defect.
+
+`play.mjs` now recognizes a loaded native cutscene before checking menu or run
+state. Canonical PE evidence binds shell state 3, the loaded flag at +0x20dd0,
+and the nonzero cutscene ID at +0x215d8; the shell pointer and ID identify the
+candidate. Two advancing stable presentations are still required. Initialization
+stays covered and output-muted, while the visible intro uses the original Enter
+handling. No automatic skip, new button, fake progress or engine change is added.
+The generated public page carries the same readiness correction.
+
+`drive_boot.mjs` records first-visible separately from title and playable
+readiness. It requires a visible canvas before intro or menu input and rechecks
+visibility when delivering an intro pulse.
+
+Eight hardware-rendered cold/warm visits compared the retained 6-request,
+4-window reader against 16 requests and 16 windows in A/B/B/A order. The larger
+setting was slower in both repetitions and is not shipped. Retained settings
+showed the intro at 38.165–40.162 seconds cold and 4.550–4.610 seconds warm;
+the first live room followed at 53.283–54.975 and 14.577–14.620 seconds.
+These are polling/input/screenshot-inclusive observations, not a before/after
+engine speedup. Failed harness runs are retained separately and excluded.
+
+Verification: the audio/portable/web/ship Node suites passed 123 tests. All 23
+journaled cutscene mutants failed at intended behavioral assertions and restored
+byte-identically; all 13 new or changed cutscene/audio tests discriminate. The
+final clean audio suite passed 31 tests. Evidence is under
+`.scratch/loading-regression/`, including `comparison.json` and
+`cutscene-mutation-final/receipt.json`. Immutable engine/assets and Update ABI 101
+remain unchanged; no native boundary is removed. No FPS, full-game/mod/save,
+physical-device or whole-process network-byte claim is made.
+
+The final production cold/warm smoke passed: first-visible 40.171/4.147 seconds,
+title 44.146/5.911 seconds and playable 55.140/14.165 seconds. The CDN-backed
+generic page also passed both visits in local preview. The permanent
+`drive_boot.mjs` passed against an isolated unpacked distribution and recorded
+visible-only input. A manual-Play browser session displayed the original intro,
+reached a live room, moved x=569.553 to 354.805, fired, paused and resumed with
+running nonzero audio and no page errors. These frontend changes are deployed
+privately; generic source and generated page remain local, without a GitHub push.
+
+Verify with the four Node suites above and
+`node scripts/recomp/web/drive_boot.mjs URL OUT visits=2 cpu=1 gl=hw profile=0 timeout=600`
+against an unpacked distribution. Portable-page cold/warm receipts, screenshots
+and exact deployment metadata are retained under
+`.scratch/loading-regression/{production-verified,public-verified,driver-proof}`.
+
 ## 2026-10-06 — Byte-based percentage and background archive startup
 
 The loading bar and Team Meat bitmap-font percentage now share one rendered

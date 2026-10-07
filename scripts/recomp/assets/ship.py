@@ -49,13 +49,14 @@ except ImportError:  # pragma: no cover - depends on the machine
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bundle as bundle_tool  # noqa: E402  (the sibling tool: its manifest and check)
+import portable as portable_tool  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 MANIFEST_NAME = "dist.json"
 MANIFEST_FORMAT = "isaac-recomp-dist/1"
 INDEX_NAME = "instance_index.json"
 INSTANCE_DIR = "instance"
-PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs")
+PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs")
 TRAIL_NAME = "boot-trail.json"       # round 59: the boot trail a drive_boot.mjs run left, shipped for first visits (--trail)
 MODULE_FILES = ("boot.mjs", "boot.wasm")
 SEGS_NAME = "isaac.segs.bin"
@@ -267,6 +268,14 @@ def cmd_build(args) -> int:
         for m in missing:
             print("   %s" % m)
         return 1
+    with open(os.path.join(web, "play.html"), encoding="utf-8") as f:
+        page = f.read()
+    loader_source = portable_tool.loader_gif_source(page)
+    loader_path = None
+    if loader_source is not None and not loader_source.group(2).startswith("data:"):
+        loader_path = portable_tool.loader_gif_path(loader_source.group(2), web)
+        page = (page[:loader_source.start(2)] + "./" + portable_tool.LOADER_GIF_NAME
+                + page[loader_source.end(2):])
     os.makedirs(dist, exist_ok=True)
     previous: dict[str, dict] = {}
     previous_manifest: dict = {}
@@ -293,6 +302,13 @@ def cmd_build(args) -> int:
 
     for f in PAGE_FILES:
         add(f, os.path.join(web, f), "page", link=False)
+    if loader_path is not None:
+        add(portable_tool.LOADER_GIF_NAME, loader_path, "page", link=False)
+        page_path = os.path.join(dist, "play.html")
+        with open(page_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(page)
+        page_entry = next(e for e in files if e["path"] == "play.html")
+        page_entry.update(size=os.stat(page_path).st_size, sha256=sha256_file(page_path))
     if getattr(args, "trail", ""):
         add(TRAIL_NAME, os.path.abspath(args.trail), "trail", link=False)
     for f in MODULE_FILES:

@@ -175,6 +175,153 @@ def patch_sheet(sheet_png: bytes, fnt: bytes, atlas_png: bytes) -> tuple[bytes, 
     return out.getvalue(), facts
 
 
+# ---- the touch HUD's art (the mobile item bar) -------------------------------
+# The touch layer draws a row of the player's own items under the game -- the
+# active item with its charge bar, the pocket item, the bombs -- with the art the
+# game's HUD draws them with: each pocket pickup's own "HUD" animation (a frame
+# of ui/ui_cardspills.png), the collectible's sprite, ui_chargebar's segments,
+# hudpickups' bomb and the HUD's own number font. Resolved here, at build time,
+# in the archive order the engine mounts them (afterbirthp.a wins).
+HUD_ARCHIVES = ("afterbirthp.a", "afterbirth.a", "graphics.a", "config.a", "fonts.a", "animations.a")
+HUD_FILES = {  # archive key -> page-assets file name
+    "resources/gfx/ui/ui_cardspills.png": "hud-pocket.png",
+    "resources/gfx/ui/hudpickups.png": "hud-pickups.png",
+    "resources/gfx/ui/ui_chargebar.png": "hud-chargebar.png",
+    "resources/font/pftempestasevencondensed.fnt": "hud-font.fnt",
+    "resources/font/pftempestasevencondensed_0.png": "hud-font_0.png",
+}
+HUD_CELL = 32
+
+
+def _hud_reader(bundle_dir: str):
+    opened = []
+    for name in HUD_ARCHIVES:
+        path = os.path.join(bundle_dir, "resources", "packed", name)
+        if os.path.isfile(path):
+            opened.append(A.Archive(path))
+
+    def read(rel: str) -> bytes | None:
+        key = A.key_of(A.resource_key(rel.replace("\\", "/")))
+        for ar in opened:
+            e = ar.by_key.get(key)
+            if e is not None:
+                return ar.decode(e)
+        return None
+    return read, opened
+
+
+def _anm2_hud_frame(anm2: bytes, sheet_suffix: str = "ui_cardspills.png") -> list[int] | None:
+    """The first frame of an anm2's HUD animation on the layer drawing `sheet_suffix`:
+    [x, y, w, h, pivot_x, pivot_y] in that sheet."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(anm2)
+    sheets = {s.get("Id"): (s.get("Path") or "").replace("\\", "/").lower() for s in root.iter("Spritesheet")}
+    layers = {l.get("Id"): sheets.get(l.get("SpritesheetId"), "") for l in root.iter("Layer")}
+    for anim in root.iter("Animation"):
+        if anim.get("Name") != "HUD":
+            continue
+        las = anim.find("LayerAnimations")
+        for la in (list(las) if las is not None else []):
+            if not layers.get(la.get("LayerId"), "").endswith(sheet_suffix):
+                continue
+            for f in la.iter("Frame"):
+                if f.get("Visible", "true") != "true":
+                    continue
+                return [int(float(f.get(k, "0"))) for k in ("XCrop", "YCrop", "Width", "Height", "XPivot", "YPivot")]
+    return None
+
+
+def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
+    """hud.json, the active items' icon atlas and the HUD sheets. Returns {file name: bytes}."""
+    import xml.etree.ElementTree as ET
+    from PIL import Image
+    read, opened = _hud_reader(bundle_dir)
+    try:
+        items_xml, pockets_xml, entities_xml = read("items.xml"), read("pocketitems.xml"), read("entities2.xml")
+        if not (items_xml and pockets_xml and entities_xml):
+            return {}
+        written: dict[str, bytes] = {}
+        for key, name in HUD_FILES.items():
+            data = read(key)
+            if data is None:
+                raise SystemExit("page-assets: no %s in the archives" % key)
+            written[name] = data
+        # the active items, one 32x32 cell each, the order of items.xml
+        items = ET.fromstring(items_xml)
+        root = (items.get("gfxroot") or "gfx/items/").rstrip("/") + "/collectibles/"
+        actives = [e for e in items if e.tag == "active" and e.get("gfx")]
+        cols = 16
+        atlas = Image.new("RGBA", (cols * HUD_CELL, -(-len(actives) // cols) * HUD_CELL), (0, 0, 0, 0))
+        cells: dict[str, list[int]] = {}
+        for e in actives:
+            png = read(root + e.get("gfx"))
+            if png is None:
+                continue
+            icon = Image.open(io.BytesIO(png)).convert("RGBA")
+            if icon.size != (HUD_CELL, HUD_CELL):
+                icon = icon.crop((0, 0, HUD_CELL, HUD_CELL))
+            n = len(cells)
+            x, y = (n % cols) * HUD_CELL, (n // cols) * HUD_CELL
+            atlas.alpha_composite(icon, (x, y))
+            cells[e.get("id")] = [x, y]
+        out = io.BytesIO()
+        atlas.save(out, format="PNG", optimize=True)
+        written["hud-actives.png"] = out.getvalue()
+        # the pocket pickups: entity 5.<variant>.<subtype> -> its anm2's HUD frame
+        ents = ET.fromstring(entities_xml)
+        anm2_root = (ents.get("anm2root") or "gfx/").rstrip("/") + "/"
+        sprite = {}
+        for e in ents:
+            if e.get("id") == "5" and e.get("variant") in ("70", "300") and e.get("anm2path"):
+                sprite[(e.get("variant"), e.get("subtype") or "0")] = anm2_root + e.get("anm2path")
+        frames: dict[str, list[int]] = {}
+
+        def hud_frame(variant: str, subtype: str):
+            path = sprite.get((variant, subtype))
+            if path not in frames and path:
+                data = read(path)
+                frames[path] = _anm2_hud_frame(data) if data else None
+            return frames.get(path) if path else None
+        cards = {}
+        for e in ET.fromstring(pockets_xml):
+            if e.tag in ("card", "rune") and e.get("id") and e.get("pickup"):
+                f = hud_frame("300", e.get("pickup"))
+                if f:
+                    cards[e.get("id")] = f
+        pills = {}
+        for colour in list(range(1, 15)) + list(range(2049, 2063)):
+            f = hud_frame("70", str(colour))
+            if f:
+                pills[str(colour)] = f
+        # hudpickups.png is a 16x16 grid: the bomb at 0,16 and the golden bomb at 48,16;
+        # ui_chargebar.anm2's BarEmpty/BarFull/BarOverlayN crops (16x32, pivot 8,16)
+        hud = {
+            "format": "isaac-touch-hud-1",
+            "actives": {"sheet": "hud-actives.png", "cell": HUD_CELL,
+                        "items": {k: {"at": v} for k, v in cells.items()}},
+            "pocket": {"sheet": "hud-pocket.png", "cards": cards, "pills": pills},
+            "pickups": {"sheet": "hud-pickups.png", "bomb": [0, 16, 16, 16], "goldenBomb": [48, 16, 16, 16]},
+            "chargebar": {"sheet": "hud-chargebar.png", "size": [16, 32], "pivot": [8, 16],
+                          "empty": [0, 0], "full": [16, 0],
+                          "overlay": {"1": [48, 32], "2": [32, 32], "3": [16, 32], "4": [0, 32], "5": [64, 0],
+                                      "6": [48, 0], "8": [64, 32], "12": [32, 0]}},
+            "font": {"fnt": "hud-font.fnt", "png": "hud-font_0.png"},
+        }
+        for e in actives:
+            entry = hud["actives"]["items"].get(e.get("id"))
+            if entry is not None:
+                entry["max"] = int(e.get("maxcharges") or 0)
+        written["hud.json"] = (json.dumps(hud, indent=1, sort_keys=True) + "\n").encode()
+        os.makedirs(out_dir, exist_ok=True)
+        for name, data in written.items():
+            with open(os.path.join(out_dir, name), "wb") as f:
+                f.write(data)
+        return written
+    finally:
+        for ar in opened:
+            ar.close()
+
+
 def entry_bytes(ar: A.Archive, path: str) -> bytes:
     e = ar.by_key.get(A.key_of(A.resource_key(path)))
     if e is None:
@@ -252,6 +399,7 @@ def build(bundle_dir: str, quiet: bool = False) -> dict:
             with open(os.path.join(out_dir, name), "wb") as f:
                 f.write(data)
             written[name] = data
+    written.update(build_hud(bundle_dir, out_dir))
     menu = {
         "format": "isaac-page-assets-1",
         "sheet": "saveselectmenu.png", "paper": "seedunlockpaper.png", "cursor": "cursor.png",

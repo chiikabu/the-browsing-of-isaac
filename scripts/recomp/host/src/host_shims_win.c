@@ -896,20 +896,40 @@ static void input_poll_page(void) {
         }
     }
 }
-static int msgq_pop_into(uint32_t msg) {
+/* GLFW's LCtrl AltGr lookahead at 0x00a5c101 uses PM_NOREMOVE.
+ * A peek must neither consume the next key nor advance GetKeyState.
+ * https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagew */
+static int msgq_read_into(uint32_t msg, uint32_t hwnd, uint32_t min,
+                          uint32_t max, uint32_t flags) {
     if (!g_msgq_count || !msg || !isaac_is_guest_va(msg + 27u)) return 0;
-    win_msg *m = &g_msgq[g_msgq_head];
-    g_msgq_head = (g_msgq_head + 1u) % MSGQ_MAX;
-    --g_msgq_count;
-    isaac_w32(msg + 0u, m->hwnd);
-    isaac_w32(msg + 4u, m->message);
-    isaac_w32(msg + 8u, m->wParam);
-    isaac_w32(msg + 12u, m->lParam);
-    isaac_w32(msg + 16u, m->time);
-    isaac_w32(msg + 20u, m->x);
-    isaac_w32(msg + 24u, m->y);
-    keysync_apply(m->message, m->wParam, m->lParam);
-    return 1;
+    min &= 0xFFFFu;
+    max &= 0xFFFFu;
+    for (unsigned offset = 0; offset < g_msgq_count; ++offset) {
+        win_msg *m = &g_msgq[(g_msgq_head + offset) % MSGQ_MAX];
+        if (hwnd && (hwnd == UINT32_MAX ? m->hwnd != 0 : m->hwnd != hwnd)) continue;
+        if (m->message != 0x12u && (min || max) &&
+            (m->message < min || m->message > max)) continue;
+        isaac_w32(msg + 0u, m->hwnd);
+        isaac_w32(msg + 4u, m->message);
+        isaac_w32(msg + 8u, m->wParam);
+        isaac_w32(msg + 12u, m->lParam);
+        isaac_w32(msg + 16u, m->time);
+        isaac_w32(msg + 20u, m->x);
+        isaac_w32(msg + 24u, m->y);
+        if (flags & 1u) {              /* PM_REMOVE, independent of PM_NOYIELD */
+            keysync_apply(m->message, m->wParam, m->lParam);
+            if (!offset) {
+                g_msgq_head = (g_msgq_head + 1u) % MSGQ_MAX;
+            } else {
+                for (unsigned i = offset; i + 1u < g_msgq_count; ++i)
+                    g_msgq[(g_msgq_head + i) % MSGQ_MAX] =
+                        g_msgq[(g_msgq_head + i + 1u) % MSGQ_MAX];
+            }
+            --g_msgq_count;
+        }
+        return 1;
+    }
+    return 0;
 }
 /* Focus. A real window receives WM_ACTIVATEAPP, WM_ACTIVATE and WM_SETFOCUS
  * before any key; GLFW turns them into its focused state and games gate
@@ -925,13 +945,13 @@ static void focus_main_window(void) {
 uint32_t isaac_input_focused_hwnd(void) { return g_win_n ? main_hwnd() : 0u; }
 void imp_user32__PeekMessageW(CpuState *restrict cpu) {
     uint32_t msg = isaac_arg(cpu, 0);
-    (void)isaac_arg(cpu, 1); (void)isaac_arg(cpu, 2);
-    (void)isaac_arg(cpu, 3); (void)isaac_arg(cpu, 4);
+    uint32_t hwnd = isaac_arg(cpu, 1), min = isaac_arg(cpu, 2);
+    uint32_t max = isaac_arg(cpu, 3), flags = isaac_arg(cpu, 4);
     focus_main_window();
     input_poll_page();
-    if (msgq_pop_into(msg)) { cpu->EAX = 1; return; }
+    if (msgq_read_into(msg, hwnd, min, max, flags)) { cpu->EAX = 1; return; }
     int cap = frame_cap();
-    if (cap > 0 && (int)g_frames_presented >= cap && !g_quit_sent && msg &&
+    if (cap > 0 && (int)g_frames_presented >= cap && !g_quit_sent && !g_msgq_count && msg &&
         isaac_is_guest_va(msg + 27u)) {
         /* MSG { HWND hwnd; UINT message; WPARAM wParam; LPARAM lParam;
          *       DWORD time; POINT pt; } -- WM_QUIT (0x12) */
@@ -942,9 +962,11 @@ void imp_user32__PeekMessageW(CpuState *restrict cpu) {
         isaac_w32(msg + 16u, 0);
         isaac_w32(msg + 20u, 0);
         isaac_w32(msg + 24u, 0);
-        g_quit_sent = 1;
-        isaac_log("[isaac][frame] ISAAC_MAX_FRAMES=%d reached after %u presented frames: "
-                  "posting WM_QUIT", cap, g_frames_presented);
+        if (flags & 1u) {
+            g_quit_sent = 1;
+            isaac_log("[isaac][frame] ISAAC_MAX_FRAMES=%d reached after %u presented frames: "
+                      "posting WM_QUIT", cap, g_frames_presented);
+        }
         cpu->EAX = 1;
         return;
     }

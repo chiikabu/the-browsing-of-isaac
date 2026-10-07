@@ -40,16 +40,22 @@ import os
 import re
 import shutil
 import sys
+import tempfile
+import urllib.parse
+import urllib.request
 
 MIB = 1 << 20
 PAGE = "play.html"
 TOP_FILES = ("boot.wasm", "isaac.segs.bin", "boot-trail.json")
-MODULES = ("boot.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs", "play.mjs")
+MODULES = ("boot.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs", "play.mjs")
 # the archives the engine reads as 1 MiB windows (boot_web.mjs LAZY_ARCHIVES)
 WINDOWED = ("resources/packed/music.a", "resources/packed/videos.a",
             "resources/packed/afterbirth.a", "resources/packed/afterbirthp.a")
 SCRIPT_BYTES = 48 << 20        # one inline script's worth of base64
 WINDOW = MIB                   # the engine's window, and the range granularity
+LOADER_GIF_NAME = "loader-isaac.gif"
+LOADER_GIF_CACHE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                                             ".scratch", "loader-assets"))
 
 
 def keystream_key(seed: bytes) -> bytes:
@@ -355,8 +361,61 @@ def manifest_for(dist: str, files: list[dict]) -> dict:
     return _strip_local(m)
 
 
+def loader_gif_source(html: str):
+    """Find only the loader picture's GIF srcset, leaving its static poster alone."""
+    picture = re.search(r'<picture\b(?=[^>]*\sid\s*=\s*["\']loader-isaac-picture["\'])'
+                        r'[^>]*>.*?</picture\s*>', html, re.I | re.S)
+    if picture is None:
+        return None
+    for source in re.finditer(r'<source\b[^>]*>', html[picture.start():picture.end()], re.I):
+        start, end = picture.start() + source.start(), picture.start() + source.end()
+        if re.search(r'\stype\s*=\s*(["\'])image/gif\1', html[start:end], re.I):
+            return re.compile(r'\ssrcset\s*=\s*(["\'])(.*?)\1', re.I | re.S).search(html, start, end)
+    return None
+
+
+def loader_gif_path(srcset: str, base_dir: str) -> str:
+    """Resolve a local GIF or cache its public download outside tracked sources."""
+    url = urllib.parse.urlsplit(srcset)
+    if url.scheme in ("http", "https"):
+        cache = os.path.join(LOADER_GIF_CACHE, hashlib.sha256(srcset.encode("utf-8")).hexdigest() + ".gif")
+        if os.path.isfile(cache):
+            return cache
+        request = urllib.request.Request(srcset, headers={"User-Agent": "Mozilla/5.0",
+                                                         "Accept": "image/gif"})
+        temporary = None
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = response.read()
+            if data[:6] not in (b"GIF87a", b"GIF89a"):
+                raise ValueError("response is not a GIF")
+            os.makedirs(LOADER_GIF_CACHE, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=LOADER_GIF_CACHE, suffix=".tmp", delete=False) as f:
+                temporary = f.name
+                f.write(data)
+            os.replace(temporary, cache)
+        except (OSError, ValueError) as e:
+            raise SystemExit("loader GIF: cannot fetch %s: %s" % (srcset, e)) from e
+        finally:
+            if temporary and os.path.isfile(temporary):
+                os.unlink(temporary)
+        return cache
+    if url.scheme or url.netloc:
+        raise SystemExit("loader GIF: unsupported source %s" % srcset)
+    path = os.path.join(base_dir, urllib.parse.unquote(url.path).lstrip("/"))
+    if not os.path.isfile(path):
+        raise SystemExit("loader GIF: missing local asset %s" % path)
+    return path
+
+
 def page_source(dist: str) -> str:
-    return read(os.path.join(dist, PAGE)).decode("utf-8")
+    html = read(os.path.join(dist, PAGE)).decode("utf-8")
+    source = loader_gif_source(html)
+    if source is not None and not source.group(2).startswith("data:"):
+        data = read(loader_gif_path(source.group(2), dist))
+        embedded = "data:image/gif;base64," + base64.b64encode(data).decode("ascii")
+        html = html[:source.start(2)] + embedded + html[source.end(2):]
+    return html
 
 
 PROVIDER_JS = r"""
@@ -443,6 +502,7 @@ PROVIDER_JS = r"""
     return u.href;
   }
   var downloads = [], byURL = new Map(), received = 0, total = 0, chunks = 0;
+  var bootReceived = 0, bootTotal = 0;
   var loaded = Object.create(null), loadedN = 0;
   for (var s = 0; s < S.length; s++) {
     downloads[s] = [];
@@ -450,12 +510,18 @@ PROVIDER_JS = r"""
       var d = { s: s, i: i, size: chunkLen(s, i), received: 0, spans: [] };
       downloads[s][i] = d;
       total += d.size; chunks++;
+      if (S[s].gz) bootTotal += d.size;
       if (P.base) byURL.set(canonical(name(s, i)), d);
       else { d.received = d.size; loaded[s + ':' + i] = 1; loadedN++; }
     }
   }
   if (!P.base) received = total;
-  function progress() { return { received: received, total: total }; }
+  function progress(scope) {
+    if (!P.base && scope === 'boot') return { received: 0, total: 0 };
+    return scope === 'boot'
+      ? { received: bootReceived, total: bootTotal }
+      : { received: received, total: total };
+  }
   function note(d) {
     var k = d.s + ':' + d.i;
     if (loaded[k] || d.received !== d.size) return;
@@ -478,6 +544,7 @@ PROVIDER_JS = r"""
     spans.splice(a, b - a, [from, to]);
     if (added) {
       d.received += added; received += added;
+      if (S[d.s].gz) bootReceived += added;
       if (P.onProgress) { try { P.onProgress(progress()); } catch (e) { /* decoration */ } }
     }
     if (complete) note(d);
@@ -844,7 +911,7 @@ MODULE_LOADER_JS = r"""
   // blob URL, and a blob's imports do not resolve relative to the page -- so the
   // sources are rewritten to import from the map before they are turned into blobs.
   var src = window.__isaacModules, url = {};
-  var order = ['boot.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs', 'boot_web.mjs', 'play.mjs'];
+  var order = ['boot.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs', 'boot_web.mjs', 'play.mjs'];
   for (var i = 0; i < order.length; i++) {
     var name = order[i];
     var text = src[name].replace(/(["'])\.\/([A-Za-z0-9_.-]+\.mjs)\1/g, function (_m, _q, dep) {

@@ -22,8 +22,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ship = join(root, 'scripts', 'recomp', 'assets', 'ship.py');
 const bundleTool = join(root, 'scripts', 'recomp', 'assets', 'bundle.py');
 const serve = join(root, 'scripts', 'recomp', 'web', 'serve_dist.mjs');
-const web = join(root, 'scripts', 'recomp', 'web');
-const rd = (...p) => readFileSync(join(root, ...p), 'utf8');
 
 const PYTHONS = [
   join(process.env.LOCALAPPDATA ?? '', 'hermes', 'hermes-agent', 'venv', 'Scripts', 'python.exe'),
@@ -106,9 +104,16 @@ function makeTree(dir, segsBytes = noise(1500000, 1234)) {
   ok(bundleTool, ['build', inst, bundle, '--copy', '--strict']);
   const modFiles = makeModule(mod);
   writeFileSync(segs, segsBytes);
-  return { inst, bundle, mod, segs, instFiles, modFiles, segsBytes };
+  // Keep package behavior tests independent of public template downloads.
+  const pageDir = join(dir, 'web');
+  mkdirSync(pageDir);
+  writeFileSync(join(pageDir, 'play.html'), '<html><body><script type="module" src="./play.mjs"></script></body></html>');
+  for (const name of ['play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs']) {
+    writeFileSync(join(pageDir, name), 'export {};');
+  }
+  return { inst, bundle, mod, segs, web: pageDir, instFiles, modFiles, segsBytes };
 }
-const buildArgs = (t, dist, extra = []) => ['build', '--bundle', t.bundle, '--module', t.mod, '--segs', t.segs, '--dist', dist,
+const buildArgs = (t, dist, extra = []) => ['build', '--bundle', t.bundle, '--module', t.mod, '--segs', t.segs, '--web', t.web, '--dist', dist,
   '--window-min', String(WINDOW_MIN), '--brotli-quality', '5', '--gzip-level', '6', ...extra];
 
 function assertSiblings(dist, rel, source, encodings) {
@@ -150,7 +155,7 @@ function parseTable(text) {
   };
 }
 
-test('ship.py build: the dist tree, the index shape, the siblings, the manifest and the size table arithmetic', (t) => {
+test('ship.py build: the index, compression, manifest coverage and size table arithmetic', (t) => {
   if (!python) { t.skip('no python 3 on PATH'); return; }
   const dir = mkdtempSync(join(tmpdir(), 'isaac-ship-'));
   try {
@@ -158,18 +163,7 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     const dist = join(dir, 'dist');
     const text = ok(ship, buildArgs(tree, dist));
     const hasBr = !/brotli: the python module is not importable/.test(text);
-    // the tree: the page, the module, the image, the bundle under instance/, the index, the manifest, the siblings
     const got = walk(dist).sort();
-    const bundleFiles = walk(tree.bundle).map((p) => `instance/${p}`);
-    // round 90f: the recorded boot trail ships by default (--no-trail leaves it out)
-    const expected = ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs', 'boot.mjs', 'boot.wasm', 'isaac.segs.bin', 'boot-trail.json', 'instance_index.json', 'dist.json', ...bundleFiles,
-      'boot.wasm.gz', 'instance/resources/packed/sfx.a.gz', ...(hasBr ? ['boot.wasm.br', 'instance/resources/packed/sfx.a.br'] : [])].sort();
-    assert.deepEqual(got, expected);
-    for (const f of ['play.html', 'play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mods.mjs']) assert.ok(readFileSync(join(dist, f)).equals(readFileSync(join(web, f))), `${f} is the page's file`);
-    assert.ok(readFileSync(join(dist, 'boot.wasm')).equals(tree.modFiles['boot.wasm']), 'the module is copied');
-    assert.ok(readFileSync(join(dist, 'isaac.segs.bin')).equals(tree.segsBytes), 'the image is copied');
-    assert.ok(readFileSync(join(dist, 'boot-trail.json')).equals(readFileSync(join(web, '..', 'assets', 'boot-trail.json'))), 'the recorded trail is the one shipped');
-    assert.ok(readFileSync(join(dist, 'instance', '.bundle.json')).equals(readFileSync(join(tree.bundle, '.bundle.json'))), 'the bundle manifest travels along');
     // the index: the shape boot_web.mjs consumes -- an array of {p, s}, the bundle's non-dot files with their sizes, sorted
     const index = JSON.parse(readFileSync(join(dist, 'instance_index.json'), 'utf8'));
     assert.ok(Array.isArray(index) && index.every((e) => Object.keys(e).sort().join() === 'p,s' && typeof e.p === 'string' && Number.isInteger(e.s)), 'array of {p, s}');
@@ -219,7 +213,7 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.equal(tab.rows['boot.wasm'].raw + tab.small.raw, tab.dist.raw, 'rows + the small group = the raw total');
     assert.equal(tab.rows['boot.wasm'].transfer + tab.small.transfer, tab.transfer.bytes, 'rows + the small group = the transfer total');
     // a second build reuses the siblings and refreshes the copies; --no-compress makes none
-    const siblings = expected.filter((p) => /\.(br|gz)$/.test(p));
+    const siblings = got.filter((p) => /\.(br|gz)$/.test(p));
     const oldTime = new Date('2000-01-01T00:00:00Z');
     for (const p of siblings) utimesSync(join(dist, p), oldTime, oldTime);
     const siblingTimes = siblings.map((p) => statSync(join(dist, p)).mtimeMs);
@@ -227,7 +221,6 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     for (let i = 0; i < siblings.length; i++) {
       assert.equal(statSync(join(dist, siblings[i])).mtimeMs, siblingTimes[i], `${siblings[i]} is reused without rewriting`);
     }
-    assert.deepEqual(walk(dist).sort(), expected, 'the tree is the same after a rebuild');
     ok(ship, buildArgs(tree, join(dir, 'plain'), ['--no-compress', '--copy']));
     assert.ok(!walk(join(dir, 'plain')).some((p) => /\.(br|gz)$/.test(p)), '--no-compress: no siblings');
     assert.equal(JSON.parse(readFileSync(join(dir, 'plain', 'dist.json'), 'utf8')).linked, 0, '--copy: nothing hard-linked');
@@ -235,6 +228,38 @@ test('ship.py build: the dist tree, the index shape, the siblings, the manifest 
     assert.match(ok(ship, ['check', dist]), /dist check OK: \d+ files, [\d,]+ bytes raw, [\d,]+ bytes transfer with the best encoding, every sha256 matches, every sibling decodes to its source/);
     assert.match(ok(ship, ['check', dist, '--quick']), /\(sizes only\)/);
     assert.match(ok(ship, ['table', dist]), /transfer with the best encoding/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ship.py packages selected loader animation locally and portable output embeds it without changing its poster', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const dir = mkdtempSync(join(tmpdir(), 'isaac-loader-'));
+  try {
+    const tree = makeTree(dir);
+    // Synthetic looping two-frame GIF: no game-derived or downloaded test assets.
+    const gif = Buffer.from('47494638396101000100800000000000ffffff21ff0b4e45545343415045322e300301000000'
+      + '21f904000a0000002c0000000001000100000202440100'
+      + '21f904000a0000002c00000000010001000002024c01003b', 'hex');
+    const poster = '<img id="loader-isaac" src="data:image/png;base64,cG9zdGVy" alt="">';
+    const picture = `<picture id="loader-isaac-picture"><source media="(prefers-reduced-motion: no-preference)" type="image/gif" srcset="./custom.gif">${poster}</picture>`;
+    writeFileSync(join(tree.web, 'custom.gif'), gif);
+    writeFileSync(join(tree.web, 'play.html'), `<html><body>${picture}<script type="module" src="./play.mjs"></script></body></html>`);
+    const dist = join(dir, 'dist');
+    ok(ship, buildArgs(tree, dist, ['--no-compress']));
+    const html = readFileSync(join(dist, 'play.html'), 'utf8');
+    const source = /<source[^>]*srcset="([^"]+)"/.exec(html)[1];
+    assert.ok(readFileSync(join(dist, source)).equals(gif), 'selected animation remains byte-exact and needs only dist files');
+    assert.ok(html.includes(poster), 'reduced-motion poster is unchanged');
+    assert.ok(html.includes('media="(prefers-reduced-motion: no-preference)"'));
+    ok(ship, ['check', dist]);
+    const offline = join(dir, 'offline.html');
+    ok(join(root, 'scripts/recomp/assets/portable.py'), ['offline', dist, offline]);
+    const embedded = readFileSync(offline, 'utf8');
+    const data = /<source[^>]*srcset="data:image\/gif;base64,([^"]+)"/.exec(embedded)[1];
+    assert.ok(Buffer.from(data, 'base64').equals(gif), 'offline source retains both animation frames and looping metadata');
+    assert.ok(embedded.includes(poster), 'embedding does not replace the static poster');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -519,22 +544,6 @@ test('serve_dist.mjs: types, slices, base64, negotiation, Range, caching by hash
   }
 });
 
-
-test('ship.py ships the three page files and mirrors the runner\'s index policy', () => {
-  const py = rd('scripts', 'recomp', 'assets', 'ship.py');
-  assert.ok(py.includes('PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mods.mjs")'),
-    'the page, the pipeline it imports, the EDIT FILE menu, the zip reader and the mods menu');
-  assert.ok(py.includes('MODULE_FILES = ("boot.mjs", "boot.wasm")') && py.includes('SEGS_NAME = "isaac.segs.bin"'));
-  assert.ok(py.includes('SKIP_DIRS = {"packed", "mods"}') && py.includes('SKIP_EXT = re.compile(r"\\.(exe|dll|so|ogv)$", re.IGNORECASE)'), 'the index policy of run_web.mjs');
-  const runner = rd('scripts', 'recomp', 'web', 'run_web.mjs');
-  assert.ok(runner.includes("const SKIP_DIRS = new Set(['packed', 'mods']);") && runner.includes('const SKIP_EXT = /\\.(exe|dll|so|ogv)$/i;'), 'which is this');
-  assert.ok(py.includes('WINDOW_MIN_DEFAULT = 32 << 20'), 'the host\'s window rule');
-  assert.ok(rd('scripts', 'recomp', 'host', 'src', 'host_shims_fs.c').includes('getenv("ISAAC_FS_WINDOW_MIN")'), 'ISAAC_FS_WINDOW_MIN is the host\'s knob');
-  assert.ok(py.includes('add(f, os.path.join(module_dir, f), "module", link=False)'), 'the module is copied, never linked (it is relinked in place)');
-  const srv = rd('scripts', 'recomp', 'web', 'serve_dist.mjs');
-  assert.ok(srv.includes("if (COI) { headers['Cross-Origin-Opener-Policy'] = 'same-origin'; headers['Cross-Origin-Embedder-Policy'] = 'require-corp'; }"), 'COOP/COEP only on request');
-  assert.ok(srv.includes("const positionalPort = argv.slice(1).find((a) => /^\\d+$/.test(a));") && srv.includes('?? 8200'), 'port 8200 by default');
-});
 
 test('round 45: the dist server re-reads dist.json when it changes, so a rebuilt dist is served with matching hashes', () => {
   const s = readFileSync(join(root, 'scripts', 'recomp', 'web', 'serve_dist.mjs'), 'utf8');

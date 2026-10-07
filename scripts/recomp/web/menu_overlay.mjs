@@ -23,7 +23,7 @@ const GAME_W = 480, GAME_H = 270, SCALE = 2;
 // the credit on the menu paper (round 87)
 const CREDIT_TEXT = 'ported by vun';
 
-function parseBmfont(buf) {
+export function parseBmfont(buf) {
   const b = new Uint8Array(buf), dv = new DataView(buf);
   if (!(b[0] === 66 && b[1] === 77 && b[2] === 70 && b[3] === 3)) throw new Error('not a BMFont v3 binary');
   const font = { chars: new Map(), kern: new Map(), lineHeight: 0, base: 0, pages: [] };

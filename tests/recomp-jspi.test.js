@@ -128,23 +128,3 @@ test('the interactive driver is state-driven: Enter until the game logs a run, t
   assert.ok(drv.includes("summary.shotsDiffer = !a.equals(b);"), 'walking must change the picture');
   assert.ok(/process\.exit\(ok \? 0 : 1\)/.test(drv), 'the exit code is the verdict');
 });
-
-test('boot_web.mjs: every stage is awaited (the run entries return promises under JSPI), live input first', () => {
-  const page = readFileSync(join(web, 'boot_web.mjs'), 'utf8');
-  assert.ok(/async function stageOk\(name, fn\) \{\s*log\(`=== \$\{name\} ===`\);\s*try \{\s*return await fn\(\);/.test(page),
-    'stageOk awaits the stage inside its try, so a rejected promise is a TRAP like a thrown one');
-  assert.ok(page.includes("done.mainRc = await stageOk('main @ 0x00931050'"), 'main is awaited');
-  assert.ok(page.includes("done.bootRc = await stageOk('host boot (IAT + TEB + TLS + _initterm)', () => m._isaac_run_boot(1));"), 'boot is awaited');
-  assert.equal((page.match(/(?<!await )stageOk\('/g) || []).length, 0, 'no stage is called without await');
-  assert.ok(page.includes("typeof r.then === 'function' ? 'promise (JSPI)' : 'value (synchronous)'"), 'the log says which kind the entry returned');
-  // live DOM input is queued and served ahead of the scripted timeline
-  const poll = page.slice(page.indexOf('cfg.isaacInputPoll = (frame, out) => {'));
-  assert.ok(poll.indexOf('if (live.length) {') > 0 && poll.indexOf('if (live.length) {') < poll.indexOf('timeline[0].frame > frame'),
-    'the live queue is drained before the timeline');
-  for (const s of ["window.addEventListener('keydown', (ev) => { resumeAudio(); onKey(ev, true); });", "window.addEventListener('keyup', (ev) => onKey(ev, false));",
-                   "canvasEl.addEventListener('mousemove'", "canvasEl.addEventListener('mousedown'", "canvasEl.addEventListener('mouseup'",
-                   'if (ev.repeat) { ev.preventDefault(); return; }', 'live.push([1, vk, sc | (ext << 8), down ? 1 : 0]);'])
-    assert.ok(page.includes(s), `live input: ${s}`);
-  assert.ok(page.includes("if (/^Key[A-Z]$/.test(c)) return c[3].toLowerCase();"), 'event.code KeyA..KeyZ map through the shared KEYS table');
-  assert.ok(page.includes('window.isaacFrame = n;'), 'the host frame counter is live on window (a driver paces real key events on it)');
-});

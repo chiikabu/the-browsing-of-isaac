@@ -120,22 +120,34 @@ class Decoder:
 
 
 def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
-                  jt=None, extent=None, bad=None):
+                  jt=None, extent=None, bad=None, ownership=None):
     """Walk direct control flow from `start`.
 
     Returns (body, jumps) where body is {va: (len, ops)} in address order and
     jumps is {va: (kind, targets)} for every computed jump encountered.
 
-    A direct `jmp` whose target is a known function start (or outside the
-    text section) is treated as a tail call, not an internal edge.  Computed
-    jumps are classified by `jt` (jumptables.JumpTables); recovered switch
-    targets become internal edges so their blocks get lifted.
+    Without explicit ownership, a jump to a known function start is a tail
+    call. A bounded PE-index compartment overrides unproven fragment starts,
+    but never independent entries or table data. Cross-compartment exits
+    park a continuation; recovered local blocks share the register frame.
     """
     body = {}
     jumps = {}
     work = [start]
     seen = set()
-    lo, hi = extent if extent else (start, text_hi)
+    lo, hi = (ownership.extent if ownership is not None
+              else extent if extent else (start, text_hi))
+
+    def is_local(target):
+        if not text_lo <= target < text_hi:
+            return False
+        if ownership is not None:
+            return ownership.is_local(target)
+        return target == start or target not in func_starts
+
+    if ownership is not None and not ownership.is_local(start):
+        raise LiftError("entry at %#x is indexed data, not code" % start)
+
     pending_jt = []
     # the entry itself must decode: a start that is data is a real failure
     length, ops = dec.at(start)
@@ -150,13 +162,15 @@ def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
             jumps[va] = (kind, targets)
             if kind == "table":
                 for t in targets:
-                    if text_lo <= t < text_hi and t not in func_starts:
+                    if is_local(t):
                         work.append(t)
             continue
         va = work.pop()
         if va in seen:
             continue
         seen.add(va)
+        if ownership is not None and not ownership.is_local(va):
+            continue
         if not (text_lo <= va < text_hi):
             raise LiftError("control flow left .text at %#x" % va)
         try:
@@ -189,19 +203,15 @@ def discover_body(dec, start, func_starts, text_lo, text_hi, max_insns=20000,
                     continue        # p-code relative, stays inside instr
                 t = tgt_vn.offset
                 falls = False
-                if t != start and t in func_starts:
-                    continue        # tail call
-                if not (text_lo <= t < text_hi):
-                    continue
+                if not is_local(t):
+                    continue        # genuine tail exit
                 work.append(t)
             elif oc == OpCode.CBRANCH:
                 tgt_vn = op.inputs[0]
                 if tgt_vn.space.name == "const":
                     continue
                 t = tgt_vn.offset
-                if t != start and t in func_starts:
-                    continue
-                if text_lo <= t < text_hi:
+                if is_local(t):
                     work.append(t)
             elif oc == OpCode.BRANCHIND:
                 falls = False
@@ -291,13 +301,14 @@ PCVAR = "pc_"
 
 
 class FuncEmitter:
-    def __init__(self, regmap, name, start, body, opts, jumps=None):
+    def __init__(self, regmap, name, start, body, opts, jumps=None, ownership=None):
         self.rm = regmap
         self.name = name
         self.start = start
         self.body = body
         self.opts = opts
         self.jumps = jumps or {}
+        self.ownership = ownership
         # The dispatch loop opens with `pc_ = start`, so the entry MUST have a
         # case label. block_starts() only marks branch targets and the lowest
         # address in the body, and a function whose body absorbed a lower
@@ -330,7 +341,7 @@ class FuncEmitter:
         self.callind = 0
         self.branchind = 0
         self.direct_calls = set()
-        self.tailcalls = set()
+        self.static_exits = set()
         self.soft_traps = []           # (va, reason): instructions lowered as traps
         self.stats = {}
 
@@ -883,8 +894,8 @@ class FuncEmitter:
             # tail call / jump out of the function: park the target and
             # return; the caller runs it (round 14d trampoline -- a nested
             # `sub_T(s); return;` grew one native frame per loop iteration)
-            self.tailcalls.add(target)
-            self.spill(pre)
+            self.static_exits.add(target)
+            self.spill(pre, continuation=True)
             self.emit(pre + "recomp_jmp_target = %#xu; recomp_jmp_pending = 1u; return;" % target)
 
     def note_const_ptr(self, op):
@@ -927,19 +938,19 @@ class FuncEmitter:
                 if t in self.body:
                     self.emit("  case %#xu: goto %s;" % (t, self.label(t)))
                 else:
-                    self.tailcalls.add(t)
+                    self.static_exits.add(t)
                     self.emit("  case %#xu:" % t)
-                    self.spill("  ")
+                    self.spill("  ", continuation=True)
                     self.emit("    recomp_jmp_target = %#xu; recomp_jmp_pending = 1u; return;" % t)
             self.emit("  default: break;")
             self.emit("}")
-            self.spill()
+            self.spill(continuation=True)
             self.emit("recomp_jump_indirect(s, %s); return;" % tmp)
             return
         if kind == "iat":
             entry = self.opts.get("imports", {}).get(targets[0] if targets else None)
             self.jt_tailcalls += 1
-            self.spill()
+            self.spill(continuation=True)
             if entry is not None:
                 # jmp [IAT] is a tail call into the real callee, which pops
                 # the return address its own caller pushed. The host imp_*
@@ -959,7 +970,7 @@ class FuncEmitter:
             return
         if kind == "dynamic":
             self.jt_tailcalls += 1
-            self.spill()
+            self.spill(continuation=True)
             self.emit("recomp_jump_indirect(s, %s); return;" % expr)
             return
         # unresolved
@@ -968,14 +979,16 @@ class FuncEmitter:
             self.emit("%s = %s;" % (PCVAR, expr))
             self.emit("continue;")
         else:
-            self.spill()
+            self.spill(continuation=True)
             self.emit("recomp_jump_indirect(s, %s); return;" % expr)
 
-    def spill(self, pre=""):
+    def spill(self, pre="", continuation=False):
         if self.opts.get("state_only"):
             return
         for r, sz in self.roots.items():
-            if self.opts["local_flags"] and r in FLAG_REGS:
+            # A JMP has no ABI boundary: its successor consumes the current
+            # flags even when genuine CALL sites keep flags function-local.
+            if self.opts["local_flags"] and r in FLAG_REGS and not continuation:
                 continue
             self.emit(pre + "s->%s = %s;" % (r, r))
 
@@ -994,7 +1007,7 @@ class FuncEmitter:
         # are actually referenced (spill/reload need the full register set
         # before we emit any call site; labels must not be emitted unused).
         probe = FuncEmitter(self.rm, self.name, self.start, self.body,
-                            self.opts, self.jumps)
+                            self.opts, self.jumps, self.ownership)
         probe.opts = dict(self.opts)
         probe._emit_all(addrs)
         self.roots = probe.roots
@@ -1032,7 +1045,7 @@ class FuncEmitter:
         self.callind = 0
         self.branchind = 0
         self.direct_calls = set()
-        self.tailcalls = set()
+        self.static_exits = set()
         self._emit_all(addrs)
         self.stats = dict(
             insns=len(self.body),
@@ -1043,7 +1056,7 @@ class FuncEmitter:
             callind=self.callind,
             branchind=self.branchind,
             calls=len(self.direct_calls),
-            tailcalls=len(self.tailcalls),
+            tailcalls=len(self.static_exits),
             soft_traps=len(self.soft_traps),
             jt_tables=self.jt_tables,
             jt_entries=self.jt_entries,
@@ -1094,13 +1107,14 @@ class FuncEmitter:
             terminated = (not tail_needed) and self._last_terminates()
             if terminated:
                 continue
-            if i + 1 < len(addrs) and addrs[i + 1] != next_va:
+            if i + 1 == len(addrs) or addrs[i + 1] != next_va:
                 if next_va in self.body:
                     self.emit("goto %s;" % self.label(next_va))
+                elif (self.ownership is not None
+                      and self.ownership.is_static_exit(next_va)):
+                    self.branch_to(next_va)
                 else:
                     self.emit("recomp_unreachable(s, %#xu); return;" % next_va)
-            elif i + 1 == len(addrs):
-                self.emit("recomp_unreachable(s, %#xu); return;" % next_va)
 
     def _last_terminates(self):
         for ln in reversed(self.lines):
@@ -1180,8 +1194,6 @@ class FuncEmitter:
         if self.opts.get("state_only"):
             return
         for r, sz in self.roots.items():
-            if self.opts["local_flags"] and r in FLAG_REGS:
-                continue
             out.append(pre + "s->%s = %s;" % (r, r))
 
 

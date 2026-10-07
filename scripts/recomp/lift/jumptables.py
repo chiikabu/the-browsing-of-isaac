@@ -14,21 +14,206 @@ Recognised MSVC x86 forms
   C  jmp dword ptr [IMM]                         IAT / global slot -> tail call
   D  jmp reg                                     dynamic tail call / vtable
 
-The bound comes from the dominating `cmp IDX, N` + unsigned `ja/jbe/jae`
-pair on the table's index register (both parts required: a bare `cmp` on
-the way to the jump is ordinary control flow, not a bound); when it cannot
-be found the table is walked until an entry leaves the owning function's
-address range (MSVC emits tables contiguously in .text or .rdata, so this
-terminates).
+The prebuilt, hash-matched PE index supplies complete tables and bounded
+function ownership independently of Ghidra's recovered fragments. Tables
+outside that index (for example in .rdata) use the dominating range guard
+or a walk bounded by the owning function.
 """
 
+import bisect
+from contextlib import closing
+from pathlib import Path
+import sqlite3
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
+
+from scripts.decomp.tools.pe import index_db_path
+from codeptrs import code_pointers
 import capstone
 
 MAX_TABLE = 4096
 
 
+class FunctionOwnership:
+    """A bounded indexed owner, with real entry points kept as tail exits."""
+
+    def __init__(self, index, start, end, entry):
+        self.index = index
+        self.start = entry
+        self.extent = (start, end)
+
+    def is_local(self, target):
+        lo, hi = self.extent
+        return (lo <= target < hi
+                and (target == self.start or target not in self.index.entries)
+                and not self.index.is_data(target))
+
+    def is_static_exit(self, target):
+        return ((target in self.index.entries or target in self.index.instructions)
+                and not self.is_local(target)
+                and not self.index.is_data(target))
+
+
+class PEIndex:
+    """Read the existing PE census; never infer an owner from .text's end.
+
+    Census compartments bound discovery, but their starts do not prove an
+    independent ABI entry. Decoded calls, escaped code pointers, relocations
+    and handwritten definitions supply the entry barriers. Every emitted
+    continuation uses the same bounded ownership as an initial request.
+    """
+
+    def __init__(self, pe, path=None):
+        path = Path(path) if path is not None else index_db_path(pe)
+        if not path.is_file():
+            raise ValueError("PE index missing: %s; build it with "
+                             "python scripts/decomp/tools/build-pe-index.py" % path)
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+            meta = dict(db.execute("SELECT key,value FROM meta"))
+            if str(meta.get("sha256", "")).upper() != pe.sha256:
+                raise ValueError("PE index hash does not match the executable: %s; "
+                                 "run decomp:index" % path)
+            if str(meta.get("decode_config", "")).split()[:2] != [
+                    "linear+skipdata+jtab-mask", "v2"]:
+                raise ValueError("PE index requires masked linear decode v2: %s; "
+                                 "run decomp:index" % path)
+            self.extents = dict(db.execute("SELECT start,end FROM func ORDER BY start"))
+            if any(not isinstance(start, int) or not isinstance(end, int)
+                   for start, end in self.extents.items()):
+                raise ValueError("invalid indexed function bounds: %s; run decomp:index" % path)
+            self.starts = sorted(self.extents)
+            text = pe.text()
+            text_hi = text.vaddr + text.vsize
+            # The index segments the complete file-backed .text, including
+            # trailing alignment beyond VirtualSize. Discovery still uses
+            # the executable virtual range supplied by its caller.
+            index_hi = text.vaddr + max(text.vsize, text.raw_size)
+            previous_end = text.vaddr
+            for start in self.starts:
+                end = self.extents[start]
+                if start != previous_end or not start < end <= index_hi:
+                    raise ValueError("invalid indexed function bounds: %s; "
+                                     "run decomp:index" % path)
+                previous_end = end
+            if not self.starts:
+                raise ValueError("PE index has no function bounds: %s; run decomp:index" % path)
+            if previous_end != index_hi:
+                raise ValueError("PE index function coverage is incomplete: %s; "
+                                 "run decomp:index" % path)
+            self.instructions = {va for (va,) in db.execute("SELECT va FROM insn")}
+            self.entries = set()
+            self.entries.update(dst for (dst,) in db.execute(
+                "SELECT DISTINCT x.dst FROM xref x JOIN insn i ON i.va=x.dst "
+                "WHERE x.kind IN ('call','call_slot','addr')"))
+            self.ranges = list(db.execute(
+                "SELECT start,end FROM seg WHERE kind='jtab' ORDER BY start"))
+            self.range_starts = [lo for lo, _hi in self.ranges]
+            previous_end = text.vaddr
+            for lo, hi in self.ranges:
+                if (not isinstance(lo, int) or not isinstance(hi, int)
+                        or not previous_end <= lo < hi <= text_hi
+                        or (hi - lo) % 4 or (hi - lo) // 4 < 2):
+                    raise ValueError("invalid indexed jump table: %s; run decomp:index" % path)
+                previous_end = hi
+            slots = dict(db.execute(
+                "SELECT DISTINCT src,dst FROM xref WHERE kind='jtab' ORDER BY src"))
+            masked_bytes = sum(hi - lo for lo, hi in self.ranges)
+            if int(str(meta.get("jtab_masked_bytes", "-1"))) != masked_bytes:
+                raise ValueError("PE index jump-table mask census is incomplete: %s; "
+                                 "run decomp:index" % path)
+            if masked_bytes != 4 * len(slots):
+                raise ValueError("PE index jump-table masks do not cover every indexed slot: %s; "
+                                 "run decomp:index" % path)
+            # seg rows merge adjacent tables for masking. Actual indexed JMP
+            # operands define logical table starts, and the JMP's owner (not
+            # the storage slot's owner) defines local control-flow ownership.
+            md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+            md.detail = True
+            self.jump_tables = {}
+            self.table_owners = set()
+            for (site,) in db.execute(
+                    "SELECT va FROM insn WHERE mn='jmp' AND ops LIKE '%*4%'"):
+                ins = next(md.disasm(pe.read(site, 16), site), None)
+                if ins is None or ins.mnemonic != "jmp" or not ins.operands:
+                    raise ValueError("invalid indexed jump at %#x; run decomp:index" % site)
+                operand = ins.operands[0]
+                if operand.type != capstone.x86.X86_OP_MEM:
+                    continue
+                memory = operand.mem
+                table = memory.disp & 0xFFFFFFFF
+                if memory.base or not memory.index or memory.scale != 4 or not self.is_data(table):
+                    continue
+                self.jump_tables[site] = table
+                owner = self.containing(site)
+                if owner is not None:
+                    self.table_owners.add(owner)
+            bases = sorted(set(self.jump_tables.values()))
+            if int(str(meta.get("jtab_tables", "-1"))) != len(bases):
+                raise ValueError("PE index jump-table census is incomplete: %s; "
+                                 "run decomp:index" % path)
+            self.tables = {}
+            for lo, hi in self.ranges:
+                targets = []
+                for slot in range(lo, hi, 4):
+                    target = slots.get(slot)
+                    if (not isinstance(target, int) or not text.vaddr <= target < text_hi
+                            or target != int.from_bytes(pe.read(slot, 4), "little")
+                            or db.execute("SELECT 1 FROM insn WHERE va=?",
+                                          (target,)).fetchone() is None):
+                        raise ValueError("invalid indexed jump-table entry at %#x; "
+                                         "run decomp:index" % slot)
+                    targets.append(target)
+                first = bisect.bisect_left(bases, lo)
+                last = bisect.bisect_left(bases, hi)
+                starts = bases[first:last]
+                for table, end in zip(starts, starts[1:] + [hi]):
+                    if (table - lo) % 4 or (end - table) % 4:
+                        raise ValueError("unaligned indexed jump table at %#x; "
+                                         "run decomp:index" % table)
+                    self.tables[table] = tuple(targets[(table - lo) // 4:(end - lo) // 4])
+                    if len(self.tables[table]) > MAX_TABLE:
+                        raise ValueError("indexed jump table exceeds %d entries at %#x; "
+                                         "run decomp:index" % (MAX_TABLE, table))
+        self.entries.update(target for pointers in code_pointers(pe).values()
+                            for _slot, target in pointers)
+
+    def containing(self, va):
+        i = bisect.bisect_right(self.starts, va) - 1
+        if i >= 0 and va < self.extents[self.starts[i]]:
+            return self.starts[i]
+        return None
+
+    def owner(self, entry):
+        start = self.containing(entry)
+        if start is not None:
+            return FunctionOwnership(self, start, self.extents[start], entry)
+        return None
+
+    def fragments(self, starts):
+        out = set()
+        for va in starts:
+            start = self.containing(va)
+            if start in starts and start in self.table_owners:
+                owner = self.owner(start)
+                if va != start and owner.is_local(va):
+                    out.add(va)
+        return out
+
+    def is_data(self, va):
+        i = bisect.bisect_right(self.range_starts, va) - 1
+        return i >= 0 and va < self.ranges[i][1]
+
+    def targets(self, site, table):
+        if self.jump_tables.get(site) == table:
+            return self.tables.get(table)
+        return None
+
+
 class JumpTables:
-    def __init__(self, pe):
+    def __init__(self, pe, index=None):
+        self.index = index
         self.pe = pe
         text = pe.text()
         self.text_lo = text.vaddr
@@ -56,6 +241,11 @@ class JumpTables:
           'dynamic'   jmp through a register       -> indirect tail call
           'unknown'   could not classify
         """
+        # Only indexed tables are independent of the discovered entry path.
+        # Fallback guards read body_addrs, which can differ for two entries
+        # in the same census compartment (or between parallel workers).
+        if self.index is None or va not in self.index.jump_tables:
+            return self._classify(va, body_addrs, lo, hi)
         key = (va, lo, hi)
         got = self.cache.get(key)
         if got is not None:
@@ -92,6 +282,10 @@ class JumpTables:
         # forms A/B: jmp dword ptr [idx*4 + TBL]
         if idx_reg != 0 and m.scale == 4 and base_reg == 0:
             tbl = disp
+            if self.index is not None:
+                targets = self.index.targets(va, tbl)
+                if targets is not None:
+                    return ("table", list(targets))
             # 1. a real range guard on the index register, then on any
             #    register (two-level tables compare the pre-transformed index)
             n = self._bound_before(va, body_addrs, idx_reg)

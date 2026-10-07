@@ -1,14 +1,14 @@
 // play.mjs -- the shipping page. This script draws the native-style loader,
 // Play button, canvas chrome, saves menu and error panel around boot_web.mjs.
-// Early presentations stay covered until a stable native menu or live room is
-// ready. The page hands the pipeline hooks before importing it:
+// Early presentations stay covered until a loaded native cutscene, stable menu or
+// live room is ready. The page hands the pipeline hooks before importing it:
 //   url(u)            every synchronous fetch the RAM-FS makes (the windowed
 //                     archive reads during play) is rewritten: the page's own
 //                     directory as the root, ?v=<sha256 prefix> from dist.json
 //                     so the server may answer `immutable`
 //   fetchBytes(u)     the boot stages (memory image, index, the six eagerly
-//                     seeded archives, the Lua) fetched asynchronously with a
-//                     byte-level progress bar
+//                     seeded archives, the Lua) fetched asynchronously with
+//                     byte counts for the bootstrap progress phase
 //   instantiateWasm   the module streamed through a counting ReadableStream
 //   onLog(line)       the stage markers and the error triggers
 //   beforeMain(m)     awaited right before main: the Play click (a user gesture,
@@ -23,6 +23,7 @@ const $ = (id) => document.getElementById(id);
 import { createEditFileMenu, createPaperMenu } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, MODS_DB } from './mods.mjs';
+import { createTouchControls } from './touch_controls.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 // The pipeline's defaults: ISAAC_YIELD=1 selects the live page and, with no
@@ -45,19 +46,25 @@ const canvas = $('canvas'), overlay = $('overlay'), playBtn = $('play'), statusE
 // saves button; the page is otherwise the game alone, and a click anywhere
 // gives the canvas the keyboard
 // Stage names, byte counts and machine details are opt-in instruments. The
-// loader stays above early blank frames until the native menu or room is ready.
+// loader covers blank frames until a native cutscene, menu or room is ready.
 const STATS = params.get('stats') === '1';
 if (STATS) { $('fps').hidden = false; $('stages').hidden = false; overlay.classList.add('stats'); }
-let mainStarted = false, gameReady = false, audioOutput = null;
+let moduleReady = false, bootReady = false, mainStarted = false, gameReady = false, audioOutput = null;
+let errorShown = false;
 overlay.setAttribute('aria-busy', 'true');
+$('bar').setAttribute('aria-label', 'Startup progress');
 if (params.get('saves') === '1') $('saves-btn').hidden = false;
-document.addEventListener('pointerdown', () => { if (!$('saves').open) canvas.focus(); });
-// F toggles fullscreen on the stage (the keydown is the gesture requestFullscreen
-// needs); the key still reaches the game, which does not bind F by default
-const toggleFullscreen = () => {
-  const stage = $('stage');
-  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  else if (stage.requestFullscreen) stage.requestFullscreen().then(() => canvas.focus()).catch(() => {});
+const pageInputTarget = (target) => target && (target.isContentEditable
+  || (target.closest && target.closest('input, textarea, select, [data-touch-ui]')));
+document.addEventListener('pointerdown', (ev) => { if (!$('saves').open && !pageInputTarget(ev.target)) canvas.focus(); });
+// Fullscreen contains the game and touch controls, including letterbox controls.
+const toggleFullscreen = async () => {
+  if (document.fullscreenElement) { await document.exitFullscreen(); return false; }
+  const main = canvas.closest('main');
+  if (!main || !main.requestFullscreen) throw new Error('Fullscreen is not available in this browser.');
+  await main.requestFullscreen();
+  canvas.focus();
+  return true;
 };
 // Escape is the game's own back key, and the browser takes it to leave
 // fullscreen. Keyboard Lock is the sanctioned way to ask for it back: while
@@ -70,7 +77,8 @@ document.addEventListener('fullscreenchange', () => {
   else try { kb.unlock(); } catch { /* not held */ }
 });
 window.addEventListener('keydown', (ev) => {
-  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();
+  if (pageInputTarget(ev.target)) return;
+  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen().catch(() => {});
   // N flips the FPS readout (round 52c-e; unbound in the game's default keys); the key still reaches the game
   if (ev.code === 'KeyN' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()) window.isaacEditFileMenu.toggleFps();
 });
@@ -105,28 +113,43 @@ function render() {
         : s.total ? `${mb(s.done ? s.total : s.received)} / ${mb(s.total)} MB` : (s.received ? `${mb(s.received)} MB` : '');
       n.className = 'name' + (s.done ? ' done' : s.received ? ' active' : '');
     }
-    // Chunked builds count stored payload bytes, including background assets.
-    // Served builds use their fixed boot-file totals and actual response bytes.
-    const download = portable && typeof portable.progress === 'function' ? portable.progress() : null;
-    let total = 0, received = 0;
-    if (download) { total = download.total; received = download.received; }
-    else for (const name of ['module', 'image', 'archives']) {
-      const s = stages[name];
-      total += s.total;
-      received += Math.min(s.received, s.total);
-    }
-    const pct = total ? Math.max(0, Math.min(100, Math.floor(100 * received / total))) : download ? 100 : 0;
-    const text = `${pct}%`;
-    $('bar-fill').style.width = text;
-    $('bar').setAttribute('aria-valuenow', String(pct));
-    $('bar').setAttribute('aria-valuetext', text);
-    $('percentage').textContent = text;
-    // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
-    $('percentage').style.backgroundPosition = `${-pct * 50}px 0px`;
+    renderProgress();
   });
 }
-// Engine preparation does not change the download percentage. Technical details
-// are visible only with ?stats=1.
+function renderProgress() {
+  const bar = $('bar'), fill = $('bar-fill'), percentage = $('percentage');
+  const indeterminate = mainStarted && !gameReady && !errorShown && !window.isaacDone;
+  bar.classList.toggle('indeterminate', indeterminate);
+  percentage.hidden = indeterminate;
+  if (indeterminate) {
+    fill.style.width = '';
+    bar.removeAttribute('aria-valuenow');
+    bar.setAttribute('aria-valuetext', 'Initializing game');
+    return;
+  }
+  // Measured preparation covers bootstrap delivery, WebAssembly instantiation
+  // and filesystem/CRT setup. Native initialization has no measurable remainder;
+  // show activity until the existing stable-readiness gate completes startup.
+  // Background archives do not count toward preparation.
+  const download = portable && typeof portable.progress === 'function' ? portable.progress('boot') : null;
+  let total = 0, received = 0;
+  if (download) { total = download.total; received = download.received; }
+  else for (const name of ['module', 'image', 'archives']) {
+    const s = stages[name];
+    total += s.total;
+    received += Math.min(s.received, s.total);
+  }
+  const delivered = total ? Math.max(0, Math.min(1, received / total)) : download ? 1 : 0;
+  const pct = gameReady ? 100 : Math.floor(25 * (delivered + Number(moduleReady) + Number(bootReady)));
+  const text = `${pct}%`;
+  fill.style.width = text;
+  bar.setAttribute('aria-valuenow', String(pct));
+  bar.setAttribute('aria-valuetext', `${text} startup complete`);
+  percentage.textContent = text;
+  // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
+  percentage.style.backgroundPosition = `${-pct * 50}px 0px`;
+}
+// Technical preparation details are visible only with ?stats=1.
 function setStatus(text, detail) {
   statusEl.textContent = STATS ? (detail || text)
     : gameReady || overlay.classList.contains('ready-to-play') ? '' : 'Loading...';
@@ -141,6 +164,26 @@ function setStatus(text, detail) {
 const portable = (typeof window !== 'undefined' && window.isaacPortable) || null;
 if (portable && typeof portable.progress === 'function' && window.__isaacPortableData)
   window.__isaacPortableData.onProgress = render;
+
+// Check actual APIs before starting the pipeline, not browser names or versions.
+// The native engine still requires JSPI and a WebGL 2 context.
+let runtimeError = '';
+if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function'
+  || typeof WebAssembly.promising !== 'function') {
+  runtimeError = 'This game requires WebAssembly JavaScript Promise Integration (JSPI). Update your browser or use a browser with JSPI support.';
+} else {
+  let gl = null;
+  try { gl = document.createElement('canvas').getContext('webgl2'); } catch { /* unsupported or disabled */ }
+  if (!gl) runtimeError = 'WebGL 2 is unavailable. Enable hardware graphics acceleration or use a browser and device that support WebGL 2.';
+  else {
+    const lose = gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();
+  }
+}
+if (runtimeError) {
+  showError('Browser not supported', runtimeError);
+  throw new Error(runtimeError);
+}
 
 // ---- manifest + index: the totals, the versions ------------------------------
 let manifest = null;
@@ -291,6 +334,7 @@ hooks.instantiateWasm = (info, receive) => {
       const bytes = await portable.bytesFor('boot.wasm', 0, 0);
       st.received = bytes.length; st.done = true; render();
       const { instance, module } = await WebAssembly.instantiate(bytes, info);
+      moduleReady = true; render();
       setStatus('loading');
       receive(instance, module);
       return;
@@ -312,7 +356,7 @@ hooks.instantiateWasm = (info, receive) => {
       }
     })().catch(() => {});
     const { instance, module } = await WebAssembly.instantiateStreaming(res, info);
-    st.done = true; render();
+    moduleReady = true; st.done = true; render();
     setStatus('loading');
     receive(instance, module);
   })().catch((e) => showError('The module failed to load', e.message));
@@ -320,6 +364,7 @@ hooks.instantiateWasm = (info, receive) => {
 };
 let moduleRef = null;
 hooks.beforeMain = (m) => new Promise((resolve) => {
+  bootReady = true;
   moduleRef = m;
   stages.boot.done = true; render();
   const start = () => {
@@ -334,6 +379,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     streamingEl.hidden = !STATS;
     updateStreaming();
     setStatus('Loading...');
+    renderProgress();
     resolve();
     // Round 46: a frame-rate readout in the status line once the engine runs --
     // the host's frame counter sampled each second, the median of the last
@@ -394,7 +440,7 @@ window.isaacPageHooks = hooks;
 // The click is the user gesture: an AudioContext created inside it starts
 // running, so the AL shim's lazily created context (host_audio_web.c) is
 // created here first, and resumed if the browser still has it suspended.
-function unlockAudio(m) {
+function unlockAudio(m, focus = true) {
   try {
     const C = window.AudioContext || window.webkitAudioContext;
     if (!C) return;
@@ -402,14 +448,15 @@ function unlockAudio(m) {
     if (!m.isaacAudio.ctx) m.isaacAudio.ctx = new C();
     if (m.isaacAudio.ctx.state === 'suspended') m.isaacAudio.ctx.resume();
   } catch (e) { /* audio never blocks the game */ }
-  canvas.focus();
+  if (focus) canvas.focus();
 }
 
 // ---- the error / ended panel ----------------------------------------------------
-let errorShown = false;
 function showError(title, text, ended = false) {
   if (errorShown && !ended) return;
   errorShown = true;
+  renderProgress();
+  overlay.setAttribute('aria-busy', 'false');
   const panel = $('error');
   panel.className = ended ? 'ended' : '';
   $('error-title').textContent = title;
@@ -436,7 +483,7 @@ window.addEventListener('unhandledrejection', (ev) => showError('The pipeline fa
 // exists the pointer is null, which is the intro cutscene.
 //
 //   -1 no manager yet (the intro)   3 THE MENU PAPER    9 stats    16 mods
-//    1 title                        5 a run is up      10 options  19 online
+//    1 title                        5 character select 10 options  19 online
 //    2 file select                  7 challenges
 //
 // The first attempt at this read a loose word of .data that had tracked the
@@ -461,12 +508,25 @@ const watchScreen = () => setInterval(() => editMenu.setScreen(readMenuId()), 20
 function updateStreaming() {
   streamingEl.textContent = `requested ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
 }
-// A present alone can still be white. Read the native menu or validate a live
-// player and room, then require stable state across advancing presentations.
+// A present alone can still be white. Read a loaded native cutscene or menu, or
+// validate a live player and room, then require advancing stable presentations.
 function readReadyState() {
   const G = window.isaacGuest;
   if (!G) return null;
   try {
+    // Offsets are bound to tools/isaac-ng.unpacked.exe, SHA-256
+    // 5129DF723E645DAAEA59514394195F3EA1DCE1671BB0433D724648A845017200.
+    // Update 0x00954cd0 passes [0x00c7169c]+0x20dd0 at 0x00954d90 to
+    // exact-ZHL Cutscene::Show (0x0095e7c0), then sets shell+8=3 at 0x00954da6.
+    // Show writes cutscene+0x808=id at 0x0095e82f, but sets cutscene+0=1 only
+    // after entryLoad at 0x0095e937. Renderer 0x0095573d tests that loaded flag.
+    // ID 0 has no visual entry. The loaded ID at shell+0x215d8 anchors stability.
+    const shell = G.u32(0x00c7169c);
+    if (shell && G.u32(shell + 8) === 3) {
+      if (G.u32(shell + 0x20dd0) !== 1) return null;
+      const cutsceneId = G.u32(shell + 0x215d8);
+      return cutsceneId !== 0 ? { key: `cutscene:${shell}:${cutsceneId}`, run: false } : null;
+    }
     const mgr = G.u32(MENU_MGR_PTR), screen = mgr ? (G.u32(mgr + MENU_SCREEN_OFF) | 0) : -1;
     const game = G.u32(0x00c71678);
     const transitioning = !!game && (G.u32(game + 0x1b83c) !== 0 || G.u32(game + 0x68d78) !== 0);
@@ -483,8 +543,41 @@ function readReadyState() {
     const width = G.u32(room + 0xc), height = G.u32(room + 0x10);
     if (!width || width >= 64 || !height || height >= 64 || !gameFrame) return null;
     return { key: `run:${game}:${G.u32(game)}:${G.u32(game + 4)}:${G.u32(game + 0x18304)}:${room}:${player}`,
-      run: true, gameFrame };
+      run: true, gameFrame, game, player };
   } catch { return null; }
+}
+
+function readTouchState() {
+  const ready = gameReady && !errorShown && !window.isaacDone;
+  const paper = modsMenu.isOpen() ? 'mods' : editMenu.isOpen() ? 'edit-file' : null;
+  const native = ready && !paper ? readReadyState() : null;
+  const running = !!(native && native.run);
+  let paused = false, twins = false, better = false;
+  const G = window.isaacGuest;
+  try {
+    if (G) {
+      // Same PE as readReadyState: 0x0095273f forms Manager+0x2a33c for
+      // options loader 0x00924440. Its "JacobEsauControls" lookup at
+      // 0x0092498f stores receiver+0x98 at 0x009249a9. Read the live option.
+      const manager = G.u32(0x00c7169c);
+      better = !!manager && G.u32(manager + 0x2a3d4) === 1;
+      if (running) {
+        // 0x006fd3b8 passes Game+0x23a74 to 0x009b7650: a nonzero pause
+        // state is open only with zero or one manager participant entries.
+        // Do not use all of Game::IsPaused, which also covers transitions.
+        if (manager && G.u32(native.game + 0x23a74) !== 0) {
+          const begin = G.u32(manager + 0x4b3d8), end = G.u32(manager + 0x4b3dc);
+          paused = begin === end || (((end - begin) >>> 0) & 0xfffffffc) === 4;
+        }
+        // The PE getter at 0x004253b0 reads player+0x13c0, not the older
+        // ZHL's +0x13bc (this binary's damage cooldown). No twin-pointer guess.
+        const type = G.u32(native.player + 0x13c0);
+        twins = type === 19 || type === 20;
+      }
+    }
+  } catch { /* state can disappear while the native run is closing */ }
+  return { ready, running, paused, menu: paper || readMenuId(), twins, better,
+    frame: window.isaacFrame || 0, blocked: !ready || $('saves').open };
 }
 let readyCandidate = null;
 function checkReady() {
@@ -503,12 +596,12 @@ function checkReady() {
   if (f < readyCandidate.frame + 2) return;
   gameReady = true;
   readyCandidate = null;
+  renderProgress();
   overlay.hidden = true;
   overlay.classList.remove('preparing');
   overlay.setAttribute('aria-busy', 'false');
   if (audioOutput) audioOutput.gain.value = 1;
   setStatus('running');
-  render();
   canvas.focus();
 }
 
@@ -770,6 +863,7 @@ function download(blob, name) {
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
 const savesDialog = $('saves');
+canvas.closest('main').appendChild(savesDialog);
 async function refreshSaves() {
   const list = $('saves-list');
   list.innerHTML = '';
@@ -846,6 +940,18 @@ $('reset-saves').addEventListener('click', async () => {
     $('saves-reload').hidden = false;
   } catch (e) { $('saves-status').textContent = `reset failed: ${e.message}`; }
 });
+
+// Touch play reads the HUD, menus and rumble out of the engine (touch_game.mjs)
+// and draws the mobile item bar with the HUD's own art (page-assets/hud.json).
+const touchControls = createTouchControls({
+  readState: readTouchState,
+  emit: (name, down) => { if (window.isaacInjectKey) window.isaacInjectKey(name, down, 'touch'); },
+  onGesture: () => { if (moduleRef) unlockAudio(moduleRef, false); },
+  guest: () => window.isaacGuest || null,
+  assetsUrl: `${ROOT}/instance/page-assets`,
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
+});
+window.addEventListener('pagehide', (ev) => { if (!ev.persisted) touchControls.destroy(); });
 
 // ---- a first visit starts at the title, not at two confirm screens (round 73).
 // Before the pipeline, which restores the store into the engine's file system.

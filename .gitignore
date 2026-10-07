@@ -30,6 +30,7 @@ scripts/decomp/*.bak*
 scripts/decomp/*.mutbak
 
 # Proprietary/local game inputs and generated packages
+/apk/
 /extracted_resources/
 /extracted_work/
 /tools/

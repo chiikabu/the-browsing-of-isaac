@@ -112,8 +112,8 @@ def main():
         fh.write('#define G_TEXT_HI 0x%08xu\n' % TEXT_HI)
         fh.write('extern const uint32_t g_dva[G_NDISPATCH];\n')
         fh.write('extern const recomp_fn g_dfn[G_NDISPATCH];\n')
+        fh.write('#define G_NBLOCK %du\n' % len(blocks))
         if blocks:
-            fh.write('#define G_NBLOCK %du\n' % len(blocks))
             fh.write('extern const uint32_t g_bva[G_NBLOCK];\n')
             fh.write('extern const recomp_fn g_bfn[G_NBLOCK];\n')
         fh.write('int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu);\n')
@@ -159,7 +159,9 @@ def main():
 uint32_t g_reentry_eip = 0u;
 
 static uint16_t *g_index;   /* direct-mapped VA -> dense function id */
+#if G_NBLOCK
 static uint32_t *g_bindex;  /* direct-mapped VA -> dense block id */
+#endif
 
 static void build_index(void) {
   size_t n = (size_t)(G_TEXT_HI - G_TEXT_LO);
@@ -174,6 +176,7 @@ static void build_index(void) {
     g_index[g_dva[i] - G_TEXT_LO] = (uint16_t)i;
 }
 
+#if G_NBLOCK
 static void build_bindex(void) {
   size_t n = (size_t)(G_TEXT_HI - G_TEXT_LO);
   g_bindex = (uint32_t *)malloc(n * sizeof(uint32_t));
@@ -186,10 +189,12 @@ static void build_bindex(void) {
   for (uint32_t i = 0; i < G_NBLOCK; ++i)
     g_bindex[g_bva[i] - G_TEXT_LO] = i;
 }
+#endif
 
 extern uint32_t recomp_jmp_pending;
 void recomp_run_pending(CpuState *restrict cpu);
 static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
+#if G_NBLOCK
   if (!g_bindex) build_bindex();
   uint32_t off = va - G_TEXT_LO;
   if (off >= (uint32_t)(G_TEXT_HI - G_TEXT_LO)) return 0;
@@ -198,6 +203,11 @@ static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
   g_reentry_eip = va;
   g_bfn[bid](cpu);
   return 1;
+#else
+  (void)va;
+  (void)cpu;
+  return 0;
+#endif
 }
 
 /* Dispatcher census (round 14h): how many times each lifted entry is

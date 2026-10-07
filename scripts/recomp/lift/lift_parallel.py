@@ -3,27 +3,22 @@
 
 The stable split (`--split-va N`, round 14g) makes every TU a function of the
 function ADDRESS alone, so buckets can be lifted by independent processes.
-Two phases, because one decision in emit.py is global:
+Two phases separate global dispatch delivery from byte coverage:
 
-  phase 1  every worker gets the starts of a few buckets (`--va-file` subset)
-           plus the whole start set (`--starts-file`, so its tail-call /
-           absorb decisions match a single run) and lifts them with
-           `--no-rescue`, writing covered.txt (the .text ranges its bodies
-           occupy);
-  phase 2  one emit.py `--rescue-only` run over the whole start list with the
-           union of the workers' covered ranges: a fragment (a Ghidra
-           recovered-functions.tsv row) is lifted standalone only when no body
-           anywhere reached it -- exactly the sequential safety net.  Without
-           this a worker rescued every fragment its OWN bodies missed (round
-           14i's first cut: +102 functions over the sequential tree).
+  phase 1  every worker gets its requested bucket subset and the complete
+           start set. With --no-rescue --defer-closure it emits only those
+           requests and records actual entries, static exits, direct callees
+           and covered bytes;
+  phase 2  one emit.py --rescue-only run imports all workers' entry/edge
+           inventories and coverage. It recursively delivers every missing
+           static exit, regardless of coverage or --follow, follows genuine
+           callees when requested, and rescues uncovered inventory fragments.
+           No worker independently emits a shared continuation.
 
-The merge re-splits the functions by address into `lifted_<bucket>.c` in the
-order and format emit.py writes, regenerates lifted_decls.h (sorted
-declarations; a CALLOTHER's arity is the maximum any part saw), missing.txt
-(references nobody lifted), data_stops.txt (union) and summary.json (per-part
-sums; ratios and coverage recomputed), and concatenates stats.json in lift
-order.  The result is byte-identical to a sequential emit.py run over the
-same start list (tests/recomp-parallel-lift.test.js pins the contract).
+The merge re-splits unique definitions by address into `lifted_<bucket>.c`,
+regenerates sorted declarations and edge inventories, unions byte coverage,
+and recomputes summary ratios. Per-function stats are sorted by entry VA.
+Generated code and delivery artifacts match a serial emit.py run.
 
 Usage: the emit.py argv with one addition --
     python scripts/recomp/lift/lift_parallel.py --jobs 12 <emit.py args ...>
@@ -83,6 +78,24 @@ def drop_opt(args, name):
             i += 1; continue
         out.append(args[i]); i += 1
     return out
+
+
+def read_vas(path):
+    if not path:
+        return []
+    with open(path, encoding="utf8") as fh:
+        return [int(value, 0) for line in fh
+                if (value := line.split("#")[0].strip())]
+
+
+def read_call_depths(path):
+    with open(path, encoding="utf8") as fh:
+        return {int(va, 0): level for va, level in json.load(fh).items()}
+
+
+def merge_call_depths(into, values):
+    for va, level in values.items():
+        into[va] = min(into.get(va, level), level)
 
 
 def read_ranges(path):
@@ -148,12 +161,13 @@ def main():
     text_lo = PE32(exe).text().vaddr
 
     starts = []
-    with open(va_file, encoding="utf8") as fh:
-        for line in fh:
-            line = line.split("#")[0].strip()
-            if line:
-                starts.append(int(line, 0))
-    order_of = {va: i for i, va in enumerate(starts)}
+    for i, arg in enumerate(emit_args):
+        if arg == "--va":
+            starts.append(int(emit_args[i + 1], 0))
+        elif arg.startswith("--va="):
+            starts.append(int(arg.split("=", 1)[1], 0))
+    starts.extend(read_vas(va_file))
+    starts = list(dict.fromkeys(starts))
     buckets: dict[int, list[int]] = {}
     for va in starts:
         buckets.setdefault((va - text_lo) // split_va, []).append(va)
@@ -168,10 +182,21 @@ def main():
         load[j] += len(buckets[b])
 
     os.makedirs(out, exist_ok=True)
-    base_args = drop_opt(drop_opt(drop_opt(emit_args, "--va-file"), "--out"), "--stats")
+    requests_path = os.path.join(out, ".requests.txt")
+    starts_path = os.path.join(out, ".starts.txt")
+    with open(requests_path, "w") as fh:
+        for va in starts:
+            fh.write("%#010x\n" % va)
+    boundaries = set(starts) | set(read_vas(get_opt(emit_args, "--starts-file")))
+    with open(starts_path, "w") as fh:
+        for va in sorted(boundaries):
+            fh.write("%#010x\n" % va)
+    base_args = emit_args
+    for option in ("--va-file", "--va", "--starts-file", "--out", "--stats"):
+        base_args = drop_opt(base_args, option)
     emit = [sys.executable, os.path.join(HERE, "emit.py"), *base_args]
 
-    # ---- phase 1: the wanted functions, no fragment rescue ------------------
+    # ---- phase 1: requested definitions only; global edges are deferred -----
     procs = []
     part_dirs = []
     for j, blist in enumerate(parts):
@@ -186,8 +211,8 @@ def main():
                 for va in buckets[b]:
                     fh.write("0x%08x\n" % va)
         cmd = [*emit,
-               "--starts-file", va_file,   # the whole start set: same tail-call decisions as one run
-               "--no-rescue",              # fragments are rescued once, in phase 2
+               "--starts-file", starts_path,
+               "--no-rescue", "--defer-closure",
                "--va-file", vf, "--out", pdir, "--stats", os.path.join(pdir, "stats.json")]
         p, log = start_emit(cmd, os.path.join(pdir, "emit.log"))
         procs.append(("worker %d" % j, p, log))
@@ -197,22 +222,42 @@ def main():
         return 1
     t_phase1 = time.time() - t0
 
-    # ---- phase 2: the fragment safety net against everybody's coverage -----
+    # ---- phase 2: one recursive delivery/rescue against global inventory ----
     covered = merge_ranges(r for pdir in part_dirs for r in read_ranges(os.path.join(pdir, "covered.txt")))
+    entries = {va for pdir in part_dirs
+               for va in read_vas(os.path.join(pdir, "entries.txt"))}
+    static_exits = {va for pdir in part_dirs
+                    for va in read_vas(os.path.join(pdir, "static_exits.txt"))}
+    call_depths = {}
+    for pdir in part_dirs:
+        merge_call_depths(call_depths, read_call_depths(os.path.join(pdir, "direct_calls.json")))
     cov_path = os.path.join(out, ".covered.txt")
+    entries_path = os.path.join(out, ".entries.txt")
+    exits_path = os.path.join(out, ".static-exits.txt")
+    calls_path = os.path.join(out, ".direct-calls.json")
     with open(cov_path, "w") as fh:
         for a, b in covered:
             fh.write("%#010x %#010x\n" % (a, b))
+    for path, values in ((entries_path, entries), (exits_path, static_exits)):
+        with open(path, "w") as fh:
+            for va in sorted(values):
+                fh.write("%#010x\n" % va)
+    with open(calls_path, "w") as fh:
+        json.dump({"%#010x" % va: call_depths[va] for va in sorted(call_depths)}, fh)
     rdir = os.path.join(out, ".rescue")
     shutil.rmtree(rdir, ignore_errors=True)
     os.makedirs(rdir)
     cmd = [*emit, "--rescue-only", "--covered-file", cov_path,
-           "--va-file", va_file, "--out", rdir, "--stats", os.path.join(rdir, "stats.json")]
+           "--entries-file", entries_path, "--static-exits-file", exits_path,
+           "--direct-calls-file", calls_path, "--starts-file", starts_path,
+           "--va-file", requests_path, "--out", rdir, "--stats", os.path.join(rdir, "stats.json")]
     p, log = start_emit(cmd, os.path.join(rdir, "emit.log"))
     if wait_all([("rescue", p, log)], out):
         return 1
     t_phase2 = time.time() - t0 - t_phase1
     covered = merge_ranges(covered + read_ranges(os.path.join(rdir, "covered.txt")))
+    static_exits.update(read_vas(os.path.join(rdir, "static_exits.txt")))
+    merge_call_depths(call_depths, read_call_depths(os.path.join(rdir, "direct_calls.json")))
 
     # ---- merge: re-split by address ---------------------------------------
     funcs: dict[int, str] = {}
@@ -281,10 +326,7 @@ def main():
             summaries.append(json.load(fh))
         with open(os.path.join(pdir, "stats.json"), encoding="utf8") as fh:
             st = json.load(fh)
-        if pdir is rdir:
-            stats.extend(st)                       # rescue order, after every wanted function
-        else:
-            stats.extend(sorted(st, key=lambda r: order_of.get(r.get("va"), 1 << 40)))
+        stats.extend(st)
     missing -= set(funcs)
     decls = ["/* generated */", '#include "recomp_state.h"', '#include "recomp_rt.h"', ""]
     for va in sorted(subs | missing):
@@ -312,7 +354,16 @@ def main():
     with open(os.path.join(out, "covered.txt"), "w") as fh:
         for a, b in covered:
             fh.write("%#010x %#010x\n" % (a, b))
-    shutil.copyfile(os.path.join(part_dirs[0], "recomp_state.h"), os.path.join(out, "recomp_state.h"))
+    for name, values in (("entries.txt", funcs),
+                         ("static_exits.txt", static_exits)):
+        with open(os.path.join(out, name), "w") as fh:
+            for va in sorted(values):
+                fh.write("%#010x\n" % va)
+    with open(os.path.join(out, "direct_calls.json"), "w") as fh:
+        json.dump({"%#010x" % va: call_depths[va] for va in sorted(call_depths)},
+                  fh, indent=2)
+    shutil.copyfile(os.path.join((part_dirs + [rdir])[0], "recomp_state.h"),
+                    os.path.join(out, "recomp_state.h"))
 
     # summary: sums where a sum is the sequential meaning, recomputed elsewhere
     first = summaries[0]
@@ -373,10 +424,12 @@ def main():
     with open(os.path.join(out, "summary.json"), "w") as fh:
         json.dump(summary, fh, indent=2)
     with open(os.path.join(out, "stats.json"), "w") as fh:
-        json.dump(stats, fh, indent=1)
+        json.dump(sorted(stats, key=lambda row: row["va"]), fh, indent=1)
     for pdir in part_dirs + [rdir]:
         shutil.rmtree(pdir, ignore_errors=True)
-    os.remove(cov_path)
+    for path in (cov_path, entries_path, exits_path, calls_path,
+                 requests_path, starts_path):
+        os.remove(path)
     print("lift_parallel: %d TUs, lifted %d (rescued %d), failed %d, %.1f s wall (phase 1 %.1f s, phase 2 %.1f s)"
           % (len(files), len(funcs), summary["fragments_rescued"], summary["failed"],
              time.time() - t0, t_phase1, t_phase2))

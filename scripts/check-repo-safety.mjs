@@ -36,6 +36,7 @@ const trackedExtensionExceptions = new Set([
 // fails the tracked-file policy above.
 const privateRoots = [
   ".scratch/",
+  "apk/",
   "re/ghidra_project/",
   "extracted_resources/",
   "extracted_work/",

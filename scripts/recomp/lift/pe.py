@@ -5,6 +5,7 @@ image buffer indexed by virtual address so the lifter can fetch code
 bytes at any VA.
 """
 
+import hashlib
 import struct
 from dataclasses import dataclass
 
@@ -32,6 +33,7 @@ class PE32:
         with open(path, "rb") as fh:
             self.data = fh.read()
         d = self.data
+        self.sha256 = hashlib.sha256(d).hexdigest().upper()
         if d[:2] != b"MZ":
             raise ValueError("not MZ")
         pe_off = struct.unpack_from("<I", d, 0x3C)[0]

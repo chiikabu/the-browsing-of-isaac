@@ -2,10 +2,12 @@
 
 import argparse
 import bisect
+from collections import deque
 import io
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 
@@ -15,7 +17,7 @@ import pypcode                                        # noqa: E402
 from pe import PE32                                   # noqa: E402
 from lift import (RegMap, Decoder, LiftError, FuncEmitter, UTYPE,   # noqa: E402
                   discover_body, LANG)
-from jumptables import JumpTables                       # noqa: E402
+from jumptables import JumpTables, PEIndex                # noqa: E402
 import scan                                            # noqa: E402
 
 
@@ -39,6 +41,14 @@ def load_fragments(path):
             if f[i_pro].strip().lower() != "true":
                 frags.add(int(f[i_va], 16))
     return frags
+
+
+def load_vas(path):
+    if not path:
+        return []
+    with open(path, encoding="utf8") as fh:
+        return [int(value, 0) for line in fh
+                if (value := line.split("#")[0].strip())]
 
 
 def load_imports(path, shim_table=None):
@@ -116,19 +126,27 @@ def main():
                     help="function VA to lift (repeatable)")
     ap.add_argument("--va-file", help="file with one VA per line")
     ap.add_argument("--starts-file",
-                    help="every known function start (one VA per line), added to "
-                         "the function-start set WITHOUT being lifted, so a worker "
-                         "that lifts a subset (lift_parallel.py) makes the same "
-                         "tail-call / absorb decisions as one run over the whole set")
+                    help="complete inventory starts (one VA per line), without "
+                         "requesting definitions; parallel workers use this "
+                         "same set to identify absorbable inventory fragments")
     ap.add_argument("--no-rescue", action="store_true",
-                    help="skip the fragment safety net: a lift_parallel.py "
-                         "phase-1 worker lifts its wanted functions only; the "
-                         "fragments are rescued once, against the coverage of "
-                         "every worker, in phase 2")
+                    help="skip uncovered inventory fragments; static jump "
+                         "closure is still mandatory")
     ap.add_argument("--rescue-only", action="store_true",
-                    help="lift nothing but the fragments of --va-file that no "
-                         "lifted body reaches (lift_parallel.py phase 2); "
-                         "--covered-file supplies the bodies lifted elsewhere")
+                    help="close imported static exits and rescue uncovered "
+                         "inventory fragments (lift_parallel.py phase 2)")
+    ap.add_argument("--defer-closure", action="store_true",
+                    help="lift_parallel.py worker: record static exits and "
+                         "callees for one global recursive closure pass")
+    ap.add_argument("--entries-file",
+                    help="actual definitions emitted by other workers, one "
+                         "VA per line; byte coverage does not imply an entry")
+    ap.add_argument("--static-exits-file",
+                    help="known static jump exits from other workers, one "
+                         "VA per line; always deliver these dispatch entries")
+    ap.add_argument("--direct-calls-file",
+                    help="JSON target-VA to minimum call-depth map from "
+                         "other workers, used with --follow")
     ap.add_argument("--covered-file",
                     help="text ranges already lifted by other runs ('lo hi' "
                          "per line, hi exclusive), as emit.py writes them to "
@@ -161,12 +179,16 @@ def main():
     ap.add_argument("--fragments-tsv",
                     help="Ghidra recovered-functions.tsv; rows without a real "
                          "prologue are treated as mid-function fragments")
+    ap.add_argument("--pe-index",
+                    help="prebuilt pe-index.sqlite; defaults to the executable's "
+                         "hash-specific decomp index. Missing, malformed, or "
+                         "stale indexes are errors; run decomp:index first.")
     ap.add_argument("--fragments", default="absorb",
                     choices=("absorb", "split"),
-                    help="absorb = fragments are not function boundaries and "
-                         "are folded into their parent (lifted standalone "
-                         "only if nothing else covers them); "
-                         "split = treat every inventory row as a function")
+                    help="absorb = unproven fragments are folded into their "
+                         "bounded parent; emit uncovered or jump-referenced entries; "
+                         "split = keep inventory rows standalone, while indexed "
+                         "computed-jump blocks remain local to their owner")
     ap.add_argument("--imports",
                     help="host-boundary census imports.json; turns "
                          "`call [IAT slot]` into a direct shim call")
@@ -220,8 +242,11 @@ def main():
     frags = set()
     if args.fragments_tsv and args.fragments == "absorb":
         frags = load_fragments(args.fragments_tsv)
-        func_starts -= frags
-    jt = JumpTables(pe)
+    try:
+        pe_index = PEIndex(pe, args.pe_index)
+    except (OSError, ValueError, sqlite3.Error) as error:
+        ap.error("cannot load PE index: %s; run decomp:index" % error)
+    jt = JumpTables(pe, index=pe_index)
     imports = (load_imports(args.imports, args.shim_table)
                if args.imports else {})
     t_scan = time.time()
@@ -242,10 +267,8 @@ def main():
         # still function boundaries, so a caller does not absorb their bodies
         func_starts |= handwritten
     want = [v for v in want if v not in handwritten]
-    deferred = [v for v in want if v in frags]
-    want = [v for v in want if v not in frags]
-    for v in want:
-        func_starts.add(v)
+    pe_index.entries.update(handwritten)
+    frags.difference_update(pe_index.entries)
     if args.starts_file:
         with open(args.starts_file) as fh:
             for line in fh:
@@ -255,6 +278,13 @@ def main():
                 v = int(line, 0)
                 if v not in handwritten and v not in frags:
                     func_starts.add(v)
+
+    func_starts.update(want)
+    if args.fragments == "absorb":
+        frags.update(pe_index.fragments(func_starts))
+        func_starts -= frags
+    deferred = [v for v in want if v in frags]
+    want = [v for v in want if v not in frags]
 
     opts = dict(local_flags=not args.spill_flags, max_insns=args.max_insns,
                 state_only=args.state_only, imports=imports,
@@ -269,6 +299,12 @@ def main():
     callothers_wide = []
     imports_used = set()
     covered = set()
+    pre_entries = set(load_vas(args.entries_file))
+    static_exits = set(load_vas(args.static_exits_file))
+    call_depths = {}
+    if args.direct_calls_file:
+        with open(args.direct_calls_file, encoding="utf8") as fh:
+            call_depths = {int(va, 0): level for va, level in json.load(fh).items()}
     # ranges lifted by other runs (lift_parallel.py phase 1), merged so a
     # fragment absorbed by bodies in two workers is found by one bisect
     pre = []
@@ -292,92 +328,108 @@ def main():
         i = bisect.bisect_right(pre_lo, va) - 1
         return i >= 0 and pre[i][0] <= va < pre[i][1]
 
-    pending = [] if args.rescue_only else list(want)
-    depth = {v: 0 for v in want}
-    while pending:
-        va = pending.pop(0)
-        if va in lifted:
-            continue
-        try:
-            ext = extents.get(va)
-            body, jumps = discover_body(dec, va, func_starts, lo, hi, bad=data_stops,
-                                        max_insns=args.max_insns, jt=jt,
-                                        extent=ext)
-            fopts = dict(opts)
-            kinds = {k for k, _t in jumps.values()}
-            if args.dispatch == "force":
-                fopts["dispatch"] = True
-            elif args.dispatch == "all" and jumps:
-                fopts["dispatch"] = True
-            elif args.dispatch == "auto" and "unknown" in kinds:
-                fopts["dispatch"] = True
-            em = FuncEmitter(regmap, "sub_%08x" % va, va, body, fopts, jumps)
-            src = em.run()
-        except LiftError as e:
-            failures.append((va, str(e)))
-            continue
-        except Exception as e:                          # noqa: BLE001
-            failures.append((va, "%s: %s" % (type(e).__name__, e)))
-            continue
-        lifted[va] = src
-        callothers.extend(em.callother)
-        callothers_wide.extend(em.callother_wide)
-        imports_used.update(em.imports_used)
-        for a, (ln, _ops) in body.items():
-            covered.update(range(a, a + ln))
-        st = dict(em.stats)
-        st["va"] = va
-        st["bytes"] = sum(v[0] for v in body.values())
-        st["csize"] = len(src)
-        st["clines"] = src.count("\n") + 1
-        stats.append(st)
-        if args.follow and depth.get(va, 0) < args.follow_depth:
-            for t in sorted(em.direct_calls | em.tailcalls):
-                if t not in lifted and lo <= t < hi:
-                    depth.setdefault(t, depth.get(va, 0) + 1)
-                    pending.append(t)
+    pending = deque()
+    depth = {}
+    attempted = set()
+    expanded_depth = {}
+    edges = {}
 
-    # coverage safety net: a fragment nothing reached still has to be lifted
+    def enqueue(va, level):
+        if va in handwritten or va in pre_entries:
+            return
+        if va not in depth or level < depth[va]:
+            depth[va] = level
+            pending.append(va)
+
+    def enqueue_target(va, level):
+        if lo <= va < hi and not pe_index.is_data(va):
+            enqueue(va, level)
+
+    if not args.rescue_only:
+        for va in want:
+            enqueue(va, 0)
+    for va in sorted(static_exits):
+        enqueue_target(va, 0)
+    if args.follow:
+        for va, level in sorted(call_depths.items()):
+            if level <= args.follow_depth:
+                enqueue_target(va, level)
+
+    def drain():
+        while pending:
+            va = pending.popleft()
+            if va not in lifted:
+                if va in attempted:
+                    continue
+                attempted.add(va)
+                try:
+                    ownership = pe_index.owner(va)
+                    body, jumps = discover_body(
+                        dec, va, func_starts, lo, hi, bad=data_stops,
+                        max_insns=args.max_insns, jt=jt,
+                        extent=extents.get(va), ownership=ownership)
+                    fopts = dict(opts)
+                    kinds = {k for k, _t in jumps.values()}
+                    if (args.dispatch == "force"
+                            or args.dispatch == "all" and jumps
+                            or args.dispatch == "auto" and "unknown" in kinds):
+                        fopts["dispatch"] = True
+                    em = FuncEmitter(regmap, "sub_%08x" % va, va, body, fopts,
+                                     jumps, ownership)
+                    src = em.run()
+                except LiftError as e:
+                    failures.append((va, str(e)))
+                    continue
+                except Exception as e:                  # noqa: BLE001
+                    failures.append((va, "%s: %s" % (type(e).__name__, e)))
+                    continue
+                lifted[va] = src
+                edges[va] = (em.static_exits, em.direct_calls)
+                callothers.extend(em.callother)
+                callothers_wide.extend(em.callother_wide)
+                imports_used.update(em.imports_used)
+                for a, (ln, _ops) in body.items():
+                    covered.update(range(a, a + ln))
+                st = dict(em.stats)
+                st["va"] = va
+                st["bytes"] = sum(v[0] for v in body.values())
+                st["csize"] = len(src)
+                st["clines"] = src.count("\n") + 1
+                stats.append(st)
+
+            # A later rescued root can lower a callee's nesting depth. Expand
+            # its recorded edges again, without emitting a second definition.
+            level = depth[va]
+            if va in expanded_depth and expanded_depth[va] <= level:
+                continue
+            expanded_depth[va] = level
+            exits, calls = edges[va]
+            static_exits.update(exits)
+            for target in calls:
+                call_depths[target] = min(call_depths.get(target, level + 1),
+                                         level + 1)
+            if not args.defer_closure:
+                for target in sorted(exits):
+                    enqueue_target(target, level)
+                if args.follow and level < args.follow_depth:
+                    for target in sorted(calls):
+                        enqueue_target(target, level + 1)
+
+    drain()
+
+    # Coverage can suppress an unreferenced inventory fragment, never a
+    # dispatch entry required by an emitted jump. Rescued bodies recursively
+    # deliver their own exits through exactly the same discovery/emitter path.
     rescued = 0
-    if args.no_rescue:
-        deferred = []
-    for va in deferred:
-        if va in covered or pre_covered(va) or va in lifted or va in handwritten:
-            continue
-        func_starts.add(va)
-        try:
-            body, jumps = discover_body(dec, va, func_starts, lo, hi, bad=data_stops,
-                                        max_insns=args.max_insns, jt=jt,
-                                        extent=extents.get(va))
-            fopts = dict(opts)
-            kinds = {k for k, _t in jumps.values()}
-            if args.dispatch == "force":
-                fopts["dispatch"] = True
-            elif args.dispatch == "all" and jumps:
-                fopts["dispatch"] = True
-            elif args.dispatch == "auto" and "unknown" in kinds:
-                fopts["dispatch"] = True
-            em = FuncEmitter(regmap, "sub_%08x" % va, va, body, fopts, jumps)
-            src = em.run()
-        except LiftError as e:
-            failures.append((va, str(e)))
-            continue
-        except Exception as e:                          # noqa: BLE001
-            failures.append((va, "%s: %s" % (type(e).__name__, e)))
-            continue
-        lifted[va] = src
-        rescued += 1
-        callothers.extend(em.callother)
-        callothers_wide.extend(em.callother_wide)
-        imports_used.update(em.imports_used)
-        st = dict(em.stats)
-        st["va"] = va
-        st["bytes"] = sum(v[0] for v in body.values())
-        st["csize"] = len(src)
-        st["clines"] = src.count("\n") + 1
-        stats.append(st)
-        for a, (ln, _ops) in body.items():
-            covered.update(range(a, a + ln))
+    if not args.no_rescue:
+        for va in deferred:
+            if (va in covered or pre_covered(va) or va in lifted
+                    or va in pre_entries or va in handwritten):
+                continue
+            enqueue(va, 0)
+            drain()
+            if va in lifted:
+                rescued += 1
 
     t_lift = time.time()
 
@@ -386,11 +438,9 @@ def main():
     with open(os.path.join(args.out, "recomp_state.h"), "w") as fh:
         fh.write(hdr)
 
-    # references that were not lifted -> extern stubs
-    refs = set()
-    for src in lifted.values():
-        refs.update(int(m, 16) for m in re.findall(r"\bsub_([0-9a-f]{8})\(", src))
-    missing = sorted((refs | handwritten) - set(lifted))
+    # Structured edges, not literal C text, define delivery requirements.
+    refs = set(call_depths) | static_exits
+    missing = sorted((refs | handwritten) - set(lifted) - pre_entries)
     others = {}
     for name, arity in callothers:
         others[name] = max(others.get(name, 0), arity)
@@ -400,7 +450,7 @@ def main():
 
     decls = ["/* generated */", '#include "recomp_state.h"',
              '#include "recomp_rt.h"', ""]
-    for va in sorted(set(lifted) | set(missing)):
+    for va in sorted(set(lifted) | refs | handwritten):
         decls.append("void sub_%08x(CpuState *restrict s);" % va)
     for o in sorted(others):
         params = ", ".join(["CpuState *restrict s"] +
@@ -464,6 +514,15 @@ def main():
                 fh.write("\n\n")
         total_c += os.path.getsize(path)
         files.append(name)
+
+    for name, values in (("entries.txt", lifted),
+                         ("static_exits.txt", static_exits)):
+        with open(os.path.join(args.out, name), "w") as fh:
+            for va in sorted(values):
+                fh.write("%#010x\n" % va)
+    with open(os.path.join(args.out, "direct_calls.json"), "w") as fh:
+        json.dump({"%#010x" % va: call_depths[va] for va in sorted(call_depths)},
+                  fh, indent=2)
 
     with open(os.path.join(args.out, "missing.txt"), "w") as fh:
         for va in missing:
@@ -555,7 +614,7 @@ def main():
         pass
     if args.stats:
         with open(args.stats, "w") as fh:
-            json.dump(stats, fh, indent=1)
+            json.dump(sorted(stats, key=lambda row: row["va"]), fh, indent=1)
     print(json.dumps(summary, indent=2))
 
 

@@ -16,9 +16,10 @@ The page is hosted on GitHub Pages; its separate payload is served by jsDelivr.
 Use a current browser with WebAssembly JSPI, WebGL2 and WebAudio support;
 Chromium is the browser used by the verification tools.
 
-The page starts automatically. Its loading screen stays up until a native menu
-or playable room is ready; audio output stays silent until then. Enter still
-skips the original intro. Add `?autoplay=0` to start with a Play button instead.
+The page starts automatically. Its loading screen stays up until a loaded native
+cutscene, menu or playable room is ready; audio output stays silent until then.
+The original intro is visible, and Enter skips it normally. Add `?autoplay=0`
+to start with a Play button instead.
 
 | Key | Action |
 | --- | --- |
@@ -31,16 +32,75 @@ skips the original intro. Add `?autoplay=0` to start with a Play button instead.
 Click the game if it does not have keyboard focus. Browser audio policies may
 require a click or keypress before sound can play.
 
-The loading bar and Isaac-font percentage count received payload bytes against
-a fixed total, including cached downloads. They do not estimate engine
-initialization time. The game can appear below 100%: remaining assets continue
-downloading in the background or stream when needed.
+The loading bar and Isaac-font percentage measure bootstrap delivery, WebAssembly
+instantiation and filesystem/CRT preparation. Each preparation phase contributes
+25%; only delivery has byte-level progress. Native initialization has no measured
+remainder, so the bar switches to a moving activity segment instead of freezing
+at 75%. The percentage is hidden during this phase; reduced-motion settings keep
+the segment still. Startup reaches 100% when the loaded intro, menu or live room
+is ready. Background downloads do not affect startup completion. Neither the
+percentage nor the activity segment estimates time remaining.
+
+The loader plays the looping [Specialist Isaac dance](https://tenor.com/view/isaac-tboi-dance-gif-7352492888219360785)
+by dazlex in a DOM picture, not a canvas snapshot. Reduced-motion preferences
+select the static poster. The meter, bitmap font and native readiness gate are unchanged.
+Distribution builds cache the public GIF under `.scratch/loader-assets`, copy it
+locally, and embed it in portable output; generated standalone pages need no
+runtime GIF download. The first public-asset build needs network access.
+Custom `--web` templates may select a local GIF instead. The committed online
+entry references the public Tenor media URL directly.
+
+Verify loader packaging with:
+
+```sh
+node --test tests/recomp-portable.test.js tests/recomp-ship.test.js
+```
 
 Engine downloads and independent range checks overlap with bounded concurrency.
 Exact-range hosts stream archive windows; unreliable range hosts download whole
 chunks in the background without blocking startup on the full archive set.
 Compressed archive windows decode only when read. Immutable window URLs preserve
 the browser's download cache. Add `?stats=1` for loading diagnostics.
+
+### Touch controls
+
+Touch builds enable controls automatically on coarse-pointer touch devices.
+Use `?touch=1` to force them or `?touch=0` to disable them. Landscape keeps the
+game centered; portrait places the controls below the playfield.
+
+- Drag the left pad to move and the right pad to fire, including diagonals.
+- In menus, use the left pad, **SELECT** and **BACK**. **PAUSE** opens the
+  native pause menu; **TOOLS** contains fullscreen, saves and touch settings.
+- Hold **ITEM**, **POCKET**, **BOMB**, **MAP** or **DROP** when needed.
+  **SWAP** switches pocket items or characters. Optional aim lock keeps firing
+  after releasing the fire pad; pausing or leaving the page stops it.
+- Jacob and Esau get separate item and pocket buttons. **JACOB ONLY** suppresses
+  Esau's movement input; native physics can still push him. Actions follow the
+  live Classic/Better setting.
+- On character selection, **SEED** opens native seed entry; **TEXT** opens the
+  device keyboard. Text and modifier changes are paced by native input polls.
+
+The layout follows [Nicalis's mobile game](https://apps.apple.com/us/app/the-binding-of-isaac-rebirth/id1069549814)
+and its virtual-stick, cancellation and Jacob/Esau fixes. The browser controls
+use the existing keyboard input path. No assets or native libraries from the
+APK are bundled.
+JSPI and WebGL2 feature detection determines browser support, not user-agent
+names. Desktop Chromium mobile emulation exercised native movement, simultaneous
+fire, cancellation, real tab backgrounding and all sixteen held/unheld twin
+actions across Classic/Better modes. Playwright WebKit exercised native startup,
+menus, both twins' eight unheld actions and character swaps. Physical devices,
+WebKit held/multi-touch input and operating-system keyboard behavior are unverified.
+
+Rebuild the native engine when shipping these controls. Its `PeekMessageW`
+shim must honor `PM_NOREMOVE`: the game's Ctrl lookahead otherwise deletes the
+following item or pocket key. The corrected queue also preserves synchronous
+key state until removal, as required by [Win32](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-peekmessagew).
+
+Verify input behavior with:
+
+```sh
+node --test tests/recomp-touch.test.js tests/recomp-web.test.js tests/recomp-audio.test.js tests/recomp-host-input.test.js
+```
 
 ### Saves and mods
 

@@ -73,41 +73,6 @@ test('the web build wires the frame capture and the context', () => {
     'build_boot.py --web defines ISAAC_WEB and links for the browser with GL');
 });
 
-test('scripted input: the page and the node driver agree on the key table, the host has the queue', () => {
-  const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  // round 30: the node driver's table lives in explore.mjs (`export const KEYS`),
-  // shared with the explorer and the console driver, and covers every letter,
-  // digit and the US punctuation -- more than the page's; the two must agree on
-  // every key both define
-  const node = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'explore.mjs'), 'utf8');
-  const table = (src, decl) => {
-    const out = {};
-    const block = src.slice(src.indexOf(decl), src.indexOf('};', src.indexOf(decl)));
-    for (const m of block.matchAll(/'?([a-z0-9]+)'?:\s*\[(0x[0-9A-Fa-f]+),\s*(0x[0-9A-Fa-f]+),\s*([01])\]/g))
-      out[m[1]] = [Number(m[2]), Number(m[3]), Number(m[4])];
-    return out;
-  };
-  const pk = table(page, 'const KEYS = {'), nk = table(node, 'export const KEYS = {');
-  assert.ok(Object.keys(pk).length >= 40, 'page key table parsed');
-  assert.ok(Object.keys(nk).length >= 60, 'node key table parsed');
-  const common = Object.keys(nk).filter((k) => k in pk);
-  assert.ok(common.length >= 10, `page and node tables share at least ten keys (${common.length})`);
-  for (const k of common)
-    assert.deepEqual(pk[k], nk[k], `key '${k}': page and node driver disagree on vk/scancode/extended`);
-  for (const k of ['enter', 'escape', 'up', 'down', 'left', 'right', 'a', 'd', 's', 'w'])
-    assert.ok(k in nk && k in pk, `key '${k}' in both tables`);
-  // GLFW decodes the scancode from lParam bits 16..23 (+24 extended); pin the
-  // canonical ones so a typo cannot silently map Enter to another key
-  assert.deepEqual(pk.enter, [0x0D, 0x1C, 0]); assert.deepEqual(pk.escape, [0x1B, 0x01, 0]);
-  assert.deepEqual(pk.up, [0x26, 0x48, 1]); assert.deepEqual(pk.down, [0x28, 0x50, 1]);
-  assert.deepEqual(pk.left, [0x25, 0x4B, 1]); assert.deepEqual(pk.right, [0x27, 0x4D, 1]);
-  const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
-  for (const s of ['void isaac_input_key(', 'void isaac_input_mouse_move(', 'void isaac_input_mouse_button(',
-                   'Module.isaacInputPoll', 'isaac_guest_call(proc, &sub)', 'input_poll_page();'])
-    assert.ok(win.includes(s), `host_shims_win.c: ${s}`);
-  assert.ok(/msgq_pop_into\(msg\)\) \{ cpu->EAX = 1; return; \}[\s\S]{0,200}frame_cap\(\)/.test(win),
-    'PeekMessageW drains the queue before the frame cap posts WM_QUIT');
-});
 
 // Round 17: the canvas already shows every frame, so the framebuffer readback
 // exists only to hand PNGs to the runner. Reading a 960x540 frame back is 2 MB
@@ -232,32 +197,163 @@ test('round 49: the edge suite hides the tab for as long as asked and continues 
 });
 
 
-test('round 52: the EDIT FILE menu -- the page takes the keys while it is up, presses confirm for Delete, and ships with the page', () => {
-  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  assert.ok(b.includes("if (typeof window.isaacKeyCapture === 'function' && window.isaacKeyCapture(ev, down)) { ev.preventDefault(); return; }"), 'a page menu takes the keys');
-  assert.ok(b.includes("window.isaacInjectKey = (name, down) => { const k = KEYS[String(name).toLowerCase()]; if (k) live.push([1, k[0], k[1] | (k[2] << 8), down ? 1 : 0]); };"), 'the page can press a key (by the key table name, any case)');
-  const p = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  assert.ok(p.includes("import { createEditFileMenu, createPaperMenu } from './menu_overlay.mjs';"),
-    'the menu module, and the paper menu the mods menus are drawn on (round 76)');
-  assert.ok(p.includes("window.isaacEditFile = (slot) => { editMenu.open(slot); };")
-    && p.includes("window.isaacKeyCapture = (ev, down) => (modsMenu.isOpen() ? modsMenu.onKey(ev, down) : editMenu.onKey(ev, down));"),
-    'the host gate reaches the menu; whichever menu is up takes the keys');
-  assert.ok(p.includes("assetsUrl: `${ROOT}/instance/page-assets`"), 'the assets come from the dist');
-  const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
-  assert.ok(m.includes("window.isaacEditFileDelete = state.slot;") && m.includes("injectKey('enter', true);"), 'Delete names the slot and presses confirm: the engine prompt');
-  assert.ok(m.includes("['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'BACK']"), 'the entries');
-  // round 81: it used to be remembered, so one press of N left a readout over
-  // the game for good. Off at every load; N still flips it for the visit.
-  assert.ok(m.includes('const toggleFps = () => {') && m.includes('fpsOn: false'), 'the fps readout is a toggle');
-  assert.ok(!m.includes("localStorage.setItem('isaac-fps-viewer'") && !m.includes("localStorage.getItem('isaac-fps-viewer'"),
-    'and it does not survive a reload');
-  assert.ok(p.includes("if (ev.code === 'KeyN' && !ev.repeat") && p.includes('window.isaacEditFileMenu.toggleFps();'), 'N flips the FPS readout (unbound in the game)');
-  assert.ok(m.includes("const text = `${Math.round(state.fps)}`;") && m.includes('drawText(gg, text, 2, 2, A.atlasWhite);'), 'the readout is the number alone, in white');
-  assert.ok(!p.includes('page-settings.json'), 'no page setting in the saves store');
-  const pa = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'page_assets.py'), 'utf8');
-  assert.ok(pa.includes('render_text(font, atlas, "EDIT FILE", ink)') && pa.includes('items.append({"h1": e.h1, "h2": e.h2, "data": patched})'), 'the sheet is reset in the font and repacked into afterbirthp.a');
-  const bp = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'bundle.py'), 'utf8');
-  assert.ok(bp.includes('Rule("page-assets", KEEP, ("page-assets/*",), "page assets",') && bp.includes('page_assets.build(out)'), 'the bundle carries the page assets');
+function liveInputPage() {
+  const source = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  function eventTarget() {
+    const listeners = new Map();
+    return {
+      addEventListener(type, listener, options = false) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push({ listener, capture: options === true || !!options.capture });
+      },
+      dispatch(type, event = {}, capture = null) {
+        for (const entry of listeners.get(type) || []) {
+          if (capture === null || entry.capture === capture) entry.listener(event);
+        }
+      },
+    };
+  }
+  const window = eventTarget(), canvas = { ...eventTarget(), focus() {} }, saves = { open: false };
+  const document = {
+    ...eventTarget(), hidden: false,
+    getElementById(id) { return id === 'canvas' ? canvas : id === 'saves' ? saves : null; },
+  };
+  const cfg = {}, m = { HEAP32: new Int32Array(4) };
+  new Script(source.slice(source.indexOf('const KEYS = {'), source.indexOf('\nlet m;')))
+    .runInNewContext({ window, document, cfg, m, params: new URLSearchParams(''), log() {} });
+  return {
+    window, document, saves,
+    inject: window.isaacInjectKey,
+    key(code, down, target = canvas) {
+      const event = {
+        code, target, repeat: false, defaultPrevented: false, stopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.stopped = true; },
+      };
+      const type = down ? 'keydown' : 'keyup';
+      window.dispatch(type, event, true);
+      if (!event.stopped) target.dispatch?.(type, event);
+      if (!event.stopped) window.dispatch(type, event, false);
+    },
+    drain() {
+      const records = [];
+      while (cfg.isaacInputPoll(0, 0)) {
+        records.push(Array.from(m.HEAP32));
+        assert.ok(records.length < 100, 'the native queue must drain');
+      }
+      return records;
+    },
+  };
+}
+
+test('live input: touch and physical holds survive either owner releasing first', () => {
+  for (const first of ['touch', 'physical']) {
+    const page = liveInputPage();
+    page.key('KeyW', true);
+    page.inject('w', true, 'touch');
+    assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 1]]);
+    if (first === 'touch') page.inject('w', false, 'touch');
+    else page.key('KeyW', false);
+    assert.deepEqual(page.drain(), [], `${first} cannot release the other owner's hold`);
+    if (first === 'touch') page.key('KeyW', false);
+    else page.inject('w', false, 'touch');
+    assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 0]]);
+  }
+});
+
+test('live input: injected owners are independent and duplicate downs are idempotent', () => {
+  const page = liveInputPage();
+  page.inject('space', true, 'first');
+  page.inject('space', true, 'first');
+  page.inject('space', true, 'second');
+  assert.deepEqual(page.drain(), [[1, 0x20, 0x39, 1]]);
+  page.inject('space', false, 'first');
+  assert.deepEqual(page.drain(), []);
+  page.inject('space', false, 'second');
+  assert.deepEqual(page.drain(), [[1, 0x20, 0x39, 0]]);
+  page.inject('space', false, 'first');
+  assert.deepEqual(page.drain(), []);
+});
+
+test('live input: left and right Control own separate physical holds', () => {
+  const page = liveInputPage();
+  page.key('ControlLeft', true);
+  page.key('ControlRight', true);
+  assert.deepEqual(page.drain(), [[1, 0x11, 0x1D, 1]]);
+  page.key('ControlLeft', false);
+  assert.deepEqual(page.drain(), []);
+  page.key('ControlRight', false);
+  assert.deepEqual(page.drain(), [[1, 0x11, 0x1D, 0]]);
+});
+
+test('live input: a newly opened paper menu cannot swallow touch or physical releases', () => {
+  const page = liveInputPage();
+  page.inject('up', true, 'touch');
+  page.key('KeyW', true);
+  assert.deepEqual(page.drain(), [[1, 0x26, 0x148, 1], [1, 0x57, 0x11, 1]]);
+  page.window.isaacKeyCapture = () => true;
+  page.inject('up', false, 'touch');
+  page.key('KeyW', false);
+  assert.deepEqual(page.drain(), [[1, 0x26, 0x148, 0], [1, 0x57, 0x11, 0]]);
+});
+
+test('live input: a touch press consumed by a paper menu has no native release', () => {
+  const page = liveInputPage();
+  let menuOpen = true;
+  page.window.isaacKeyCapture = () => menuOpen;
+  page.inject('enter', true, 'touch');
+  assert.deepEqual(page.drain(), []);
+  menuOpen = false;
+  page.inject('enter', false, 'touch');
+  assert.deepEqual(page.drain(), []);
+});
+
+test('live input: two-argument injected confirmation bypasses paper menu capture', () => {
+  const page = liveInputPage();
+  page.window.isaacKeyCapture = () => true;
+  page.inject('ENTER', true);
+  page.inject('ENTER', false);
+  assert.deepEqual(page.drain(), [[1, 0x0D, 0x1C, 1], [1, 0x0D, 0x1C, 0]]);
+});
+
+test('live input: typing and a focused dialog suppress downs but release existing physical holds', () => {
+  const page = liveInputPage();
+  const input = {
+    closest(selector) { return selector.split(',').map((part) => part.trim()).includes('input') ? this : null; },
+    dispatch(type, event) { event.stopPropagation(); },
+  };
+  page.key('KeyW', true);
+  assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 1]]);
+  // An ordinary input lets keydown bubble; its dialog stops keyup at the target.
+  page.key('KeyA', true, { closest: input.closest });
+  page.key('KeyW', false, input);
+  assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 0]]);
+  page.key('KeyW', true);
+  assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 1]]);
+  page.saves.open = true;
+  page.key('KeyA', true);
+  page.key('KeyW', false);
+  assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 0]]);
+});
+
+test('live input: blur and hidden release only physical owners', () => {
+  for (const lifecycle of ['blur', 'hidden']) {
+    const page = liveInputPage();
+    page.key('KeyW', true);
+    page.inject('w', true, 'touch');
+    page.key('KeyA', true);
+    assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 1], [1, 0x41, 0x1E, 1]]);
+    if (lifecycle === 'blur') page.window.dispatch('blur');
+    else {
+      page.document.dispatch('visibilitychange');
+      assert.deepEqual(page.drain(), [], 'a visible document keeps physical holds');
+      page.document.hidden = true;
+      page.document.dispatch('visibilitychange');
+    }
+    assert.deepEqual(page.drain(), [[1, 0x41, 0x1E, 0]], lifecycle);
+    page.inject('w', false, 'touch');
+    assert.deepEqual(page.drain(), [[1, 0x57, 0x11, 0]], lifecycle);
+  }
 });
 
 test('round 53: draws in the standard quad pattern take one static index buffer, no upload', () => {

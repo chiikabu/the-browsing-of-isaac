@@ -836,6 +836,96 @@ arrays (`glVertexAttribPointer`/`glDrawElements` with raw caller pointers,
 no `glGenBuffers` anywhere), so guest pointers are handed straight to the
 GL layer. **Do not introduce a base offset.**
 
+### 11.6 Current contract: bounded computed-jump ownership (2026-10-07)
+
+The current lifter no longer treats a truncated Ghidra extent or an
+unproven interior inventory start as an independent call frame. This
+supersedes §11.1/§11.3's historical inventory decisions, not their recorded
+measurements.
+
+`emit.py --pe-index PATH` consumes the existing read-only PE index; omitting
+the option selects `output/decomp/<first-12-sha>/index/pe-index.sqlite`.
+Build it with `npm run decomp:index`. Missing, stale, malformed, or
+incomplete indexes fail instead of restoring the old truncated walk.
+Required invariants:
+
+- Executable SHA agreement and `linear+skipdata+jtab-mask v2` decoding.
+- Contiguous census compartments from `.text`'s start through its
+  file-backed alignment boundary; discovery still respects the virtual
+  executable range. A compartment start alone is not proof of an ABI entry.
+- Complete masked-byte and logical-table censuses, every indexed slot
+  represented, and each target checked against PE bytes and a decoded
+  instruction.
+- Adjacent masked tables split at their actual indexed JMP table bases.
+  Local ownership follows the JMP's function, not the table's storage.
+- Calls, decoded address escapes, relocation-backed code pointers, and
+  selected handwritten entries provide entry evidence. Cross-compartment
+  exits remain conservative tails; main, probe, and rescue must agree.
+
+For canonical SHA
+`5129DF723E645DAAEA59514394195F3EA1DCE1671BB0433D724648A845017200`,
+the v2 index records **763 sites / 7,501 unique slots / 30,004 masked
+bytes**. Execution of `PEIndex.targets` and `FunctionOwnership.is_local`
+against the complete independently recorded corpus matched every target
+vector: **7,331 local slots; 170 cross-owner slots preserved**, no
+cross-owner absorption. These are classifications, not 763 demonstrated
+gameplay fixes.
+
+Actual fault witnesses are the sacrifice text converter's JMP
+`0x00a2c680`, Gate's ordinary-shot JMP `0x004603ed`, Mega Maw's second
+native FireRing JMP `0x0045f80b`, and ordinary Greed Fistuloid child
+cleanup's JMP `0x0052c6a8`. Keep source names address-stable; the last
+spilled EIP is not necessarily the failing instruction. Gate's distinct
+low-HP State8 laser already passed on the deployed engine; do not conflate
+that branch with its failing ordinary-shot table.
+
+The first full ownership-aware build exposed a separate closure defect:
+startup branches at `0x009b1018` and `0x009b102d` reached `0x009b1030`,
+absent from the requested inventory and emitted dispatch. That census
+compartment uses the caller's existing EBP frame and loops back into it.
+Parking a static exit is insufficient: every known direct, table, and
+fallthrough exit needs recursive dispatch delivery, independently of
+callee-following options and byte coverage. Parallel workers need one
+global closure with unique definitions. Continuation jumps preserve guest
+registers, flags, ESP, and EBP without synthesizing a call frame. The full
+test suite passed before this actual startup failure; compiler fixtures
+must exercise whole-CLI closure, not supply missing tails as manual stubs.
+
+`entries.txt`, `static_exits.txt`, and `direct_calls.json` record actual
+definitions, required continuation targets, and minimum CALL depths.
+Workers defer closure; the global rescue imports those receipts before
+unreferenced inventory fragments. Continuation hops do not consume
+`--follow-depth`, and an already-covered target still needs its own
+dispatch entry. Fallback table guards remain entry-path-specific rather
+than reusing another entry's shorter guard.
+
+The full web-engine regeneration uses `--follow` as well. Static exit
+closure remains independent of that option; following actual CALL edges
+also delivers callees absent from the initial inventory. The complete
+2026-10-07 run emitted 26,578 definitions and 26,587 dispatch entries,
+including the shared-frame startup continuation `0x009b1030` and genuine
+callees `0x005cd670`, `0x00af063f`, and `0x00af067b`. Exact ZHL signature
+checks found no names for those three callees. The 55 rejected inventory
+addresses are indexed data, not successful function translations.
+
+Verify with
+`node --test tests/recomp-jumptables.test.js tests/recomp-parallel-lift.test.js tests/recomp-entry-first.test.js`.
+Generated-code fixtures execute real Wasm and check registers, flags,
+stack transitions, local cases, genuine tails, and adjacent-table
+boundaries. Whole serial/parallel CLIs and the real dispatcher exercise
+missing table/direct/fallthrough entries, shared-frame loops, rescued
+blocks, and nested CALLs. Malformed-index cases reject lost owners/slots.
+Entry-first fixtures compile CRLF-generated C against the real runtime and
+check normal entry, explicit shared-frame reentry, arbitrary-comment
+producer jumps, read-only `--check`, and byte-idempotent application. The
+three behavioral tests pass; four targeted production-pass mutants are
+killed by their consumer assertions and restored byte-identically.
+Mutation checks run through `scripts/decomp/mutate.mjs`, with byte-exact
+source restoration before the final clean build.
+Gameplay acceptance and release evidence
+belong in the dated `docs/decomp-port.md` handoff; these compiler checks
+alone do not establish all ending/fire/death paths or an FPS improvement.
+
 ## 12. Round 3: dynamic dispatch, x87, and the residual
 
 ### 12.1 VA → wasm function: measured, and binary search is disqualified
