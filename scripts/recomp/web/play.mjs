@@ -1,7 +1,7 @@
-// play.mjs -- the shipping page (round 34). The pipeline is boot_web.mjs,
-// unchanged: this script draws the loading screen, the Play button, the
-// canvas chrome, the saves menu and the error panel around it, and hands the
-// pipeline a few hooks through window.isaacPageHooks before importing it:
+// play.mjs -- the shipping page. This script draws the native-style loader,
+// Play button, canvas chrome, saves menu and error panel around boot_web.mjs.
+// Early presentations stay covered until a stable native menu or live room is
+// ready. The page hands the pipeline hooks before importing it:
 //   url(u)            every synchronous fetch the RAM-FS makes (the windowed
 //                     archive reads during play) is rewritten: the page's own
 //                     directory as the root, ?v=<sha256 prefix> from dist.json
@@ -13,6 +13,8 @@
 //   onLog(line)       the stage markers and the error triggers
 //   beforeMain(m)     awaited right before main: the Play click (a user gesture,
 //                     so the AudioContext the AL shim creates starts running)
+//   onAudioReady(A)   holds the output gain closed until native readiness,
+//                     without muting the mixer or suspending its context
 // Defaults: ISAAC_YIELD=1 (live page, JSPI) and no frame budget, handed to the
 // pipeline as hooks.params rather than written into the URL. ?frames=N ends the run after N
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
@@ -34,19 +36,20 @@ const PERSIST = params.get('persist') !== '0';
 
 // the six archives boot_web.mjs seeds eagerly (its `seed packed archives`
 // stage); the rest of resources/packed is registered lazily and read as
-// slices once the game runs. Pinned against boot_web.mjs by tests/recomp-ship.test.js.
+// slices once the game runs.
 const EAGER_ARCHIVES = ['graphics.a', 'config.a', 'fonts.a', 'animations.a', 'rooms.a', 'sfx.a'];
-const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';      // the pipeline's IndexedDB store (boot_web.mjs), same pin
+const SAVE_DB = 'isaac-saves', SAVE_STORE = 'files';      // the pipeline's IndexedDB store (boot_web.mjs)
 
 const canvas = $('canvas'), overlay = $('overlay'), playBtn = $('play'), statusEl = $('status'), streamingEl = $('streaming');
 // opt-in chrome (round 51): ?stats=1 shows the live status line, ?saves=1 the
 // saves button; the page is otherwise the game alone, and a click anywhere
 // gives the canvas the keyboard
-// Round 82: the loading screen is black, one bar and one short line. The named
-// stages, their byte counts and the machine string are instruments, and they
-// live where the rest of the page's instruments do.
+// Stage names, byte counts and machine details are opt-in instruments. The
+// loader stays above early blank frames until the native menu or room is ready.
 const STATS = params.get('stats') === '1';
-if (STATS) { $('fps').hidden = false; $('stages').hidden = false; }
+if (STATS) { $('fps').hidden = false; $('stages').hidden = false; overlay.classList.add('stats'); }
+let mainStarted = false, gameReady = false, audioOutput = null;
+overlay.setAttribute('aria-busy', 'true');
 if (params.get('saves') === '1') $('saves-btn').hidden = false;
 document.addEventListener('pointerdown', () => { if (!$('saves').open) canvas.focus(); });
 // F toggles fullscreen on the stage (the keydown is the gesture requestFullscreen
@@ -111,16 +114,16 @@ function render() {
     const byBytes = tot ? 100 * got / tot : 0;
     const c = stages.chunks;
     const byChunks = c.total ? 100 * Math.min(c.received, c.total) / c.total : 0;
-    const pct = stages.boot.done ? 100 : Math.min(99, Math.max(byBytes, byChunks));
+    const pct = gameReady ? 100 : Math.min(99, Math.max(byBytes, byChunks));
     $('bar-fill').style.width = `${pct.toFixed(1)}%`;
   });
 }
-// The line under the bar. `text` is what the page has to say; the detail -- an
-// engine stage name, a path, an error -- goes in the tooltip and, under ?stats=1,
-// on the line itself. A loading screen is not the place for internals.
+// Native-style loading text stays unchanged while preparation has no known
+// percentage. Technical details are visible only with ?stats=1.
 function setStatus(text, detail) {
-  statusEl.textContent = STATS && detail ? detail : text;
-  statusEl.title = detail || text;
+  statusEl.textContent = STATS ? (detail || text)
+    : gameReady || overlay.classList.contains('ready-to-play') ? '' : 'Loading...';
+  statusEl.title = STATS ? (detail || text) : '';
 }
 
 // ---- the portable provider (round 70) ----------------------------------------
@@ -169,6 +172,12 @@ else setStatus('loading', manifest ? null : 'no dist.json: sizes unknown');
 let streamed = 0, streamedRequests = 0;
 const hooks = {};
 hooks.params = pageDefaults;
+// Called before the output is connected, including delayed audio initialization
+// and context recreation. Only the destination is muted; the mixer stays live.
+hooks.onAudioReady = (A) => {
+  audioOutput = A.outputGain;
+  audioOutput.gain.value = gameReady ? 1 : 0;
+};
 // a single-file build answers with bytes, not URLs: the reader Worker would have
 // nothing to fetch, so it is not started
 hooks.noReader = !!(portable && !portable.urlFor);
@@ -310,9 +319,16 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
   stages.boot.done = true; render();
   const start = () => {
     unlockAudio(m);
+    mainStarted = true;
+    overlay.hidden = false;
+    overlay.classList.remove('ready-to-play');
+    overlay.classList.add('preparing');
+    overlay.setAttribute('aria-busy', 'true');
     playBtn.hidden = true;
     $('stages').hidden = true;
-    setStatus('starting');
+    streamingEl.hidden = !STATS;
+    updateStreaming();
+    setStatus('Loading...');
     resolve();
     // Round 46: a frame-rate readout in the status line once the engine runs --
     // the host's frame counter sampled each second, the median of the last
@@ -340,14 +356,16 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
       if (first) { first = false; render(); }
       const note = document.hidden ? ' -- paused while hidden' : (nrDelta > 0 ? ` -- no animation frames (${nrDelta} timer tick(s) this second: occluded?)` : '');
       const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;
-      setStatus('running', line + machine);            // the overlay is gone by now; ?stats=1 still shows it
+      if (gameReady) setStatus('running', line + machine);
       const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;   // the header's, live during play
       editMenu.setFps(fps);                                                          // the in-game FPS VIEWER, when on
     }, 1000);
     watchScreen();
   };
   if (AUTOPLAY) { start(); return; }
-  setStatus('press play');
+  overlay.classList.add('ready-to-play');
+  overlay.setAttribute('aria-busy', 'false');
+  setStatus('');
   playBtn.hidden = false;
   playBtn.focus();
   playBtn.addEventListener('click', start, { once: true });
@@ -434,6 +452,60 @@ const readMenuId = () => {
 // four bytes every 200 ms: the credit appears within a frame or two of the
 // paper and is gone the moment a run starts
 const watchScreen = () => setInterval(() => editMenu.setScreen(readMenuId()), 200);
+
+function updateStreaming() {
+  streamingEl.textContent = `requested ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
+}
+// A present alone can still be white. Read the native menu or validate a live
+// player and room, then require stable state across advancing presentations.
+function readReadyState() {
+  const G = window.isaacGuest;
+  if (!G) return null;
+  try {
+    const mgr = G.u32(MENU_MGR_PTR), screen = mgr ? (G.u32(mgr + MENU_SCREEN_OFF) | 0) : -1;
+    const game = G.u32(0x00c71678);
+    const transitioning = !!game && (G.u32(game + 0x1b83c) !== 0 || G.u32(game + 0x68d78) !== 0);
+    const gameFrame = game ? G.u32(game + 0x264f8) : 0;
+    const begin = game ? G.u32(game + 0x1baa8) : 0, end = game ? G.u32(game + 0x1baac) : 0;
+    const hasPlayers = begin !== 0 && end > begin;
+    // Game is allocated before a run, and screen 5 can be character selection.
+    // Only native run activity takes precedence over the retained menu state.
+    const inRun = transitioning || gameFrame > 0 || hasPlayers;
+    if (!inRun) return screen >= 1 ? { key: `menu:${mgr}:${screen}`, run: false } : null;
+    if (!game || transitioning) return null;
+    const room = G.u32(game + 0x18300), player = hasPlayers ? G.u32(begin) : 0;
+    if (!room || !player || G.u32(player + 0x28) !== 1 || G.u8(player + 0x173) !== 0) return null;
+    const width = G.u32(room + 0xc), height = G.u32(room + 0x10);
+    if (!width || width >= 64 || !height || height >= 64 || !gameFrame) return null;
+    return { key: `run:${game}:${G.u32(game)}:${G.u32(game + 4)}:${G.u32(game + 0x18304)}:${room}:${player}`,
+      run: true, gameFrame };
+  } catch { return null; }
+}
+let readyCandidate = null;
+function checkReady() {
+  if (!mainStarted || gameReady) return;
+  const f = window.isaacFrame || 0;
+  const state = !errorShown && !window.isaacDone && f > 0 ? readReadyState() : null;
+  if (!state) { readyCandidate = null; return; }
+  if (!readyCandidate || readyCandidate.key !== state.key || f < readyCandidate.lastFrame) {
+    readyCandidate = { ...state, frame: f, lastFrame: f };
+    return;
+  }
+  if (f === readyCandidate.lastFrame) return;
+  if (state.run && state.gameFrame <= readyCandidate.gameFrame) { readyCandidate = null; return; }
+  readyCandidate.lastFrame = f;
+  readyCandidate.gameFrame = state.gameFrame;
+  if (f < readyCandidate.frame + 2) return;
+  gameReady = true;
+  readyCandidate = null;
+  overlay.hidden = true;
+  overlay.classList.remove('preparing');
+  overlay.setAttribute('aria-busy', 'false');
+  if (audioOutput) audioOutput.gain.value = 1;
+  setStatus('running');
+  render();
+  canvas.focus();
+}
 
 // ---- the EDIT FILE menu (round 52) -----------------------------------------------------
 // The save-select screen's DELETE FILE strip reads EDIT FILE (page_assets.py
@@ -534,18 +606,9 @@ hooks.onModImport = () => { modsMenu.open(); };
 window.isaacModsMenu = modsMenu;                          // the drivers look at it too
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
-let lastFrame = 0, lastT = performance.now(), firstFrameSeen = false, finished = false;
+let finished = false;
 setInterval(() => {
-  const f = window.isaacFrame || 0;
-  const now = performance.now();
-  if (f > 0 && !firstFrameSeen) { firstFrameSeen = true; overlay.hidden = true; canvas.focus(); }
-  if (firstFrameSeen) {
-    const fps = (f - lastFrame) / ((now - lastT) / 1000);
-    // (#fps is written by the status interval above: fps, median, frame, the hidden / no-animation-frames notes; the machine in its tooltip)
-    lastFrame = f; lastT = now;
-  } else if (!streamingEl.hidden) {
-    streamingEl.textContent = `streamed ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
-  }
+  if (mainStarted && !gameReady) { updateStreaming(); checkReady(); }
   const done = window.isaacDone;
   if (done && !finished) {
     finished = true;

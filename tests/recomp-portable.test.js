@@ -14,11 +14,347 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Script } from 'node:vm';
+import { gzipSync } from 'node:zlib';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
 const bootWeb = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
 const portable = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'portable.py'), 'utf8');
+
+// Run the emitted provider unchanged. The override also exercises a repacked
+// page's extracted loader without making the suite depend on scratch files.
+const providerSource = process.env.ISAAC_PORTABLE_LOADER
+  ? readFileSync(process.env.ISAAC_PORTABLE_LOADER, 'utf8')
+  : /PROVIDER_JS = r"""\r?\n([\s\S]*?)\r?\n"""/.exec(portable)[1];
+const WIN = 1048576, PIECE = 2 * WIN;
+const turn = () => new Promise(setImmediate);
+
+function deferredFetch() {
+  const requests = [];
+  return {
+    requests,
+    fetch(url, init) {
+      return new Promise((resolve, reject) => {
+        const range = init?.headers?.Range || null;
+        requests.push({
+          url, range, settled: false,
+          reply(bytes, { status = range ? 206 : 200, total } = {}) {
+            assert.equal(this.settled, false, `already answered ${url} ${range}`);
+            this.settled = true;
+            resolve({
+              ok: status >= 200 && status < 300, status,
+              headers: new Headers(total === undefined ? {} : {
+                'content-range': `bytes ${range?.slice(6) || '0-0'}/${total}`,
+              }),
+              arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+            });
+          },
+          fail(error) { this.settled = true; reject(error); },
+        });
+      });
+    },
+  };
+}
+
+function deferredPortable(data, search = '') {
+  const network = deferredFetch();
+  const window = { __isaacPortableData: data };
+  new Function('window', 'fetch', 'location', 'setTimeout', providerSource)(
+    window, network.fetch, { href: 'https://game.test/index.html' + search, search }, () => 0,
+  );
+  return { ...network, provider: window.isaacPortable };
+}
+
+function deferredReaderWorker() {
+  // Cook the actual template, as the page and recomp-web.test.js do.
+  const source = new Function('return `' + /const READER_WORKER = `([\s\S]*?)\r?\n`;/.exec(bootWeb)[1] + '`')();
+  const network = deferredFetch(), replies = new Map();
+  let nextWant = 1;
+  const worker = {
+    fetch: network.fetch, Blob, Response, DecompressionStream, Uint8Array, ArrayBuffer, setTimeout,
+    postMessage(message) { replies.get(message.want)(message); },
+  };
+  new Script(source).runInNewContext(worker);
+  return {
+    ...network,
+    read(url, len) {
+      const want = nextWant++;
+      return new Promise((resolve) => {
+        replies.set(want, resolve);
+        worker.onmessage({ data: { want, key: 'window' + want, url, len } });
+      });
+    },
+  };
+}
+
+function chunkData(engineCount = 4, archiveCount = 4) {
+  const files = {
+    'boot.wasm': { s: 0, at: 0, size: Math.min(3, engineCount) * PIECE },
+    'isaac.segs.bin': { s: 0, at: 3 * PIECE, size: PIECE },
+    'resources/packed/archive.a': { s: 1, at: 0, size: archiveCount * PIECE },
+  };
+  for (let i = 0; i < engineCount; i++) files['engine' + i] = { s: 0, at: i * PIECE, size: PIECE };
+  return {
+    base: 'https://assets.test/release/c', workerWindows: true, files,
+    streams: [
+      { tag: 'a', size: PIECE, gz: true, n: engineCount, bytes: engineCount * PIECE,
+        v: Array.from({ length: engineCount }, (_, i) => 'engine-' + i) },
+      { tag: 'b', size: PIECE, gz: false, n: archiveCount, bytes: archiveCount * PIECE,
+        v: Array.from({ length: archiveCount }, (_, i) => 'archive-' + i) },
+    ],
+  };
+}
+
+function fileName(request) {
+  return new URL(request.url, 'https://game.test/').pathname.split('/').pop();
+}
+
+function pending(network, file, range) {
+  const request = network.requests.find((r) => !r.settled && fileName(r) === file && r.range === range);
+  assert.ok(request, `${file} ${range} is pending`);
+  return request;
+}
+
+function answerRange(request, bytes) {
+  const [from, to] = request.range.slice(6).split('-').map(Number);
+  request.reply(bytes.subarray(from, to + 1), { total: bytes.length });
+}
+
+async function answerProbes(network, archives) {
+  for (const range of ['bytes=0-1023', 'bytes=512-1535']) {
+    for (const request of network.requests.filter((r) => !r.settled && r.range === range)) {
+      answerRange(request, archives[Number(fileName(request).slice(1, -4))]);
+    }
+    await turn();
+  }
+}
+
+test('portable startup overlaps required chunks and four probe pairs without waiting for the image', { timeout: 5000 }, async () => {
+  const h = deferredPortable(chunkData());
+  const engine = Array.from({ length: 4 }, (_, i) => Buffer.alloc(PIECE, i + 1));
+  const archives = Array.from({ length: 4 }, (_, i) => Buffer.alloc(PIECE, i + 20));
+  assert.deepEqual(h.requests.filter((r) => !r.range).map(fileName), ['a0.bin', 'a1.bin', 'a2.bin', 'a3.bin']);
+  assert.deepEqual(h.requests.filter((r) => r.range).map(fileName), ['b0.bin', 'b1.bin', 'b2.bin', 'b3.bin']);
+  assert.ok(h.requests.filter((r) => r.range).every((r) => r.range === 'bytes=0-1023'));
+  const wasm = h.provider.bytesFor('boot.wasm', 0, 0);
+  assert.equal(h.requests.filter((r) => !r.range).length, 4, 'consumer shares the four engine requests');
+  assert.equal(h.provider.urlFor('boot.wasm', 0, 100), null, 'whole compressed chunks stay on the bytes path');
+
+  // Only this pair may advance; the other three first responses are pending.
+  answerRange(pending(h, 'b2.bin', 'bytes=0-1023'), archives[2]);
+  await turn();
+  assert.deepEqual(h.requests.filter((r) => r.range === 'bytes=512-1535').map(fileName), ['b2.bin']);
+  assert.equal(h.requests.filter((r) => !r.settled && r.range).length, 4);
+  let ready = false;
+  h.provider.ready.then(() => { ready = true; });
+  await answerProbes(h, archives);
+  assert.equal(ready, true, 'range readiness does not await the engine preload');
+  assert.equal(await h.provider.ready, true);
+  assert.equal(h.requests.filter((r) => !r.settled && !r.range).length, 4);
+
+  for (let i = 0; i < 3; i++) pending(h, `a${i}.bin`, null).reply(gzipSync(engine[i]));
+  assert.deepEqual(Buffer.from(await wasm), Buffer.concat(engine.slice(0, 3)));
+  const image = h.provider.bytesFor('isaac.segs.bin', 0, 0);
+  pending(h, 'a3.bin', null).reply(gzipSync(engine[3]));
+  assert.deepEqual(Buffer.from(await image), engine[3]);
+  assert.deepEqual(h.requests.filter((r) => !r.range).map(fileName), ['a0.bin', 'a1.bin', 'a2.bin', 'a3.bin'],
+    'no duplicate engine fetches or speculative whole archives');
+});
+
+test('portable preload stays at four and failed shared requests can be retried', { timeout: 5000 }, async () => {
+  const data = chunkData(6, 1);
+  data.streams[0].z = '000000';
+  const h = deferredPortable(data);
+  const whole = () => h.requests.filter((r) => !r.range && !r.settled);
+  assert.deepEqual(whole().map(fileName), ['a0.bin', 'a1.bin', 'a2.bin', 'a3.bin']);
+  const failedRead = assert.rejects(h.provider.bytesFor('engine0', 31, 97), /HTTP 503/);
+  pending(h, 'a0.bin', null).reply(Buffer.alloc(0), { status: 503 });
+  await failedRead;
+  await turn();
+  assert.deepEqual(whole().map(fileName), ['a1.bin', 'a2.bin', 'a3.bin', 'a4.bin']);
+  pending(h, 'a1.bin', null).reply(Buffer.alloc(PIECE, 2));
+  await turn();
+  assert.deepEqual(whole().map(fileName), ['a2.bin', 'a3.bin', 'a4.bin', 'a5.bin']);
+  const lastRead = h.provider.bytesFor('engine5', 31, 97);
+  for (let i = 2; i < 6; i++) pending(h, `a${i}.bin`, null).reply(Buffer.alloc(PIECE, i + 1));
+  assert.deepEqual(Buffer.from(await lastRead), Buffer.alloc(97, 6));
+  await answerProbes(h, [Buffer.alloc(PIECE, 20)]);
+  await h.provider.ready;
+
+  const retry = h.provider.bytesFor('engine0', 31, 97);
+  pending(h, 'a0.bin', null).reply(Buffer.alloc(PIECE, 1));
+  assert.deepEqual(Buffer.from(await retry), Buffer.alloc(97, 1));
+  assert.deepEqual(Buffer.from(await h.provider.bytesFor('engine0', 401, 37)), Buffer.alloc(37, 1));
+  assert.equal(h.requests.filter((r) => fileName(r) === 'a0.bin').length, 2, 'retry then cache, not a poisoned flight');
+  assert.equal(h.requests.filter((r) => fileName(r).startsWith('b') && !r.range).length, 0);
+});
+
+test('portable parallel probes keep every failure and report the first chunk deterministically', { timeout: 5000 }, async () => {
+  const h = deferredPortable(chunkData(0, 4));
+  const archives = Array.from({ length: 4 }, (_, i) => Buffer.alloc(PIECE, i + 20));
+  // Chunk 2 fails first in time; chunk 0 fails later in its overlap.
+  pending(h, 'b2.bin', 'bytes=0-1023').reply(Buffer.alloc(1020), { total: PIECE });
+  for (const i of [0, 1, 3]) answerRange(pending(h, `b${i}.bin`, 'bytes=0-1023'), archives[i]);
+  await turn();
+  assert.equal(h.requests.filter((r) => fileName(r) === 'b2.bin').length, 1, 'a failed first response has no second probe');
+  assert.equal(h.requests.filter((r) => !r.range).length, 0, 'no whole archive before the range decision');
+  pending(h, 'b0.bin', 'bytes=512-1535').reply(Buffer.alloc(1024, 99), { total: PIECE });
+  for (const i of [1, 3]) answerRange(pending(h, `b${i}.bin`, 'bytes=512-1535'), archives[i]);
+  await turn();
+  assert.equal(h.provider.ranges(), false, 'later successful pairs cannot re-enable ranges');
+  assert.match(h.provider.rangesWhy(), /^chunk 0:/, 'failure selection follows chunk order, not completion order');
+  assert.equal(h.provider.urlFor('resources/packed/archive.a', 41, 17), null);
+  const read = h.provider.bytesFor('resources/packed/archive.a', PIECE - 7, 19);
+  for (let i = 0; i < 4; i++) pending(h, `b${i}.bin`, null).reply(archives[i]);
+  assert.equal(await h.provider.ready, false);
+  assert.deepEqual(Buffer.from(await read), Buffer.concat([archives[0].subarray(PIECE - 7), archives[1].subarray(0, 12)]));
+  assert.deepEqual(Buffer.from(await h.provider.bytesFor('resources/packed/archive.a', 2 * PIECE + 123, 31)), archives[2].subarray(123, 154));
+  assert.deepEqual(h.requests.filter((r) => !r.range).map(fileName), ['b0.bin', 'b1.bin', 'b2.bin', 'b3.bin']);
+});
+
+test('portable range guards preserve whole-chunk delivery', { timeout: 5000 }, async (t) => {
+  for (const mode of ['total', 'overlap-length', 'network', 'cdn', 'noranges']) {
+    await t.test(mode, async () => {
+      const data = chunkData(0, 1);
+      if (mode === 'cdn') data.base = 'https://cdn.jsdelivr.net/package/c';
+      const h = deferredPortable(data, mode === 'noranges' ? '?noranges=1' : '');
+      const bytes = Buffer.alloc(PIECE, 23);
+      if (mode === 'total') {
+        pending(h, 'b0.bin', 'bytes=0-1023').reply(bytes.subarray(0, 1024), { total: PIECE + 37 });
+      } else if (mode === 'overlap-length') {
+        answerRange(pending(h, 'b0.bin', 'bytes=0-1023'), bytes);
+        await turn();
+        pending(h, 'b0.bin', 'bytes=512-1535').reply(bytes.subarray(512, 1531), { total: PIECE });
+      } else if (mode === 'network') {
+        pending(h, 'b0.bin', 'bytes=0-1023').fail(new Error('probe disconnected'));
+      } else {
+        assert.equal(h.requests.filter((r) => r.range).length, 0, 'known untrusted and opted-out origins are not probed');
+      }
+      await turn();
+      pending(h, 'b0.bin', null).reply(bytes);
+      assert.equal(await h.provider.ready, false);
+      assert.equal(h.provider.urlFor('resources/packed/archive.a', 13, 71), null);
+      assert.deepEqual(Buffer.from(await h.provider.bytesFor('resources/packed/archive.a', 13, 71)), bytes.subarray(13, 84));
+      assert.equal(h.requests.filter((r) => !r.range).length, 1);
+    });
+  }
+});
+
+test('portable runtime range rejection never caches a partial response as a whole chunk', { timeout: 5000 }, async (t) => {
+  for (const status of [200, 206]) {
+    await t.test(String(status), async () => {
+      const h = deferredPortable(chunkData(0, 1));
+      const bytes = Buffer.alloc(PIECE, 29);
+      bytes.fill(43, 200, 400);
+      await answerProbes(h, [bytes]);
+      assert.equal(await h.provider.ready, true);
+      const first = h.provider.bytesFor('resources/packed/archive.a', 213, 71);
+      pending(h, 'b0.bin', 'bytes=213-283').reply(
+        status === 200 ? bytes : Buffer.alloc(71, 99), { status, total: PIECE + 37 },
+      );
+      await turn();
+      if (status === 206) pending(h, 'b0.bin', null).reply(bytes);
+      assert.deepEqual(Buffer.from(await first), bytes.subarray(213, 284));
+      assert.equal(h.provider.ranges(), false);
+      assert.deepEqual(Buffer.from(await h.provider.bytesFor('resources/packed/archive.a', 397, 19)), bytes.subarray(397, 416));
+      assert.equal(h.requests.filter((r) => !r.range).length, status === 200 ? 0 : 1);
+    });
+  }
+});
+
+test('portable raw ranges isolate concurrent cache entries and deliver matching direct and worker bytes', { timeout: 5000 }, async () => {
+  const data = chunkData(0, 1);
+  // Unversioned hosts still need separate immutable byte-range identities.
+  delete data.streams[1].v;
+  const bytes = Buffer.allocUnsafe(PIECE);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37 + (i >>> 8)) & 255;
+  const h = deferredPortable(data);
+  await answerProbes(h, [bytes]);
+  assert.equal(await h.provider.ready, true);
+  const rel = 'resources/packed/archive.a';
+  const cuts = [{ off: 73, len: 257 }, { off: 173, len: 257 }];
+  const urls = cuts.map(({ off, len }) => h.provider.urlFor(rel, off, len));
+  const expected = cuts.map(({ off, len }) => bytes.subarray(off, off + len));
+  const direct = cuts.map(({ off, len }) => h.provider.bytesFor(rel, off, len));
+  const directRequests = h.requests.filter((r) => !r.settled);
+  assert.notEqual(directRequests[0].url, directRequests[1].url,
+    'overlapping raw ranges cannot share one HTTP cache entry');
+  assert.deepEqual(directRequests.map((r) => r.url), urls.map((url) => url.split('#')[0]));
+  assert.deepEqual(urls.map((url) => new URL(url).searchParams.get('w')), ['73-329', '173-429']);
+  const network = deferredReaderWorker();
+  const messages = urls.map((url, i) => network.read(url, cuts[i].len));
+  assert.deepEqual(network.requests.map((r) => r.url), directRequests.map((r) => r.url));
+  assert.deepEqual(network.requests.map((r) => r.range), directRequests.map((r) => r.range));
+  // Finish out of order to expose accidental reuse of either range's bytes.
+  for (const requests of [directRequests, network.requests]) {
+    for (const request of [...requests].reverse()) answerRange(request, bytes);
+  }
+  const delivered = await Promise.all(direct);
+  const workerMessages = await Promise.all(messages);
+  for (let i = 0; i < cuts.length; i++) {
+    assert.deepEqual(Buffer.from(delivered[i]), expected[i]);
+    assert.ok(workerMessages[i].buf instanceof ArrayBuffer);
+    assert.deepEqual(Buffer.from(workerMessages[i].buf), expected[i]);
+  }
+  assert.equal(h.requests.filter((r) => !r.range).length, 0);
+});
+
+test('portable compressed windows share stable direct and worker cache identities and exact bytes', { timeout: 5000 }, async () => {
+  const data = chunkData(0, 1);
+  const raw = Buffer.allocUnsafe(WIN);
+  for (let i = 0; i < raw.length; i++) raw[i] = (i * 37 + (i >>> 8)) & 255;
+  const packed = Buffer.alloc(WIN, 61), zipped = gzipSync(packed);
+  const stored = Buffer.concat([zipped, raw]);
+  Object.assign(data.streams[1], {
+    base: 'https://archives.test/stable/c', win: WIN, wl: [zipped.length, raw.length], wz: '10',
+  });
+  const h = deferredPortable(data);
+  await answerProbes(h, [stored]);
+  assert.equal(await h.provider.ready, true);
+  const rel = 'resources/packed/archive.a';
+  const cuts = [{ off: 97, len: 2048 }, { off: WIN + 173, len: 3072 }];
+  const urls = cuts.map(({ off, len }) => h.provider.urlFor(rel, off, len));
+  const expected = [packed.subarray(97, 97 + 2048), raw.subarray(173, 173 + 3072)];
+  assert.equal(new URL(urls[0]).origin, 'https://archives.test', 'per-stream base stays pinned');
+  assert.equal(new URL(urls[0]).searchParams.get('v'), 'archive-0');
+  assert.notEqual(new URL(urls[0]).searchParams.get('w'), new URL(urls[1]).searchParams.get('w'),
+    'simultaneous stored windows cannot collide in the HTTP cache');
+  assert.equal(h.provider.urlFor(rel, 98, 1024).split('#')[0], urls[0].split('#')[0],
+    'overlapping slices of one immutable window reuse its cache identity');
+  assert.equal(h.provider.urlFor(rel, WIN - 1, 2), null, 'a cross-window read needs the bytes path');
+  const direct = cuts.map(({ off, len }) => h.provider.bytesFor(rel, off, len));
+  const directRequests = h.requests.filter((r) => !r.settled);
+  assert.deepEqual(directRequests.map((r) => r.url), urls.map((url) => url.split('#')[0]));
+  for (const request of directRequests) answerRange(request, stored);
+  const directBytes = await Promise.all(direct);
+  for (let i = 0; i < cuts.length; i++) assert.deepEqual(Buffer.from(directBytes[i]), expected[i]);
+
+  // The actual worker must return transferable buffers for raw windows too.
+  const network = deferredReaderWorker();
+  const messages = urls.map((url, i) => network.read(url, cuts[i].len));
+  assert.deepEqual(network.requests.map((r) => r.url), directRequests.map((r) => r.url));
+  assert.deepEqual(network.requests.map((r) => r.range), directRequests.map((r) => r.range));
+  for (const request of network.requests) answerRange(request, stored);
+  for (const [i, message] of (await Promise.all(messages)).entries()) {
+    assert.ok(message.buf instanceof ArrayBuffer, 'the worker sends the consumer a transferable buffer');
+    assert.deepEqual(Buffer.from(message.buf), expected[i]);
+  }
+  assert.equal(h.requests.filter((r) => !r.range).length, 0, 'window reads never preload whole archives');
+});
+
+test('portable offline reads span inline chunks without network activity', async () => {
+  const h = deferredPortable({
+    base: null,
+    streams: [{ tag: 'a', first: 0, size: 4, gz: false, n: 2 }],
+    blobs: [Buffer.from([10, 11, 12, 13]).toString('base64'), Buffer.from([14, 15, 16, 17]).toString('base64')],
+    files: { asset: { s: 0, at: 0, size: 8 } },
+  });
+  await h.provider.ready;
+  assert.equal(h.provider.urlFor, null);
+  assert.deepEqual(Buffer.from(await h.provider.bytesFor('asset', 3, 5)), Buffer.from([13, 14, 15, 16, 17]));
+  assert.equal(h.requests.length, 0);
+});
 
 test('the page takes a provider, and falls back to the server without one', () => {
   assert.match(play, /const portable = \(typeof window !== 'undefined' && window\.isaacPortable\) \|\| null;/);
@@ -42,61 +378,6 @@ test('a build with no URLs does not start the reader Worker', () => {
   assert.match(bootWeb, /function startReader\(\) \{[\s\S]{0,400}?if \(hooks\.noReader\) return;/);
 });
 
-test('a window is a byte range inside a large chunk, and the payload is a dozen files', () => {
-  // The first cut gave every 1 MiB window its own chunk, which is correct and
-  // useless: 559 files, and a cold start that spent 23 s fetching them one at a
-  // time. The chunks are coarse now and a window is a Range inside one, so the
-  // chunk's size costs nothing -- but only where the host honours the range.
-  assert.match(portable, /p\.add_argument\("--chunks", type=int, default=12,/);
-  assert.match(portable, /if \(!ranges\) return null;/, 'no range support, no URL: the bytes path serves it');
-  assert.match(portable, /if \(!parts \|\| parts\.length !== 1\) return null;/,
-    'a window that straddles two chunks is not a range');
-  // Round 89 kept this shape and changed only how a chunk is stored: its
-  // windows are compressed one by one, so a window is still one contiguous
-  // range, just a shorter one. Part A is still read whole by the page.
-  assert.match(portable, /if \(S\[p\.s\]\.gz\) return null;   \/\/ part A is read whole by the page itself/);
-  assert.match(portable, /return name\(p\.s, p\.i\) \+ '#r=' \+ p\.within \+ '-' \+ \(p\.within \+ p\.take - 1\)/,
-    'the range rides in the fragment, which no server ever sees');
-  // windowed archives are padded up to the window so a read never crosses a cut
-  assert.match(portable, /def lay_out\(part: list\[dict\], table: dict, stream: int, align: int = 1\) -> int:/);
-  assert.match(portable, /b_len = lay_out\(windowed, table, 1, WINDOW\)/, 'part B is laid out on window boundaries');
-  // and the host is asked once, before the first window goes out as a range.
-  // Round 78: jsDelivr answers 206 with a plausible Content-Range and the wrong
-  // bytes (4 bytes early at 1 MiB) plus a total 37 bytes over the file. A probe
-  // that only checks "206 and two bytes" passes. The page knows the chunk
-  // length, so the probe requires Content-Range's total to match it.
-  assert.match(portable, /async function probeRanges\(\) \{/);
-  // round 89d: a kilobyte, then a second range overlapping it that must agree --
-  // jsDelivr's answers four bytes short passed a probe that asked only once
-  assert.match(portable, /Range: 'bytes=0-1023'/);
-  assert.match(portable, /Range: 'bytes=512-1535'/);
-  // round 84: one question is a coin toss on a host whose answers vary, so the
-  // probe asks about four chunks and every one has to come back right
-  assert.match(portable, /var n = count\(b\), picks = \[0, Math\.floor\(n \/ 3\), Math\.floor\(\(2 \* n\) \/ 3\), n - 1\]/);
-  assert.match(portable, /if \(head\.length !== 1024 \|\| claimed !== want\) \{/);
-  assert.match(portable, /ranges = true;/);
-  assert.match(portable, /"bytes": b_len/, 'the page carries the raw stream length so the probe has a number to check');
-  assert.match(portable, /--part-mib/, 'a 1 MiB cut exists for a host whose ranges cannot be trusted');
-});
-
-test('the pieces of a read are fetched in parallel', () => {
-  // 49 MB of module in 1 MiB pieces, one at a time, was 23.2 s to the first frame
-  assert.match(portable, /for \(var w = 0; w < Math\.min\(6, parts\.length\); w\+\+\) crew\.push\(worker\(\)\);/);
-  assert.match(portable, /if \(r\.status === 206 && u\.length === p\.take && \(mine < 0 \|\| told === mine\)\) \{/,
-    'the window, when the answer is the window and about the right file');
-  assert.match(portable, /ranges = false;/, 'and a host that ignores Range is noticed and not asked again');
-});
-
-test('round 83: an answer that is not the window is not treated as the chunk', () => {
-  // It used to slice whatever came back and cache it under the chunk's key: right
-  // for a host that ignores Range (200, the whole chunk), and for one that answers
-  // 206 with the wrong bytes it returned nothing AND left a short buffer behind,
-  // so every later window in that chunk came back empty too.
-  assert.match(portable, /if \(r\.status === 200 && whole >= 0 && u\.length === whole\) \{/);
-  assert.match(portable, /cache\.delete\(p\.s \+ ':' \+ p\.i\);/, 'the bad answer does not stay in the cache');
-  assert.match(portable, /return \(await piece\(p\.s, p\.i\)\)\.subarray\(p\.within, p\.within \+ p\.take\);/,
-    'and the window comes from the chunk fetched whole');
-});
 
 test('round 83: one failed fetch does not end the run', () => {
   // `lazy pread FAILED ... the reader had no bytes` on a window the host answered
@@ -117,16 +398,6 @@ test('round 78: a host whose ranges lie does not start the reader Worker', () =>
   assert.match(play, /if \(portable\.ranges && !portable\.ranges\(\)\) \{\s*\n\s*hooks\.noReader = true;/);
 });
 
-test('round 78: whole-chunk mode fetches every piece once and keeps them', () => {
-  // 6 cached 19 MB pieces with FIFO eviction is the freeze: a new room misses,
-  // downloads 19 MB on the engine's read, and drops a piece it will need again.
-  assert.match(portable, /async function prefetchAll\(\)/);
-  assert.match(portable, /await prefetchAll\(\);/);
-  assert.doesNotMatch(portable, /if \(cache\.size > 6\) cache\.delete/,
-    'dropping a 19 MB piece is the freeze; keep every chunk');
-  assert.match(play, /onChunk = \(got, total\) => \{[\s\S]*?if \(portable && portable\.ready\)/,
-    'the status hook is installed before ready waits on the prefetch');
-});
 
 test('the provider is keyed by the engine\'s own name for a file', () => {
   // play.mjs strips `instance/` off a pipeline URL before it asks; a plan that
@@ -278,21 +549,9 @@ test('round 90f: the cache evicts what has been read, not the boot\'s next chunk
   // round 90g: and it says what it dropped and why -- the instrument that
   // closed 90g's two hypotheses (recomp-architecture §21.115)
   assert.deepEqual(C.evicted.map((e) => e.replace(/ @\d+$/, '')), ['0:0 read', '0:1 read', '1:0 read']);
-  // the boot's budget is its head, uncapped: summing stored sizes undercounted
-  // part A (stored gzipped) and evicted it during the prefetch itself
-  assert.match(portable, /CACHE_MAX = Infinity;/);
-  assert.doesNotMatch(portable, /CACHE_MAX = want \+ S\[head\[0\]\[0\]\]\.size/);
-  // a prefetch is not a read, or the head's own fetches would look finished
-  assert.match(portable, /piece\(jobs\[k\]\[0\], jobs\[k\]\[1\], paced \? 2 : 1\)/);
-  assert.match(portable, /if \(pre === 2\) markUnread\(key\);/, 'and only the paced stream counts toward its pacing');
   // the budget drops, and the leftovers start, when the boot is over -- the
   // frame boot_web.mjs itself calls the end of the boot, not the first one
   assert.equal(C.bootOver, Number(/READER_CLEAR_FRAME = (\d+)/.exec(bootWeb)[1]));
-  assert.match(portable, /if \(\(window\.isaacFrame \|\| 0\) >= BOOT_OVER_FRAME \|\| Date\.now\(\) - t0 > 300000\) \{/);
-  // and it happens whether or not anything is left to stream: under `if (more)`
-  // a trail that touched every chunk would have kept the boot uncapped for good
-  assert.doesNotMatch(portable, /var more = await prefetchAll\(\);\s*\n\s*if \(more\) \{/);
-  assert.match(portable, /var later = function \(\) \{ if \(more\) more\(\); \};/);
 });
 
 test('round 90f: a chunked page is never built without its boot trail', () => {
@@ -320,16 +579,6 @@ test('round 90f: a chunked page is never built without its boot trail', () => {
   }
 });
 
-test('round 90f: part B can be served from its own pinned base', () => {
-  // one base pinned per deploy moved all 32 URLs every time, and a returning
-  // visitor re-fetched 512 MB of unchanged part B
-  assert.match(portable, /return \(S\[s\]\.base \|\| P\.base\) \+ '\/' \+ S\[s\]\.tag \+ i \+ '\.bin'/);
-  assert.match(portable, /streams\[1\]\["base"\] = args\.base_b\.rstrip\("\/"\)/);
-  assert.match(portable, /p\.add_argument\("--base-b"/);
-  const check = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'check_deployed.mjs'), 'utf8');
-  assert.match(check, /baseOf\[`\$\{s\.tag\}\$\{i\}`\] = s\.base \|\| `\$\{CDN\}\/c`;/, 'check_deployed reads each stream where the page does');
-  assert.match(check, /await fetch\(`\$\{baseOf\[n\]\}\/\$\{n\}\.bin`/);
-});
 
 test('round 77: every page module parses, before and after minifying', async (t) => {
   // A backtick in a comment inside the reader Worker -- which is one big template
@@ -398,38 +647,6 @@ test('round 80: a rebuild can keep the key the uploaded chunks were scrambled wi
   assert.deepEqual(out.split(/\r?\n/), ['True', 'True', 'True']);
 });
 
-test('round 84: the single-file build fetches nothing, because it has everything', () => {
-  // Round 78 made `ready` prefetch every chunk, for a host whose ranges lie. It
-  // was not gated on there being a host: the single-file build has its payload
-  // inline and no base, so it asked the page for `null/a0.bin` -- eight of those,
-  // no frames, a build that did not run. Every offline build from 820f7d2 to
-  // round 84 was broken this way, and nothing was driving it to notice.
-  assert.match(portable, /if \(!P\.base\) return ranges;/);
-  const ready = portable.slice(portable.indexOf('ready: (async function'), portable.indexOf('ranges: function'));
-  assert.ok(ready.indexOf('if (!P.base) return ranges;') < ready.indexOf('await probeRanges();'),
-    'and it returns before either of the things that fetch');
-  assert.ok(ready.indexOf('if (!P.base) return ranges;') < ready.indexOf('await prefetchAll();'));
-});
-
-test('round 86d: a chunk carries a token from its own bytes into its URL', () => {
-  // jsDelivr answers chunks with max-age=604800, so a returning visitor holds
-  // them for a week. With one stable URL per chunk, a rebuild that changes only
-  // part A leaves that visitor free to mix new chunks with cached old ones --
-  // by cache, by a revalidated Range, or by a fetch that straddled a purge --
-  // and a mixed module is not a module:
-  //   WebAssembly.instantiate(): size 8760567 > maximum function size 7654321
-  // The token is per CHUNK rather than per build on purpose: a chunk whose
-  // bytes did not change keeps its URL and stays cached, so a module-only
-  // rebuild re-fetches four chunks instead of all thirty-three.
-  const p = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'portable.py'), 'utf8');
-  assert.match(p, /def chunk_tokens\(tag, count\)/, 'the tokens are computed per chunk');
-  assert.match(p, /h\.hexdigest\(\)\[:8\]/, 'and they come from that chunk\'s own bytes');
-  assert.match(p, /"v": chunk_tokens\("a", n_a\)/, 'part A carries them');
-  assert.match(p, /"v": chunk_tokens\("b", n_b\)/, 'and so does part B');
-  // the query has to sit before the #r= fragment the reader Worker strips off
-  assert.match(p, /\.bin' \+ \(v \? '\?v=' \+ v : ''\)/, 'the URL carries the token');
-  assert.match(p, /var v = S\[s\]\.v && S\[s\]\.v\[i\];/, 'read out of the stream the chunk belongs to');
-});
 
 test('round 88: the whole-read chunks may be zopfli, and it stays gzip', () => {
   // Part A is gzipped before it is scrambled, so its wire form is ours. Zopfli
@@ -442,24 +659,4 @@ test('round 88: the whole-read chunks may be zopfli, and it stays gzip', () => {
   assert.match(p, /import zopfli\.gzip/, 'and zopfli is imported only when asked for');
   assert.match(p, /--zopfli needs the zopfli package/, 'with a clear word when it is missing');
   assert.match(p, /"--zopfli", action="store_true"/, 'it is opt-in');
-});
-
-test('round 89: a chunk stores its windows compressed one by one', () => {
-  // The chunk keeps its size, its window count and the bytes it rebuilds to;
-  // only the way it is stored changes, so the file count does not move -- 32
-  // chunks, not 525. A window is still one contiguous range, just shorter.
-  const p = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'portable.py'), 'utf8');
-  assert.match(p, /class WindowPacker:/, 'the packer that compresses each window on its own');
-  assert.match(p, /use = len\(packed\) <= len\(window\) - \(len\(window\) >> 6\)/,
-    'a window is only stored compressed when it saves at least 1.6%');
-  assert.match(p, /streams\[1\]\["wl"\] = packer\.lens/, 'the page gets every window length');
-  assert.match(p, /streams\[1\]\["wz"\] = ""\.join\(packer\.flags\)/,
-    'and which are really compressed -- Theora and Vorbis give nothing back');
-  assert.match(p, /function inWindow\(p\)/, 'the page maps a read to its window');
-  assert.match(p, /async function rebuild\(s, i, stored\)/,
-    'and rebuilds a whole chunk where ranges are not to be trusted');
-
-  const b = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
-  assert.match(b, /const g = url\.indexOf\('#w='\);/, 'the Worker knows the window fragment');
-  assert.match(b, /if \(winPacked\) \{/, 'and only inflates a window that really is compressed');
 });
