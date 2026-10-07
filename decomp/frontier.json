@@ -59,11 +59,11 @@
   "loaderDelivery": {
     "verified": "2026-10-06",
     "nextVa": "0x00a14c00",
-    "changes": "Native-style loader, stable native menu/live-room readiness, downstream audio gate preserving mixer/analyser and unlock behavior. Required engine chunk width4 overlaps four sequential overlap-probe pairs. Matching raw/compressed range query identities preserve HTTP cache entries. Exact ranges avoid full archive prefetch; CDN fallback gate retained.",
-    "payload": "Public Wasm255e9c7fee33, all existing immutable payload URLs, manifests, stream geometry and key unchanged. No native boundary removed; Update ABI101 unchanged.",
-    "verification": "Affected audio/portable/ship/web Node suites81passed.11behavioral mutants killed with assertion failures and byte-identical restoration; clean audio/portable50passed. Cold/warm destination probe silent under loader despite live mixer, then nonzero output. Real CDN-backed title/movement/shooting/audio exercised.",
-    "limits": "No repeatable full-title speedup established for frontend scheduling alone. Extra archive-end prefetch rejected. No FPS, full-game/save/mod equivalence or other-device claim.",
-    "evidence": ".scratch/loading-sync/{audio-proof,production-proof,public-gameplay.json,mutations/receipt.json}"
+    "changes": "Fixed stored-byte download denominator and interval-union accounting drive one bar/Isaac-font percentage snapshot. Streamed prefixes and worker results count actual stored bytes; headers, retries and overlaps do not inflate progress. Whole-chunk fallback starts engine without archive-head wait, with bounded shared background prefetch and lazy compressed-window decode. Exact-range delivery remains streamed. Native readiness and output-audio gate unchanged.",
+    "payload": "Public Wasm255e9c7fee33 and immutable asset URLs/bytes, key and stream geometry unchanged. Added exact stored[] chunk sizes to portable metadata. No native boundary removed; Update ABI101 unchanged.",
+    "verification": "Affected audio/portable/ship/web Node suites113passed after61journaled behavioral mutants killed/restored byte-identically. All25new/updated behavioral tests discriminate; no stranded mutants. Cold/warm browser proof checks percentage/bar consistency, completed byte intervals, early engine start, native title, movement/shooting and silent destination during loading.",
+    "limits": "Percentage measures available payload bytes, not whole-process wire traffic or engine initialization. Game may appear below100%; remaining assets download in background or stream when needed. No repeatable latency/FPS, full-game/save/mod equivalence or other-device claim.",
+    "evidence": ".scratch/loading-progress/{private-proof,cdn-proof-final,mutations/receipt.json,release-integrity.json}"
   },
   "updated": "2026-10-06",
   "updatedAbi": 101
