@@ -5,6 +5,38 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-06 — Native loader, output-audio gate and bounded downloads
+
+The portable page now uses the minimal native-style loading screen and waits for
+a stable native menu or live room rather than the first blank presentation.
+Actual run state takes precedence over a retained menu manager; screen 5 alone
+does not distinguish character selection from gameplay. Enter remains unchanged.
+
+The WebAudio analyser still observes the live mixer. A downstream gain holds
+speaker output at zero until the page reveals the game, including delayed audio
+initialization and context replacement. The raw boot harness has no page gate.
+Cold and warm browser probes observed nonzero mixer energy with exactly zero
+destination energy under the loader, then nonzero destination energy in play.
+
+Required engine chunks start at width four alongside up to four independent
+range-probe pairs. Each pair still checks sequential overlapping responses;
+every pair must pass. Exact-range hosts avoid whole-archive prefetch. The
+untrusted-CDN fallback still waits for its archive head before starting the
+engine. Both raw and compressed worker/direct ranges use matching immutable
+range-specific query keys. No Wasm, asset bytes, key or stream geometry changed.
+
+Verification: the four affected Node suites passed 81 tests. Eleven journaled
+behavioral mutants failed the intended assertions and restored identical source
+bytes; the clean audio/portable suites then passed 50 tests. A real CDN-backed
+browser reached the native title and advancing gameplay, with movement, shooting
+and running audio. README build/usage instructions were condensed and corrected.
+
+Timing scope: repeated network runs did not establish a repeatable full-title
+speedup from the frontend scheduling change alone. Additional archive-end
+prefetch increased requests without a repeatable gain and was rejected.
+Do not claim an FPS gain, new native boundary removal, full-game equivalence or
+other-device performance. Evidence remains under `.scratch/loading-sync/`.
+
 ## 2026-10-05 — Immutable release payload and preserved CDN assets
 
 The portable release uses engine payload commit
