@@ -5,6 +5,123 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-07 — Replace the native-initialization percentage plateau
+
+Preparation retains measured startup progress. Entering native `main` now
+synchronously switches to an indeterminate activity segment instead of leaving
+75% visible. The numeric glyph and `aria-valuenow` are absent while the remaining
+work is unknown. The existing readiness gate restores 100% before revealing the
+native surface. Errors and normal termination stop activity immediately, and
+later download callbacks cannot restart it. Reduced-motion preferences disable
+the animation without inventing a numeric completion value.
+
+The audio/portable/web/ship suites passed 130 tests. All 17 journaled behavioral
+mutants failed assertions and restored identical source bytes, covering the ten
+changed lifecycle tests; the final clean audio/portable run passed 93 tests.
+Fresh-profile and retained-profile browser visits passed on both exact-range
+and generic CDN delivery. They observed changing segment positions, no visible
+numeric percentage during initialization, synchronous 100% at native reveal,
+ordinary Enter, movement, shooting, silent loading output and running audio
+afterward. Manual Play and the reduced-motion browser preference also passed.
+
+Generic loading changes include the previously unpublished native-intro reveal
+and bootstrap-scoped progress work. Each distribution retains its existing
+engine, assets, URLs, keys and stream geometry. No native boundary was removed;
+Update ABI 101 and the 24 open boundaries are unchanged. Next native target is
+still `0x00a14c00`. Evidence: `.scratch/loading-activity/`. These are correctness
+smokes, not speed/FPS, mobile, full-game/mod/save or social-platform acceptance
+claims.
+
+## 2026-10-06 — Make loading completion mean native readiness
+
+The loader now counts four equal startup phases rather than the entire streamed
+game library. Bootstrap delivery contributes its actual received-byte fraction;
+successful WebAssembly instantiation, entry to `beforeMain`, and the existing
+stable native readiness gate complete the other phases. Native readiness paints
+100% synchronously before revealing the canvas. Background archives do not move
+the startup counter. Native initialization can hold it at 75%; this is not a
+time estimate or a synthetic animation.
+
+`portable.progress('boot')` scopes the existing stored-byte interval union to
+eager bootstrap streams. `progress()` retains whole-library diagnostics,
+including inline embedded-byte totals. Inline bootstrap delivery is already
+complete; served builds retain fixed boot-file totals. No engine, payload,
+reader concurrency, native visibility predicate, input or audio gate changed.
+The generated generic page is synchronized locally; no GitHub push occurred.
+
+The audio/portable/web/ship suites passed 130 tests. Seventeen journaled mutants
+failed behavioral assertions and restored source bytes identically, covering
+all ten new or replaced progress tests. The final clean audio/portable run
+passed 93 tests. A real cross-origin sandboxed Chromium frame started without
+a second Play click, displayed the original intro, reached a live room, moved,
+fired and produced running audio at 640x360 and 480x270. Startup was 100% while
+only part of the whole library was downloaded. This is not proof of acceptance
+by any social platform, a speed/FPS improvement, or full-game/device coverage.
+
+The final exact-range and generic CDN whole-chunk browser checks passed both
+fresh-profile and retained-profile visits. Each kept early frames covered,
+reached 100% at the first visible native surface, exercised ordinary Enter,
+movement and shooting, and checked silent output while loading. The initial
+failed smoke used a whole-chunk expectation on the exact-range host; that
+receipt remains separate. Final receipts are `production-verified` and
+`public-verified` under the evidence directory below.
+
+Evidence: `.scratch/startup-progress/` contains source-preserving page candidates,
+mutation receipts and browser observations. Update ABI 101 and the 24 open
+boundaries remain unchanged; next native target remains `0x00a14c00`.
+
+## 2026-10-06 — Reveal the native intro instead of hiding its playback
+
+A whole-browser startup trace showed a loaded intro at about 43 seconds, but the
+HTML loader stayed visible until the title at 197.673 seconds. The byte counter
+was not an engine-readiness counter: the apparent 38% stall included native
+intro playback behind the overlay. Earlier verification pressed Enter while
+the canvas was hidden and therefore masked this defect.
+
+`play.mjs` now recognizes a loaded native cutscene before checking menu or run
+state. Canonical PE evidence binds shell state 3, the loaded flag at +0x20dd0,
+and the nonzero cutscene ID at +0x215d8; the shell pointer and ID identify the
+candidate. Two advancing stable presentations are still required. Initialization
+stays covered and output-muted, while the visible intro uses the original Enter
+handling. No automatic skip, new button, fake progress or engine change is added.
+The generated public page carries the same readiness correction.
+
+`drive_boot.mjs` records first-visible separately from title and playable
+readiness. It requires a visible canvas before intro or menu input and rechecks
+visibility when delivering an intro pulse.
+
+Eight hardware-rendered cold/warm visits compared the retained 6-request,
+4-window reader against 16 requests and 16 windows in A/B/B/A order. The larger
+setting was slower in both repetitions and is not shipped. Retained settings
+showed the intro at 38.165–40.162 seconds cold and 4.550–4.610 seconds warm;
+the first live room followed at 53.283–54.975 and 14.577–14.620 seconds.
+These are polling/input/screenshot-inclusive observations, not a before/after
+engine speedup. Failed harness runs are retained separately and excluded.
+
+Verification: the audio/portable/web/ship Node suites passed 123 tests. All 23
+journaled cutscene mutants failed at intended behavioral assertions and restored
+byte-identically; all 13 new or changed cutscene/audio tests discriminate. The
+final clean audio suite passed 31 tests. Evidence is under
+`.scratch/loading-regression/`, including `comparison.json` and
+`cutscene-mutation-final/receipt.json`. Immutable engine/assets and Update ABI 101
+remain unchanged; no native boundary is removed. No FPS, full-game/mod/save,
+physical-device or whole-process network-byte claim is made.
+
+The final production cold/warm smoke passed: first-visible 40.171/4.147 seconds,
+title 44.146/5.911 seconds and playable 55.140/14.165 seconds. The CDN-backed
+generic page also passed both visits in local preview. The permanent
+`drive_boot.mjs` passed against an isolated unpacked distribution and recorded
+visible-only input. A manual-Play browser session displayed the original intro,
+reached a live room, moved x=569.553 to 354.805, fired, paused and resumed with
+running nonzero audio and no page errors. These frontend changes are deployed
+privately; generic source and generated page remain local, without a GitHub push.
+
+Verify with the four Node suites above and
+`node scripts/recomp/web/drive_boot.mjs URL OUT visits=2 cpu=1 gl=hw profile=0 timeout=600`
+against an unpacked distribution. Portable-page cold/warm receipts, screenshots
+and exact deployment metadata are retained under
+`.scratch/loading-regression/{production-verified,public-verified,driver-proof}`.
+
 ## 2026-10-06 — Byte-based percentage and background archive startup
 
 The loading bar and Team Meat bitmap-font percentage now share one rendered

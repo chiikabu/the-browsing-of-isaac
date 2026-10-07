@@ -16,9 +16,10 @@ The page is hosted on GitHub Pages; its separate payload is served by jsDelivr.
 Use a current browser with WebAssembly JSPI, WebGL2 and WebAudio support;
 Chromium is the browser used by the verification tools.
 
-The page starts automatically. Its loading screen stays up until a native menu
-or playable room is ready; audio output stays silent until then. Enter still
-skips the original intro. Add `?autoplay=0` to start with a Play button instead.
+The page starts automatically. Its loading screen stays up until a loaded native
+cutscene, menu or playable room is ready; audio output stays silent until then.
+The original intro is visible, and Enter skips it normally. Add `?autoplay=0`
+to start with a Play button instead.
 
 | Key | Action |
 | --- | --- |
@@ -31,10 +32,14 @@ skips the original intro. Add `?autoplay=0` to start with a Play button instead.
 Click the game if it does not have keyboard focus. Browser audio policies may
 require a click or keypress before sound can play.
 
-The loading bar and Isaac-font percentage count received payload bytes against
-a fixed total, including cached downloads. They do not estimate engine
-initialization time. The game can appear below 100%: remaining assets continue
-downloading in the background or stream when needed.
+The loading bar and Isaac-font percentage measure bootstrap delivery, WebAssembly
+instantiation and filesystem/CRT preparation. Each preparation phase contributes
+25%; only delivery has byte-level progress. Native initialization has no measured
+remainder, so the bar switches to a moving activity segment instead of freezing
+at 75%. The percentage is hidden during this phase; reduced-motion settings keep
+the segment still. Startup reaches 100% when the loaded intro, menu or live room
+is ready. Background downloads do not affect startup completion. Neither the
+percentage nor the activity segment estimates time remaining.
 
 Engine downloads and independent range checks overlap with bounded concurrency.
 Exact-range hosts stream archive windows; unreliable range hosts download whole
