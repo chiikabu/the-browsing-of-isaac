@@ -443,6 +443,7 @@ PROVIDER_JS = r"""
     return u.href;
   }
   var downloads = [], byURL = new Map(), received = 0, total = 0, chunks = 0;
+  var bootReceived = 0, bootTotal = 0;
   var loaded = Object.create(null), loadedN = 0;
   for (var s = 0; s < S.length; s++) {
     downloads[s] = [];
@@ -450,12 +451,18 @@ PROVIDER_JS = r"""
       var d = { s: s, i: i, size: chunkLen(s, i), received: 0, spans: [] };
       downloads[s][i] = d;
       total += d.size; chunks++;
+      if (S[s].gz) bootTotal += d.size;
       if (P.base) byURL.set(canonical(name(s, i)), d);
       else { d.received = d.size; loaded[s + ':' + i] = 1; loadedN++; }
     }
   }
   if (!P.base) received = total;
-  function progress() { return { received: received, total: total }; }
+  function progress(scope) {
+    if (!P.base && scope === 'boot') return { received: 0, total: 0 };
+    return scope === 'boot'
+      ? { received: bootReceived, total: bootTotal }
+      : { received: received, total: total };
+  }
   function note(d) {
     var k = d.s + ':' + d.i;
     if (loaded[k] || d.received !== d.size) return;
@@ -478,6 +485,7 @@ PROVIDER_JS = r"""
     spans.splice(a, b - a, [from, to]);
     if (added) {
       d.received += added; received += added;
+      if (S[d.s].gz) bootReceived += added;
       if (P.onProgress) { try { P.onProgress(progress()); } catch (e) { /* decoration */ } }
     }
     if (complete) note(d);

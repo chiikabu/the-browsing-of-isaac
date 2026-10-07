@@ -52,13 +52,14 @@ const receipt = {
     logicalCpus: cpus().length, totalMemoryBytes: totalmem() },
   boundaries: {
     start: 'Host monotonic timestamp immediately before page.goto; browser launch, save reset and manifest/control requests are excluded.',
+    firstVisible: 'First poll observing the native canvas visible without the HTML loading overlay, whether showing the intro or a menu. Recorded before any intro input.',
     titleVisible: 'First poll observing native MenuManager screen 1, a visible canvas without the HTML loading overlay, and at least two further presentations on that screen. Screenshot is taken before any title-menu input.',
     firstPlayable: 'First poll observing a live player and valid room, closed debug console, no transition, and the same stage/type/room index/player advancing at least two GameFrames and two presentations.',
     diagnostics: 'First poll observing isaacFrame >= 1/300/600; recorded frame and observation time may overshoot the threshold. These are not readiness metrics.',
   },
   limits: [
     'Polling observations are upper bounds on readiness, not exact native event or GPU-completion timestamps. Polls normally pause 50 ms; browser work, input and screenshots can delay them.',
-    'Title evidence capture and ordinary Enter/Space input are included in navigation-to-playable time. Intro skips use the existing host input queue for one presentation, only after the native intro-start log and before any MenuManager screen exists; menu holds start only after the title screenshot. No guest memory or production content is changed.',
+    'Title evidence capture and ordinary Enter/Space input are included in navigation-to-playable time. Intro skips use the existing host input queue for one presentation, only while the canvas is visible, after the native intro-start log and before any MenuManager screen exists; menu holds start only after the title screenshot. No guest memory or production content is changed.',
     'An intro pulse enqueues keyup at the next host presentation; delivery still waits for the native input poll. Saved pulse frame/menu/page-time observations do not imply an exact simulation tick or GPU-completion boundary.',
     'After title capture, live-player state gates menu input and readiness; menu 5 can still be character selection and is not proof that a run has started.',
     'Cold means a fresh browser profile, not a cold OS/server disk cache. Warm means retained Chromium disk HTTP/code cache and local boot trail, not proven Wasm code-cache reuse; each visit starts a new browser process.',
@@ -85,7 +86,7 @@ async function visit(number, target) {
       browserProcess: 'new per visit', saveDatabase: 'isaac-saves', savesReset: false,
       httpAndCodeCache: number === 1 && fresh ? 'fresh; HTTP cache cleared after control navigation' : 'retained; actual cache reuse is not guaranteed',
       bootTrailBefore: null, bootTrailAfter: null },
-    navigation: null, titleVisible: null, firstPlayable: null, hidden: null,
+    navigation: null, firstVisible: null, titleVisible: null, firstPlayable: null, hidden: null,
     introStarted: null, introInputStopped: null, titleFirstObserved: null,
     diagnostics: { frame1: null, frame300: null, frame600: null },
     browser: null, renderer: null, module: null, lastState: null, lazyAtPlayable: null, lazyFinal: null,
@@ -162,6 +163,7 @@ async function visit(number, target) {
     // there can be consumed by the title before the next driver poll.
     if (s.menu >= 0 && !r.introInputStopped) r.introInputStopped = point(s);
     if (s.menu === 1 && !r.titleFirstObserved) r.titleFirstObserved = point(s);
+    if (s.canvasVisible && !r.firstVisible) r.firstVisible = point(s);
     if (s.errorPanel) fail(r.errors, `page error panel: ${s.errorPanel}`);
     if (s.done !== null) fail(r.errors, `engine ended: ${JSON.stringify(s.done)}`);
     r.lastState = point(s);
@@ -208,11 +210,15 @@ async function visit(number, target) {
         input.pulse = await within(page.evaluate(({ key, menuPtr, menuOffset }) => {
           const observe = () => {
             const guest = window.isaacGuest, manager = guest && guest.u32(menuPtr);
+            const canvas = document.querySelector('canvas'), overlay = document.getElementById('overlay');
+            const box = canvas?.getBoundingClientRect(), style = canvas ? getComputedStyle(canvas) : null;
             return { observedAtPageMs: performance.now(), observedFrame: window.isaacFrame || 0,
-              menu: manager ? guest.u32(manager + menuOffset) | 0 : -1 };
+              menu: manager ? guest.u32(manager + menuOffset) | 0 : -1,
+              canvasVisible: !!(box?.width && box?.height && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0' && !document.hidden && (!overlay || overlay.hidden)) };
           };
           const before = observe();
           // Check at delivery time, not just before the CDP round trip.
+          if (!before.canvasVisible) return { sent: false, reason: 'canvas not visible', before };
           if (before.menu !== -1 || !(window.isaacLog || []).some((line) => /\bplaying cutscene 1 \(Intro\)/i.test(line)))
             return { sent: false, reason: 'intro no longer active', before };
           const descriptor = Object.getOwnPropertyDescriptor(window, 'isaacFrame');
@@ -422,7 +428,7 @@ async function visit(number, target) {
       } else titleCandidate = null;
       if (s.htmlPlayVisible && !clickedPlay) {
         await within(page.locator('#play').click(), 'clicking ordinary HTML Play button'); clickedPlay = true;
-      } else if (s.menu === -1 && r.introStarted && !r.introInputStopped && !r.titleFirstObserved && s.f > 0 && performance.now() >= nextInputAt) {
+      } else if (s.canvasVisible && s.menu === -1 && r.introStarted && !r.introInputStopped && !r.titleFirstObserved && s.f > 0 && performance.now() >= nextInputAt) {
         await hold(introInputs++ % 2 ? 'Space' : 'Enter', s, true);
         nextInputAt = performance.now() + 500;
       }
@@ -450,7 +456,7 @@ async function visit(number, target) {
           break;
         }
       } else readyRoom = null;
-      if (!p.live && performance.now() >= nextInputAt) {
+      if (s.canvasVisible && !p.live && performance.now() >= nextInputAt) {
         await hold(menuInputs++ % 2 ? 'Space' : 'Enter', s);
         nextInputAt = performance.now() + 500;
       }
@@ -512,7 +518,7 @@ async function visit(number, target) {
     r.finishedAt = new Date().toISOString();
     writeFileSync(join(OUT, 'boot.json'), JSON.stringify(receipt, null, 2) + '\n');
   }
-  console.log(`[boot] visit ${number} ${r.cache.label} profile=${Number(profilingEnabled)} ${r.status}: navigation-to-title ${r.titleVisible?.sinceNavigationCallMs ?? 'unreached'} ms; navigation-to-playable ${r.firstPlayable?.sinceNavigationCallMs ?? 'unreached'} ms; cpu=${cpu} gl=${gl} module=${r.module?.sha256 ?? 'unknown'} browser=${r.browser?.product ?? 'unknown'} renderer=${r.renderer?.renderer ?? 'unknown'}${r.errors.length ? `; ${r.errors[0]}` : ''}`);
+  console.log(`[boot] visit ${number} ${r.cache.label} profile=${Number(profilingEnabled)} ${r.status}: navigation-to-first-visible ${r.firstVisible?.sinceNavigationCallMs ?? 'unreached'} ms; navigation-to-title ${r.titleVisible?.sinceNavigationCallMs ?? 'unreached'} ms; navigation-to-playable ${r.firstPlayable?.sinceNavigationCallMs ?? 'unreached'} ms; cpu=${cpu} gl=${gl} module=${r.module?.sha256 ?? 'unknown'} browser=${r.browser?.product ?? 'unknown'} renderer=${r.renderer?.renderer ?? 'unknown'}${r.errors.length ? `; ${r.errors[0]}` : ''}`);
   if (r.status !== 'complete') throw new Error(`visit ${number}: ${r.errors[0] || 'incomplete'}`);
 }
 

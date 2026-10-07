@@ -1,14 +1,14 @@
 // play.mjs -- the shipping page. This script draws the native-style loader,
 // Play button, canvas chrome, saves menu and error panel around boot_web.mjs.
-// Early presentations stay covered until a stable native menu or live room is
-// ready. The page hands the pipeline hooks before importing it:
+// Early presentations stay covered until a loaded native cutscene, stable menu or
+// live room is ready. The page hands the pipeline hooks before importing it:
 //   url(u)            every synchronous fetch the RAM-FS makes (the windowed
 //                     archive reads during play) is rewritten: the page's own
 //                     directory as the root, ?v=<sha256 prefix> from dist.json
 //                     so the server may answer `immutable`
 //   fetchBytes(u)     the boot stages (memory image, index, the six eagerly
-//                     seeded archives, the Lua) fetched asynchronously with a
-//                     byte-level progress bar
+//                     seeded archives, the Lua) fetched asynchronously with
+//                     byte counts for the bootstrap progress phase
 //   instantiateWasm   the module streamed through a counting ReadableStream
 //   onLog(line)       the stage markers and the error triggers
 //   beforeMain(m)     awaited right before main: the Play click (a user gesture,
@@ -45,11 +45,12 @@ const canvas = $('canvas'), overlay = $('overlay'), playBtn = $('play'), statusE
 // saves button; the page is otherwise the game alone, and a click anywhere
 // gives the canvas the keyboard
 // Stage names, byte counts and machine details are opt-in instruments. The
-// loader stays above early blank frames until the native menu or room is ready.
+// loader covers blank frames until a native cutscene, menu or room is ready.
 const STATS = params.get('stats') === '1';
 if (STATS) { $('fps').hidden = false; $('stages').hidden = false; overlay.classList.add('stats'); }
-let mainStarted = false, gameReady = false, audioOutput = null;
+let moduleReady = false, bootReady = false, mainStarted = false, gameReady = false, audioOutput = null;
 overlay.setAttribute('aria-busy', 'true');
+$('bar').setAttribute('aria-label', 'Startup progress');
 if (params.get('saves') === '1') $('saves-btn').hidden = false;
 document.addEventListener('pointerdown', () => { if (!$('saves').open) canvas.focus(); });
 // F toggles fullscreen on the stage (the keydown is the gesture requestFullscreen
@@ -105,28 +106,43 @@ function render() {
         : s.total ? `${mb(s.done ? s.total : s.received)} / ${mb(s.total)} MB` : (s.received ? `${mb(s.received)} MB` : '');
       n.className = 'name' + (s.done ? ' done' : s.received ? ' active' : '');
     }
-    // Chunked builds count stored payload bytes, including background assets.
-    // Served builds use their fixed boot-file totals and actual response bytes.
-    const download = portable && typeof portable.progress === 'function' ? portable.progress() : null;
-    let total = 0, received = 0;
-    if (download) { total = download.total; received = download.received; }
-    else for (const name of ['module', 'image', 'archives']) {
-      const s = stages[name];
-      total += s.total;
-      received += Math.min(s.received, s.total);
-    }
-    const pct = total ? Math.max(0, Math.min(100, Math.floor(100 * received / total))) : download ? 100 : 0;
-    const text = `${pct}%`;
-    $('bar-fill').style.width = text;
-    $('bar').setAttribute('aria-valuenow', String(pct));
-    $('bar').setAttribute('aria-valuetext', text);
-    $('percentage').textContent = text;
-    // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
-    $('percentage').style.backgroundPosition = `${-pct * 50}px 0px`;
+    renderProgress();
   });
 }
-// Engine preparation does not change the download percentage. Technical details
-// are visible only with ?stats=1.
+function renderProgress() {
+  const bar = $('bar'), fill = $('bar-fill'), percentage = $('percentage');
+  const indeterminate = mainStarted && !gameReady && !errorShown && !window.isaacDone;
+  bar.classList.toggle('indeterminate', indeterminate);
+  percentage.hidden = indeterminate;
+  if (indeterminate) {
+    fill.style.width = '';
+    bar.removeAttribute('aria-valuenow');
+    bar.setAttribute('aria-valuetext', 'Initializing game');
+    return;
+  }
+  // Measured preparation covers bootstrap delivery, WebAssembly instantiation
+  // and filesystem/CRT setup. Native initialization has no measurable remainder;
+  // show activity until the existing stable-readiness gate completes startup.
+  // Background archives do not count toward preparation.
+  const download = portable && typeof portable.progress === 'function' ? portable.progress('boot') : null;
+  let total = 0, received = 0;
+  if (download) { total = download.total; received = download.received; }
+  else for (const name of ['module', 'image', 'archives']) {
+    const s = stages[name];
+    total += s.total;
+    received += Math.min(s.received, s.total);
+  }
+  const delivered = total ? Math.max(0, Math.min(1, received / total)) : download ? 1 : 0;
+  const pct = gameReady ? 100 : Math.floor(25 * (delivered + Number(moduleReady) + Number(bootReady)));
+  const text = `${pct}%`;
+  fill.style.width = text;
+  bar.setAttribute('aria-valuenow', String(pct));
+  bar.setAttribute('aria-valuetext', `${text} startup complete`);
+  percentage.textContent = text;
+  // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
+  percentage.style.backgroundPosition = `${-pct * 50}px 0px`;
+}
+// Technical preparation details are visible only with ?stats=1.
 function setStatus(text, detail) {
   statusEl.textContent = STATS ? (detail || text)
     : gameReady || overlay.classList.contains('ready-to-play') ? '' : 'Loading...';
@@ -291,6 +307,7 @@ hooks.instantiateWasm = (info, receive) => {
       const bytes = await portable.bytesFor('boot.wasm', 0, 0);
       st.received = bytes.length; st.done = true; render();
       const { instance, module } = await WebAssembly.instantiate(bytes, info);
+      moduleReady = true; render();
       setStatus('loading');
       receive(instance, module);
       return;
@@ -312,7 +329,7 @@ hooks.instantiateWasm = (info, receive) => {
       }
     })().catch(() => {});
     const { instance, module } = await WebAssembly.instantiateStreaming(res, info);
-    st.done = true; render();
+    moduleReady = true; st.done = true; render();
     setStatus('loading');
     receive(instance, module);
   })().catch((e) => showError('The module failed to load', e.message));
@@ -320,6 +337,7 @@ hooks.instantiateWasm = (info, receive) => {
 };
 let moduleRef = null;
 hooks.beforeMain = (m) => new Promise((resolve) => {
+  bootReady = true;
   moduleRef = m;
   stages.boot.done = true; render();
   const start = () => {
@@ -334,6 +352,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     streamingEl.hidden = !STATS;
     updateStreaming();
     setStatus('Loading...');
+    renderProgress();
     resolve();
     // Round 46: a frame-rate readout in the status line once the engine runs --
     // the host's frame counter sampled each second, the median of the last
@@ -410,6 +429,8 @@ let errorShown = false;
 function showError(title, text, ended = false) {
   if (errorShown && !ended) return;
   errorShown = true;
+  renderProgress();
+  overlay.setAttribute('aria-busy', 'false');
   const panel = $('error');
   panel.className = ended ? 'ended' : '';
   $('error-title').textContent = title;
@@ -461,12 +482,25 @@ const watchScreen = () => setInterval(() => editMenu.setScreen(readMenuId()), 20
 function updateStreaming() {
   streamingEl.textContent = `requested ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
 }
-// A present alone can still be white. Read the native menu or validate a live
-// player and room, then require stable state across advancing presentations.
+// A present alone can still be white. Read a loaded native cutscene or menu, or
+// validate a live player and room, then require advancing stable presentations.
 function readReadyState() {
   const G = window.isaacGuest;
   if (!G) return null;
   try {
+    // Offsets are bound to tools/isaac-ng.unpacked.exe, SHA-256
+    // 5129DF723E645DAAEA59514394195F3EA1DCE1671BB0433D724648A845017200.
+    // Update 0x00954cd0 passes [0x00c7169c]+0x20dd0 at 0x00954d90 to
+    // exact-ZHL Cutscene::Show (0x0095e7c0), then sets shell+8=3 at 0x00954da6.
+    // Show writes cutscene+0x808=id at 0x0095e82f, but sets cutscene+0=1 only
+    // after entryLoad at 0x0095e937. Renderer 0x0095573d tests that loaded flag.
+    // ID 0 has no visual entry. The loaded ID at shell+0x215d8 anchors stability.
+    const shell = G.u32(0x00c7169c);
+    if (shell && G.u32(shell + 8) === 3) {
+      if (G.u32(shell + 0x20dd0) !== 1) return null;
+      const cutsceneId = G.u32(shell + 0x215d8);
+      return cutsceneId !== 0 ? { key: `cutscene:${shell}:${cutsceneId}`, run: false } : null;
+    }
     const mgr = G.u32(MENU_MGR_PTR), screen = mgr ? (G.u32(mgr + MENU_SCREEN_OFF) | 0) : -1;
     const game = G.u32(0x00c71678);
     const transitioning = !!game && (G.u32(game + 0x1b83c) !== 0 || G.u32(game + 0x68d78) !== 0);
@@ -503,12 +537,12 @@ function checkReady() {
   if (f < readyCandidate.frame + 2) return;
   gameReady = true;
   readyCandidate = null;
+  renderProgress();
   overlay.hidden = true;
   overlay.classList.remove('preparing');
   overlay.setAttribute('aria-busy', 'false');
   if (audioOutput) audioOutput.gain.value = 1;
   setStatus('running');
-  render();
   canvas.focus();
 }
 
