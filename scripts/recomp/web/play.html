@@ -21,23 +21,31 @@
   #stage:fullscreen { display: flex; align-items: center; justify-content: center; background: #000; }
   #canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; image-rendering: pixelated; image-rendering: crisp-edges; }
   #stage:fullscreen #canvas { width: min(100vw, calc(100vh * 16 / 9)); height: min(100vh, calc(100vw * 9 / 16)); }
-  /* The loader: black, one segmented bar and one line in caps, gone at the first
-     frame. The bar is drawn in pips rather than a smooth fill and has square
-     corners, because nothing in this game is rounded. */
-  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: #000; }
-  #bar { width: min(200px, 44%); height: 2px; background: #2a241e; }
-  #bar-fill { width: 0; height: 100%; background: var(--load); transition: width .12s linear; }
-  #overlay .note { color: var(--load-dim); font: 10px/1.6 ui-monospace, "Courier New", monospace;
-                   letter-spacing: .24em; text-transform: uppercase; max-width: 40em; text-align: center; }
+  /* Keep the loader above early blank presentations until a native menu or
+     playable room has advanced. Engine preparation has no known percentage. */
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #000; }
+  #loader-isaac { display: block; width: clamp(40px, 12vw, 64px); height: auto; image-rendering: pixelated; }
+  #bar { width: 104px; height: 4px; overflow: hidden; background: #252525; }
+  #bar-fill { width: 0; height: 100%; background: #e9dfcf; }
+  #overlay.preparing #bar-fill { width: 25% !important; animation: loader-pulse 1s steps(2, jump-none) infinite alternate; }
+  #overlay.ready-to-play #bar { display: none; }
+  @keyframes loader-pulse { from { opacity: .35; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { #overlay.preparing #bar-fill { animation: none; } }
+  #overlay .note { color: #a6a099; font: 12px/1.4 system-ui, sans-serif; max-width: 40em; text-align: center; }
+  #overlay #status { width: 118px; height: 17px; font-size: 0; background: center / 118px 17px no-repeat url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHYAAAARCAYAAAAIVljzAAAD7UlEQVR42tVZ0XGjMBB9vsl/1EHoAK4CkwpiVxCnAnMVhFRgUsGRCg5XEFxBoALjz/zhCnIft8zs7KyERGLHpxnPYJDEat++p9Uye9+/xQBqABWAB0xr1wAWACJ2r6F5jxPmu6fxLS6vXQMo6boC8GLpkwJI6H9Hvjicy8grAAUAQ8A8TFhkRj+jPO9p/qeAOX8DWJEjbhXAVyJ4GotzASCmdaXKs5oc/gLglfVZOeYDrXVB10Mw8/U9OvxR05jjqYGdve/fPvj/gLExRW7i0bcB8NOj35wWPzTDnLCmIIElgFYAtuL+h8c7V4yBw1yRw/mPAHL2vwKwpOs/DHRb4/1P1n4ojvVlai1A7WnBBV3zlgDYBEgcH8eZYmuGHHavOHHMyRUFHp+rCPDhMHYjQK0ZoxPmE3MOKf4xcVwpDOxJyp4A/KLFZALgDMDNiMRF4l4qmLUQNsggKgW4S1KhmVCClO4tiZmdwmJbIKaKvN6IwCtpG9nSvtqycd13AGs8JXihOIInOkcAzwQUZ0M+IomycaB3AsSOBRFnZmEJoMiDdTLQ7kd80ZNdmbinqUtLwfTwHcD67JcLRc62lr5H0d+2/9xZHB+NsGV4x5KBYzyCRM7TOZQpdthQKX4rz5EcnUKKUyWyXe0gFCH2CJbOI9CkHcUn/NAJ9nZCaq/p+sayhycj7P8vgDViEYdPjNdAKpnDDHNqCDihbSdUKxP2loqdPVMqc2nAXk0YIzPhz7a1kMlOzLtg58o0gMFTWDvYsaXg4ufVtVi7LeNuWZacCBVoRBBdFLChyZYrE94r+2iuyPTLF9hSj4DPgZ0Ta1M2by4CrnKs1wjWp+c+y06R4kqw9y5wT+48M9UxJibiDLwSIIa2WskNchE4kSLDUrlSzwQ0vjRgCyVzXDuitxCgHiwg9zTXwBSe5c4dDB2qVSH7nBk58gwAPluCpHQEe07rymlsqbBd2nCHf2XNV6pexcqpIej5lYUdhjEiFUAUQtaGSk1GC+zFscNYZHauHEFawSBuw06RU62EJ48bMY2JxJk5ofWUNHdjUZJMCZRS2T5WbGxN955YHmEUX+8ssm5EnTz4uQasS0oi9tFAlhSjkaNPLfbKXDxrHQwaqlqNxzGJ27Cx2GRE0T8iJekVAFqyNWfvaC2ynbNtosLXHL8mPZ9aUjySY+oA+b517J2Zx14+ZKudI3ASwVafgotPQsSDKnP0KTzeVY9sb7WSQAY/n73v34ZPVp3DaRH9hkL/s9D3odidUp9GFNm1s+6G2CLng8K4mgVGTGMMe1dl+XZ7R4uOlASpYWOP7LNgKWQytM2ZCqQKIB2rc29PlTz9BZeOJyiq4il5AAAAAElFTkSuQmCC"); image-rendering: pixelated; max-width: none; }
+  #overlay #status:empty { display: none; }
+  #overlay.stats #status { width: auto; height: auto; font-size: 12px; background: none; }
   #stages { display: grid; grid-template-columns: max-content minmax(160px, 28vw) max-content; gap: 6px 12px; align-items: center; font-variant-numeric: tabular-nums; }
   #stages .name { text-align: right; color: var(--dim); }
   #stages .name.done { color: var(--ok); }
   #stages .name.active { color: var(--ink); }
   #stages progress { width: 100%; height: 10px; accent-color: var(--accent); }
   #stages .bytes { font-size: 12px; color: var(--dim); min-width: 11em; text-align: left; }
-  #play { font: 12px/1 ui-monospace, "Courier New", monospace; letter-spacing: .3em; padding: 9px 26px; margin-top: 2px;
-           background: transparent; color: var(--load); border: 2px solid #3b322a; border-radius: 0; }
-  #play:hover { background: transparent; color: #fff; border-color: var(--load); }
+  #play { display: flex; align-items: center; justify-content: center; min-width: 104px; min-height: 44px; padding: 10px 24px;
+           background: transparent; color: #e9dfcf; border: 2px solid #b0a89c; border-radius: 0; }
+  #play img { display: block; width: 51px; height: 18px; image-rendering: pixelated; }
+  #play:hover { background: #181818; border-color: #e9dfcf; }
+  #play:focus-visible { outline: 2px solid #e9dfcf; outline-offset: 4px; }
   #streaming { font-variant-numeric: tabular-nums; }
   /* opt-in chrome: ?stats=1 shows the live status line, ?saves=1 the saves button */
   #fps { position: fixed; left: 6px; top: 4px; z-index: 3; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; text-shadow: 0 0 3px #000; }
@@ -62,7 +70,8 @@
 <main>
   <div id="stage">
     <canvas id="canvas" width="960" height="540" tabindex="0"></canvas>
-    <div id="overlay">
+    <div id="overlay" role="status" aria-live="polite" aria-busy="true">
+      <img id="loader-isaac" width="32" height="32" alt="" aria-hidden="true" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAADRklEQVR4nK1XW08TQRT+zoaYtF4w8VKqBTXx8mhb8AXiI0lVLhF/iK/AH5BH9YcgAilF3oTCC3S3r2qMRNOWUohCUhIfumb2Mp2dnd1tKyc52ZnZM+f7zjkzp1tClxIDzLD3ZwB144/OC7hXItQt8JfFj573pkTr0avprohQp+BfF5eRSGdgmiaIvNvYmsjjwNA9RMJIUBT4tw8rNrBjbEY4abVaNikA9bKOhzPToSQoFHxpBYnHWbD4NCIePdvU8uTeduPmwXXK7Fk2HsxMBZKgMPBkmoHbRiQQUD1dYSM25UUxTdTLBu6/nFSSoCACzf2KY9HFrWJnQSBjZ4ksMlfupZQENBX4j+W8DWypQ0I5h2+NNM1WIqtsGsF6soyKGMoMxNzof9acZFJUwtzQeQbkJTErF+/e9mVBk8H3V/LeKO2JF9xXFuc9aY56M+Rm5PvSqi8LmhyLfccJR4aBeCrh0WNDb4NzXkIJADT0EuKpAcQHmSYRH0risGzvk/uHkoCdecLgRA5N07TUldREjhXUVuZM0wRw0xoPTT7z7bsz+TyQQJ+PERGO9RIihWdCeMp9WZCGUVJeqD55oVou4VY6a43jIVcwnrzhmTerh5yMeh+hVo4ILAaYTI/z69ZTpWa10dO7xmqBj8PPAICqUUIlv+5fX/vEL4NbZ7nelTX/vl+rhcDoSZUFy1F+HcWRMX5wxnaL6M84pRm4rnTWrDWs3b/1PRRHRvmRGN0tIvUip+yEfUpPAGplHfTkKZ/3Z7NtoIOG11j6XbqaGbb6AWvCdu31IBj4SuAyzM7NYmunaDlht84jvEm1QT29ijdQwubONkbm55TRKwmIhm+nxvF5Z9uK41TXFcCkJPPHucab21t4Pz0eCO5yDxTxxL5e3sD8BeCyUAqVnJT28OYv4d2UDRwGHklAJsHEWFhAMj3MgxZ7T8XYQ2Z29vy+CXv9Iu7my1jrFPygsIFm/SgSlNkwW3FvmFCn4G7tT0vB7ZSV5VKmbZfIhR9AJoF9QCXxm9c8ZGRhoMymk0x1XAJZwm5B1A3pSWLyD079yNKTwgZfY2N3Xbb/7wycBdSvk2jP5RZAcsRqHCTiu3P7cypKp/2gm7/o/wAfY4a3PGBAVAAAAABJRU5ErkJggg==">
       <div id="bar"><div id="bar-fill"></div></div>
       <div id="stages" hidden>
         <span class="name" id="n-module">module</span><progress id="p-module" max="1" value="0"></progress><span class="bytes" id="b-module"></span>
@@ -71,8 +80,8 @@
         <span class="name" id="n-chunks" hidden>chunks</span><progress id="p-chunks" max="1" value="0" hidden></progress><span class="bytes" id="b-chunks" hidden></span>
         <span class="name" id="n-boot">host boot</span><progress id="p-boot" max="1" value="0"></progress><span class="bytes" id="b-boot"></span>
       </div>
-      <div id="status" class="note">loading&hellip;</div>
-      <button id="play" type="button" hidden>PLAY</button>
+      <div id="status" class="note">Loading...</div>
+      <button id="play" type="button" aria-label="Play" hidden><img width="51" height="18" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAASCAYAAAD2Uea5AAACB0lEQVR42t1XwXHCQAxce/jjVBBSAe4glwogFcT8MxNTAaSC0AF2BzCTf0wFmApsnvxMBclHNyOEDsfG5BG97mTfnVZaSXfeodjiH8g9gKhHkxGAMYABzSsAOYASwArAUdlgCCCj75MrjXmh83ZMtyR7FgDWNWsTAPAOxXYGYF5zWEL/7JnuC4Ah4HdXAFkCiMgxT0z/Lc7XHPYBILYT71BsCxaRS1LRwlQ5zGsJ5JFAWAkYCyxIF6ATIADgE5Ws5ES3hdDbgxIyQDOqqfQtPZiEbDwnB1qJAMwYtWKxNpJgQuLnFMADbSBBjTtK2lhhhGHjvYiMBbhUnLAAkPqKsX02Tglg5fAej1pTiRSdBLdW8jlS8nmq0UwzNhD/VIoRYUMgI0eearp3JRJqHvUcuTGikBvF0FUHFJNULQmIyykTJSpnFU4Ds6op0WkHYIzY01bKgGiu9bWcjTOtVPuid7hKckIGTDoA8iboVAqHugpMbV72GOqQecp6a9fxtUPraXOFgmlNXhptc595h3tqcwMg+GVzNm0j4yt8NDe8EJYKfWM6M2dGt2nCJzTrIqEDRgcjQHyKyBgR/Uys3bQFk3UAxtTQ61UYvrtQrQz1l0ZiaXZkm1V/8P6IFd2qpglXDuBnkbFVJfnFc4B71yilVUZkwCrjkPbXisuR7lixw9hneoQFruL0A42dhcErZ9jvAAAAAElFTkSuQmCC"></button>
       <div id="streaming" class="note" hidden></div>
     </div>
     <div id="error" hidden>

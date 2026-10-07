@@ -4,10 +4,9 @@
 // the memory image, the bundle under instance/, the index the page registers,
 // precompressed siblings, a manifest) and prints a size table; serve_dist.mjs
 // serves it with the contract the page depends on (byte slices, base64 text,
-// content negotiation, Range, immutable caching by hash); play.html/play.mjs
-// wrap the unchanged pipeline (boot_web.mjs) in a loading screen, a Play
-// button and a saves menu. These pins hold all three on a synthetic tree (no
-// game bytes near a test) and on the source of the page.
+// content negotiation, Range, immutable caching by hash). These checks use a
+// synthetic tree (no game bytes near a test); recomp-audio.test.js exercises
+// the page's loading and audio lifecycle.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -520,102 +519,6 @@ test('serve_dist.mjs: types, slices, base64, negotiation, Range, caching by hash
   }
 });
 
-// --- the page --------------------------------------------------------------------
-test('play.html + play.mjs wrap the pipeline: the hooks, the Play click unlocks audio, the progress accounting, the saves menu, the defaults', () => {
-  const html = rd('scripts', 'recomp', 'web', 'play.html');
-  const page = rd('scripts', 'recomp', 'web', 'play.mjs');
-  const pipe = rd('scripts', 'recomp', 'web', 'boot_web.mjs');
-  // the elements the pipeline needs (#canvas is where the host creates the WebGL2 context; #log is its text sink)
-  for (const s of ['<canvas id="canvas" width="960" height="540"', '<pre id="log">', 'id="play"', 'id="overlay"', 'id="error"', '<dialog id="saves">',
-    'image-rendering: pixelated', 'aspect-ratio: 16 / 9', 'id="bar-fill"', '<div id="fps" hidden></div>', 'id="saves-btn" type="button" hidden',
-    '<script type="module" src="./play.mjs"></script>'])
-    assert.ok(html.includes(s), `play.html: ${s}`);
-  assert.ok(!html.includes('<header') && !html.includes('<footer') && !html.includes('fullscreen-btn'),
-    'round 51: the page is the game alone -- no header, no key hints, no fullscreen button; ?stats=1 and ?saves=1 opt in');
-  // the hooks: set before the pipeline is imported, read by it
-  assert.ok(page.includes('window.isaacPageHooks = hooks;'), 'the page publishes its hooks');
-  assert.ok(page.indexOf('window.isaacPageHooks = hooks;') < page.indexOf("import('./boot_web.mjs')"), 'before importing the pipeline');
-  assert.ok(pipe.includes("const hooks = (typeof window !== 'undefined' && window.isaacPageHooks) || {};"), 'the pipeline reads them');
-  for (const s of ['if (hooks.url) url = hooks.url(url);', 'const fetchBytes = hooks.fetchBytes || (async (url) => fetchSync(url));',
-    'instantiateWasm: hooks.instantiateWasm,', 'if (hooks.onLog) hooks.onLog(String(line));', 'if (hooks.beforeMain) await hooks.beforeMain(m);',
-    "const blob = await fetchBytes('/isaac.segs.bin');", "await stageOk('seed packed archives', async () => {", "await stageOk('lua scripts into MEMFS', async () => {"])
-    assert.ok(pipe.includes(s), `boot_web.mjs: ${s}`);
-  assert.ok(pipe.indexOf('if (hooks.beforeMain) await hooks.beforeMain(m);') < pipe.indexOf("done.mainRc = await stageOk('main @ 0x00931050'"), 'beforeMain is awaited before main');
-  assert.ok(pipe.includes('fetchSync(`/instance/${src}?off=${off}&len=${len}`)'), 'the windowed reads stay synchronous');
-  // the Play click: a user gesture that creates/resumes the AudioContext and focuses the canvas, then main
-  assert.ok(page.includes("playBtn.addEventListener('click', start, { once: true });"), 'the click starts');
-  const start = page.slice(page.indexOf('const start = () => {'), page.indexOf('resolve();', page.indexOf('const start = () => {')));
-  assert.ok(start.includes('unlockAudio(m);'), 'start unlocks audio before resolving beforeMain');
-  const unlock = page.slice(page.indexOf('function unlockAudio(m) {'), page.indexOf('\n}', page.indexOf('function unlockAudio(m) {')));
-  for (const s of ['m.isaacAudio = { ctx: null, buffers: new Map(), sources: new Map() };', 'm.isaacAudio.ctx = new C();',
-    "if (m.isaacAudio.ctx.state === 'suspended') m.isaacAudio.ctx.resume();", 'canvas.focus();'])
-    assert.ok(unlock.includes(s), `unlockAudio: ${s}`);
-  // round 36: the AL shim adopts that page-made object (its ctx, buffers and
-  // sources) instead of making its own, and adds the master node and helpers
-  const al = rd('scripts', 'recomp', 'host', 'src', 'host_audio_web.c');
-  for (const s of ['if (!A) A = Module.isaacAudio = {};', 'A.ctx = A.ctx || null;', 'A.buffers = A.buffers || new Map();',
-    'A.sources = A.sources || new Map();', 'if (A.master) return true;', 'if (!A.ctx) {'])
-    assert.ok(al.includes(s), `the AL shim adopts the shape the page creates: ${s}`);
-  assert.ok(page.includes("if (AUTOPLAY) { start(); return; }"), 'autoplay skips the button');
-  assert.ok(page.includes("const AUTOPLAY = params.get('autoplay') !== '0';"), 'round 51: the page starts on its own; autoplay=0 keeps the Play button');
-  // round 82: ?stats=1 also brings back the named stages and their byte counts,
-  // which the loading screen no longer shows
-  assert.ok(page.includes("const STATS = params.get('stats') === '1';")
-    && page.includes("if (STATS) { $('fps').hidden = false; $('stages').hidden = false; }")
-    && page.includes("if (params.get('saves') === '1') $('saves-btn').hidden = false;"),
-    'the instruments and the saves button are opt-in');
-  assert.ok(page.includes("$('bar-fill').style.width = `${pct.toFixed(1)}%`;"), 'one bar for the three fetch stages and the boot');
-  assert.ok(page.includes("if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen();"), 'F toggles fullscreen (not while the EDIT FILE menu is up)');
-  assert.ok(page.includes("stage.requestFullscreen().then(() => canvas.focus())"), 'fullscreen keeps the keyboard on the canvas');
-  // the progress accounting: module and image from dist.json, archives + scripts from the index, streamed while the module is compiled
-  for (const s of ["stages.module.total = sizeOf('boot.wasm');", "stages.image.total = sizeOf('isaac.segs.bin');",
-    "stages.archives.total = EAGER_ARCHIVES.reduce((s, n) => s + (indexSize.get(`resources/packed/${n}`) || 0), 0)",
-    "index.filter((e) => e.p.startsWith('resources/scripts/')).reduce((s, e) => s + e.s, 0)",
-    "WebAssembly.instantiateStreaming(res, info)", "const counted = res.clone().body.getReader();",
-    'st.received += value.length; render();', 'if (st) { st.received += value.length; render(); }'])
-    assert.ok(page.includes(s), `progress: ${s}`);
-  // the eager list is the pipeline's
-  const m = pipe.match(/for \(const name of \[([^\]]*)\]\) \{\s*const rel = `resources\/packed\/\$\{name\}`;/);
-  assert.ok(m, 'the seed loop of boot_web.mjs');
-  const eager = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  const pm = page.match(/const EAGER_ARCHIVES = \[([^\]]*)\];/);
-  assert.deepEqual([...pm[1].matchAll(/'([^']+)'/g)].map((x) => x[1]), eager, 'play.mjs seeds the same six archives into its total');
-  // the sync fetches are rewritten (root, ?v= from dist.json) and the streamed bytes counted
-  assert.ok(page.includes('hooks.url = (url) => {') && page.includes('return rewrite(url);'), 'the url hook');
-  assert.ok(page.includes("const v = versionOf(rel);") && page.includes('v=${v}'), 'a version from the manifest hash');
-  assert.ok(page.includes("const ROOT = new URL('.', location.href).pathname.replace(/\\/$/, '');"), 'the page directory is the root');
-  // the saves menu shares the pipeline's store
-  const store = pipe.match(/const SAVE_DB = '([^']+)', SAVE_STORE = '([^']+)';/);
-  assert.ok(page.includes(`const SAVE_DB = '${store[1]}', SAVE_STORE = '${store[2]}';`), 'the same IndexedDB names');
-  for (const s of ["$('export-zip').addEventListener('click'", "$('export-json').addEventListener('click'", "$('import-file').addEventListener('change'",
-    "$('reset-saves').addEventListener('click'", "import { zipStore, unzip } from './zip.mjs';", "format: 'isaac-recomp-saves/1'",
-    "st.put({ src: it.src, bytes: it.bytes }, it.key);", 'if (clear) st.clear();'])
-    assert.ok(page.includes(s), `saves: ${s}`);
-  // round 74: the zip reader is a module of its own, because the mods menu reads
-  // zips too and one reader is better than two
-  const zip = rd('scripts', 'recomp', 'web', 'zip.mjs');
-  assert.ok(zip.includes('export function zipStore(entries) {') && zip.includes('export async function unzip(buf) {'), 'and it is there');
-  assert.ok(page.includes("const entryName = (key, src) => (src || key.replace(/^c:\\/isaac\\//i, '')).replace(/^\\/+/, '');"),
-    'a save travels under its seed path, else its key without the fake cwd root (the node driver\'s rule)');
-  // defaults: a live page (ISAAC_YIELD=1) with no frame budget, persist on
-  // round 76: the default reaches the pipeline through the hooks, and the address
-  // bar is left as the player found it
-  assert.ok(page.includes("if (!params.has('ISAAC_YIELD')) { params.set('ISAAC_YIELD', '1'); pageDefaults.ISAAC_YIELD = '1'; }")
-    && page.includes('hooks.params = pageDefaults;') && !page.includes('history.replaceState(null'),
-    'the live-page default is applied without being written into the URL');
-  assert.ok(pipe.includes('for (const [k, v] of Object.entries((hooks && hooks.params) || {})) {') && pipe.includes("if (!params.has(k)) params.set(k, String(v));"),
-    'and the pipeline takes it, with a real query still winning');
-  assert.ok(!/params\.set\('frames'/.test(page), 'no frames= is set: the pipeline takes an unlimited budget under ISAAC_YIELD=1');
-  assert.ok(pipe.includes("cfg.ENV.ISAAC_MAX_FRAMES = params.get('frames') || (params.get('ISAAC_YIELD') === '1' ? '100000000' : '5');"), 'which it does');
-  // the error panel shows the log tail only when something went wrong; a normal end is not an error
-  assert.ok(page.includes("$('errlog').textContent = (window.isaacLog || []).slice(-24).join('\\n');"), 'the last log lines');
-  assert.ok(page.includes("if (done.error || done.mainRc !== 0) showError('The run ended with an error'"), 'an error end');
-  assert.ok(page.includes("else showError('The run ended', `main returned 0 after ${done.presented} frames"), 'a budget end is reported as an end');
-  assert.ok(page.includes("if (/^\\s*TRAP in |^RESULT: aborted|module instantiation failed|lazy (read|pread) FAILED/.test(line)) showError("), 'the log triggers');
-  // the grave key reaches the game (the console key), agreeing with the node table
-  assert.ok(pipe.includes("grave: [0xC0, 0x29, 0],") && pipe.includes("Backquote: 'grave'"), 'Backquote -> grave');
-  assert.ok(rd('scripts', 'recomp', 'lift', 'explore.mjs').includes('grave: [0xC0, 0x29, 0],'), 'the same row in explore.mjs');
-});
 
 test('ship.py ships the three page files and mirrors the runner\'s index policy', () => {
   const py = rd('scripts', 'recomp', 'assets', 'ship.py');
@@ -637,11 +540,4 @@ test('round 45: the dist server re-reads dist.json when it changes, so a rebuilt
   const s = readFileSync(join(root, 'scripts', 'recomp', 'web', 'serve_dist.mjs'), 'utf8');
   assert.ok(s.includes('if (st.mtimeMs === manifestMtime) return;'), 'the manifest is re-read on an mtime change');
   assert.ok(/createServer\([^\n]*=>[^\n]*\n  refreshManifest\(\);/.test(s), 'every request checks it first');
-});
-
-test('round 46: the shipping page shows a frame-rate readout once the engine runs', () => {
-  const page = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  assert.ok(page.includes("const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;"), 'fps and the median of the last ten seconds in the status line');
-  assert.ok(page.includes('const f = window.isaacFrame || 0, t = performance.now();'), 'sampled from the host frame counter');
-  assert.ok(page.includes("machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${renderer}`;"), 'the line names the machine: cores, memory, GPU renderer');
 });

@@ -56,6 +56,15 @@
     "limits": "No quality reductions. No full-game/mod/save equivalence, all-floor regression, physical Chromebook result, peak-memory saving or FPS gain claimed. CDP page network counters omit worker traffic; consumed windows can hit HTTP cache and are not wire bytes.",
     "evidence": "output/recomp/load-native-comparison.json;load-native-mutations/receipt.json;load-compression-mutations.json;load-reader-cap-mutation.json;load-reader-{network,repeat}-comparison.json;load-floor-final-default/floors.json;load-compressed-http.json;load-original-verify/web-run.log;load-live-ui/summary.json;load-muted-audio-final/summary.json. README loading section has commands and source links."
   },
-  "updated": "2026-10-05",
+  "loaderDelivery": {
+    "verified": "2026-10-06",
+    "nextVa": "0x00a14c00",
+    "changes": "Native-style loader, stable native menu/live-room readiness, downstream audio gate preserving mixer/analyser and unlock behavior. Required engine chunk width4 overlaps four sequential overlap-probe pairs. Matching raw/compressed range query identities preserve HTTP cache entries. Exact ranges avoid full archive prefetch; CDN fallback gate retained.",
+    "payload": "Public Wasm255e9c7fee33, all existing immutable payload URLs, manifests, stream geometry and key unchanged. No native boundary removed; Update ABI101 unchanged.",
+    "verification": "Affected audio/portable/ship/web Node suites81passed.11behavioral mutants killed with assertion failures and byte-identical restoration; clean audio/portable50passed. Cold/warm destination probe silent under loader despite live mixer, then nonzero output. Real CDN-backed title/movement/shooting/audio exercised.",
+    "limits": "No repeatable full-title speedup established for frontend scheduling alone. Extra archive-end prefetch rejected. No FPS, full-game/save/mod equivalence or other-device claim.",
+    "evidence": ".scratch/loading-sync/{audio-proof,production-proof,public-gameplay.json,mutations/receipt.json}"
+  },
+  "updated": "2026-10-06",
   "updatedAbi": 101
 }

@@ -10,7 +10,7 @@
 // AudioBufferSourceNode, the census said 300 chunks queued, and nothing was
 // audible.
 //
-// Three layers of pins:
+// Coverage:
 //   1. the model's OpenAL Soft rules and the backend contract run natively in
 //      the host selftest (build-selftest.json: the `audio:` checks, a fake
 //      clock, counted hooks);
@@ -21,12 +21,14 @@
 //      bookkeeping only, a stop cancels, a play re-schedules from the head,
 //      a suspended context defers and a resume replays, a chain far ahead of
 //      the clock is trimmed;
-//   3. the page's level meter and the driver that reads it, by source.
+//   3. the page's output gate and native readiness lifecycle, using the same
+//      backend bodies and a signal-carrying fake audio graph.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Script } from 'node:vm';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const hostSrc = join(root, 'scripts', 'recomp', 'host', 'src');
@@ -70,9 +72,9 @@ function extractEmJs(src) {
 
 // ---- a fake WebAudio ----------------------------------------------------------
 class FakeNode {
-  constructor(ctx) { this.context = ctx; this.outputs = []; }
-  connect(dst) { this.outputs.push(dst); return dst; }
-  disconnect() { this.outputs = []; }
+  constructor(ctx) { this.context = ctx; this.outputs = []; this.inputs = new Set(); }
+  connect(dst) { this.outputs.push(dst); dst.inputs.add(this); return dst; }
+  disconnect() { for (const dst of this.outputs) dst.inputs.delete(this); this.outputs = []; }
 }
 class FakeGain extends FakeNode {
   constructor(ctx) { super(ctx); this.gain = { value: 1 }; }
@@ -82,6 +84,9 @@ class FakeBufferSource extends FakeNode {
   start(when = 0, offset = 0) { this.started = { when, offset }; this.context.nodes.push(this); }
   stop() { if (!this.started) throw new Error('InvalidStateError'); this.stopped = true; }
 }
+class FakeAnalyser extends FakeNode {
+  getFloatTimeDomainData(buffer) { buffer.fill(this.context.level(this)); }
+}
 class FakeContext {
   constructor() {
     this.currentTime = 0; this.state = 'running'; this.sampleRate = 48000;
@@ -90,6 +95,20 @@ class FakeContext {
   }
   createGain() { return new FakeGain(this); }
   createBufferSource() { return new FakeBufferSource(this); }
+  createAnalyser() { return new FakeAnalyser(this); }
+  level(node = this.destination) {
+    if (this.state !== 'running') return 0;
+    if (node instanceof FakeBufferSource) {
+      if (!node.started || node.stopped || this.currentTime < node.started.when) return 0;
+      const elapsed = (this.currentTime - node.started.when) * node.playbackRate.value + node.started.offset;
+      if (!node.loop && elapsed >= node.buffer.duration) return 0;
+      const frame = Math.floor(elapsed * node.buffer.sampleRate) % node.buffer.length;
+      return node.buffer.getChannelData(0)[frame];
+    }
+    let sample = 0;
+    for (const input of node.inputs) sample += this.level(input);
+    return node instanceof FakeGain ? sample * node.gain.value : sample;
+  }
   createBuffer(channels, frames, rate) {
     const ch = Array.from({ length: channels }, () => new Float32Array(frames));
     return { numberOfChannels: channels, length: frames, sampleRate: rate, duration: frames / rate, getChannelData: (c) => ch[c] };
@@ -335,15 +354,264 @@ test('the model follows OpenAL Soft where the music path needs it (source pins +
     assert.ok(audio.some((l) => l.includes(want)), `selftest: ${want}`);
 });
 
-test('the page taps the master output and the driver reads it', () => {
-  const page = readFileSync(join(web, 'boot_web.mjs'), 'utf8');
-  assert.ok(page.includes('cfg.isaacAudioReady = (A) =>'), 'the backend announces its context to the page');
-  assert.ok(/createAnalyser\(\)[\s\S]*?A\.master\.disconnect\(\);[\s\S]*?A\.master\.connect\(an\);[\s\S]*?an\.connect\(A\.ctx\.destination\)/.test(page),
-    'the analyser sits between the master and the destination');
-  assert.ok(page.includes('window.isaacAudioLevel = () =>') && page.includes('getFloatTimeDomainData'), 'window.isaacAudioLevel reads the analyser');
-  assert.ok(backendSrc.includes('Module.isaacAudioReady(A)') && backendSrc.includes('A.master = A.ctx.createGain();'), 'the backend side of that handshake');
-  const drive = readFileSync(join(web, 'drive_audio.mjs'), 'utf8');
-  assert.ok(drive.includes('window.isaacAudioLevel()') && drive.includes('isaacAudioLevelFallback'), 'the driver prefers the page tap and falls back to its own');
-  assert.ok(drive.includes("page.mouse.click(") && drive.includes("keyboard.down('Enter')"), 'a click to unlock audio, held Enters');
-  assert.ok(/aboveThreshold >= 0\.8/.test(drive), 'the verdict is sustained energy, not a single blip');
+
+// Execute the production graph and page lifecycle, replacing only browser I/O.
+// No Wasm payload or private deployment fixture is needed.
+function pageAudio(api, hooks = {}) {
+  const source = readFileSync(join(web, 'boot_web.mjs'), 'utf8');
+  const start = source.indexOf('let audioTap = null;');
+  const end = source.indexOf("window.addEventListener('keydown'", start);
+  const window = {}, timers = new Set();
+  new Function('cfg', 'hooks', 'window', 'setInterval', 'clearInterval', 'log', source.slice(start, end))(
+    api.Module, hooks, window, (fn) => { timers.add(fn); return fn; },
+    (fn) => timers.delete(fn), (line) => api.errs.push(line));
+  return window;
+}
+
+async function loadingPage(search = '') {
+  const elements = new Map(), intervals = [], frames = [], words = new Map(), events = new Map();
+  let now = 0;
+  const document = {
+    hidden: false,
+    getElementById: (id) => elements.get(id),
+    addEventListener() {},
+  };
+  const html = readFileSync(join(web, 'play.html'), 'utf8');
+  for (const [, tag, id] of html.matchAll(/(<[^>]*\bid="([^"]+)"[^>]*>)/g)) {
+    const classes = new Set(), listeners = new Map(), attributes = new Map();
+    const element = {
+      hidden: /\bhidden\b/.test(tag), open: false, style: {}, textContent: '', title: '',
+      classList: { add: (name) => classes.add(name), remove: (name) => classes.delete(name), contains: (name) => classes.has(name) },
+      setAttribute: (key, value) => attributes.set(key, value),
+      removeAttribute: (key) => attributes.delete(key),
+      getAttribute: (key) => attributes.get(key),
+      addEventListener: (event, fn) => listeners.set(event, fn),
+      focus: () => { document.activeElement = element; },
+      getContext: () => null,
+      click: () => listeners.get('click')?.(),
+    };
+    elements.set(id, element);
+  }
+  const window = {
+    AudioContext: FakeContext,
+    isaacPortable: { manifest: { files: [] }, index: [], bytesFor: async () => new Uint8Array() },
+    isaacGuest: { u32: (address) => words.get(address) || 0, u8: (address) => (words.get(address) || 0) & 255 },
+    addEventListener: (event, fn) => events.set(event, fn),
+    isaacFrame: 0,
+  };
+  const menu = { isOpen: () => false, setFps() {}, setScreen() {} };
+  const context = {
+    window, document, location: new URL(`https://game.invalid/play.html${search}`), navigator: {},
+    URL, URLSearchParams, TextEncoder, TextDecoder, performance: { now: () => now },
+    console,
+    requestAnimationFrame: (fn) => frames.push(fn),
+    setInterval: (fn, ms) => { intervals.push({ fn, ms, next: now + ms }); },
+    createEditFileMenu: () => menu, createPaperMenu: () => ({}), createModsMenu: () => menu,
+  };
+  const source = readFileSync(join(web, 'play.mjs'), 'utf8')
+    .replace(/^import .+ from '.+';\r?$/gm, '')
+    .replace("import('./boot_web.mjs')", 'Promise.resolve()');
+  await new Script(`(async () => {\n${source}\n})()`).runInNewContext(context);
+  return {
+    window, elements, words, hooks: window.isaacPageHooks,
+    error: () => events.get('error')({ message: 'engine failed before readiness' }),
+    menu: (screen = 1, manager = 0x1000) => { words.set(0x00c72a20, manager); words.set(manager + 0x40, screen); },
+    advance(frame) {
+      window.isaacFrame = frame;
+      now += 500;
+      for (const timer of intervals) if (now >= timer.next) { timer.next += timer.ms; timer.fn(); }
+      for (const fn of frames.splice(0)) fn(now);
+    },
+  };
+}
+
+function playTone(api, gain = 0.6) {
+  stereoChunk(api, 1, 1024);
+  api.play(10, 1, gain, 1, 1, 0, 0, 0);
+  return api.Module.isaacAudio.ctx;
+}
+
+test('loading keeps mixer energy but silences output until a stable native menu is visible', async () => {
+  const page = await loadingPage(), api = backend(), meter = pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  page.hooks.onLog('=== main @ 0x00931050 ===');
+  for (const frame of [1, 3, 20]) page.advance(frame);
+  assert.equal(page.elements.get('overlay').hidden, false, 'early presentations are not readiness');
+  assert.ok(near(meter.isaacAudioLevel().rmsNow, 0.3), 'real PCM still reaches the mixer analyser');
+  assert.equal(ctx.level(), 0, 'no PCM reaches the destination under the loader');
+  page.menu();
+  // The native title already allocates Game and Room, but has not begun a run.
+  page.words.set(0x00c71678, 0x100000);
+  page.words.set(0x100000 + 0x18300, 0x200000);
+  page.advance(21);
+  page.advance(22);
+  assert.equal(ctx.level(), 0, 'one later presentation is not stable readiness');
+  page.advance(23);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.equal(page.elements.get('overlay').getAttribute('aria-busy'), 'false');
+  assert.ok(near(ctx.level(), 0.3), 'the same source becomes audible without restarting');
+  api.gain(10, 0.25);
+  assert.ok(near(ctx.level(), 0.125), 'normal volume still controls output');
+  api.stop(10);
+  assert.equal(ctx.level(), 0, 'normal pause still silences output');
+  api.play(10, 1, 0.25, 1, 1, 0, 0, 0);
+  assert.ok(near(ctx.level(), 0.125), 'normal resume restores output');
+  ctx.setState('suspended');
+  assert.equal(ctx.level(), 0);
+  ctx.setState('running');
+  assert.ok(near(ctx.level(), 0.125), 'context unlock does not reset the ready output gate');
+});
+
+test('audio initialized or recreated after readiness starts audible; raw boot needs no page hook', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  page.menu();
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  const ctx = playTone(api);
+  assert.ok(near(ctx.level(), 0.3), 'readiness before the first buffer is retained');
+  ctx.setState('closed');
+  const replacement = backend();
+  replacement.Module.isaacAudioReady = api.Module.isaacAudioReady;
+  assert.ok(near(playTone(replacement).level(), 0.3), 'a replacement context inherits readiness');
+  const raw = backend();
+  pageAudio(raw);
+  assert.ok(near(playTone(raw).level(), 0.3), 'the raw boot harness remains audible');
+});
+
+test('unlock and replacement audio contexts remain silent before native readiness', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api);
+  ctx.setState('suspended');
+  ctx.resume();
+  ctx.setState('running');
+  assert.equal(ctx.level(), 0, 'user activation is not native readiness');
+  ctx.setState('closed');
+  const replacement = backend();
+  replacement.Module.isaacAudioReady = api.Module.isaacAudioReady;
+  const next = playTone(replacement);
+  assert.equal(next.level(), 0);
+  page.menu();
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assert.ok(near(next.level(), 0.3), 'readiness opens the current context, not its predecessor');
+});
+
+for (const failure of ['error', 'ended']) {
+  test(`${failure} before readiness keeps existing and delayed audio silent`, async () => {
+    const page = await loadingPage(), api = backend();
+    pageAudio(api, page.hooks);
+    await page.hooks.beforeMain(api.Module);
+    const ctx = playTone(api);
+    page.menu();
+    page.advance(1);
+    if (failure === 'error') page.error();
+    else page.window.isaacDone = { mainRc: 0, presented: 1 };
+    for (const frame of [2, 3, 4]) page.advance(frame);
+    assert.equal(page.elements.get('overlay').hidden, false);
+    assert.equal(ctx.level(), 0);
+    ctx.setState('closed');
+    const replacement = backend();
+    replacement.Module.isaacAudioReady = api.Module.isaacAudioReady;
+    assert.equal(playTone(replacement).level(), 0, 'later initialization does not bypass the failed loader');
+  });
+}
+
+test('screen-5 character selection opens output after stable presentations without a run', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api), game = 0x100000, players = 0x300000;
+  page.menu(5);
+  page.words.set(0x00c71678, game);
+  page.words.set(game + 0x18300, 0x200000);
+  page.words.set(game + 0x1baa8, players);
+  page.words.set(game + 0x1baac, players);
+  page.advance(1);
+  page.advance(2);
+  assert.equal(page.elements.get('overlay').hidden, false);
+  assert.equal(ctx.level(), 0, 'character selection still needs two later presentations');
+  page.advance(3);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3), 'allocated Game and an empty player vector do not block the menu');
+});
+
+test('a starting run overrides a retained menu before its first game frame', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api), game = 0x100000, room = 0x200000, players = 0x300000, player = 0x400000;
+  page.menu(5);
+  for (const [address, value] of [[0x00c71678, game], [game + 0x18300, room],
+    [game + 0x1baa8, players], [game + 0x1baac, players + 4], [players, player],
+    [player + 0x28, 1], [room + 0xc, 13], [room + 0x10, 7]]) page.words.set(address, value);
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assert.equal(page.elements.get('overlay').hidden, false, 'a starting run cannot borrow retained menu readiness');
+  assert.equal(ctx.level(), 0, 'nonempty players with gameFrame 0 are not ready');
+  page.menu(1);
+  page.words.set(game + 0x1b83c, 1);
+  page.words.set(game + 0x264f8, 10);
+  for (const frame of [4, 5, 6]) page.advance(frame);
+  assert.equal(ctx.level(), 0, 'a transitioning run takes precedence over any retained menu');
+  page.words.set(game + 0x1b83c, 0);
+  for (const frame of [7, 8, 9]) {
+    page.words.set(game + 0x264f8, frame + 10);
+    page.advance(frame);
+    if (frame < 9) assert.equal(ctx.level(), 0, 'the room must still stabilize after transition');
+  }
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('live-room readiness rejects dead players, stalled game frames and room transitions', async () => {
+  const page = await loadingPage(), api = backend();
+  pageAudio(api, page.hooks);
+  await page.hooks.beforeMain(api.Module);
+  const ctx = playTone(api), game = 0x100000, room = 0x200000, players = 0x300000, player = 0x400000;
+  page.menu(5);
+  for (const [address, value] of [[0x00c71678, game], [game + 0x18300, room],
+    [game + 0x1baa8, players], [game + 0x1baac, players + 4], [players, player],
+    [player + 0x28, 1], [player + 0x173, 1], [room + 0xc, 13], [room + 0x10, 7],
+    [game + 0x264f8, 10]]) page.words.set(address, value);
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assert.equal(ctx.level(), 0, 'a dead player is not a playable room');
+  page.words.set(player + 0x173, 0);
+  for (const frame of [4, 5, 6]) page.advance(frame);
+  assert.equal(ctx.level(), 0, 'presentations without advancing game frames do not reveal the room');
+  page.words.set(game + 0x264f8, 11);
+  page.advance(7);
+  page.words.set(game + 0x18304, 1);
+  page.words.set(game + 0x264f8, 12);
+  page.advance(8);
+  assert.equal(ctx.level(), 0, 'a changed room identity restarts stabilization');
+  page.words.set(game + 0x264f8, 13);
+  page.advance(9);
+  assert.equal(ctx.level(), 0);
+  page.words.set(game + 0x264f8, 14);
+  page.advance(10);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
+});
+
+test('manual Play and a reset presentation counter cannot bypass readiness', async () => {
+  const page = await loadingPage('?autoplay=0'), api = backend();
+  pageAudio(api, page.hooks);
+  const starting = page.hooks.beforeMain(api.Module), ctx = playTone(api);
+  page.menu();
+  for (const frame of [1, 2, 3]) page.advance(frame);
+  assert.equal(page.elements.get('play').hidden, false);
+  assert.equal(page.elements.get('overlay').hidden, false, 'native state cannot reveal the game before Play');
+  assert.equal(ctx.level(), 0);
+  page.elements.get('play').click();
+  await starting;
+  page.advance(10);
+  page.advance(1);
+  page.advance(2);
+  assert.equal(ctx.level(), 0, 'a reset frame counter restarts stabilization');
+  page.advance(3);
+  assert.equal(page.elements.get('overlay').hidden, true);
+  assert.ok(near(ctx.level(), 0.3));
 });
