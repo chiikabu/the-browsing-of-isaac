@@ -15,6 +15,8 @@ const logEl = document.getElementById('log');
 // url(u) rewrites every synchronous fetch (root path, cache-busting ?v=), fetchBytes(u) fetches the
 // boot stages asynchronously with a progress bar, instantiateWasm streams the module, onLog sees
 // every line, beforeMain(m) is awaited before main (the Play click). All optional; boot_web.html sets none.
+// onAudioReady(A) holds the output gain at zero until the page reveals the game.
+// With no readiness hook, the raw boot harness keeps its ordinary audible output.
 const hooks = (typeof window !== 'undefined' && window.isaacPageHooks) || {};
 window.isaacLog = [];
 window.isaacFrames = [];
@@ -661,21 +663,27 @@ const resumeAudio = () => {
 // Round 36: a level meter on the master output. The proof that music plays
 // is energy, not log lines: the WebAudio backend (host_audio_web.c) routes
 // every source through Module.isaacAudio.master and calls
-// Module.isaacAudioReady(A) once the AudioContext exists; the page puts an
-// AnalyserNode between the master and the destination and keeps the RMS of
-// the last second (100 ms blocks, while the page's timers run -- the JSPI
-// page yields every frame). window.isaacAudioLevel() answers a driver:
+// Module.isaacAudioReady(A) once the AudioContext exists. The analyser measures
+// the live mixer before the page's output-only loading gate, keeping the RMS of
+// the last second (100 ms blocks while the JSPI page yields each frame).
+// window.isaacAudioLevel() answers a driver:
 //   { rms, rmsNow, peak, blocks, ctxTime, state, sampleRate, scheduled, played, streams }
 // rms is the last second, rmsNow the freshest block (always current, timers
 // or not), peak the last second's peak sample.
 let audioTap = null;
 cfg.isaacAudioReady = (A) => {
   try {
+    A.master.disconnect();
+    if (audioTap) { clearInterval(audioTap.timer); audioTap = null; }
     const an = A.ctx.createAnalyser();
     an.fftSize = 8192;                                   // 171 ms per read at 48 kHz
-    A.master.disconnect();
+    const output = A.outputGain = A.ctx.createGain();
+    const pageReady = typeof hooks.onAudioReady === 'function';
+    output.gain.value = pageReady ? 0 : 1;
+    if (pageReady) hooks.onAudioReady(A);
     A.master.connect(an);
-    an.connect(A.ctx.destination);
+    an.connect(output);
+    output.connect(A.ctx.destination);
     const buf = new Float32Array(an.fftSize);
     const blocks = [];
     const sample = () => {

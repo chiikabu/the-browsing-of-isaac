@@ -476,9 +476,12 @@ PROVIDER_JS = r"""
   // moved all 32 URLs, and a returning visitor fetched 512 MB their cache
   // already held. Pinned to the commit that last changed it, part B keeps its
   // URLs until its bytes change.
-  function name(s, i) {
+  function name(s, i, windowRange) {
     var v = S[s].v && S[s].v[i];
-    return (S[s].base || P.base) + '/' + S[s].tag + i + '.bin' + (v ? '?v=' + v : '');
+    var url = (S[s].base || P.base) + '/' + S[s].tag + i + '.bin' + (v ? '?v=' + v : '');
+    // Concurrent ranges sharing one URL do not survive Chromium's HTTP cache.
+    // Give each immutable stored window its own cache entry.
+    return windowRange ? url + (v ? '&' : '?') + 'w=' + windowRange.from + '-' + windowRange.to : url;
   }
   // Is chunk i of stream s actually compressed? A stream may be gzipped and
   // still hold raw chunks: a window of Theora or Vorbis gives nothing back, so
@@ -614,14 +617,15 @@ PROVIDER_JS = r"""
     if (!ranges) return (await piece(p.s, p.i)).subarray(p.within, p.within + p.take);
     var w = inWindow(p);
     if (w) {
-      var rw = await fetch(name(p.s, p.i), { headers: { Range: 'bytes=' + w.from + '-' + w.to } });
+      var rw = await fetch(name(p.s, p.i, w), { headers: { Range: 'bytes=' + w.from + '-' + w.to } });
       if (!rw.ok) throw new Error('range ' + p.s + ':' + p.i + ': HTTP ' + rw.status);
       note(p.s, p.i);
       var stored = unscramble(new Uint8Array(await rw.arrayBuffer()), w.abs);
       var win = await window1(p.s, w.k, stored);
       return win.subarray(w.at, w.at + p.take);
     }
-    var r = await fetch(name(p.s, p.i), { headers: { Range: 'bytes=' + p.within + '-' + (p.within + p.take - 1) } });
+    var rawRange = { from: p.within, to: p.within + p.take - 1 };
+    var r = await fetch(name(p.s, p.i, rawRange), { headers: { Range: 'bytes=' + rawRange.from + '-' + rawRange.to } });
     if (!r.ok) throw new Error('range ' + p.s + ':' + p.i + ': HTTP ' + r.status);
     var u = new Uint8Array(await r.arrayBuffer());
     note(p.s, p.i);
@@ -729,46 +733,46 @@ PROVIDER_JS = r"""
     // question is a coin toss; every one of these has to come back right.
     var n = count(b), picks = [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1]
       .filter(function (v, i, a) { return v >= 0 && v < n && a.indexOf(v) === i; });
-    try {
-      for (var k = 0; k < picks.length; k++) {
-        var i = picks[k], want = chunkLen(b, i);
-        if (want < 0) { ranges = false; P.rangesWhy = 'chunk length unknown'; return false; }
+    var failures = new Array(picks.length);
+    function failed(k, why) { failures[k] = why; return false; }
+    // Each pair stays sequential so its overlap checks the first response.
+    // The at-most-four independent pairs can share the network wait.
+    var checked = await Promise.all(picks.map(async function (i, k) {
+      try {
+        var want = chunkLen(b, i);
+        if (want < 0) return failed(k, 'chunk ' + i + ': length unknown');
         // 1 KiB, not 64 bytes: the deficit that gave this away was four bytes,
         // and a 64-byte answer that is four short still looks like a plausible
         // read. The bigger ask costs nothing and fails louder.
         var r = await fetch(name(b, i), { headers: { Range: 'bytes=0-1023' } });
-        if (r.status !== 206) { ranges = false; P.rangesWhy = 'the host answered ' + r.status + ' for a range'; return false; }
+        if (r.status !== 206) return failed(k, 'chunk ' + i + ': the host answered ' + r.status + ' for a range');
         var head = new Uint8Array(await r.arrayBuffer());
         var cr = r.headers.get('content-range') || '';
         var total = /\/(\d+)\s*$/.exec(cr);
         var claimed = total ? Number(total[1]) : -1;
         if (head.length !== 1024 || claimed !== want) {
-          ranges = false;
-          P.rangesWhy = 'chunk ' + i + ': a 1024-byte range came back as ' + head.length + ' byte(s)'
-            + (claimed >= 0 ? ' and the host calls that file ' + claimed + ' bytes, not ' + want : ' with no Content-Range total');
-          return false;
+          return failed(k, 'chunk ' + i + ': a 1024-byte range came back as ' + head.length + ' byte(s)'
+            + (claimed >= 0 ? ' and the host calls that file ' + claimed + ' bytes, not ' + want : ' with no Content-Range total'));
         }
         // and the same bytes have to come back from a range that merely
         // overlaps them. A host serving from the wrong offset answers both
         // with the right LENGTH and disagrees with itself about the contents.
         var r2 = await fetch(name(b, i), { headers: { Range: 'bytes=512-1535' } });
-        if (r2.status !== 206) { ranges = false; P.rangesWhy = 'the host answered ' + r2.status + ' for the second range'; return false; }
+        if (r2.status !== 206) return failed(k, 'chunk ' + i + ': the host answered ' + r2.status + ' for the second range');
         var mid = new Uint8Array(await r2.arrayBuffer());
         if (mid.length !== 1024) {
-          ranges = false;
-          P.rangesWhy = 'chunk ' + i + ': an overlapping 1024-byte range came back as ' + mid.length + ' byte(s)';
-          return false;
+          return failed(k, 'chunk ' + i + ': an overlapping 1024-byte range came back as ' + mid.length + ' byte(s)');
         }
         for (var q = 0; q < 512; q++) {
           if (mid[q] !== head[512 + q]) {
-            ranges = false;
-            P.rangesWhy = 'chunk ' + i + ': two ranges over the same bytes disagree at ' + (512 + q);
-            return false;
+            return failed(k, 'chunk ' + i + ': two ranges over the same bytes disagree at ' + (512 + q));
           }
         }
-      }
-      ranges = true;
-    } catch (e) { ranges = false; P.rangesWhy = e.message; }
+        return true;
+      } catch (e) { return failed(k, 'chunk ' + i + ': ' + (e.message || String(e))); }
+    }));
+    ranges = checked.every(function (ok) { return ok; });
+    if (!ranges) P.rangesWhy = failures.find(function (why) { return why; });
     return ranges;
   }
   function count(s) {
@@ -896,10 +900,19 @@ PROVIDER_JS = r"""
       // payload inline and has no base, and prefetching it asked the page for
       // `null/a0.bin` -- eight of those, no frames, a build that did not run.
       if (!P.base) return ranges;
+      // These whole compressed chunks are required engine bytes, not archive
+      // speculation. Start them alongside the probes; piece() shares each
+      // request with the consumer, which need not wait for unrelated chunks.
+      var required = [];
+      for (var s = 0; s < S.length; s++) {
+        if (!S[s].gz || S[s].size <= WIN) continue;
+        for (var i = 0; i < count(s); i++) required.push([s, i]);
+      }
+      fetchList(required, 4);
       await probeRanges();
-      // Pull the pieces the boot reads before the engine starts. jsDelivr's
-      // ranges lie, so a window is a 19 MB GET; doing that mid-room is the
-      // freeze. What the boot does NOT read follows it down in the background.
+      // Exact ranges need only the archive windows the engine requests.
+      if (ranges) return ranges;
+      // Hosts without exact ranges still need the whole-chunk path.
       var more = await prefetchAll();
       // Round 90f: this block used to sit under `if (more)`. With the boot's
       // budget uncapped, a build whose trail touches every chunk would then
@@ -972,7 +985,7 @@ PROVIDER_JS = r"""
       if (S[p.s].wl) {
         var w = P.workerWindows ? inWindow(p) : null;
         if (w) {
-          return name(p.s, p.i) + '#w=' + w.from + '-' + w.to + '@' + w.abs
+          return name(p.s, p.i, w) + '#w=' + w.from + '-' + w.to + '@' + w.abs
             + '!' + (S[p.s].wz.charAt(w.k) === '1' ? 1 : 0)
             + '*' + w.at + '-' + p.take;
         }
@@ -982,7 +995,8 @@ PROVIDER_JS = r"""
       // where those bytes start in the stream, which is what unscrambles them
       // `!len` is the chunk's own length: the Worker has nothing else to check a
       // Content-Range against, and on this host that check is the whole defence
-      return name(p.s, p.i) + '#r=' + p.within + '-' + (p.within + p.take - 1)
+      var rawRange = { from: p.within, to: p.within + p.take - 1 };
+      return name(p.s, p.i, rawRange) + '#r=' + rawRange.from + '-' + rawRange.to
         + '@' + (p.i * S[p.s].size + p.within) + '!' + chunkLen(p.s, p.i);
     } : null,
     bytesFor: P.base
@@ -1188,7 +1202,7 @@ def cmd_chunks(args) -> int:
         streams[1]["win"] = WINDOW
     data = {"streams": streams, "files": table, "base": args.base or "./c",
             "index": index_for(args.dist, files), "manifest": manifest_for(args.dist, files),
-            "chunks": n_a + n_b, "status": "loading"}
+            "chunks": n_a + n_b, "status": "loading", "workerWindows": True}
     if key:
         data["key"] = base64.b64encode(key).decode("ascii")
     if getattr(args, "base_b", None) and len(streams) > 1:
