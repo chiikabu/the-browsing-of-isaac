@@ -181,7 +181,7 @@ test('the import row is a mod, and the toggle on it is the button', () => {
   assert.ok(p.includes('hooks.onModImport = () => { modsMenu.open(); };'));
   // round 84: the page also asks the store whether there is a mod at all, to
   // decide whether this browser needs EnableMods turned on once
-  assert.ok(p.includes("import { createModsMenu, openModDb, listMods, MODS_DB } from './mods.mjs';"));
+  assert.ok(p.includes("import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';"));
 });
 
 test('importing over a mod replaces it rather than merging into it', () => {
@@ -300,15 +300,16 @@ test('round 82: the import row is not seeded until the player has a mod', () => 
   // from the game's own MODS screen instead)
   const ov = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
   assert.match(ov, /actions\.mods \? \['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'MODS', 'BACK'\]/);
-  assert.match(ov, /if \(rows\[i\] === 'MODS'\) \{ play\('select'\); close\(null\); actions\.mods\(\); return; \}/);
-  assert.match(ov, /if \(rows\[i\] === 'BACK'\) \{ close\('back'\); return; \}/, 'BACK is found by name, not by index');
+  assert.match(ov, /if \(label === 'MODS'\) \{ play\('select'\); close\(null\); actions\.mods\(\); return; \}/);
+  assert.match(ov, /if \(label === 'BACK'\) \{ close\('back'\); return; \}/, 'BACK is found by name, not by index');
+  assert.match(ov, /if \(label === 'DELETE FILE'\) \{/, 'so is DELETE FILE, which asks first');
   const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
   assert.match(play, /actions: \{ export: exportSlot, import: importSlot \}/, 'EDIT FILE no longer carries MODS');
   assert.match(play, /const MODS_SCREEN = 16;/, 'the MODS screen, MenuManager+0x40');
   assert.match(play, /const openModBrowser = \(\) => \{ modsTag\.setShown\(false\); modsMenu\.open\('browse'\); \};/, 'its BROWSE MODS paper opens the browser');
   assert.match(play, /ev\.code === 'KeyB' && readMenuId\(\) === MODS_SCREEN && modsBrowsable\(\)/, 'and so does B on that screen');
   // the paper grows with the entries rather than clipping the fifth
-  assert.match(ov, /const sh = sh0 \+ 24 \+ \(items\(\)\.length - 4\) \* 17/);
+  assert.match(ov, /h: sh0 \+ 24 \+ \(items\(\)\.length - 4\) \* LINE_H/);
 });
 
 test('round 82: a mod being downloaded reports bytes, not parts', () => {
@@ -383,7 +384,7 @@ test('round 84: a browser that already had a mod gets mods turned on too', () =>
   // once per browser, so turning them off in the game afterwards sticks
   assert.match(play, /localStorage\.getItem\('isaac-mods-enabled-once'\) === '1'/);
   assert.match(play, /localStorage\.setItem\('isaac-mods-enabled-once', '1'\)/);
-  assert.match(play, /import \{ createModsMenu, openModDb, listMods, MODS_DB \} from '\.\/mods\.mjs';/);
+  assert.match(play, /import \{ createModsMenu, openModDb, listMods, setModEnabled, MODS_DB \} from '\.\/mods\.mjs';/);
 });
 
 test('round 85: a mod path reaches KAGE without its leading slashes', () => {

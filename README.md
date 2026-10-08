@@ -33,7 +33,12 @@ There are no extra buttons on screen; you play by touching the game.
 | Drop a card or trinket | Hold it |
 | Map | Tap the minimap, or hold it to peek |
 | Pause | The paper icon next to the map |
-| Menus | Tap, swipe to scroll, two fingers to go back |
+| Menus | Tap a row to pick it, tap it again to choose it; swipe to scroll |
+| Back | The BACK note in the corner, or two fingers |
+| Cutscenes | Tap to skip |
+
+Held upright, a pad under the picture also moves through the menus; tap it to
+choose. Switching to another tab pauses the run.
 
 Vibration follows the game's Rumble option.
 
@@ -66,7 +71,8 @@ restarts with the mod loaded. A mod you already have can be added from a
 ## Saves
 
 Saves stay in the browser you play in. **EDIT FILE** on the file select screen
-exports a save or imports one, including a `.dat` save from PC.
+exports a save or imports one, including a `.dat` save from PC. Deleting a file
+asks first.
 
 ## Browsers
 
@@ -90,7 +96,7 @@ You need your own copy of the game; this repository has no game files in it.
 
 ## Credits
 
-- Ported by shisa.
+- Ported by chiikabu.
 - *The Binding of Isaac: Repentance+* is by Edmund McMillen and Nicalis.
 - The loading screen dance is the [Specialist dance](https://tenor.com/view/isaac-tboi-dance-gif-7352492888219360785) by dazlex.
 - Function signatures from [REPENTOGON](https://github.com/TeamREPENTOGON/REPENTOGON).

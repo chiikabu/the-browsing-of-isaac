@@ -242,6 +242,8 @@ def _anm2_hud_frame(anm2: bytes, sheet_suffix: str = "ui_cardspills.png") -> lis
 # 245,103, 52x49 each) are the touch layer's pause and twin marks: the same paper,
 # outline and shading, their words replaced by a glyph in the same ink.
 PAPER_MARKS = {"pause": (245, 168, 52, 49), "twin": (245, 103, 52, 49)}
+# backselectwidget.anm2's "Back" frame: a 96x96 crop at 0,0 of its sheet
+BACK_PAPER = (0, 0, 96, 96)
 PAPER, PAPER_INK = (199, 178, 154), (54, 47, 45)
 
 
@@ -267,6 +269,16 @@ def _paper_mark(sheet, box, glyph: str):
         draw.ellipse((cx - 13, cy - 6, cx - 1, cy + 6), fill=PAPER_INK)
         draw.ellipse((cx + 1, cy - 6, cx + 13, cy + 6), fill=PAPER_INK)
     return mark
+
+
+def _back_mark(png: bytes):
+    """backselectwidget.png's "Back" crop trimmed to the paper (transparent margin
+    off), or None when the crop is empty."""
+    from PIL import Image
+    x, y, w, h = BACK_PAPER
+    back = Image.open(io.BytesIO(png)).convert("RGBA").crop((x, y, x + w, y + h))
+    box = back.getbbox()
+    return back.crop(box) if box else None
 
 
 def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
@@ -351,7 +363,7 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
         written["hud-bombs.png"] = out.getvalue()
         # the pause and twin marks, cut from the pause screen's own paper buttons
         marks_sheet = read("gfx/ui/pausescreen.png")
-        marks = Image.new("RGBA", (2 * 56, 52), (0, 0, 0, 0))
+        marks = Image.new("RGBA", (2 * 56 + BACK_PAPER[2], max(52, BACK_PAPER[3])), (0, 0, 0, 0))
         mark_cells = {}
         if marks_sheet:
             paper = Image.open(io.BytesIO(marks_sheet)).convert("RGBA")
@@ -360,6 +372,12 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
                 if mark is not None:
                     marks.alpha_composite(mark, (n * 56, 0))
                     mark_cells[name] = [n * 56, 0, box[2], box[3]]
+        # the menus' BACK sticker, as the file screen shows it, trimmed to the paper
+        back_sheet = read("gfx/ui/backselectwidget.png")
+        back = _back_mark(back_sheet) if back_sheet else None
+        if back is not None:
+            marks.alpha_composite(back, (2 * 56, 0))
+            mark_cells["back"] = [2 * 56, 0, back.width, back.height]
         out = io.BytesIO()
         marks.save(out, format="PNG", optimize=True)
         written["hud-marks.png"] = out.getvalue()

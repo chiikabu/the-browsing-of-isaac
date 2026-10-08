@@ -1,18 +1,26 @@
 // touch_controls.mjs -- the phone's way into the game, with nothing on screen
 // that the game does not already show.
 //
-//   - Sticks: the left half moves, the right half fires, eight directions that
-//     hold steady (touch_input.mjs createStickDirection). In landscape a stick
-//     appears where the thumb lands, stays put while it drags and fades when it
-//     lifts; in portrait both rest under the picture, always in view.
+//   - Sticks: the left half moves in eight directions, the right half fires in
+//     the game's four, each holding steady (touch_input.mjs
+//     createStickDirection). In landscape a stick appears where the thumb
+//     lands, stays put while it drags and fades when it lifts; a thumb that
+//     lands again near it soon after picks the same stick back up, so a burst
+//     of taps keeps aiming. In portrait both rest under the picture.
 //   - The game's own HUD is the button set: tap the minimap for the big map
 //     (hold to peek), the paper pause mark beside it pauses, the trinket and
 //     pocket corners swap or use on a tap and drop on a hold. Under the room,
 //     the mobile item bar, evenly spaced: the active item with its charge, the
 //     pocket item and the bomb with its count, drawn with the game's own art
 //     (page_assets.py build_hud). Tap to use; a small second item swaps.
-//   - Menus are tapped: rows, files, characters, the game's BACK/SELECT papers;
-//     a swipe steps the cursor, two fingers go back, so does Android's back.
+//   - Menus are tapped: rows, files, characters, the game's BACK/SELECT papers.
+//     Rows closer together than a thumb are chosen by the first tap and
+//     confirmed by a second on the chosen row; a tap between rows does nothing.
+//     The game's BACK sticker sits in a corner of the menus that have no back
+//     paper of their own; a swipe steps the cursor, two fingers go back, so
+//     does Android's back. Upright, a pad under the picture steps the cursor
+//     and a tap on it confirms.
+//   - A cutscene is skipped by a tap.
 //   - The game's rumble (Options > RUMBLE) drives navigator.vibrate.
 //
 // Every action is one of the game's keyboard keys, paced on native frames by
@@ -28,6 +36,9 @@ const STICK_RADIUS = 52;        // css px from the base to a full push
 const TAP_SLOP = 14;            // css px a tap may wander before it is a drag
 const HOLD_MS = 450;            // a press this long is a hold (drop, map peek)
 const SWIPE_STEP = 34;          // css px of swipe per menu step
+const FINGER = 40;              // css px: rows closer than this are chosen, then confirmed
+const RELAND_MS = 1200;         // a stick lifted this recently is picked back up near its base
+const PAD_REPEAT = [380, 130];  // ms before a held pad direction repeats, then between repeats
 
 // ---- where the game draws its HUD (480x270 game px) ------------------------
 // Measured on this build at Options > HUD OFFSET 1 (the page's default): the
@@ -75,6 +86,25 @@ export const barDrawKey = (plan, pressed, scale, upright, mode, cinematic) => JS
     i.player && i.player.bombs, i.player && i.player.goldenBomb, i.active && i.active.id]),
   [...pressed], scale, upright, mode, cinematic]);
 
+// The menu screens that get the corner BACK sticker: every screen that has
+// somewhere to go back to and no BACK paper of its own (the file screen draws
+// one; the title has nowhere to go).
+export const BACK_SCREENS = new Set([MENU.GAME, MENU.CHARACTER, MENU.CHALLENGES, MENU.STATS, MENU.OPTIONS, MENU.MODS, MENU.ONLINE]);
+export const backShown = (mode, state, screen) => mode === 'menu' && !!state && !state.running && !state.cutscene
+  && (state.menu === 'edit-file' || (typeof state.menu !== 'string' && BACK_SCREENS.has(screen)));
+
+// The row a tap at gy is for: the nearest, if it is within reach.
+export function nearestRow(rows, gy, reach) {
+  let best = -1, distance = Infinity;
+  rows.forEach((y, i) => { const d = Math.abs(gy - y); if (d < distance) { best = i; distance = d; } });
+  return distance <= reach ? best : -1;
+}
+
+// Where a tap on a row leaves the cursor: rows a thumb can tell apart are
+// confirmed at once; closer ones are chosen first, and confirmed by a tap on
+// the row already chosen.
+export const rowTapConfirms = (target, cursor, pitchCss) => target === cursor || pitchCss >= FINGER;
+
 export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, textEntry }) {
   const preference = new URLSearchParams(location.search).get('touch');
   if (preference === '0') return { destroy() {} };
@@ -96,7 +126,9 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   root.innerHTML = `
     <div class="touch-stick" data-stick="move" aria-hidden="true"><span class="touch-stick-base"></span><span class="touch-stick-knob"></span></div>
     <div class="touch-stick" data-stick="fire" aria-hidden="true"><span class="touch-stick-base"></span><span class="touch-stick-knob"></span></div>
+    <div class="touch-stick touch-pad" aria-hidden="true"><span class="touch-stick-base"></span><span class="touch-stick-knob"></span></div>
     <canvas class="touch-bar" aria-hidden="true"></canvas>
+    <canvas class="touch-back" aria-hidden="true" hidden></canvas>
     <input class="touch-keys" type="text" inputmode="text" enterkeyhint="done" autocomplete="off" autocapitalize="characters"
       autocorrect="off" spellcheck="false" aria-label="Seed" tabindex="-1">`;
   main.append(root);
@@ -110,8 +142,12 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   const bar = root.querySelector('.touch-bar');
   const barCtx = bar.getContext('2d');
   const keysInput = root.querySelector('.touch-keys');
-  const sticks = Object.fromEntries([...root.querySelectorAll('.touch-stick')].map((el) => [el.dataset.stick, {
-    el, knob: el.querySelector('.touch-stick-knob'), pointer: null, bx: 0, by: 0, x: 0, y: 0,
+  const backEl = root.querySelector('.touch-back');
+  const backCtx = backEl.getContext('2d');
+  const padEl = root.querySelector('.touch-pad');
+  const pad = { el: padEl, knob: padEl.querySelector('.touch-stick-knob'), x: 0, y: 0, pointer: null, dir: null, next: 0, moved: false };
+  const sticks = Object.fromEntries([...root.querySelectorAll('.touch-stick[data-stick]')].map((el) => [el.dataset.stick, {
+    el, knob: el.querySelector('.touch-stick-knob'), pointer: null, bx: 0, by: 0, x: 0, y: 0, last: null,
     dir: createStickDirection({ shooting: el.dataset.stick === 'fire' }),
   }]));
 
@@ -447,9 +483,17 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   }
   function releaseStick(stick) {
     stick.pointer = null; stick.x = stick.y = 0;
+    stick.last = { x: stick.bx, y: stick.by, at: performance.now() };
     stick.dir.reset();
     input.release(stick === sticks.fire ? 'touch:fire' : 'touch:move');
     restStick(stick);
+  }
+  // A thumb landing again near a stick it just lifted keeps that stick's base,
+  // so the first frame of the new touch already points somewhere.
+  function relandBase(stick, cx, cy) {
+    const last = stick.last;
+    if (!last || performance.now() - last.at > RELAND_MS) return null;
+    return Math.hypot(cx - last.x, cy - last.y) <= STICK_RADIUS * 1.25 ? last : null;
   }
   const restSticks = () => { for (const stick of Object.values(sticks)) if (stick.pointer === null) restStick(stick); };
 
@@ -506,18 +550,14 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
         return true;
       }
       case MENU.GAME: {
+        // NEW RUN .. OPTIONS, 22 px apart; the MODS paper beside them is Tab
         const rows = [68, 90, 113, 136, 158, 180];
         if (gx >= 330 && gx < 465 && gy >= 150 && gy < 210) { input.tap('touch:menu', 'tab'); return true; }
-        if (gx >= 140 && gx < 330 && gy >= 30 && gy < 240) {
-          const target = rows.findIndex((y) => Math.abs(gy - y) <= 11);
-          if (target >= 0) walk(screen, (m) => m.cursor, target, upDown, 'enter');
-          return true;
-        }
-        input.tap('touch:menu', 'escape');
+        if (gx >= 120 && gx < 345 && gy >= 40 && gy < 215) chooseRow(screen, (m) => m.cursor, nearestRow(rows, gy, 15), menu.cursor, 22);
         return true;
       }
       case MENU.OPTIONS: {
-        if (gx < 130 || gx >= 355) { input.tap('touch:menu', 'escape'); return true; }
+        if (gx < 120 || gx >= 365) return true;
         const scroll = (Number.isFinite(menu.viewY) ? menu.viewY : -1080) + 1080;
         const row = Math.round((gy - 72 - scroll) / 20);
         if (row < 0 || row > 22) return true;
@@ -525,6 +565,13 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
         // The selected row: CONTROLS opens, any other value steps left or right.
         if (row === 0) confirm();
         else input.tap('touch:menu', gx < 262 ? 'left' : 'right');
+        return true;
+      }
+      case MENU.MODS: {
+        // the PRESS TAB TO ENABLE MODS paper, top right, is its key; the list
+        // paper confirms the row the cursor is on (a swipe moves it)
+        if (gx >= 270 && gx < 415 && gy < 80) { input.tap('touch:menu', 'tab'); return true; }
+        if (gx >= 70 && gx < 320 && gy >= 20 && gy < 240) confirm();
         return true;
       }
       case MENU.CHARACTER: {
@@ -561,7 +608,9 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     const pause = readPause(G());
     if (!pause) { confirm(); return true; }
     if (pause.state === 2) {
-      if (gx < 135 || gx >= 350) { input.tap('touch:menu', 'escape'); return true; }
+      // well clear of the paper is the room: back to the pause paper
+      if (gx < 105 || gx >= 380) { input.tap('touch:menu', 'escape'); return true; }
+      if (gx < 135 || gx >= 350) return true;
       const row = Math.round((gy - 72 - pause.optionsScroll) / 23);
       if (row < 0) return true;
       if (row !== pause.optionsCursor) {
@@ -572,11 +621,123 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       else input.tap('touch:menu', gx < 262 ? 'left' : 'right');
       return true;
     }
-    if (pause.state !== 1 || gx < 165 || gx >= 340 || gy < 172) { input.tap('touch:menu', 'escape'); return true; }
+    if (pause.state !== 1) { input.tap('touch:menu', 'escape'); return true; }
+    // A tap on the room, well clear of the paper, resumes; a near miss does nothing.
+    if (gx < 140 || gx >= 365 || gy < 150) { input.tap('touch:menu', 'escape'); return true; }
+    if (gx < 165 || gx >= 340) return true;
     const stops = [188, 208, 226, 245];
-    const target = stops.findIndex((y) => Math.abs(gy - y) <= 10);
-    if (target >= 0) walk(menu.screen, () => { const p = readPause(G()); return p ? p.cursor : -1; }, target, upDown, 'enter');
+    chooseRow(menu.screen, () => { const p = readPause(G()); return p ? p.cursor : -1; }, nearestRow(stops, gy, 13), pause.cursor, 19);
     return true;
+  }
+  // Walk the cursor to row `target` of rows `pitch` game px apart, and confirm
+  // it when a thumb can tell those rows apart (or it is already chosen).
+  function chooseRow(screen, read, target, cursor, pitch) {
+    if (target < 0) return;
+    walk(screen, read, target, upDown, rowTapConfirms(target, cursor, pitch * stageBox().s) ? 'enter' : null);
+  }
+
+  // ---- the corner BACK sticker --------------------------------------------------------
+  // The file screen's own BACK paper (backselectwidget.anm2, hud-marks.png),
+  // pinned top-left of the picture on its side and under it upright, where a
+  // thumb reaches it without covering the menu.
+  let backKey = '';
+  const backArt = () => (art.ready && art.hud.marks && art.hud.marks.back) || null;
+  const backOn = () => available && !!backArt() && backShown(mode, state, menu.screen);
+  function backPlace() {
+    const [, , sw, sh] = backArt(), box = stageBox();
+    let w, x, y;
+    if (portrait()) { w = Math.max(60, Math.min(84, innerWidth * 0.18)); x = 12; y = box.y + box.h + 12; }
+    else { w = Math.max(52, (sw / 2) * box.s); x = box.x + 6 * box.s; y = box.y + 6 * box.s; }
+    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(w * sh / sw) };
+  }
+  const backHit = (cx, cy) => backOn() && inside(backPlace(), cx, cy, 10);
+  function goBack() {
+    nav = null;
+    vibrate(10);
+    input.tap('touch:menu', 'escape');
+  }
+  function drawBack() {
+    const on = backOn(), rect = on ? backPlace() : null, down = on && [...pointers.values()].some((p) => p.back);
+    const key = on ? `${rect.x}:${rect.y}:${rect.w}:${down}` : 'off';
+    if (key === backKey) return;
+    backKey = key;
+    backEl.hidden = !on;
+    if (!on) return;
+    const [sx, sy, sw, sh] = backArt();
+    if (backEl.width !== sw || backEl.height !== sh) { backEl.width = sw; backEl.height = sh; }
+    backCtx.imageSmoothingEnabled = false;
+    backCtx.clearRect(0, 0, sw, sh);
+    backCtx.drawImage(art.img.marks, sx, sy, sw, sh, 0, 0, sw, sh);
+    Object.assign(backEl.style, { left: `${rect.x}px`, top: `${rect.y + (down ? 2 : 0)}px`, width: `${rect.w}px`, height: `${rect.h}px` });
+  }
+
+  // ---- the upright menu pad -------------------------------------------------------------
+  // Upright, the menus leave the deck under the picture empty: one pad in its
+  // middle steps the game's cursor (a held direction repeats) and a tap on it
+  // confirms, so no row has to be hit with a fingertip.
+  const padDirection = () => createStickDirection({ shooting: true, deadzone: 0.4, release: 0.3, hold: 10 });
+  pad.steer = padDirection();
+  function padHome() {
+    const box = stageBox(), deckTop = box.y + box.h, deckH = innerHeight - deckTop;
+    if (deckH < STICK_RADIUS * 2 + 60) return null;
+    return { x: innerWidth / 2, y: Math.max(deckTop + STICK_RADIUS + 30, Math.min(innerHeight - STICK_RADIUS - 36, deckTop + deckH * 0.5)) };
+  }
+  // the menus, the pause paper and the death paper; not a cutscene, not the
+  // mod browser (it covers the whole screen upright), not the seed keyboard
+  const padOn = () => available && mode === 'menu' && portrait() && !state.cutscene
+    && state.menu !== 'mods' && !seedEntryOpen() && !!padHome();
+  function padHit(cx, cy) {
+    if (!padOn()) return false;
+    const home = padHome();
+    return Math.hypot(cx - home.x, cy - home.y) <= STICK_RADIUS * 1.7;
+  }
+  function holdPad(pointer, cx, cy) {
+    pad.pointer = pointer.id; pad.dir = null; pad.moved = false;
+    pad.steer.reset();
+    nav = null;
+    pad.el.classList.add('is-held');
+    movePad(cx, cy);
+    vibrate(10);
+  }
+  function movePad(cx, cy) {
+    const home = padHome();
+    if (!home) return;
+    let dx = cx - home.x, dy = cy - home.y;
+    const length = Math.hypot(dx, dy);
+    if (length > STICK_RADIUS) { dx *= STICK_RADIUS / length; dy *= STICK_RADIUS / length; }
+    pad.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    const [key] = pad.steer.keys(dx / STICK_RADIUS, dy / STICK_RADIUS);
+    if ((key || null) === pad.dir) return;
+    pad.dir = key || null;
+    if (!pad.dir) return;
+    pad.moved = true;
+    input.tap('touch:menu', pad.dir);
+    pad.next = performance.now() + PAD_REPEAT[0];
+  }
+  function stepPad() {
+    if (pad.pointer === null || !pad.dir || performance.now() < pad.next) return;
+    input.tap('touch:menu', pad.dir);
+    pad.next = performance.now() + PAD_REPEAT[1];
+  }
+  function releasePad(pointer) {
+    const tapped = !pad.moved && !pointer.moved && performance.now() - pointer.at < HOLD_MS;
+    pad.pointer = null; pad.dir = null;
+    restPad();
+    if (tapped && available && mode === 'menu') confirm();
+  }
+  function restPad() {
+    pad.el.classList.remove('is-held');
+    pad.knob.style.transform = 'translate(-50%, -50%)';
+  }
+  let padKey = '';
+  function placePad() {
+    const on = padOn(), home = on ? padHome() : null;
+    const key = on ? `${Math.round(home.x)}:${Math.round(home.y)}` : 'off';
+    if (key === padKey) return;
+    padKey = key;
+    pad.el.classList.toggle('is-shown', on);
+    if (!on) { if (pad.pointer !== null) { pad.pointer = null; pad.dir = null; restPad(); } return; }
+    pad.el.style.transform = `translate(${home.x}px, ${home.y}px)`;
   }
 
   // ---- the soft keyboard for seeds -------------------------------------------------
@@ -595,7 +756,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       try { if (root.hasPointerCapture(pointer.id)) root.releasePointerCapture(pointer.id); } catch { /* gone */ }
     }
     pointers.clear();
-    for (const stick of Object.values(sticks)) { stick.pointer = null; stick.dir.reset(); }
+    for (const stick of Object.values(sticks)) { stick.pointer = null; stick.last = null; stick.dir.reset(); }
+    pad.pointer = null; pad.dir = null;
     restSticks();
     mapLatched = false;
     barKey = '';
@@ -638,7 +800,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     lastTick = performance.now();
     refresh();
     if (available) {
-      if (mode === 'menu') stepWalk();
+      if (mode === 'menu') { stepWalk(); stepPad(); }
       // The seed paper holds the keyboard up; a page's search keeps it while it is up.
       const typing = enabled && seedEntryOpen();
       const searching = enabled && !!textEntry && textEntry();
@@ -647,6 +809,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     }
     drawBar();
     drawHud();
+    drawBack();
+    placePad();
     // The game's own rumble, whatever drives the run.
     const events = haptics.update(run && options ? { rumble: options.rumble, shake: run.shake, players: run.players } : null);
     vibrate(hapticPattern(events));
@@ -683,6 +847,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     try { root.setPointerCapture(id); } catch { /* synthetic */ }
     pointers.set(id, pointer);
     if (mode === 'menu') {
+      if (pointers.size === 1 && backHit(cx, cy)) { pointer.back = true; vibrate(10); return; }
+      if (pointers.size === 1 && pad.pointer === null && padHit(cx, cy)) { pointer.pad = true; holdPad(pointer, cx, cy); return; }
       pointer.menu = true;
       pointer.anchorX = cx; pointer.anchorY = cy;
       if (pointers.size === 2) pointer.second = true;
@@ -713,8 +879,9 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     stick.pointer = pointer.id;
     pointer.stick = stick;
     if (!resting()) {
-      const margin = STICK_RADIUS + 8;
-      placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
+      const margin = STICK_RADIUS + 8, again = relandBase(stick, cx, cy);
+      if (again) placeStick(stick, again.x, again.y);
+      else placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
     }
     showStick(stick, true);
     moveStick(stick, cx, cy);
@@ -725,10 +892,14 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (!pointer) return;
     event.preventDefault();
     event.stopPropagation();
-    refresh();                       // a tap paced from here counts from the current frame
     pointer.x = event.clientX; pointer.y = event.clientY;
     if (Math.hypot(pointer.x - pointer.sx, pointer.y - pointer.sy) > TAP_SLOP) pointer.moved = true;
+    // A held stick only changes which keys are down: the frame the last tick
+    // read is good enough, and a phone sends a move every few milliseconds.
     if (pointer.stick) { moveStick(pointer.stick, pointer.x, pointer.y); return; }
+    if (pointer.pad) { movePad(pointer.x, pointer.y); return; }
+    if (pointer.back) return;
+    refresh();                       // a tap paced from here counts from the current frame
     if (pointer.menu) { swipe(pointer); return; }
     // A press that wanders off an icon before its hold becomes a stick.
     if (pointer.does && pointer.moved && !pointer.held && !pointer.does.down) {
@@ -756,10 +927,18 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     try { if (root.hasPointerCapture(pointer.id)) root.releasePointerCapture(pointer.id); } catch { /* gone */ }
     refresh();
     if (pointer.stick) { releaseStick(pointer.stick); return; }
+    if (pointer.back) {
+      // a press that slid off the sticker is no press
+      if (available && mode === 'menu' && backHit(pointer.x, pointer.y)) goBack();
+      return;
+    }
+    if (pointer.pad) { releasePad(pointer); return; }
     if (pointer.menu) {
       if (!available || mode !== 'menu') return;
       if (pointer.second && !pointer.moved && performance.now() - pointer.at < 400) { nav = null; input.tap('touch:menu', 'escape'); return; }
       if (pointer.moved || pointer.swiped || pointers.size) return;
+      // A cutscene goes by on a tap, as on a key.
+      if (state.cutscene) { nav = null; input.tap('touch:menu', 'enter'); return; }
       const [gx, gy] = toGame(stageBox(), pointer.sx, pointer.sy);
       // The page's own papers (the mods browser, EDIT FILE) answer first.
       const page = onMenuTap ? onMenuTap(gx, gy, pointer.sx, pointer.sy) : false;
@@ -783,6 +962,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     pointers.delete(event.pointerId);
     clearTimeout(pointer.holdTimer);
     if (pointer.stick) releaseStick(pointer.stick);
+    if (pointer.pad) { pad.pointer = null; pad.dir = null; restPad(); }
     input.release(pointer.owner);
     barKey = '';
   }
@@ -825,7 +1005,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   listen(window, 'blur', () => { blurred = true; reset(); refresh(); });
   listen(window, 'focus', () => { blurred = false; refresh(); });
   listen(document, 'visibilitychange', () => { reset(); refresh(); });
-  const resized = () => { reset(); fullscreenTried = fullscreenTried && !!document.fullscreenElement; positionBar(); };
+  const resized = () => { reset(); fullscreenTried = fullscreenTried && !!document.fullscreenElement; positionBar(); backKey = ''; padKey = ''; };
   listen(window, 'resize', resized);
   listen(window, 'orientationchange', resized);
   listen(document, 'fullscreenchange', resized);

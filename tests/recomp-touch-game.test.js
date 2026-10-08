@@ -13,13 +13,40 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 // ---- sticks: eight directions that hold steady ----------------------------------
 const at = (degrees, length = 1) => [Math.cos(degrees * Math.PI / 180) * length, Math.sin(degrees * Math.PI / 180) * length];
 
-test('sticks give the eight keyboard directions, movement and firing', () => {
+test('the move stick gives the eight keyboard directions', () => {
   const expected = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
-  const fire = [['right'], ['down', 'right'], ['down'], ['down', 'left'], ['left'], ['left', 'up'], ['up'], ['right', 'up']];
-  for (let i = 0; i < 8; i++) {
-    assert.deepEqual(createStickDirection().keys(...at(i * 45)), expected[i]);
-    assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(i * 45)), fire[i]);
+  for (let i = 0; i < 8; i++) assert.deepEqual(createStickDirection().keys(...at(i * 45)), expected[i]);
+});
+
+test('the fire stick gives four directions, one key each, split on the diagonals', () => {
+  const fire = [['right'], ['down'], ['left'], ['up']];
+  for (let i = 0; i < 4; i++) assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(i * 90)), fire[i]);
+  // never two fire keys at once, wherever the thumb is
+  for (let degrees = 0; degrees < 360; degrees += 3) {
+    assert.equal(createStickDirection({ shooting: true }).keys(...at(degrees)).length, 1, `${degrees} deg`);
   }
+  // a fresh push takes the nearer axis on either side of a diagonal
+  assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(40)), ['right']);
+  assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(50)), ['down']);
+  assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(-50)), ['up']);
+});
+
+test('the fire stick holds its direction across a diagonal until the thumb is clearly past it', () => {
+  const stick = createStickDirection({ shooting: true });
+  assert.deepEqual(stick.keys(...at(0)), ['right']);
+  // 45 is the edge; 15 degrees of give on top
+  for (const degrees of [44, 50, 58, -50, -58, 30]) assert.deepEqual(stick.keys(...at(degrees)), ['right'], `${degrees} deg`);
+  assert.deepEqual(stick.keys(...at(62)), ['down']);
+  assert.deepEqual(stick.keys(...at(35)), ['down']);
+  assert.deepEqual(stick.keys(...at(28)), ['right']);
+});
+
+test('the fire stick answers a short push', () => {
+  const stick = createStickDirection({ shooting: true });
+  assert.deepEqual(stick.keys(...at(270, 0.09)), []);
+  assert.deepEqual(stick.keys(...at(270, 0.11)), ['up']);
+  assert.deepEqual(stick.keys(...at(270, 0.07)), ['up']);
+  assert.deepEqual(stick.keys(...at(270, 0.05)), []);
 });
 
 test('a thumb wobbling across a sector edge keeps its direction: no diagonal jitter', () => {
@@ -36,10 +63,10 @@ test('a thumb wobbling across a sector edge keeps its direction: no diagonal jit
 test('the dead zone lets go later than it catches', () => {
   const stick = createStickDirection();
   assert.deepEqual(stick.keys(0, 0), []);
-  assert.deepEqual(stick.keys(...at(0, 0.19)), []);
-  assert.deepEqual(stick.keys(...at(0, 0.21)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.14)), []);
   assert.deepEqual(stick.keys(...at(0, 0.16)), ['d']);
-  assert.deepEqual(stick.keys(...at(0, 0.13)), []);
+  assert.deepEqual(stick.keys(...at(0, 0.11)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.09)), []);
   // held, 120 degrees stays down; released, a fresh push takes the nearest sector
   assert.deepEqual(stick.keys(...at(100)), ['s']);
   assert.deepEqual(stick.keys(...at(120)), ['s']);
@@ -202,6 +229,27 @@ test('build_hud takes the HUD frame from the layer that draws ui_cardspills', ()
   const r = spawnSync('python', ['-c', script, join(root, 'scripts', 'recomp', 'assets')], { input: anm2, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), [32, 96, 32, 32, 16, 16]);
+});
+
+test('the BACK sticker is backselectwidget\'s Back crop, trimmed to its paper', () => {
+  // a 256x256 sheet: the Back paper opaque at 12..91 x 8..83, the Select paper
+  // right of the 96 px crop, where the sticker must not reach
+  const script = [
+    'import sys, io, json',
+    'sys.path.insert(0, sys.argv[1])',
+    'import page_assets as P',
+    'from PIL import Image',
+    'im = Image.new("RGBA", (256, 256), (0, 0, 0, 0))',
+    'im.paste((230, 200, 190, 255), (12, 8, 92, 84))',
+    'im.paste((10, 10, 10, 255), (100, 0, 200, 120))',
+    'out = io.BytesIO(); im.save(out, format="PNG")',
+    'b = P._back_mark(out.getvalue())',
+    'empty = io.BytesIO(); Image.new("RGBA", (256, 256), (0, 0, 0, 0)).save(empty, format="PNG")',
+    'print(json.dumps([b.width, b.height, list(b.getpixel((0, 0))), P._back_mark(empty.getvalue()) is None]))',
+  ].join('\n');
+  const r = spawnSync('python', ['-c', script, join(root, 'scripts', 'recomp', 'assets')], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), [80, 76, [230, 200, 190, 255], true]);
 });
 
 test('browser_layout cuts the MODS paper the way modsmenu.anm2 does', () => {

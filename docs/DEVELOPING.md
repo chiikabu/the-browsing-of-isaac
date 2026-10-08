@@ -32,7 +32,8 @@ a room is ready to show. URL options:
 
 The loading bar covers download, WebAssembly start-up and file system setup, a
 quarter each; while the engine initialises it shows a moving segment. The
-dancing Isaac is a 120-frame pixel-art strip stepped by CSS.
+dancing Isaac is an 84-frame loop of 42 px pixel art, drawn on a canvas at a
+whole number of device pixels per art pixel.
 
 Downloads run in parallel. Hosts that support range requests stream archive
 windows on demand; others download whole chunks in the background.
@@ -44,12 +45,17 @@ and the item bar. Everything else is the game's own HUD and menus, read from
 game memory by `touch_game.mjs`. Every action is a keyboard key, paced on game
 frames by `touch_input.mjs`.
 
-- The sticks are eight-way with a little hysteresis, so a thumb resting between
-  two directions doesn't flicker between them.
-- The item bar's art is extracted from the game's archives at build time
-  (`build_hud` in `scripts/recomp/assets/page_assets.py`).
-- Tapping a menu row moves the game's own cursor there one step at a time, then
-  confirms once the menu has settled.
+- Movement is eight-way and firing four-way (the game only shoots in four
+  directions), each with a little hysteresis so a thumb resting between two
+  directions doesn't flicker between them. A stick lifted and touched again
+  near the same spot within a second keeps its base, so repeated taps aim at once.
+- The item bar's art and the menus' BACK note are extracted from the game's
+  archives at build time (`build_hud` in `scripts/recomp/assets/page_assets.py`).
+- Tapping a menu row moves the game's own cursor there one step at a time. Rows
+  closer together on screen than a fingertip (40 CSS px) are picked by the first
+  tap and chosen by a second; a tap between rows does nothing. Upright, a pad
+  under the picture steps the cursor.
+- A hidden tab opens the pause menu and mutes the sound; a tap skips a cutscene.
 - Rumble comes from the game itself (screen shakes and taking damage) and follows
   the RUMBLE option.
 

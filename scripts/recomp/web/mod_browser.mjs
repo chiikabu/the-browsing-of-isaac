@@ -343,9 +343,21 @@ export function createModBrowser(opts) {
     // the chosen mod
     const d = L.detail, dh = page(d.px, d.py, d.n, false);
     st.regions.push({ kind: 'paper', x: d.px + 12, y: d.py, w: 234, h: dh });
-    const back = touch() ? 'BACK' : 'ESC  BACK', backW = measure(F10, back), by = d.py + dh - 30;
-    text(F10, back, d.x1 - backW, by, 'light');
-    st.regions.push({ kind: 'back', x: d.x1 - backW - 6, y: by - 4, w: backW + 12, h: 20 });
+    // the way out: a key hint for a keyboard, a framed button a thumb can find on a phone
+    let backW, by = d.py + dh - 30;
+    if (touch()) {
+      backW = measure(F16, 'BACK') + 16; by = d.py + dh - 37;
+      const bx = d.x1 - backW;
+      frame(bx, by, backW, 22, INK);
+      frame(bx + 1, by + 1, backW - 2, 20, INK);
+      text(F16, 'BACK', bx + 8, by - 1);
+      st.regions.push({ kind: 'back', x: bx - 10, y: by - 3, w: backW + 20, h: 32 });
+    } else {
+      const back = 'ESC  BACK';
+      backW = measure(F10, back);
+      text(F10, back, d.x1 - backW, by, 'light');
+      st.regions.push({ kind: 'back', x: d.x1 - backW - 6, y: by - 4, w: backW + 12, h: 20 });
+    }
     const it = list[st.cursor];
     const width = d.x1 - d.x0;
     let y = d.py + 12;
@@ -381,7 +393,9 @@ export function createModBrowser(opts) {
       tick(d.x0, actionY + 7);
       text(F16, 'INSTALLED', d.x0 + 15, actionY);
       const sub = done ? 'LOADS WHEN YOU CLOSE THIS' : st.confirm === it.id ? `${key} AGAIN TO REMOVE IT` : `${key} TO REMOVE`;
-      text(F10, sub, d.x0, actionY + 24, st.confirm === it.id ? 'ink' : 'light');
+      // kept left of the way out, on two lines if it needs them
+      wrapText(sub, width - backW - 12, (t) => measure(F10, t), 2)
+        .forEach((line, i) => text(F10, line, d.x0, actionY + 22 + i * 11, st.confirm === it.id ? 'ink' : 'light'));
       if (!done) st.regions.push({ kind: 'act', x: d.x0 - 4, y: actionY - 4, w: width + 8, h: 44 });
     } else if (it.big) {
       text(F10, 'TOO BIG FOR THE BROWSER', d.x0, actionY + 4);
@@ -394,7 +408,7 @@ export function createModBrowser(opts) {
       text(F10, key, d.x0 + w2 + 8, actionY + 5, 'light');
       st.regions.push({ kind: 'act', x: d.x0 - 4, y: actionY - 4, w: width + 8, h: 30 });
     }
-    if (s.message) text(F10, clip(F10, String(s.message).toUpperCase(), width - backW - 10), d.x0, by, 'ink');
+    if (s.message) text(F10, clip(F10, String(s.message).toUpperCase(), width - backW - 10), d.x0, touch() ? by + 7 : by, 'ink');
   }
   // a check mark, pixel by pixel, in the ink
   function tick(x, y) {

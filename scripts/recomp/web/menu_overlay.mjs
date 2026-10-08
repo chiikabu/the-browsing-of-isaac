@@ -8,9 +8,11 @@
 // gate first, which asks window.isaacEditFile(slot): this module opens the
 // menu instead. Its entries: EXPORT FILE, IMPORT FILE, DELETE FILE, BACK.
 // The FPS readout is a key, not an entry: N flips it (play.mjs), a corner
-// text in the same font, remembered by this browser only. Delete hands the flow back to the engine (the
-// page sets window.isaacEditFileDelete and presses confirm again, so the
-// game's own prompt and deletion run untouched). Export and import are the
+// text in the same font, remembered by this browser only. Delete asks first
+// (DELETE FILE N? with NO under the cursor); YES hands the flow back to the
+// engine: the page sets window.isaacEditFileDelete and presses confirm again,
+// the game's own prompt comes up through the gate, and the page answers it,
+// so the deletion itself runs untouched. Export and import are the
 // page's saves store; the fps viewer is a corner readout in the same font.
 //
 // Drawing: one canvas over the game's, 960x540 (the game's 480x270 at 2x,
@@ -20,8 +22,13 @@
 // the engine's menu sounds through the page's AudioContext.
 
 const GAME_W = 480, GAME_H = 270, SCALE = 2;
+const FINGER_CSS = 40;            // rows closer than this on screen are chosen, then confirmed
+const ROW_MID = 7;                // a row's text centre below its top, in game px
+const PROMPT_WAIT_MS = 3000;      // how long the engine has to take the delete through its gate
+const PROMPT_SETTLE_FRAMES = 20;  // frames the engine's prompt is given before it is answered
+const PROMPT_STEP_FRAMES = 8;     // frames between choosing YES on it and confirming
 // the credit on the menu paper (round 87)
-const CREDIT_TEXT = 'ported by shisa';
+const CREDIT_TEXT = 'ported by chiikabu';
 
 export function parseBmfont(buf) {
   const b = new Uint8Array(buf), dv = new DataView(buf);
@@ -154,7 +161,7 @@ export function createEditFileMenu(opts) {
   // readAsset (round 70) is how a build with no server hands over its own files
   const { stage, canvas, assetsUrl, readAsset, actions, injectKey } = opts;
   const log = opts.log || (() => {});
-  const state = { open: false, slot: 0, cursor: 0, message: null, fps: null, fpsOn: false, closing: false, creditOn: false };
+  const state = { open: false, slot: 0, cursor: 0, message: null, fps: null, fpsOn: false, closing: false, creditOn: false, confirm: false };
   const M = menuAssets(opts);
   const { A, load, play, measure, drawText } = M;
   // Off on every load. N flips it for this visit only: it used to be remembered,
@@ -204,19 +211,26 @@ export function createEditFileMenu(opts) {
     else if (state.fpsOn) drawFps();
     return state.fpsOn;
   };
+  // DELETE FILE asks first, here, NO under the cursor: the rows become NO and
+  // YES on the same paper.
+  const rows = () => (state.confirm ? ['NO', 'YES'] : items());
+  // the seed paper (blank) where the engine draws its own prompt, the prompt
+  // paper's width and taller by however many entries there are: a title, the
+  // rows at LINE_H, and room under them for the message
+  const LINE_H = 17;
+  const paper = () => {
+    const R = A.menu.rects, [px, py0] = R.prompt_at, [, , sw, sh0] = R.prompt_paper;
+    return { x: px, y: py0 - 12, w: sw, h: sh0 + 24 + (items().length - 4) * LINE_H, top: py0 - 12 + 40 };
+  };
   const draw = () => {
     if (!state.open || !M.isReady()) return;
-    const R = A.menu.rects, [px0, py0] = R.prompt_at, [sx, sy, sw, sh0] = R.prompt_paper;
-    // the seed paper (blank) where the engine draws its own prompt, the prompt
-    // paper's width and taller by however many entries there are: a title, the
-    // rows at lineH, and room under them for the message
-    const sh = sh0 + 24 + (items().length - 4) * 17, px = px0, py = py0 - 12;
+    const R = A.menu.rects, P = paper(), sw = P.w, sh = P.h, px = P.x, py = P.y;
     g.clearRect(0, 0, overlay.width, overlay.height);
     g.drawImage(A.paper, 0, 0, A.paper.width, A.paper.height, px * SCALE, py * SCALE, sw * SCALE, sh * SCALE);
-    const title = `FILE ${state.slot + 1}`;
+    const title = state.confirm ? `DELETE FILE ${state.slot + 1}?` : `FILE ${state.slot + 1}`;
     drawText(g, title, px + (sw - measure(title)) / 2, py + 10, A.atlas);
-    const list = items();
-    const lineH = 17, top = py + 40;
+    const list = rows();
+    const lineH = LINE_H, top = P.top;
     list.forEach((label, i) => {
       const y = top + i * lineH, w = measure(label), x = px + (sw - w) / 2;
       drawText(g, label, x, y, i === state.cursor ? A.atlas : A.atlasLight);
@@ -225,7 +239,9 @@ export function createEditFileMenu(opts) {
         g.drawImage(A.sheet, cx, cy, cw, ch, (x - cw - 4) * SCALE, (y - 4) * SCALE, cw * SCALE, ch * SCALE);
       }
     });
-    if (state.message) drawText(g, state.message, px + (sw - measure(state.message)) / 2, py + sh - 24, A.atlas);
+    // the question's warning sits under its two rows, on the paper's face
+    if (state.confirm) drawText(g, 'THERE IS NO UNDO', px + (sw - measure('THERE IS NO UNDO')) / 2, top + 2 * lineH + 10, A.atlas);
+    else if (state.message) drawText(g, state.message, px + (sw - measure(state.message)) / 2, py + sh - 24, A.atlas);
   };
   const drawFps = () => {
     if (!M.isReady()) return;
@@ -267,7 +283,7 @@ export function createEditFileMenu(opts) {
 
   const open = async (slot) => {
     if (state.open) return;
-    state.slot = slot; state.cursor = 0; state.message = null; state.open = true; state.closing = false;
+    state.slot = slot; state.cursor = 0; state.message = null; state.open = true; state.closing = false; state.confirm = false;
     try { await load(); } catch (e) { state.open = false; return; }
     if (!state.open) return;
     overlay.hidden = false;
@@ -281,43 +297,108 @@ export function createEditFileMenu(opts) {
     if (sound) play(sound);
     log('[menu] EDIT FILE closed');
   };
+  const press = (name) => { injectKey(name, true); setTimeout(() => injectKey(name, false), 80); };
+  // YES: the engine's own prompt and deletion run untouched. The gate lets the
+  // prompt through for the slot the page names and consumes the name; once it
+  // has, the prompt is up, and its confirm is pressed for the player (the
+  // question was asked here). A gate that never asks deletes nothing.
+  const deleteSlot = () => {
+    const slot = state.slot;
+    play('delete');
+    close(null);
+    log(`[menu] DELETE FILE ${slot + 1}: yes`);
+    window.isaacEditFileDelete = slot;
+    press('enter');
+    const asked = Date.now();
+    const answer = () => {
+      if (window.isaacEditFileDelete === slot) {
+        if (Date.now() - asked < PROMPT_WAIT_MS) { setTimeout(answer, 30); return; }
+        window.isaacEditFileDelete = -1;
+        log('[menu] the engine did not ask; nothing deleted');
+        return;
+      }
+      // The prompt reads ARE YOU SURE? over YES and NO, with NO chosen: its
+      // paper takes a few frames to come up before it listens, then Left
+      // chooses YES and confirm answers it.
+      const after = (frames, then) => {
+        const from = window.isaacFrame || 0, since = Date.now();
+        const wait = () => {
+          if ((window.isaacFrame || 0) - from < frames && Date.now() - since < 4000) { setTimeout(wait, 30); return; }
+          then();
+        };
+        wait();
+      };
+      after(PROMPT_SETTLE_FRAMES, () => { press('left'); after(PROMPT_STEP_FRAMES, () => press('enter')); });
+    };
+    setTimeout(answer, 30);
+  };
   const select = async () => {
-    const i = state.cursor, rows = items();
-    if (rows[i] === 'BACK') { close('back'); return; }
-    if (rows[i] === 'MODS') { play('select'); close(null); actions.mods(); return; }
-    if (i === 2) {
-      // the engine's own prompt: the gate lets the transition through when the
-      // page has named the slot, and the confirm is pressed for the player
-      play('delete');
-      close(null);
-      window.isaacEditFileDelete = state.slot;
-      injectKey('enter', true);
-      setTimeout(() => injectKey('enter', false), 80);
+    const label = rows()[state.cursor];
+    if (state.confirm) {
+      if (label === 'YES') { state.confirm = false; deleteSlot(); return; }
+      cancelConfirm();
       return;
     }
+    if (label === 'BACK') { close('back'); return; }
+    if (label === 'MODS') { play('select'); close(null); actions.mods(); return; }
+    if (label === 'DELETE FILE') {
+      state.confirm = true; state.cursor = 0; state.message = null;
+      play('select');
+      draw();
+      return;
+    }
+    const exporting = label === 'EXPORT FILE';
     play('select');
-    state.message = i === 0 ? 'EXPORTING...' : 'CHOOSE A FILE...';
-    log(`[menu] ${items()[i]} for file ${state.slot + 1}`);
+    state.message = exporting ? 'EXPORTING...' : 'CHOOSE A FILE...';
+    log(`[menu] ${label} for file ${state.slot + 1}`);
     draw();
     try {
-      const r = await (i === 0 ? actions.export(state.slot) : actions.import(state.slot));
-      state.message = r || (i === 0 ? 'EXPORTED' : 'IMPORTED');
+      const r = await (exporting ? actions.export(state.slot) : actions.import(state.slot));
+      state.message = r || (exporting ? 'EXPORTED' : 'IMPORTED');
     } catch (e) { state.message = (e && e.message ? e.message : 'FAILED').toUpperCase().slice(0, 28); }
     log(`[menu] ${state.message}`);
     draw();
   };
+  // NO, or back: the file's own rows again, the cursor on DELETE FILE
+  const cancelConfirm = () => {
+    state.confirm = false;
+    state.cursor = Math.max(0, items().indexOf('DELETE FILE'));
+    play('back');
+    draw();
+  };
+  const back = () => { if (state.confirm) cancelConfirm(); else close('back'); };
   const onKey = (ev, down) => {
     if (!state.open) return false;
     // key-ups always reach the engine: the confirm that opened this menu went
     // down in the engine's eyes, and its release must follow (a held confirm
     // would swallow the press the Delete entry makes for the player)
     if (!down) return false;
-    const code = ev.code;
-    if (code === 'ArrowUp' || code === 'KeyW') { state.cursor = (state.cursor + items().length - 1) % items().length; play('move'); draw(); }
-    else if (code === 'ArrowDown' || code === 'KeyS') { state.cursor = (state.cursor + 1) % items().length; play('move'); draw(); }
+    const code = ev.code, n = rows().length;
+    if (code === 'ArrowUp' || code === 'KeyW') { state.cursor = (state.cursor + n - 1) % n; play('move'); draw(); }
+    else if (code === 'ArrowDown' || code === 'KeyS') { state.cursor = (state.cursor + 1) % n; play('move'); draw(); }
     else if (code === 'Enter' || code === 'Space' || code === 'KeyE') { select(); }
-    else if (code === 'Escape' || code === 'Backspace') { close('back'); }
+    else if (code === 'Escape' || code === 'Backspace') { back(); }
     return true;
+  };
+  // A tap or a click at game (gx, gy): the row it is for, the nearest within
+  // half a row's reach; -1 between rows or on the paper; 'outside' off it.
+  const hit = (gx, gy) => {
+    if (!state.open || !M.isReady()) return -1;
+    const P = paper();
+    if (gx < P.x - 12 || gx >= P.x + P.w + 12 || gy < P.y - 12 || gy >= P.y + P.h + 12) return 'outside';
+    let best = -1, distance = Infinity;
+    rows().forEach((_, i) => { const d = Math.abs(gy - (P.top + i * LINE_H + ROW_MID)); if (d < distance) { best = i; distance = d; } });
+    return distance <= LINE_H * 0.75 ? best : -1;
+  };
+  // A tap on row i: a mouse, or a finger on rows it can tell apart, does it at
+  // once; rows closer than a fingertip are chosen first and done by a second
+  // tap on the chosen row. cssPerGamePx is how large the game is drawn.
+  const tapRow = (i, cssPerGamePx = Infinity) => {
+    const n = rows().length;
+    if (!state.open || !(i >= 0 && i < n)) return;
+    if (i !== state.cursor && LINE_H * cssPerGamePx < FINGER_CSS) { state.cursor = i; play('move'); draw(); return; }
+    state.cursor = i;
+    select();
   };
 
   return {
@@ -327,8 +408,10 @@ export function createEditFileMenu(opts) {
     fpsViewer: () => state.fpsOn,
     // what the menu is showing, so a driver can walk to a row by name rather
     // than by counting presses (the entries are not always the same four)
-    rows: () => items(),
-    current: () => items()[state.cursor] || null,
+    rows: () => rows(),
+    current: () => rows()[state.cursor] || null,
+    confirming: () => state.confirm,
+    hit, tapRow, back,
     setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!M.isReady()) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
     // the screen the engine is on, so the credit knows whether to be there
     setScreen,

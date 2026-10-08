@@ -22,7 +22,7 @@
 const $ = (id) => document.getElementById(id);
 import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
-import { createModsMenu, openModDb, listMods, MODS_DB } from './mods.mjs';
+import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
 import { createModBrowser } from './mod_browser.mjs';
 import { createTouchControls } from './touch_controls.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
@@ -233,7 +233,7 @@ if (portable && typeof portable.recordDownload === 'function')
 // and context recreation. Only the destination is muted; the mixer stays live.
 hooks.onAudioReady = (A) => {
   audioOutput = A.outputGain;
-  audioOutput.gain.value = gameReady ? 1 : 0;
+  audioOutput.gain.value = gameReady && !document.hidden ? 1 : 0;
 };
 // a single-file build answers with bytes, not URLs: the reader Worker would have
 // nothing to fetch, so it is not started
@@ -552,13 +552,71 @@ const readMenuId = () => {
 // paper and is gone the moment a run starts
 // The menu camera's position: the tag waits for the MODS screen to stop sliding in.
 const menuView = () => { const G = window.isaacGuest; try { const mgr = G && G.u32(MENU_MGR_PTR); return mgr ? `${G.u32(mgr + 0x44)}:${G.u32(mgr + 0x48)}` : ''; } catch { return ''; } };
-let lastView = '';
+let lastView = '', stillPolls = 0;
 const watchScreen = () => setInterval(() => {
-  const screen = readMenuId(), view = menuView(), still = view === lastView;
+  // still for two polls running: a pan can hold one position across a single poll
+  const screen = readMenuId(), view = menuView();
+  stillPolls = view === lastView ? stillPolls + 1 : 0;
+  const still = stillPolls >= 2;
   lastView = view;
   editMenu.setScreen(screen);
   modsTag.setShown(screen === MODS_SCREEN && still && !modsMenu.isOpen() && gameReady && modsBrowsable());
+  if (screen === MODS_SCREEN && gameReady) syncGameMods();
 }, 200);
+
+// ---- a mod turned back on in the game's own list ----------------------------------------
+// The game writes mods/<dir>/disable.it to turn a mod off, and the page keeps
+// that flag (boot_web.mjs). Turning it back on first asks the game's file index
+// whether disable.it exists (0x008e3a27 -> 0x00a17860), and that index never
+// saw a file written this session, so remove() is never called and the page
+// never hears of it. So while the MODS screen is up the page reads the list
+// itself: ModManager at Manager+0x2a6c0 (0x00952788 and 0x009b2474 pass it to
+// ListMods 0x008f61d0), a vector of ModEntry* at +0, each entry's folder as a
+// std::string at +0 and its enabled byte at +0xfc (0x008e3a12 tests that byte
+// to choose between writing and removing disable.it).
+const MOD_MANAGER_OFF = 0x2a6c0, MOD_ENABLED_OFF = 0xfc;
+function guestString(G, at) {
+  const size = G.u32(at + 0x10), capacity = G.u32(at + 0x14);
+  if (size > 260) return '';
+  const data = capacity >= 16 ? G.u32(at) : at;
+  let s = '';
+  for (let i = 0; i < size; i++) s += String.fromCharCode(G.u8(data + i));
+  return s;
+}
+function readGameMods(G) {
+  const manager = G.u32(0x00c7169c);
+  if (!manager) return null;
+  const begin = G.u32(manager + MOD_MANAGER_OFF), end = G.u32(manager + MOD_MANAGER_OFF + 4);
+  if (!begin || end < begin || end - begin > 4 * 1024 || (end - begin) % 4) return null;
+  const out = [];
+  for (let at = begin; at < end; at += 4) {
+    const entry = G.u32(at);
+    if (entry) out.push({ dir: guestString(G, entry).split(/[\\/]/).filter(Boolean).pop() || '', enabled: G.u8(entry + MOD_ENABLED_OFF) !== 0 });
+  }
+  return out;
+}
+let gameModsOn = '', gameModsBusy = false;
+async function syncGameMods() {
+  if (gameModsBusy || !window.isaacGuest) return;
+  let list = null;
+  try { list = readGameMods(window.isaacGuest); } catch { return; }
+  if (!list) return;
+  const on = list.filter((m) => m.enabled && m.dir).map((m) => m.dir.toLowerCase()).sort().join('/');
+  if (on === gameModsOn) return;
+  gameModsOn = on;
+  const enabled = new Set(on.split('/'));
+  gameModsBusy = true;
+  try {
+    const db = await openModDb();
+    if (!db) return;
+    for (const mod of await listMods(db)) {
+      if (mod.enabled !== false || !enabled.has(String(mod.id).toLowerCase())) continue;
+      await setModEnabled(db, mod.id, true);
+      console.log(`[mods] ${mod.id} turned back on in the game's list`);
+    }
+    db.close();
+  } catch (e) { console.warn(`[mods] the game's list could not be read back: ${e.message}`); } finally { gameModsBusy = false; }
+}
 
 function updateStreaming() {
   streamingEl.textContent = `requested ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
@@ -643,7 +701,9 @@ function readTouchState() {
       }
     }
   } catch { /* state can disappear while the native run is closing */ }
-  return { ready, running, transit, cinematic, paused, menu: paper || readMenuId(), twins, better,
+  // a cutscene playing (readReadyState's shell+8 == 3 with one loaded): a tap skips it
+  const cutscene = !!(native && !native.run && typeof native.key === 'string' && native.key.startsWith('cutscene:'));
+  return { ready, running, transit, cinematic, cutscene, paused, menu: paper || readMenuId(), twins, better,
     frame: window.isaacFrame || 0, blocked: !ready || $('saves').open };
 }
 let readyCandidate = null;
@@ -667,7 +727,7 @@ function checkReady() {
   overlay.hidden = true;
   overlay.classList.remove('preparing');
   overlay.setAttribute('aria-busy', 'false');
-  if (audioOutput) audioOutput.gain.value = 1;
+  if (audioOutput) audioOutput.gain.value = document.hidden ? 0 : 1;
   setStatus('running');
   canvas.focus();
 }
@@ -793,7 +853,7 @@ const coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer: 
 const modsTag = createMenuTag({
   stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'mods-tag', at: [312, 150],
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
-  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'CLICK OR B'],
+  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
 });
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
@@ -810,6 +870,13 @@ function pageMenuTap(gx, gy, cx, cy) {
     if (at.row !== undefined) modsMenu.tapRow(at.row);
     return true;
   }
+  if (editMenu.isOpen()) {
+    // a row: chosen, or done when it is the chosen one; anywhere else, nothing
+    // (the corner BACK sticker and two fingers go back)
+    const at = editMenu.hit(gx, gy);
+    if (typeof at === 'number' && at >= 0) editMenu.tapRow(at, $('stage').getBoundingClientRect().width / 480);
+    return true;
+  }
   if (readMenuId() === MODS_SCREEN && modsTag.hit(gx, gy)) { openModBrowser(); return true; }
   return false;
 }
@@ -820,10 +887,17 @@ const touchLayer = () => document.documentElement.classList.contains('isaac-touc
 window.addEventListener('pointerdown', (ev) => {
   if (ev.pointerType === 'touch' || ev.button !== 0 || touchLayer()) return;
   if (modsMenu.inBrowser()) { modsMenu.tapClient(ev.clientX, ev.clientY); ev.preventDefault(); return; }
-  if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
   const r = $('stage').getBoundingClientRect();
   if (!r.width) return;
-  if (modsTag.hit((ev.clientX - r.left) / r.width * 480, (ev.clientY - r.top) / r.height * 270)) { openModBrowser(); ev.preventDefault(); }
+  const gx = (ev.clientX - r.left) / r.width * 480, gy = (ev.clientY - r.top) / r.height * 270;
+  // the EDIT FILE paper's rows answer a click
+  if (editMenu.isOpen()) {
+    const at = editMenu.hit(gx, gy);
+    if (typeof at === 'number' && at >= 0) { editMenu.tapRow(at); ev.preventDefault(); }
+    return;
+  }
+  if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
+  if (modsTag.hit(gx, gy)) { openModBrowser(); ev.preventDefault(); }
 }, true);
 window.addEventListener('wheel', (ev) => { if (modsMenu.inBrowser()) { modsMenu.wheel(ev.deltaY); ev.preventDefault(); } }, { passive: false });
 
@@ -1080,6 +1154,31 @@ const touchControls = createTouchControls({
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
 });
 window.addEventListener('pagehide', (ev) => { if (!ev.persisted) touchControls.destroy(); });
+
+// ---- another tab in front: the run waits on its pause paper -----------------------------
+// A hidden tab keeps the game on a slow tick (the yield's timer), so a run left
+// behind another tab played on. Escape opens the game's own pause paper instead,
+// and the speakers rest until the tab is back. Nothing restarts: the player
+// comes back to RESUME GAME. Menus and cutscenes are left as they are.
+function pauseHiddenRun() {
+  if (typeof window.isaacInjectKey !== 'function') return false;
+  const st = readTouchState();
+  if (!st.ready || !st.running || st.paused || st.cinematic) return false;
+  const from = window.isaacFrame || 0, since = Date.now();
+  window.isaacInjectKey('escape', true);
+  // released once the engine has polled it, however slowly a hidden tab ticks
+  const release = () => {
+    if ((window.isaacFrame || 0) - from < 2 && Date.now() - since < 10000) { setTimeout(release, 50); return; }
+    window.isaacInjectKey('escape', false);
+  };
+  setTimeout(release, 50);
+  console.log('[isaac] the tab went to the background: the run is paused');
+  return true;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pauseHiddenRun();
+  if (audioOutput) audioOutput.gain.value = document.hidden || !gameReady ? 0 : 1;
+});
 
 // ---- a first visit starts at the title, not at two confirm screens (round 73).
 // Before the pipeline, which restores the store into the engine's file system.

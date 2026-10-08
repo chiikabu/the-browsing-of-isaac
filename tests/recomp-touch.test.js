@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTouchInput, stickKeys, twinAction } from '../scripts/recomp/web/touch_input.mjs';
-import { touchMode, overlayShown, barDrawKey } from '../scripts/recomp/web/touch_controls.mjs';
+import { touchMode, overlayShown, barDrawKey, backShown, nearestRow, rowTapConfirms } from '../scripts/recomp/web/touch_controls.mjs';
 
 // The native poll drains every queued edge before sampling key state. A down/up
 // pair in one poll therefore cannot stand in for a usable game button press.
@@ -428,4 +428,38 @@ test('the bar redraws when a cinematic starts or ends, and not otherwise', () =>
   assert.notEqual(key(true), key(false), 'a VS card hides the bar, so the drawing must run');
   assert.equal(key(false), key(false), 'nothing changed, nothing redrawn');
   assert.notEqual(key(false, 4), key(false, 3), 'a bomb picked up redraws it');
+});
+
+test('the corner BACK sticker: menus with somewhere to go back to and no BACK paper of their own', () => {
+  const at = (menu, extra = {}) => ({ running: false, cutscene: false, menu, ...extra });
+  // main menu, WHO AM I?, challenges, stats, options, MODS, online
+  for (const screen of [3, 5, 7, 9, 10, 16, 19]) assert.equal(backShown('menu', at(screen), screen), true, `screen ${screen}`);
+  // the title has nowhere to go; the file screen draws its own BACK paper
+  for (const screen of [1, 2, -1]) assert.equal(backShown('menu', at(screen), screen), false, `screen ${screen}`);
+  assert.equal(backShown('menu', at('edit-file'), 2), true, 'EDIT FILE over the file screen');
+  assert.equal(backShown('menu', at('mods'), 16), false, 'the mod browser draws its own BACK');
+  assert.equal(backShown('game', at(3), 3), false, 'never over a room');
+  assert.equal(backShown('menu', at(5, { running: true }), 5), false, 'not on the pause or death paper');
+  assert.equal(backShown('menu', at(3, { cutscene: true }), 3), false, 'not over a cutscene');
+});
+
+test('a tap picks the nearest row within reach; between the papers it picks none', () => {
+  const rows = [68, 90, 113, 136, 158, 180];
+  assert.equal(nearestRow(rows, 68, 15), 0);
+  assert.equal(nearestRow(rows, 78, 15), 0, 'nearer NEW RUN than CONTINUE');
+  assert.equal(nearestRow(rows, 80, 15), 1, 'nearer CONTINUE');
+  assert.equal(nearestRow(rows, 79, 15), 0, 'exactly between two rows: the upper one');
+  assert.equal(nearestRow(rows, 195, 15), 5, 'just under the last row is still the last row');
+  assert.equal(nearestRow(rows, 196, 15), -1, 'past reach: nothing');
+  assert.equal(nearestRow(rows, 40, 15), -1);
+  assert.equal(nearestRow([], 40, 15), -1);
+});
+
+test('rows closer than a fingertip are chosen first and confirmed on the chosen row', () => {
+  assert.equal(rowTapConfirms(2, 0, 22 * 0.81), false, 'an upright phone: 18 px rows');
+  assert.equal(rowTapConfirms(2, 2, 22 * 0.81), true, 'the chosen row confirms');
+  assert.equal(rowTapConfirms(2, 0, 22 * 1.44), false, 'a phone on its side: 32 px rows');
+  assert.equal(rowTapConfirms(2, 0, 22 * 2.5), true, 'a tablet: 55 px rows confirm at once');
+  assert.equal(rowTapConfirms(2, 0, 40), true, 'a fingertip apart is enough');
+  assert.equal(rowTapConfirms(2, 0, 39.9), false);
 });

@@ -397,7 +397,7 @@ test('round 59: the saves round trip is driven on the shipping page, and the men
   assert.ok(d.includes("const keyOf = (n) => SAVE_DIR + `persistentgamedata${n}.dat`;") && d.includes('const lookalikes = (all, n) =>'), 'a file is found by the exact key the page writes; the engine\'s save_backups copies are named, not counted');
   assert.ok(d.includes("check(imported.length === 1 && same(imported[0].bytes, before[0].bytes)") && d.includes('a bare .dat imports into file 3 under this file'), 'the import is checked before the page reloads itself, and a bare .dat goes in too');
   const m = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
-  assert.ok(m.includes("log(`[menu] ${items()[i]} for file ${state.slot + 1}`);") && m.includes("log(`[menu] ${state.message}`);") && m.includes('message: () => state.message,'), 'the menu logs the choice and its outcome, and exposes the message');
+  assert.ok(m.includes("log(`[menu] ${label} for file ${state.slot + 1}`);") && m.includes("log(`[menu] ${state.message}`);") && m.includes('message: () => state.message,'), 'the menu logs the choice and its outcome, and exposes the message');
   const pl = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
   assert.ok(pl.includes("console.log('[menu] the file chooser was asked for');"), 'the import logs the chooser call');
 });
@@ -650,7 +650,7 @@ test('round 87: the credit is drawn on the menu paper and nowhere else', () => {
   // picture and the canvas fills it, so a percentage from the left edge is a
   // percentage into the game rather than into the letterbox around it.
   const ov = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
-  assert.match(ov, /const CREDIT_TEXT = 'ported by shisa';/, 'the text');
+  assert.match(ov, /const CREDIT_TEXT = 'ported by chiikabu';/, 'the text');
   assert.match(ov, /creditEl\.id = 'credit';/, 'its own surface');
   assert.match(ov, /left:1%;bottom:1\.2%/, 'bottom-left');
   assert.match(ov, /const CREDIT_ON = new Set\(\[3, 7, 9, 10, 19\]\);/,

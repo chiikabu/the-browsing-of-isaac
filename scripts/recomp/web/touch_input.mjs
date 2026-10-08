@@ -9,14 +9,20 @@ export function stickKeys(x, y, shooting = false) {
   return keys;
 }
 
-// Eight directions that stay put. A thumb resting near a sector edge must not
-// flick between a diagonal and its neighbour: Isaac's body and head would turn
-// on every flip. A direction is kept until the stick leaves its 45-degree sector
-// by `hold` degrees; the dead zone has the same give, in and out.
+// Directions that stay put. A thumb resting near a sector edge must not flick
+// between neighbours: Isaac's body and head would turn on every flip. A
+// direction is kept until the stick leaves its sector by `hold` degrees; the
+// dead zone has the same give, in and out.
+//
+// Walking takes eight directions. Firing takes four: Isaac's tears go up, down,
+// left or right, and two fire keys held at once turn his head to whichever
+// came last, so a diagonal sector fired wherever the thumb had last crossed a
+// line. Four quarter sectors fire where the thumb points. Both dead zones are
+// small, so a stick that lands under the thumb answers the first few pixels.
 const MOVE_KEYS = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
-const FIRE_KEYS = [['right'], ['down', 'right'], ['down'], ['down', 'left'], ['left'], ['left', 'up'], ['up'], ['right', 'up']];
-export function createStickDirection({ shooting = false, deadzone = 0.2, release = 0.14, hold = 12 } = {}) {
-  const table = shooting ? FIRE_KEYS : MOVE_KEYS;
+const FIRE_KEYS = [['right'], ['down'], ['left'], ['up']];
+export function createStickDirection({ shooting = false, deadzone = shooting ? 0.1 : 0.15, release = shooting ? 0.06 : 0.1, hold = shooting ? 15 : 12 } = {}) {
+  const table = shooting ? FIRE_KEYS : MOVE_KEYS, width = 360 / table.length;
   let current = -1;
   return {
     reset() { current = -1; },
@@ -28,10 +34,10 @@ export function createStickDirection({ shooting = false, deadzone = 0.2, release
       let angle = Math.atan2(y, x) * 180 / Math.PI;
       if (angle < 0) angle += 360;
       if (current >= 0) {
-        const off = Math.abs(((angle - current * 45) % 360 + 540) % 360 - 180);
-        if (off <= 22.5 + hold) return table[current].slice();
+        const off = Math.abs(((angle - current * width) % 360 + 540) % 360 - 180);
+        if (off <= width / 2 + hold) return table[current].slice();
       }
-      current = Math.round(angle / 45) % 8;
+      current = Math.round(angle / width) % table.length;
       return table[current].slice();
     },
   };
