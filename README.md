@@ -21,10 +21,7 @@ install mods from the game's own MODS menu.
 
 ## On a phone
 
-<p align="center">
-  <img src="docs/media/phone-portrait.webp" height="440" alt="Playing in portrait">&nbsp;
-  <img src="docs/media/phone-landscape.webp" height="220" alt="Playing in landscape">
-</p>
+<p align="center"><img src="docs/media/phones.webp" width="800" alt="Playing upright and sideways on a phone"></p>
 
 There are no extra buttons on screen; you play by touching the game.
 
@@ -56,13 +53,20 @@ Vibration follows the game's Rumble option.
 
 <p align="center"><img src="docs/media/menus.webp" width="640" alt="Loading, the title screen and the main menu"></p>
 
-## Saves and mods
+## Mods
+
+<p align="center"><img src="docs/media/mods.webp" width="640" alt="Installing External Item Descriptions from the MODS screen, then using it in a run"></p>
+
+Mods from the Steam Workshop run here too, Lua and all. Open the game's
+**MODS** screen and click **MOD BROWSER** (press <kbd>B</kbd>, or tap it on a
+phone): search the catalogue, read what each mod does, and install it. The game
+restarts with the mod loaded. A mod you already have can be added from a
+`.zip`.
+
+## Saves
 
 Saves stay in the browser you play in. **EDIT FILE** on the file select screen
 exports a save or imports one, including a `.dat` save from PC.
-
-On the **MODS** screen, tap **MOD BROWSER** (or press <kbd>B</kbd>) to search
-and install mods, or add one from a `.zip` or folder.
 
 ## Browsers
 

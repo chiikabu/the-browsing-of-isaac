@@ -59,8 +59,14 @@ frames by `touch_input.mjs`.
   **EDIT FILE** on the file screen exports a slot as a ZIP or imports a ZIP or a
   PC `.dat` save.
 - Mods have their own store (`isaac-mods`); enabled mods are seeded before the
-  engine scans for them. The MODS screen opens the mod browser: a catalogue
-  built by `scripts/recomp/assets/modpack.py`, plus import from a ZIP or folder.
+  engine scans for them, so a new mod loads when the page restarts. The MODS
+  screen opens the mod browser (`mod_browser.mjs`): two pages of the game's own
+  MODS paper, a searchable list and the chosen mod's description, over a
+  catalogue built by `scripts/recomp/assets/modpack.py`. A ZIP or folder can be
+  imported too. Workshop descriptions are cleaned of BBCode on the way in.
+- Lua mods run on Lua 5.3.3 built into the host (`scripts/recomp/host/lua_build.py`);
+  the game's calls into it go through `host_lua.c`, which formats `luaL_error`
+  and `lua_pushfstring` arguments off the guest stack.
 
 ## Requirements
 
