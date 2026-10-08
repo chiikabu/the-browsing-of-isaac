@@ -743,18 +743,60 @@ LUA_SHIM(lua_pushcclosure) {
     lua_pushcclosure(L_ARG(0), f, I_ARG(2));
     cpu->EAX = 0;
 }
-LUA_SHIM(lua_pushfstring) {
-    /* Varargs through a guest stack. Only %s/%d are used by this binary's
-     * call sites; anything else is reported rather than mis-formatted. */
-    const char *fmt = S_ARG(1);
-    if (fmt && !strpbrk(fmt, "%"))
-        ret_ptr(cpu, lua_pushstring(L_ARG(0), fmt));
-    else {
-        isaac_log("[isaac][lua] lua_pushfstring(\"%s\") with conversions is not "
-                  "marshalled yet (caller 0x%08x)", fmt ? fmt : "(null)",
-                  isaac_retaddr(cpu));
-        ret_ptr(cpu, lua_pushstring(L_ARG(0), fmt ? fmt : ""));
+/* lua_pushfstring and luaL_error take their arguments off the guest stack:
+ * cdecl varargs, where an int, a char and a pointer take one 4-byte slot and
+ * a lua_Integer (%I) and a lua_Number (%f) take two. The conversions are
+ * exactly lua_pushvfstring's (lobject.c, Lua 5.3.3): %% %s %c %d %I %f %p %U.
+ * The message is built here and pushed as one string, so no guest-shaped
+ * va_list ever reaches the host's own formatting.
+ *
+ * These used to pass the format through unformatted. The game's `require`
+ * raises "module '%s' not found:%s" through luaL_error, so a failed require
+ * answered with that literal text -- and mods that find their own folder from
+ * that message (External Item Descriptions, and every mod copying its trick)
+ * failed to load. */
+static int utf8_esc(char *out, unsigned long x) {
+    if (x < 0x80) { out[0] = (char)x; return 1; }
+    if (x < 0x800) { out[0] = (char)(0xC0 | (x >> 6)); out[1] = (char)(0x80 | (x & 0x3F)); return 2; }
+    if (x < 0x10000) { out[0] = (char)(0xE0 | (x >> 12)); out[1] = (char)(0x80 | ((x >> 6) & 0x3F));
+                       out[2] = (char)(0x80 | (x & 0x3F)); return 3; }
+    out[0] = (char)(0xF0 | ((x >> 18) & 0x07)); out[1] = (char)(0x80 | ((x >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((x >> 6) & 0x3F)); out[3] = (char)(0x80 | (x & 0x3F));
+    return 4;
+}
+static const char *push_guest_fstring(lua_State *L, const CpuState *cpu, const char *fmt, unsigned slot) {
+    luaL_Buffer b;
+    char buf[64];
+    luaL_buffinit(L, &b);
+    for (const char *p = fmt; *p; ++p) {
+        if (*p != '%' || !p[1]) { luaL_addchar(&b, *p); continue; }
+        switch (*++p) {
+        case 's': {
+            uint32_t va = isaac_arg(cpu, slot++);
+            const char *s = va && isaac_is_guest_va(va) ? (const char *)isaac_g(va) : NULL;
+            luaL_addstring(&b, s ? s : "(null)");
+            break;
+        }
+        case 'c': luaL_addchar(&b, (char)isaac_arg(cpu, slot++)); break;
+        case 'd': snprintf(buf, sizeof buf, "%d", (int)isaac_arg(cpu, slot++)); luaL_addstring(&b, buf); break;
+        case 'I': snprintf(buf, sizeof buf, LUA_INTEGER_FMT, (LUAI_UACINT)i64_arg(cpu, slot)); slot += 2;
+                  luaL_addstring(&b, buf); break;
+        case 'f': snprintf(buf, sizeof buf, LUA_NUMBER_FMT, (LUAI_UACNUMBER)num_arg(cpu, slot)); slot += 2;
+                  if (buf[strspn(buf, "-0123456789")] == '\0') strcat(buf, ".0");   /* looks like an int */
+                  luaL_addstring(&b, buf); break;
+        case 'p': snprintf(buf, sizeof buf, "0x%08x", isaac_arg(cpu, slot++)); luaL_addstring(&b, buf); break;
+        case 'U': { int n = utf8_esc(buf, (unsigned long)isaac_arg(cpu, slot++)); luaL_addlstring(&b, buf, (size_t)n); break; }
+        case '%': luaL_addchar(&b, '%'); break;
+        default:  luaL_addchar(&b, '%'); luaL_addchar(&b, *p); break;
+        }
     }
+    luaL_pushresult(&b);
+    return lua_tostring(L, -1);
+}
+
+LUA_SHIM(lua_pushfstring) {
+    const char *fmt = S_ARG(1);
+    ret_ptr(cpu, push_guest_fstring(L_ARG(0), cpu, fmt ? fmt : "", 2));
 }
 
 /* get / to */
@@ -829,10 +871,14 @@ LUA_SHIM(luaL_tolstring) {
 LUA_SHIM(luaL_ref)   { cpu->EAX = (uint32_t)luaL_ref(L_ARG(0), I_ARG(1)); }
 LUA_SHIM(luaL_unref) { luaL_unref(L_ARG(0), I_ARG(1), I_ARG(2)); cpu->EAX = 0; }
 LUA_SHIM(luaL_error) {
-    /* Varargs; noreturn. Pass the format through as a literal message rather
-     * than risk mis-marshalling a guest va_list into an error path. */
+    /* Varargs; noreturn. lauxlib's own body: where, the formatted message,
+     * concatenated, raised -- with the message marshalled off the guest stack. */
+    lua_State *L = L_ARG(0);
     const char *fmt = S_ARG(1);
-    cpu->EAX = (uint32_t)luaL_error(L_ARG(0), "%s", fmt ? fmt : "error");
+    luaL_where(L, 1);
+    push_guest_fstring(L, cpu, fmt ? fmt : "error", 2);
+    lua_concat(L, 2);
+    cpu->EAX = (uint32_t)lua_error(L);
 }
 LUA_SHIM(luaL_argerror) {
     const char *m = S_ARG(2);

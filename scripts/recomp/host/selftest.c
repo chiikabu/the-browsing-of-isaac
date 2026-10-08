@@ -46,6 +46,26 @@ void isaac_gl_draw_elements(unsigned mode, int count, unsigned type, uint32_t in
 #  endif
 #endif
 
+#ifdef ISAAC_SELFTEST_HAVE_LUA
+/* luaL_error raises, so it is called from inside a protected call: a C
+ * function that sets up the guest frame the game's require would, and calls
+ * the shim. The upvalues are the guest addresses of the format and its two
+ * string arguments. */
+void imp_lua5_3_3r__luaL_error(CpuState *restrict cpu);
+static int selftest_raise_through_shim(lua_State *L) {
+    CpuState c;
+    memset(&c, 0, sizeof c);
+    c.ESP = ISAAC_STACK_TOP_VA - 0x2000;
+    isaac_w32(c.ESP, 0xDEADBEEF);
+    isaac_w32(c.ESP + 4, isaac_va(L));
+    isaac_w32(c.ESP + 8, (uint32_t)lua_tointegerx(L, lua_upvalueindex(1), NULL));
+    isaac_w32(c.ESP + 12, (uint32_t)lua_tointegerx(L, lua_upvalueindex(2), NULL));
+    isaac_w32(c.ESP + 16, (uint32_t)lua_tointegerx(L, lua_upvalueindex(3), NULL));
+    imp_lua5_3_3r__luaL_error(&c);
+    return 0;
+}
+#endif
+
 /* Provided by the host layer TUs under test. */
 void     isaac_heap_report(void);
 uint64_t isaac_heap_peak(void);
@@ -2197,6 +2217,68 @@ int main(int argc, char **argv) {
     imp_lua5_3_3r__luaL_checkinteger(&lc);
     check(lc.EAX == 42 && lc.EDX == 0,
           "luaL_checkinteger returns in EDX:EAX");
+
+    /* lua_pushfstring and luaL_error take varargs off the guest stack. The
+     * game's require raises "module '%s' not found:%s"; a mod that finds its
+     * own folder in that message (External Item Descriptions) needs it
+     * formatted, which it was not. */
+    {
+        uint32_t g = isaac_guest_alloc(256);
+        char *gs = (char *)isaac_g(g);
+        strcpy(gs + 0, "module '%s' not found:%s");
+        strcpy(gs + 64, "");
+        strcpy(gs + 80, "\n\tno file 'mods/eid/.lua'");
+        strcpy(gs + 128, "%d|%c|%I|%f|%f|%p|%%|%U|%s");
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, g);
+        LARG(2, g + 64);
+        LARG(3, g + 80);
+        imp_lua5_3_3r__lua_pushfstring(&lc);
+        sret = lua_tolstring(L, -1, &slen);
+        check(lc.EAX == isaac_va(sret) && sret && strcmp(sret, "module '' not found:\n\tno file 'mods/eid/.lua'") == 0,
+              "lua_pushfstring formats guest %s arguments (the require message)");
+        lua_pop(L, 1);
+
+        /* every conversion lua_pushvfstring has, in its slots: an int, a
+         * char, a 64-bit integer (two), two doubles (two each), a pointer,
+         * %%, a code point and a NULL string */
+        lint = (lua_Integer)-1234567890123LL;
+        dbl = 1.5;
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, g + 128);
+        LARG(2, (uint32_t)-7);
+        LARG(3, 'Q');
+        LARG64(4, lint);
+        LARG64(6, dbl);
+        dbl = 2.0;
+        LARG64(8, dbl);
+        LARG(10, 0x00c0ffee);
+        LARG(11, 0x20AC);
+        LARG(12, 0);
+        imp_lua5_3_3r__lua_pushfstring(&lc);
+        sret = lua_tolstring(L, -1, &slen);
+        printf("      lua_pushfstring -> \"%s\"\n", sret ? sret : "(null)");
+        check(sret && strcmp(sret, "-7|Q|-1234567890123|1.5|2.0|0x00c0ffee|%|\xE2\x82\xAC|(null)") == 0,
+              "lua_pushfstring marshals %d %c %I %f %p %% %U and a NULL %s");
+        lua_pop(L, 1);
+
+        /* luaL_error: the formatted message, raised */
+        lua_pushinteger(L, (lua_Integer)g);
+        lua_pushinteger(L, (lua_Integer)(g + 64));
+        lua_pushinteger(L, (lua_Integer)(g + 80));
+        lua_pushcclosure(L, selftest_raise_through_shim, 3);
+        {
+            int rc = lua_pcall(L, 0, 0, 0);
+            const char *msg = lua_tostring(L, -1);
+            printf("      luaL_error -> %d \"%s\"\n", rc, msg ? msg : "(null)");
+            check(rc == LUA_ERRRUN && msg && strstr(msg, "module '' not found:\n\tno file 'mods/eid/.lua'") != NULL,
+                  "luaL_error raises its formatted message");
+            lua_pop(L, 1);
+        }
+        isaac_guest_free(g);
+    }
 
     LFRAME();
     LARG(0, isaac_va(L));
