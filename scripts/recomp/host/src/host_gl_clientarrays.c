@@ -64,15 +64,15 @@
  * NOT derivable at all
  *            The true extent of the client buffer. If the app's array is
  *            shorter than max_index+1 vertices, real GL would read out of
- *            bounds and so would we; we cannot detect it. We clamp uploads to
- *            the guest image/heap bounds and report, rather than fault.
+ *            bounds and so would we; we cannot infer it. Upload only the span
+ *            referenced by GL, without padding after the final attribute.
  *
  * PER-FRAME COST
  * --------------
  * Per glDrawElements call:
  *   - index scan: count reads (2 bytes each for GL_UNSIGNED_SHORT).
  *   - index upload: count*2 bytes.
- *   - vertex upload: stride * (max_index+1) bytes per enabled attribute,
+ *   - vertex upload: stride * max_index + attribute width per enabled attribute,
  *     or one upload if all attributes are interleaved in one array (the common
  *     case, and detected here so the buffer is uploaded once).
  * With only 2 draw-call sites in the whole binary, the dominant term is the
@@ -113,6 +113,9 @@ typedef long GLsizeiptr; typedef void GLvoid;
 #define GL_BYTE 0x1400
 #define GL_SHORT 0x1402
 #define GL_INT 0x1404
+#define GL_HALF_FLOAT 0x140B
+#define GL_INT_2_10_10_10_REV 0x8D9F
+#define GL_UNSIGNED_INT_2_10_10_10_REV 0x8368
 extern void glGenBuffers(GLsizei, GLuint *);
 extern void glBindBuffer(GLenum, GLuint);
 extern void glBufferData(GLenum, GLsizeiptr, const void *, GLenum);
@@ -132,6 +135,7 @@ typedef struct {
     GLboolean normalized;
     GLsizei  stride;        /* 0 means tightly packed                  */
     uint32_t client_ptr;    /* guest VA, or 0 if a real VBO was bound  */
+    uint32_t width;         /* bytes occupied by one attribute value   */
 } attrib_state;
 
 static attrib_state g_attribs[ISAAC_MAX_ATTRIBS];
@@ -244,7 +248,7 @@ static uint64_t g_draws, g_indices_scanned, g_vertex_bytes, g_index_bytes;
 static unsigned type_size(GLenum t) {
     switch (t) {
     case GL_BYTE: case GL_UNSIGNED_BYTE:   return 1;
-    case GL_SHORT: case GL_UNSIGNED_SHORT: return 2;
+    case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: return 2;
     case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: return 4;
     default: return 4;
     }
@@ -314,7 +318,10 @@ void isaac_gl_vertex_attrib_pointer(GLuint index, GLint size, GLenum type,
     a->size = size;
     a->type = type;
     a->normalized = normalized;
-    a->stride = stride ? stride : (GLsizei)(size * (GLint)type_size(type));
+    a->width = (type == GL_INT_2_10_10_10_REV ||
+                type == GL_UNSIGNED_INT_2_10_10_10_REV)
+        ? 4u : (uint32_t)size * type_size(type);
+    a->stride = stride ? stride : (GLsizei)a->width;
     a->client_ptr = pointer_va;
     /* Deliberately NOT forwarded to glVertexAttribPointer here: with no buffer
      * bound WebGL2 would reject it. The real call is issued at draw time once
@@ -352,6 +359,15 @@ static uint32_t max_index(uint32_t indices_va, GLsizei count, GLenum type,
     return maxi;
 }
 
+static uint32_t attribute_span(const attrib_state *a, uint32_t count) {
+    return count ? (count - 1u) * (uint32_t)a->stride + a->width : 0;
+}
+
+static uint32_t attribute_offset(uint32_t offset, const attrib_state *a) {
+    /* Preserve the source's alignment, including invalid unaligned inputs. */
+    return offset + ((a->client_ptr - offset) & (type_size(a->type) - 1u));
+}
+
 /* Stage every enabled client attribute and point GL at the staged copy.
  * vertex_count is max_index+1 for indexed draws, or first+count for arrays. */
 static void stage_attributes(uint32_t vertex_count) {
@@ -367,11 +383,13 @@ static void stage_attributes(uint32_t vertex_count) {
         if (!any) { stride0 = a->stride; any = 1; }
         else if (a->stride != stride0) interleaved = 0;
         uint32_t lo = a->client_ptr;
-        uint32_t hi = lo + (uint32_t)a->stride * vertex_count;
+        uint32_t hi = lo + attribute_span(a, vertex_count);
         if (lo < base) base = lo;
         if (hi > top)  top = hi;
     }
     if (!any) return;
+    /* Keep each source pointer's low bits when rebasing mixed scalar types. */
+    if (vertex_count) base &= ~3u;
 
     if (interleaved && (top - base) <= (uint32_t)stride0 * vertex_count + 256) {
         uint32_t bytes = top - base;
@@ -393,14 +411,16 @@ static void stage_attributes(uint32_t vertex_count) {
     for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
         attrib_state *a = &g_attribs[i];
         if (!a->enabled || !a->configured || !a->client_ptr) continue;
-        total += (uint32_t)a->stride * vertex_count;
+        if (vertex_count) total = attribute_offset(total, a);
+        total += attribute_span(a, vertex_count);
     }
     uint32_t at = ring_put(GL_ARRAY_BUFFER, &g_vring, RING_VERTEX_BYTES, 0, total);
     uint32_t off = 0;
     for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
         attrib_state *a = &g_attribs[i];
         if (!a->enabled || !a->configured || !a->client_ptr) continue;
-        uint32_t bytes = (uint32_t)a->stride * vertex_count;
+        if (vertex_count) off = attribute_offset(off, a);
+        uint32_t bytes = attribute_span(a, vertex_count);
 #ifdef __EMSCRIPTEN__
         glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(at + off), (GLsizeiptr)bytes,
                         isaac_g(a->client_ptr));

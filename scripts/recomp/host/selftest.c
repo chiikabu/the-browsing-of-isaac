@@ -1742,6 +1742,8 @@ int main(int argc, char **argv) {
     {
         extern void isaac_audio_gen_sources(uint32_t n, uint32_t out_va);
         extern void isaac_audio_gen_buffers(uint32_t n, uint32_t out_va);
+        extern void isaac_audio_delete_sources(uint32_t n, uint32_t va);
+        extern void isaac_audio_delete_buffers(uint32_t n, uint32_t va);
         extern void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
                                             uint32_t bytes, uint32_t freq);
         extern void isaac_audio_source_i(uint32_t src, uint32_t param, int32_t value);
@@ -1752,8 +1754,10 @@ int main(int argc, char **argv) {
         extern void isaac_audio_queue(uint32_t src, uint32_t n, uint32_t bufs_va);
         extern uint32_t isaac_audio_unqueue(uint32_t src, uint32_t n, uint32_t out_va);
         extern uint32_t isaac_guest_alloc(uint32_t n);
+        extern void isaac_guest_free(uint32_t p);
         enum { STATE = 0x1010, PLAYING = 0x1012, PAUSED = 0x1013, STOPPED = 0x1014,
                QUEUED = 0x1015, PROCESSED = 0x1016, BUFFER = 0x1009, LOOPING = 0x1007,
+               SAMPLE_OFFSET = 0x1025, BYTE_OFFSET = 0x1026,
                SRC_TYPE = 0x1027, UNDETERMINED = 0x1030, STEREO16 = 0x1103 };
         uint32_t ids = isaac_guest_alloc(64), out = isaac_guest_alloc(64), pcm = isaac_guest_alloc(4000);
         uint32_t src, b[4];
@@ -1847,6 +1851,99 @@ int main(int argc, char **argv) {
         g_audio_ms = 13500.0;
         check(isaac_audio_get_source_i(src, STATE) == PLAYING, "audio: a looping static source keeps playing");
         isaac_audio_stop(src);
+        isaac_audio_source_i(src, LOOPING, 0);
+
+        /* Playback uses metadata only, including sample/byte offsets and the
+         * existing byte-count duration for a partial terminal frame. */
+        isaac_audio_source_i(src, BUFFER, (int32_t)b[3]);
+        for (k = 0; k < 4; ++k) {
+            static const uint32_t formats[] = { 0x1100, 0x1101, 0x1102, 0x1103 };
+            static const uint32_t frame_bytes[] = { 1, 2, 2, 4 };
+            double start = 20000.0 + 10000.0 * k;
+            double end = start + 4000.0 / frame_bytes[k];
+            isaac_audio_buffer_data(b[3], formats[k], pcm, 4000, 1000);
+            g_audio_ms = start;
+            isaac_audio_play(src);
+            g_audio_ms = start + 500.0;
+            check(isaac_audio_get_source_i(src, STATE) == PLAYING &&
+                  isaac_audio_get_source_i(src, SAMPLE_OFFSET) == 500 &&
+                  isaac_audio_get_source_i(src, BYTE_OFFSET) == (int32_t)(500u * frame_bytes[k]),
+                  "audio: mono/stereo 8/16-bit formats retain sample and byte offsets");
+            g_audio_ms = end - 0.25;
+            check(isaac_audio_get_source_i(src, STATE) == PLAYING,
+                  "audio: each PCM format remains playing immediately before its duration");
+            g_audio_ms = end;
+            check(isaac_audio_get_source_i(src, STATE) == STOPPED,
+                  "audio: each PCM format stops exactly at its duration");
+        }
+        isaac_audio_buffer_data(b[3], STEREO16, ISAAC_GUEST_LIMIT_VA, 4097, 1024);
+        g_audio_ms = 60000.0;
+        isaac_audio_play(src);
+        g_audio_ms = 61000.0;
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING,
+              "audio: unavailable PCM still uses byte-count duration, including a partial frame");
+        g_audio_ms = 61000.244140625;
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED,
+              "audio: a partial terminal frame expires at its fractional duration");
+        isaac_audio_buffer_data(b[3], STEREO16, pcm, 0, 1000);
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED,
+              "audio: an empty replacement cannot play the preceding buffer duration");
+        isaac_audio_buffer_data(b[3], STEREO16, pcm, 4000, 0);
+        isaac_audio_play(src);
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED,
+              "audio: a zero-rate replacement cannot play the preceding buffer duration");
+
+        /* The model keeps queued ids, not sample storage. Replacing an id
+         * updates its duration; deleting it leaves an immediately retired
+         * entry that can still be unqueued in the original order. */
+        isaac_audio_source_i(src, BUFFER, 0);
+        for (k = 0; k < 3; ++k) isaac_w32(ids + 4u * k, b[k]);
+        isaac_audio_queue(src, 3, ids);
+        g_audio_ms = 70000.0;
+        isaac_audio_play(src);
+        g_audio_ms = 70500.0;
+        isaac_audio_buffer_data(b[0], STEREO16, pcm, 4000, 500);
+        memset(isaac_g(pcm), 0xff, 4000);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING &&
+              isaac_audio_get_source_i(src, QUEUED) == 3 &&
+              isaac_audio_get_source_i(src, PROCESSED) == 0 &&
+              isaac_audio_get_source_i(src, SAMPLE_OFFSET) == 250 &&
+              isaac_audio_get_source_i(src, BYTE_OFFSET) == 1000,
+              "audio: replacing a queued buffer updates its format without restarting the source");
+        g_audio_ms = 71999.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 0,
+              "audio: replacing a queued buffer keeps its extended duration after guest overwrite");
+        g_audio_ms = 72000.0;
+        check(isaac_audio_get_source_i(src, PROCESSED) == 1 &&
+              isaac_audio_get_source_i(src, BUFFER) == (int32_t)b[1],
+              "audio: the replaced queue head retires exactly at the new duration");
+        isaac_w32(ids, b[0]); isaac_w32(ids + 4, b[1]);
+        isaac_audio_delete_buffers(2, ids);
+        check(isaac_audio_get_source_i(src, STATE) == PLAYING &&
+              isaac_audio_get_source_i(src, QUEUED) == 3 &&
+              isaac_audio_get_source_i(src, PROCESSED) == 2 &&
+              isaac_audio_get_source_i(src, BUFFER) == (int32_t)b[2],
+              "audio: deleting processed and current buffers preserves queued ids and retires the deleted head");
+        g_audio_ms = 72500.0;
+        check(isaac_audio_get_source_i(src, SAMPLE_OFFSET) == 500 &&
+              isaac_audio_get_source_i(src, BYTE_OFFSET) == 2000,
+              "audio: buffer-table compaction keeps the surviving queue entry's format and start time");
+        check(isaac_audio_unqueue(src, 2, out) == 2 &&
+              isaac_r32(out) == b[0] && isaac_r32(out + 4) == b[1] &&
+              isaac_audio_get_source_i(src, QUEUED) == 1 &&
+              isaac_audio_get_source_i(src, PROCESSED) == 0,
+              "audio: deleted buffers are still returned in queue order without losing the survivor");
+        g_audio_ms = 73000.0;
+        check(isaac_audio_get_source_i(src, STATE) == STOPPED &&
+              isaac_audio_get_source_i(src, PROCESSED) == 1 &&
+              isaac_audio_unqueue(src, 1, out) == 1 && isaac_r32(out) == b[2],
+              "audio: the surviving queue entry stops and unqueues at its original duration");
+        isaac_w32(ids, src);
+        isaac_audio_delete_sources(1, ids);
+        isaac_w32(ids, b[2]); isaac_w32(ids + 4, b[3]);
+        isaac_audio_delete_buffers(2, ids);
+        isaac_guest_free(pcm); isaac_guest_free(out); isaac_guest_free(ids);
     }
 
     /* Steam accessor policy (boot round 11): SteamInternal_ContextInit is
@@ -2010,6 +2107,57 @@ int main(int argc, char **argv) {
         imp_kernel32__GetProcAddress(&cpu);
         check(cpu.EAX == 0,
               "GetProcAddress returns NULL for a symbol we do not provide");
+
+        /* Controllers: Gamepad_init's first probe, LoadLibraryA("XInput1_4.dll"),
+         * must load, and all three names it resolves must resolve (none is
+         * NULL-checked before the call). With no page to ask, every slot is
+         * empty: ERROR_DEVICE_NOT_CONNECTED from all three, and nothing written. */
+        {
+            const char *xi = "XInput1_4.dll";
+            for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)xi[i]; if (!xi[i]) break; }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, sbuf);
+            imp_kernel32__LoadLibraryA(&cpu);
+            uint32_t hxi = cpu.EAX;
+            check(hxi != 0, "LoadLibraryA(\"XInput1_4.dll\") loads: the game polls XInput");
+            const char *names[] = { "XInputGetState", "XInputSetState", "XInputGetCapabilities" };
+            int found = 0;
+            for (unsigned n = 0; n < 3; ++n) {
+                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)names[n][i]; if (!names[n][i]) break; }
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, hxi);
+                isaac_w32(cpu.ESP + 8, sbuf);
+                imp_kernel32__GetProcAddress(&cpu);
+                isaac_import *xiimp = isaac_resolve_shim(cpu.EAX);
+                if (cpu.EAX && xiimp && !strcmp(xiimp->symbol, names[n]) && !strcmp(xiimp->dll, "xinput1_4.dll")) ++found;
+            }
+            check(found == 3, "XInputGetState, XInputSetState and XInputGetCapabilities all resolve");
+            uint32_t xbuf = sbuf + 64;
+            for (unsigned i = 0; i < 20; ++i) *(uint8_t *)isaac_g(xbuf + i) = 0xa5;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
+            imp_xinput1_4__XInputGetState(&cpu);
+            uint32_t r_state = cpu.EAX;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, xbuf);
+            imp_xinput1_4__XInputGetCapabilities(&cpu);
+            uint32_t r_caps = cpu.EAX;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
+            imp_xinput1_4__XInputSetState(&cpu);
+            uint32_t r_set = cpu.EAX;
+            check(r_state == 1167u && r_caps == 1167u && r_set == 1167u,
+                  "with no page, every XInput slot answers ERROR_DEVICE_NOT_CONNECTED");
+            check(*(uint8_t *)isaac_g(xbuf) == 0xa5 && *(uint8_t *)isaac_g(xbuf + 19) == 0xa5,
+                  "and a slot with nothing in it writes nothing");
+        }
     }
 
     /* 11. CreateEventW must be non-NULL or the same fatal branch fires one
@@ -2107,57 +2255,6 @@ int main(int argc, char **argv) {
     check(lc.EAX > 0, "the Lua VM really allocated after openlibs");
 
     /* doubles: two stack slots in, round-trip out without narrowing. */
-
-        /* Controllers: Gamepad_init's first probe, LoadLibraryA("XInput1_4.dll"),
-         * must load, and all three names it resolves must resolve (none is
-         * NULL-checked before the call). With no page to ask, every slot is
-         * empty: ERROR_DEVICE_NOT_CONNECTED from all three, and nothing written. */
-        {
-            const char *xi = "XInput1_4.dll";
-            for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)xi[i]; if (!xi[i]) break; }
-            memset(&cpu, 0, sizeof cpu);
-            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
-            isaac_w32(cpu.ESP, 0xDEADBEEF);
-            isaac_w32(cpu.ESP + 4, sbuf);
-            imp_kernel32__LoadLibraryA(&cpu);
-            uint32_t hxi = cpu.EAX;
-            check(hxi != 0, "LoadLibraryA(\"XInput1_4.dll\") loads: the game polls XInput");
-            const char *names[] = { "XInputGetState", "XInputSetState", "XInputGetCapabilities" };
-            int found = 0;
-            for (unsigned n = 0; n < 3; ++n) {
-                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)names[n][i]; if (!names[n][i]) break; }
-                memset(&cpu, 0, sizeof cpu);
-                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
-                isaac_w32(cpu.ESP, 0xDEADBEEF);
-                isaac_w32(cpu.ESP + 4, hxi);
-                isaac_w32(cpu.ESP + 8, sbuf);
-                imp_kernel32__GetProcAddress(&cpu);
-                isaac_import *xiimp = isaac_resolve_shim(cpu.EAX);
-                if (cpu.EAX && xiimp && !strcmp(xiimp->symbol, names[n]) && !strcmp(xiimp->dll, "xinput1_4.dll")) ++found;
-            }
-            check(found == 3, "XInputGetState, XInputSetState and XInputGetCapabilities all resolve");
-            uint32_t xbuf = sbuf + 64;
-            for (unsigned i = 0; i < 20; ++i) *(uint8_t *)isaac_g(xbuf + i) = 0xa5;
-            memset(&cpu, 0, sizeof cpu);
-            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
-            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
-            imp_xinput1_4__XInputGetState(&cpu);
-            uint32_t r_state = cpu.EAX;
-            memset(&cpu, 0, sizeof cpu);
-            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
-            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, xbuf);
-            imp_xinput1_4__XInputGetCapabilities(&cpu);
-            uint32_t r_caps = cpu.EAX;
-            memset(&cpu, 0, sizeof cpu);
-            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
-            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
-            imp_xinput1_4__XInputSetState(&cpu);
-            uint32_t r_set = cpu.EAX;
-            check(r_state == 1167u && r_caps == 1167u && r_set == 1167u,
-                  "with no page, every XInput slot answers ERROR_DEVICE_NOT_CONNECTED");
-            check(*(uint8_t *)isaac_g(xbuf) == 0xa5 && *(uint8_t *)isaac_g(xbuf + 19) == 0xa5,
-                  "and a slot with nothing in it writes nothing");
-        }
     dbl = 1.5;
     LFRAME();
     LARG(0, isaac_va(L));

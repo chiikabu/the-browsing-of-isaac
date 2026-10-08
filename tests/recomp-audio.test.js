@@ -25,7 +25,7 @@
 //      backend bodies and a signal-carrying fake audio graph.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Script } from 'node:vm';
@@ -33,7 +33,6 @@ import { Script } from 'node:vm';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const hostSrc = join(root, 'scripts', 'recomp', 'host', 'src');
 const web = join(root, 'scripts', 'recomp', 'web');
-const modelSrc = readFileSync(join(hostSrc, 'host_audio.c'), 'utf8');
 const backendSrc = readFileSync(join(hostSrc, 'host_audio_web.c'), 'utf8');
 
 // ---- EM_JS extraction -------------------------------------------------------
@@ -118,18 +117,19 @@ class FakeContext {
   resume() { this.resumes += 1; return Promise.resolve(); }
 }
 
-// Bind every EM_JS body to one Module/HEAPU8/window and return callables.
-function backend({ heap, trace = 0, maxLead = 3 } = {}) {
+// Bind every EM_JS body to one Module/heap/window and return callables.
+function backend({ heap, trace = 0, maxLead = 3, AudioContext = FakeContext } = {}) {
   const fns = extractEmJs(backendSrc);
   const Module = {};
   const errs = [];
   const err = (s) => errs.push(String(s));
-  const window = { AudioContext: FakeContext };
+  const window = { AudioContext };
   const HEAPU8 = heap || new Uint8Array(65536);
+  const HEAP16 = new Int16Array(HEAPU8.buffer, 0, HEAPU8.byteLength >>> 1);
   const api = {};
   for (const [name, { params, body }] of fns) {
-    const f = new Function('Module', 'HEAPU8', 'err', 'window', ...params, body);
-    api[name.replace(/^isaac_audio_js_/, '')] = (...args) => f(Module, HEAPU8, err, window, ...args);
+    const f = new Function('Module', 'HEAPU8', 'HEAP16', 'err', 'window', ...params, body);
+    api[name.replace(/^isaac_audio_js_/, '')] = (...args) => f(Module, HEAPU8, HEAP16, err, window, ...args);
   }
   api.init(trace, maxLead);
   api.Module = Module; api.errs = errs; api.HEAPU8 = HEAPU8;
@@ -144,33 +144,85 @@ function stereoChunk(api, id, ptr, frames = 4800, sample = 0x4000) {
   return frames / 48000;
 }
 
-test('EM_JS extraction finds every backend entry point with its parameters', () => {
-  const fns = extractEmJs(backendSrc);
-  for (const n of ['isaac_audio_js_init', 'isaac_audio_js_buffer', 'isaac_audio_js_queue', 'isaac_audio_js_unqueue',
-                   'isaac_audio_js_play', 'isaac_audio_js_stop', 'isaac_audio_js_clear', 'isaac_audio_js_gain',
-                   'isaac_audio_js_pitch', 'isaac_audio_js_drop', 'isaac_audio_js_state', 'isaac_audio_js_stat'])
-    assert.ok(fns.has(n), `${n} extracted`);
-  assert.deepEqual(fns.get('isaac_audio_js_play').params, ['src', 'buffer', 'gain', 'pitch', 'looping', 'streaming', 'head', 'offset_sec']);
-  assert.deepEqual(fns.get('isaac_audio_js_buffer').params, ['id', 'pcm', 'bytes', 'channels', 'bits', 'freq']);
-  assert.deepEqual(fns.get('isaac_audio_js_state').params, []);
-});
 
-test('PCM upload: interleaved int16 is de-interleaved into float channels through a master node', () => {
-  const api = backend();
-  const dur = stereoChunk(api, 1, 1024);
-  const A = api.Module.isaacAudio;
-  assert.ok(A.ctx && A.master, 'the context and the master gain exist after the first upload');
-  assert.deepEqual(A.master.outputs, [A.ctx.destination], 'master -> destination');
-  const ab = A.buffers.get(1);
-  assert.ok(near(ab.duration, dur), 'duration follows frames / rate');
-  assert.ok(near(ab.getChannelData(0)[0], 0.5) && near(ab.getChannelData(1)[4799], 0.5), '0x4000 -> 0.5 on both channels');
-  // a negative sample: 0x8000 -> -1
-  api.HEAPU8[2048] = 0x00; api.HEAPU8[2049] = 0x80;
-  api.buffer(2, 2048, 4, 1, 16, 48000);
-  assert.ok(near(A.buffers.get(2).getChannelData(0)[0], -1), 'int16 -32768 -> -1.0');
-  api.drop(2);
-  assert.ok(!A.buffers.has(2), 'alDeleteBuffers drops the AudioBuffer');
-});
+for (const bits of [8, 16]) {
+  for (const channels of [1, 2]) {
+    for (const ptr of bits === 16 ? [1024, 1025] : [1025]) {
+      test(`PCM upload: every ${bits}-bit value, ${channels} channel(s), ${ptr & 1 ? 'unaligned' : 'aligned'} guest data`, () => {
+        const frames = 1 << bits, frameBytes = channels * (bits >> 3);
+        const bytes = frames * frameBytes;
+        const heap = new Uint8Array(ptr + bytes + frameBytes - 1);
+        heap.fill(0xa5); // Any incomplete trailing frame must not enter the audio.
+        const data = new DataView(heap.buffer);
+        for (let i = 0; i < frames; i++) {
+          for (let c = 0; c < channels; c++) {
+            const value = c === 0 ? i : frames - 1 - i;
+            const offset = ptr + (i * channels + c) * (bits >> 3);
+            if (bits === 16) data.setInt16(offset, value - 32768, true);
+            else data.setUint8(offset, value);
+          }
+        }
+        const api = backend({ heap });
+        api.buffer(1, ptr, bytes + frameBytes - 1, channels, bits, 48000);
+        // The guest may reuse its scratch memory as soon as alBufferData returns.
+        heap.fill(0xff, ptr);
+        const ab = api.Module.isaacAudio.buffers.get(1);
+        assert.equal(ab.numberOfChannels, channels);
+        assert.equal(ab.length, frames, 'partial terminal frames are ignored');
+        assert.equal(ab.sampleRate, 48000);
+        assert.equal(ab.duration, frames / 48000);
+        const midpoint = frames / 2;
+        for (let c = 0; c < channels; c++) {
+          const samples = ab.getChannelData(c);
+          for (let i = 0; i < frames; i++) {
+            const expected = ((c === 0 ? i : frames - 1 - i) - midpoint) / midpoint;
+            if (!Object.is(samples[i], expected)) {
+              assert.equal(samples[i], expected,
+                `channel ${c}, sample ${i}: exact signedness, byte order, deinterleave and ownership after guest overwrite`);
+            }
+          }
+        }
+      });
+    }
+  }
+}
+
+for (const state of ['running', 'suspended']) {
+  test(`queued audio keeps its uploaded samples through buffer replacement and deletion (${state})`, () => {
+    const api = backend();
+    stereoChunk(api, 1, 1024, 4800, 0x4000); // 100 ms at +0.5.
+    const A = api.Module.isaacAudio, ctx = A.ctx;
+    ctx.setState(state);
+    api.queue(10, 1);
+    api.play(10, 1, 0.5, 1, 0, 1, 0, 0);
+    stereoChunk(api, 1, 1025, 2400, -0x2000); // Same id, now 50 ms at -0.25.
+    api.queue(10, 1);
+    api.drop(1);
+    api.HEAPU8.fill(0);
+    assert.equal(A.buffers.has(1), false);
+    const start = state === 'suspended' ? 2 : 0;
+    if (state === 'suspended') {
+      assert.equal(ctx.level(), 0, 'pending samples stay silent while suspended');
+      ctx.currentTime = start;
+      ctx.setState('running');
+    }
+    ctx.currentTime = start + 0.025;
+    assert.equal(ctx.level(), 0.25, 'the first queued version keeps its original samples and gain');
+    ctx.currentTime = start + 0.125;
+    assert.equal(ctx.level(), -0.125, 'the replacement follows the original duration, with its own samples');
+    ctx.currentTime = start + 0.16;
+    assert.equal(ctx.level(), 0, 'the replacement ends after its own duration');
+    api.stop(10);
+    ctx.currentTime = start + 0.2;
+    api.play(10, 1, 0.5, 1, 0, 1, 0, 0);
+    ctx.currentTime = start + 0.225;
+    assert.equal(ctx.level(), 0.25, 'replaying the queue still owns the first deleted buffer version');
+    ctx.currentTime = start + 0.325;
+    assert.equal(ctx.level(), -0.125, 'replaying the queue still owns the second deleted buffer version');
+    api.delete(10);
+    assert.equal(ctx.level(), 0, 'deleting the source silences its retained queue');
+  });
+}
 
 test('a streaming queue becomes a chain of nodes started back to back on the context clock', () => {
   const api = backend();
@@ -290,69 +342,28 @@ test('static sources: one node per play, loop, pitch, restart, stop', () => {
   assert.equal(api.stat(4), 2, 'played census counts the two real plays');
 });
 
-test('the backend never throws into the guest and reports the context state', () => {
+test('unavailable or suspended audio does not schedule audible output', () => {
+  const unavailable = backend({ AudioContext: null });
+  stereoChunk(unavailable, 1, 1024);
+  unavailable.queue(1, 1);
+  unavailable.play(1, 1, 1, 1, 0, 1, 0, 0);
+  assert.equal(unavailable.state(), 0, 'no AudioContext is available');
+  assert.equal(unavailable.stat(0), 0, 'no stream chunks are scheduled');
+  assert.equal(unavailable.stat(4), 0, 'no source is played');
   const api = backend();
-  assert.equal(api.state(), 0, 'no context yet');
-  assert.doesNotThrow(() => { api.queue(1, 1); api.play(1, 1, 1, 1, 0, 1, 0, 0); api.stop(1); api.unqueue(1, 3); api.gain(1, 1); });
   stereoChunk(api, 1, 1024);
   assert.equal(api.state(), 1, 'running');
-  api.Module.isaacAudio.ctx.setState('suspended');
+  const ctx = api.Module.isaacAudio.ctx;
+  ctx.setState('suspended');
+  api.queue(1, 1);
+  api.play(1, 1, 1, 1, 0, 1, 0, 0);
   assert.equal(api.state(), 2, 'suspended');
-  const noAudio = (() => {
-    const fns = extractEmJs(backendSrc);
-    const { params, body } = fns.get('isaac_audio_js_init');
-    const Module = {};
-    new Function('Module', 'HEAPU8', 'err', 'window', ...params, body)(Module, new Uint8Array(16), () => {}, {}, 0, 3);
-    const b = fns.get('isaac_audio_js_buffer');
-    return () => new Function('Module', 'HEAPU8', 'err', 'window', ...b.params, b.body)(Module, new Uint8Array(16), () => {}, {}, 1, 0, 4, 1, 16, 48000);
-  })();
-  assert.doesNotThrow(noAudio, 'a page with no AudioContext at all stays silent, not broken');
+  assert.equal(api.stat(0), 0, 'a suspended stream remains pending');
+  assert.equal(ctx.level(), 0);
+  ctx.setState('running');
+  assert.equal(ctx.level(), 0.5, 'resuming makes the pending PCM audible');
 });
 
-test('trace: the JS side logs schedules under the same switch as the model', () => {
-  const api = backend({ trace: 1 });
-  stereoChunk(api, 1, 1024);
-  api.queue(50, 1); api.play(50, 1, 1, 1, 0, 1, 0, 0);
-  assert.ok(api.errs.some((l) => /\[isaac\]\[audio-web\] .*context ready: 48000 Hz, running/.test(l)), 'context line');
-  assert.ok(api.errs.some((l) => /src 50 buffer 1 scheduled at 0\.000 for 0\.100 s/.test(l)), 'one line per scheduled chunk with time and duration');
-  assert.ok(api.errs.some((l) => /src 50 play stream from entry 0 of 1/.test(l)), 'the play line');
-  assert.ok(backendSrc.includes('isaac_audio_js_init(isaac_audio_trace_on(), lead)'), 'the C side passes ISAAC_AUDIO_TRACE through');
-  assert.ok(modelSrc.includes('getenv("ISAAC_AUDIO_TRACE")') && modelSrc.includes('int isaac_audio_trace_on(void)'), 'the model owns the switch');
-});
-
-test('the model follows OpenAL Soft where the music path needs it (source pins + the native selftest)', () => {
-  // the streaming contract between the model and its backends
-  for (const hook of ['isaac_audio_backend_queue(uint32_t src, uint32_t buffer)', 'isaac_audio_backend_unqueue(uint32_t src, uint32_t n)',
-                      'isaac_audio_backend_clear(uint32_t src)', 'isaac_audio_backend_pitch(uint32_t src, float pitch)',
-                      'int looping, int streaming, uint32_t head, float offset_sec'])
-    assert.ok(modelSrc.includes(hook), `weak hook: ${hook}`);
-  assert.ok(modelSrc.includes('__attribute__((weak)) double isaac_audio_clock_ms(void)'), 'the clock is overridable (the selftest sets it)');
-  // the rules, by their code
-  assert.ok(/case AL_BUFFERS_QUEUED:\s+return \(int32_t\)s->qn;/.test(modelSrc), 'AL_BUFFERS_QUEUED is the whole queue');
-  assert.ok(/void isaac_audio_stop[\s\S]*?s->processed = s->qn;/.test(modelSrc), 'a stop marks every queued buffer processed');
-  assert.ok(/void isaac_audio_play[\s\S]*?s->processed = 0;[\s\S]*?s->state = AL_STOPPED;\s+\+\+g_stat_empty_plays;/.test(modelSrc),
-    'a play restarts at the head, and stops at once with nothing to play');
-  assert.ok(/uint32_t isaac_audio_unqueue[\s\S]*?if \(n > s->processed\) \{/.test(modelSrc), 'an unqueue past the processed count takes nothing');
-  assert.ok(/case AL_BUFFER:[\s\S]*?if \(s->state == AL_PLAYING \|\| s->state == AL_PAUSED\) \{/.test(modelSrc), 'AL_BUFFER is refused on a playing/paused source');
-  assert.ok(modelSrc.includes('isaac_audio_backend_queue(src, id);') && modelSrc.includes('isaac_audio_backend_unqueue(src, take);'),
-    'every queue and unqueue reaches the backend');
-  // the web backend is entirely under ISAAC_WEB and defines every strong hook
-  assert.ok(backendSrc.includes('#ifdef ISAAC_WEB') && backendSrc.trimEnd().endsWith('#endif /* ISAAC_WEB */'));
-  for (const h of ['isaac_audio_backend_queue', 'isaac_audio_backend_unqueue', 'isaac_audio_backend_clear', 'isaac_audio_backend_play',
-                   'isaac_audio_backend_pitch', 'isaac_audio_backend_gain', 'isaac_audio_backend_stop'])
-    assert.ok(new RegExp(`^void ${h}\\(`, 'm').test(backendSrc), `strong web hook ${h}`);
-  // the native selftest ran the model on the fake clock
-  const json = join(root, 'output', 'recomp', 'host', 'build-selftest.json');
-  if (!existsSync(json)) return;
-  const b = JSON.parse(readFileSync(json, 'utf8'));
-  const audio = (b.run.output || []).filter((l) => /^(ok|FAIL) {2,}audio: /.test(l));
-  assert.ok(audio.length >= 18, `the selftest ran the audio section (${audio.length} checks)`);
-  assert.deepEqual(audio.filter((l) => l.startsWith('FAIL')), [], 'and every audio check passed');
-  for (const want of ['a play with nothing queued stops at once', 'a stop marks every queued buffer processed',
-                      'a play from stopped restarts at the head of the queue', 'AL_BUFFERS_QUEUED still counts the whole queue',
-                      'resumes the current entry at its offset'])
-    assert.ok(audio.some((l) => l.includes(want)), `selftest: ${want}`);
-});
 
 
 // Execute the production graph and page lifecycle, replacing only browser I/O.

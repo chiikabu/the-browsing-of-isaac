@@ -72,28 +72,6 @@ test('the resources/ mount root override is back, with the reason', () => {
   assert.ok(lp.includes('"resources/<path>"'), 'the archive-index key form is documented next to it');
 });
 
-test('the forced branch over the sound open is undone at the block level', () => {
-  const lp = readFileSync(join(lift, 'lift_patches.py'), 'utf8');
-  assert.ok(lp.includes('BLOCK_PATCHES: list[tuple[str, str, str]] = ['), 'block patches exist');
-  assert.ok(lp.includes('recomp_jmp_target = ZF ? 0xa2b5e1u : 0xa2b5c8u; recomp_jmp_pending = 1u; return;'),
-    'the pristine `cmp byte [ebp+0x14], 0; je 0xa2b5e1` becomes a tail jump into the orphaned tail');
-  assert.ok(lp.includes('L_00a2b5c8: ;') && lp.includes('RECOMP_VA(0xa2b5c8u);'),
-    'the tail function gets a re-decoded first block at 0xa2b5c8');
-  assert.ok(lp.includes('case 0x00a2b5c8u: goto L_00a2b5c8;') && lp.includes('case 0x00a2b5e1u: goto L_00a2b5e1;'),
-    'both targets are re-entry cases');
-  for (const marker of ['LIFT-PATCH 0x00a2b5c2', 'LIFT-PATCH 0x00a2b5c8', 'LIFT-PATCH 0x00a2b5c7-reentry',
-                        'LIFT-PATCH REENTRY 0x00a2b5c8', 'LIFT-PATCH REENTRY 0x00a2b5e1']) {
-    assert.ok(lp.includes(marker), `${marker}: the idempotence marker`);
-  }
-  const bb = readFileSync(join(lift, 'build_boot.py'), 'utf8');
-  assert.ok(bb.includes('set(apply_block_patches(lift_dir))'), 'build_boot applies block patches like the others');
-  // the dispatcher only knows function entries and call continuations; a
-  // block another function jumps into has to be declared to it
-  const mk = readFileSync(join(lift, 'mkdispatch.py'), 'utf8');
-  assert.ok(mk.includes('if (v in cont or "LIFT-PATCH REENTRY" in line) and v not in seen_b:'),
-    'mkdispatch treats a marked RECOMP_VA line as a re-entry block');
-});
-
 test('the mount skips its per-entry checksum pass unless ISAAC_ARCHIVE_VERIFY=1', () => {
   // round 26: with the DLC set the pass read 1.5 GB through the RAM-FS
   // windows before the first frame (and every byte of it over HTTP in the

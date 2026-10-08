@@ -5,6 +5,241 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-08 — Unchanged uniforms, exact vertex spans, and continuation ownership
+
+This unit keeps the lifted native/Wasm frame path, assets, resolution, effects,
+audio, and game rules intact. ABI 101 and the 24-open/27-resolved hand-translation
+counter are unchanged; a fast path is not removal of the remaining boundary.
+
+- `isaac_fast_shader_uniform` handles only the unchanged-value return of
+  `0x00a14c00`. It finds the first active matching name and compares the latest
+  version bitwise using the incoming type's width. All 21 supported type codes,
+  signed zero/NaN payloads, mutable names, duplicate rows, history, aliases,
+  return registers, and arithmetic flags are covered. It allocates and writes
+  no guest memory. Changed values, missing slots, and unsafe inputs retain the
+  original allocation/version/snapshot paths. The original lift omitted the
+  terminal CMP flag spill; the taken branch at `0x00a14de7` now preserves the
+  machine's flags, including AF=0.
+- Verification mode snapshots before the candidate, detects and restores
+  illegal candidate writes, executes the original, and compares CPU state and
+  the captured uniform graph. Dead stack scratch is excluded, not claimed
+  unwritten by the original. The final hoisted module's stage-8 run with
+  16 items and 18 scattered Hosts completed 2,960,855 matched uniform
+  comparisons and 184,055 original fallbacks with zero fast-path mismatches
+  (94.15% handled overall). Control and candidate each retain one existing
+  native GL diagnostic. This diagnostic run is not timing/memory evidence.
+- `mkdispatch.py` now identifies definitions rather than prototypes, sends
+  wrapped continuations directly to their original bodies, and resolves
+  split-part markers through the owning trampoline. The old scanner could
+  assign both renamed bodies and static split parts to a preceding function.
+  The generated-table audit corrected 21,527 owners while preserving the
+  exact set of 159,434 continuation addresses, including all 11 uniform
+  continuations. Actual `split_giants` output is compiled in the regression:
+  entry/cache/return paths, renamed trampolines, and forward/backward pending
+  jumps execute under normal and diagnostic modes.
+- Client-array staging uses `(count - 1) * stride + attribute_width` for
+  positive counts, not a trailing full stride. Half-float and packed widths,
+  byte-first interleaving, and separate-array alignment remain valid.
+  Before the fix, a valid triangle ending at the Wasm memory limit produced
+  `GL_INVALID_VALUE` and black pixels. The real WebGL2 pixel suite now passes,
+  including indexed/instanced draws, overlapping elements, rewrites, zero
+  spans, and raw unsupported-type errors. Index scanning and ring capacities
+  are unchanged.
+- The browser profiler reads GPU identity from the native `#canvas`, not
+  the first canvas, which can be a HUD surface. The corrected capture
+  observed NVIDIA RTX 2060 SUPER / ANGLE D3D11; CPU throttling does not turn
+  that GPU into Chromebook hardware.
+
+Verification already exercised for these paths:
+
+- Canonical-PE Unicorn oracle and compiled-Wasm replay: 210 cases each,
+  105 handled and 105 declined; exact machine register/flag and memory checks.
+- Focused suites report 5 uniform, 8 dispatch, and 40 real-WebGL test results
+  including parent suites. Twenty-one behavioral mutants were killed through
+  `mutate.mjs`, with full child logs and SHA-identical restoration.
+  A further input-bound mutant initially survived: the old alias examples
+  already differed before the guard. The corrected cases start with matching
+  names/payloads that the PE's first `push ebx` or temporary SEH installation
+  overwrites. All three wrapper modes reach the real insertion/allocation
+  callees; removing each alias guard now fails both direct-helper and native
+  wrapper checks (three failed test results including the parent).
+- `node scripts/decomp/verify-unit.mjs --handoff`: all gates pass, including
+  4,268 passing npm test results with zero failures and 5,392 differential
+  cases. The slice remains ABI 101, with 685 exports and zero imports.
+  The first gate found an obsolete source-text-only archive re-entry test;
+  it was deleted rather than repinned. Compiled marked-block behavior remains
+  covered under cache, heartbeat, watch, and timing modes.
+- `build_selftest.py`: 604 checks, zero failures, zero compiler warnings.
+  The complete browser module linked successfully; its build still reports
+  one warning each in the existing `host_shims_gl.c` and `boot_integration.c`
+  compilation.
+- Final compressed shipping surface: ordinary Enter reaches native gameplay;
+  movement advances X=320 to 459.6053, firing produces visible tears,
+  GameFrame stays 3343 during 61 paused presentations and advances to 3354
+  after resume. WebAudio runs with nonzero RMS. Its browser resource entry
+  confirms 8,223,979 compressed bytes decoded to 57,980,367 Wasm bytes.
+  The managed tab was closed; its retained diagnostic ring is not a claim
+  of complete-session error coverage.
+
+Local evidence is under `output/recomp/lowend-next/`: `uniform-oracle.json`,
+`uniform-replay.json`, `dispatch-audit.json`, `mutations.json`,
+`dispatch-mutations.json`, `alias-mutations.json`, `live-final.json`,
+`shipping-final-ui.json`, and their screenshots/logs. Matched links differ in
+four object inputs; all 65 non-module distribution files have identical
+manifest hashes. The control reproduces the previous named module hash
+`4de1cd04511a958d7a2f99920610481434687fda02b055d85d3fa3eff84cf14f`.
+
+Final matched measurements (`comparison-final.json`) use eight sequential
+runs: ABBA for the heavy workload, BAAB for ordinary combat, two runs per
+variant/workload. Both links use the same 70 other objects; all 65 non-module
+distribution files match. The final named candidate is
+`131045341f1d90d266ebb4086d8962d05de1274ea6defc4c5442990aa1c60f80`.
+Each run uses stage 8, 18 scattered Hosts, seed `3JY16FLR`, fixed epoch,
+CPU4 and hardware ANGLE, 180 warmup presentations and 900 measured
+presentations (450 game-frame advances). No builds, tests, compression, or
+other browser runs overlapped the measurements.
+
+| Workload | Control pooled FPS | Final pooled FPS | Change | Mean per-run p95, ms |
+|---|---:|---:|---:|---:|
+| Heavy, 16 items | 32.3641 | 33.3554 | +3.06% | 64.85 → 62.20 |
+| Ordinary, 0 items | 51.1509 | 51.7862 | +1.24% | 31.75 → 31.50 |
+
+FPS pools interval counts/time; the p95 column averages two separate run
+percentiles, not pooled percentiles. The earlier, unhoisted candidate
+(`comparison.json`) measured +3.48% heavy and -1.08% ordinary; ordinary gains
+are small and not a universal speed claim. Final post-GC renderer working
+set increased 3.03/4.16 MiB (heavy/ordinary), and private bytes increased
+3.04/3.64 MiB. This unit adds no demonstrated memory saving. CPU throttling
+on an RTX 2060 SUPER is not a physical Chromebook/phone test, and the runs
+are not pixel-locked replays.
+
+Matched shipping (`size-final.json`) keeps all 65 non-module files identical.
+Raw distribution size rises 2,674 bytes to 641,876,692; best-encoding transfer
+falls 3,009 bytes to 585,531,744; local disk rises 1,004 bytes. Wasm gzip
+grows 1,338 bytes, while Brotli falls 2,984 bytes. These are effectively flat
+sizes, not an asset-compression breakthrough. `ship.py check` verifies all
+67 SHA-256 hashes and decodes every one of the 88 compressed siblings.
+The final local distribution is `output/recomp/lowend-next/shipping-final`;
+its stripped module SHA-256 is
+`282dca491d7847ea6f55fe4d1878e9ac9cb87c702ea45d36f9e2e4086c495974`.
+No production deployment was performed.
+
+Next exact untranslated instruction: `0x00a14e2d`, changed-value allocation.
+The live unchanged-value path is integrated; the original version/snapshot
+graph and the 24 open hand-translation boundaries remain.
+
+Further search used measured time rather than static call counts. In the
+39,623 ms sampled heavy profile, `sub_00a671b0` accounts for 1,314.722 ms
+self time. Its twelve static `roundf` call sites account for only 28.870 ms
+of sampled descendants (0.073% of the profile), not a high-impact target.
+Temporary quad-vector allocation remains a lead, not permission to pool
+buffers without proving escape, lifetime, and re-entry behavior. Replacing
+division with reciprocal multiplication is not bitwise IEEE equivalence.
+The prior `Player::HasCollectible` cache negative remains closed because
+items can mutate within a frame.
+
+The portable path already aligns streaming windows, independently compresses
+them, and bounds its consumed-first LRU at 256 MiB; Zopfli is also already
+available. No new lossless asset-size cut was established in this pass.
+The observed guest-heap peak was 262,539,160 bytes; its largest allocation
+was 67,108,868 bytes, but ownership is not established. A 384 MiB arena
+reservation is not equivalent to touched/committed memory, and shrinking it
+without lifetime attribution would trade correctness for an unproved saving.
+
+
+## 2026-10-08 — Low-end dispatch, audio ownership, and lossless shipping
+
+The frame path remains the real lifted native/Wasm game. No game content,
+resolution, effect, audio sample rate, or simulation rule was reduced.
+
+- `mkdispatch.py` replaces dense text-address indexes with 32-byte function
+  pages and 8-byte continuation pages. Once both indexes exist, index storage
+  falls from 44,582,712 to 11,042,692 bytes. Including the larger callable cache
+  and additional pointers, the net reduction is 33,408,940 bytes (31.86 MiB).
+  Cached function pointers avoid redundant lookups; diagnostic census,
+  heartbeat, watch, and timing behavior remains on the diagnostic path.
+  Calls retain entry-first precedence; returns retain continuation-first
+  precedence, including colliding/reentrant cache use and missing sentinels.
+- The audio model no longer allocates, copies, and retains duplicate PCM.
+  The synchronous backend borrows guest bytes and WebAudio owns its converted
+  samples. Signed aligned `HEAP16` reads replace per-byte assembly; unaligned
+  reads, partial frames, duration, replacement, deletion, and queued versions
+  retain their original behavior. A compiled allocation probe observed zero
+  retained PCM bytes across 132 uploads totaling 6,553,600 bytes. This probe
+  does not measure total browser audio memory.
+- Shipping strips only the Wasm `name` custom section from its distribution
+  copy; the original build remains useful for profiling. Other sections are
+  preserved. `--keep-wasm-names` retains names for profiling distributions.
+  Compression considers files from 1 KiB and still requires at least 5%
+  savings. Windowed archives remain range-readable and byte-identical.
+
+### Controlled browser measurements
+
+Eight sequential fresh Chromium sessions used hardware GL, 4x DevTools CPU
+throttling, seed `3JY16FLR`, stage 8, 18 scattered Hosts, a native-verified
+closed arena, 180 warmup presentations, and 900 measured presentations.
+Each workload ran control/candidate/candidate/control. All other link inputs,
+frontend files, and assets were held constant; concurrent gamepad work was
+not attributed to this change.
+
+| Workload | Control FPS, two runs | Candidate FPS, two runs | Mean change | Mean per-run p95 |
+| --- | --- | --- | --- | --- |
+| 16-item heavy effects | 32.35 / 34.47 | 35.09 / 36.21 | +6.7% | 60.45 → 55.45 ms |
+| Ordinary combat, no added items | 52.94 / 52.51 | 52.89 / 52.38 | -0.16%; no speed claim | 31.10 → 30.15 ms |
+
+Post-GC renderer working set fell by 30.55 MiB and 29.53 MiB respectively.
+Renderer private bytes instead increased by 3.38 MiB and 2.20 MiB; this is
+not a committed-memory reduction, and the Wasm reservation is unchanged.
+These are seed-matched workloads, not pixel-locked replays. CPU throttling on
+Windows is not a physical low-end phone measurement or a full-game/mod
+equivalence proof.
+
+### Payload and runtime verification
+
+Matched complete distributions fell from 642,323,053 to 641,874,018 raw bytes.
+Best-encoding HTTP transfer fell from 586,495,916 to 585,534,753 bytes
+(961,163 bytes saved). The module's gzip sibling fell from 12,139,213 to
+12,030,644 bytes; its Brotli sibling fell from 8,278,507 to 8,226,963.
+Additional compressed siblings increase local distribution disk use by
+593,871 bytes; transfer savings are not disk savings. The packed game
+archives were not recompressed or reduced.
+
+The local browser exercised title/start, movement, shooting, pause/resume,
+and running nonzero WebAudio. A seven-transition floor sweep
+(`2,4,6,8,10,12,2`) passed 12/12 checks without page or fatal engine errors.
+It first exposed an old bundle missing HUD/browser assets. Regenerating
+page assets in a private bundle fixed delivery; all 22 non-page game files
+remain hash-identical. All three distribution checks verified every hash and
+decoded sibling. Fifteen behavioral mutants were killed and restored;
+the native host selftest passed 604 checks with zero failures or warnings.
+The final `verify-unit.mjs --handoff` gate passed: 4,237 tests passed,
+zero failed (nine skipped), and 5,392 native/Wasm differential cases passed
+at ABI 101 with zero imports. Repository safety, whitespace, and consistency
+checks passed; the preflight reported only the expected uncommitted-unit
+warning. Its captured output is `output/recomp/lowend-final-gate.log`.
+The real built module also passed an independent byte comparison: all
+12 non-`name` sections remain identical after shipping; only the 449,182-byte
+name section was removed (`lowend-verification/wasm-sections.json`).
+
+Verification commands:
+
+```sh
+node --test tests/recomp-dispatch.test.js tests/recomp-trampoline.test.js tests/recomp-audio.test.js tests/recomp-ship.test.js
+python scripts/recomp/host/build_selftest.py
+node scripts/decomp/verify-unit.mjs --handoff
+python scripts/recomp/assets/ship.py check output/recomp/lowend-verification/optimized-dist
+node scripts/recomp/web/drive_floors.mjs "http://127.0.0.1:8245/?ISAAC_EPOCH=1700000000" output/recomp/lowend-floors-final options=output/recomp/lowend-options.ini stages=2,4,6,8,10,12,2 timing=1 profile=0 cpu=1 gl=hw seed=3JY16FLR
+```
+
+The final local module is 57,977,693 bytes, SHA-256
+`f8b890e8f818d3056b6a8b600c958e8a43415a883a14ccc3f912d59e366ad7d0`.
+Receipts are under `output/recomp/lowend-verification/`, with interactive,
+floor, host-selftest, and mutation receipts under `output/recomp/lowend-*`.
+No production deployment or public entry-page replacement was performed.
+Hand-decomp ABI 101, open 24, resolved 27 remain unchanged. No hand-decomp
+boundary was removed; next runtime target is still `0x00a14c00`, whose
+historical uniform versions must survive until `0x00a150d0` consumes them.
+
 ## 2026-10-07 — Computed-jump ownership and continuation closure
 
 The machine lifter now consumes the canonical read-only PE index, retains

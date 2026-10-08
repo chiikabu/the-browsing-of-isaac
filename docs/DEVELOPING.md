@@ -147,6 +147,64 @@ python scripts/recomp/lift/build_boot.py --web --fast --jobs 3
 python scripts/recomp/assets/ship.py build --no-compress
 ```
 
+Shipping removes the Wasm `name` custom section from the distribution copy;
+the original build keeps its profiler and stack names. Use
+`ship.py build --keep-wasm-names` when preparing a profiling distribution.
+Executable sections and other custom sections remain byte-identical.
+Compression now considers files from 1 KiB, including page modules and Lua;
+both the probe and final encoding must save at least 5%. Windowed archives
+retain their raw range contract. Neither change reduces asset quality.
+
+The dispatcher uses 32-byte function pages and 8-byte continuation pages
+instead of dense tables spanning every guest text address. Callable cache
+entries retain both the function ID and pointer; diagnostic counting and
+timing stay on the diagnostic path. Entry-first calls and continuation-first
+returns still have different lookup precedence.
+Wrapped-function continuations dispatch to the original `__lifted` body,
+not its public fast-path wrapper. Split-function continuations dispatch
+through their owning trampoline so pending jumps cross parts correctly;
+function prototypes do not establish block ownership.
+
+The unchanged-value path of `0x00a14c00` compares the first active matching
+uniform's latest payload using the incoming type's width. It performs no
+guest allocation or write. Changed values, missing entries, unsafe aliases,
+and unsupported types retain the original version/snapshot machinery.
+`ISAAC_FASTPATH_VERIFY=1` executes both paths and compares CPU state and
+captured guest data; the original remains authoritative. This mode is for
+correctness, not timing. `ISAAC_FASTPATH=0` disables all native shortcuts,
+so it is not a uniform-only performance control.
+
+Client-array uploads end at the last referenced attribute byte, not at an
+extra trailing stride. Packed/half-float widths and mixed-type alignment
+are covered by real WebGL2 pixel tests:
+
+```sh
+node --test tests/recomp-dispatch.test.js tests/recomp-fastpath.test.js tests/recomp-gl-clientarrays.test.js
+```
+
+For matched browser measurements, use identical assets, seed, input,
+throttle, and warmup; run variants sequentially without builds or tests.
+Pool FPS as total presented intervals divided by total interval time.
+`profile_load.mjs` reads the native `#canvas` GPU identity, not an unrelated
+HUD canvas. CPU throttling is not proof of performance on physical low-end
+hardware.
+
+Audio uploads borrow guest PCM only for the synchronous backend call.
+WebAudio owns the converted samples afterward, including queued versions
+whose guest buffers have been replaced or deleted. Aligned 16-bit uploads
+use signed `HEAP16` reads; unaligned data retains little-endian decoding.
+No audio format, sample rate, asset quality, or game logic is reduced.
+
+When reusing an old bundle after frontend changes, regenerate page assets:
+
+```sh
+python scripts/recomp/assets/page_assets.py build .scratch/game-bundle
+```
+
+The HUD and mod-browser art are generated from the game archives. A stale
+bundle can pass its own manifest check while lacking assets required by the
+current frontend; run the actual page as well as checking the distribution.
+
 `npm run serve` runs the separate decomp-slice host, not the full game. The
 `native/decomp/`, `decomp/`, `platform/` and `web/` trees belong to that
 hand-translation track.
@@ -160,6 +218,7 @@ python scripts/recomp/host/build_selftest.py
 
 # Page, loading, audio, shipping and touch
 node --test tests/recomp-portable.test.js tests/recomp-audio.test.js tests/recomp-web.test.js tests/recomp-ship.test.js
+node --test tests/recomp-dispatch.test.js tests/recomp-trampoline.test.js
 node --test tests/recomp-touch.test.js tests/recomp-touch-game.test.js tests/recomp-host-input.test.js
 
 # Boot the real page and play a few frames

@@ -603,7 +603,7 @@ uint32_t isaac_fastpath_mismatches(void) { return g_mismatches; }
  * "0 mismatches" comes with the number of calls it was measured over. The
  * host path itself is not counted -- for a dispatched wrapper it is the
  * dispatch census minus the lifted count -- to keep the hot path free of it. */
-#define FP_CENSUS_MAX 16
+#define FP_CENSUS_MAX 32
 static uint32_t g_fp_va[FP_CENSUS_MAX], g_fp_lifted[FP_CENSUS_MAX], g_fp_verified[FP_CENSUS_MAX];
 static unsigned g_fp_n;
 /* Round 64: what the archive inflater decodes -- calls, bytes in and out,
@@ -1490,6 +1490,213 @@ int isaac_fast_copy36_ok(uint32_t self_va, uint32_t src_va) {
 
 void isaac_fast_copy36(uint32_t self_va, uint32_t src_va) {
     memcpy(isaac_g(self_va), isaac_g(src_va), 36u);
+}
+
+/* 0x00a14c00: only the unchanged-value exit. The PE's 0x00a15040 lookup
+ * compares each name BEFORE testing slot+4 == 1, and returns the first active
+ * match. Names, vectors and objects can move or change: no pointer-key cache.
+ * The incoming type selects the comparison width, not the stored slot type.
+ * All insertion/allocation/version/snapshot rebuilding stays in the lift. */
+static uint32_t uniform_r32(uint32_t va) {
+    uint32_t value;
+    memcpy(&value, isaac_g(va), sizeof value);
+    return value;
+}
+
+static uint32_t uniform_size(uint32_t type) {
+    /* Raw PE jump table 0x00a14f10 and its MOV ESI,imm targets, SHA 5129df723e64.
+     * Both invalid bands must still run the original logger. */
+    static const uint8_t sizes[21] = {
+        4, 8, 12, 16, 4, 8, 12, 16, 4, 8, 12, 16,
+        16, 24, 32, 24, 36, 48, 32, 48, 64
+    };
+    return type >= 8u && type <= 28u ? sizes[type - 8u] : 0u;
+}
+
+typedef struct {
+    uint32_t lo, hi, seh;
+} UniformFrame;
+
+/* The original writes its dead stack frame and temporarily changes FS:[0].
+ * Do not skip those writes when they could change an input read. The lookup's
+ * last PUSH reaches aligned EBP-0x64; no other callee runs on this exit. */
+static int uniform_frame(const CpuState *s, UniformFrame *f) {
+    if (s->ESP < 0x1080u || !isaac_fast_guest_range(s->ESP, 20u)
+        || s->FS_OFFSET < 0x1000u || !isaac_fast_guest_range(s->FS_OFFSET, 4u))
+        return 0;
+    f->lo = ((s->ESP - 12u) & ~7u) - 0x64u;
+    f->hi = s->ESP;
+    f->seh = s->FS_OFFSET;
+    return !(f->seh < s->ESP + 20u && f->seh + 4u > f->lo)
+        && !(f->seh < 0x00bf93b8u && f->seh + 4u > 0x00bf93b4u)
+        && !(f->lo < 0x00bf93b8u && f->hi > 0x00bf93b4u);
+}
+
+static int uniform_range(uint32_t va, uint32_t len, const UniformFrame *f) {
+    return va >= 0x1000u && isaac_fast_guest_range(va, len)
+        && !(len && va < f->hi && va + len > f->lo)
+        && !(len && va < f->seh + 4u && va + len > f->seh);
+}
+
+/* Contiguous readable bytes before a guest boundary or an original write.
+ * This bounds the native string walk without strlen/strcmp overreads. */
+static uint32_t uniform_string_room(uint32_t va, const UniformFrame *f) {
+    if (!uniform_range(va, 1u, f)) return 0u;
+    uint32_t end = ISAAC_GUEST_LIMIT_VA;
+    if (va < f->lo && f->lo < end) end = f->lo;
+    if (va < f->seh && f->seh < end) end = f->seh;
+    return end - va;
+}
+
+static int uniform_name_equal(uint32_t a, uint32_t an, uint32_t b,
+                              const UniformFrame *f) {
+    uint32_t bn = uniform_string_room(b, f);
+    uint32_t n = an < bn ? an : bn;
+    const uint8_t *ap = isaac_g(a), *bp = isaac_g(b);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (ap[i] != bp[i]) return 0;
+        if (!ap[i]) return 1;
+    }
+    return -1;  /* Let the original perform the invalid/unterminated read. */
+}
+
+int isaac_fast_shader_uniform(CpuState *s) {
+    UniformFrame f;
+    if (!uniform_frame(s, &f) || !uniform_range(s->ECX, 0x4cu, &f)) return 0;
+    uint32_t name = uniform_r32(s->ESP + 4u);
+    uint32_t size = uniform_size(uniform_r32(s->ESP + 8u));
+    uint32_t data = uniform_r32(s->ESP + 12u);
+    if (!size || !uniform_range(data, size, &f)) return 0;
+    uint32_t begin = uniform_r32(s->ECX + 0x34u);
+    uint32_t end = uniform_r32(s->ECX + 0x38u);
+    if (end <= begin || (end - begin) % 24u
+        || !uniform_range(begin, end - begin, &f)) return 0;
+    uint32_t name_room = uniform_string_room(name, &f);
+    if (!name_room) return 0;
+    for (uint32_t slot = begin; slot < end; slot += 24u) {
+        int equal = uniform_name_equal(name, name_room, uniform_r32(slot), &f);
+        if (equal < 0) return 0;
+        if (!equal || uniform_r32(slot + 4u) != 1u) continue;
+        uint32_t versions = uniform_r32(slot + 12u);
+        uint32_t vend = uniform_r32(slot + 16u);
+        if (vend <= versions || (vend - versions) % 4u
+            || !uniform_range(versions, vend - versions, &f)) return 0;
+        uint32_t latest = uniform_r32(vend - 4u);
+        if (!uniform_range(latest, size, &f)
+            || memcmp(isaac_g(latest), isaac_g(data), size)) return 0;
+        /* All valid widths are multiples of four. The final load leaves EAX
+         * holding the last word; CMP EDI,-4 sets these six arithmetic flags.
+         * POP ECX retrieves cookie XOR aligned EBP, without a cookie call. */
+        s->EAX = uniform_r32(latest + size - 4u);
+        s->EDX = data + size;
+        s->ECX = uniform_r32(0x00bf93b4u) ^ ((s->ESP - 12u) & ~7u);
+        s->CF = s->AF = s->SF = s->OF = 0u;
+        s->PF = s->ZF = 1u;
+        s->EIP = uniform_r32(s->ESP);
+        s->ESP += 20u;
+        return 1;
+    }
+    return 0;
+}
+
+/* Mode 2 snapshots live uniform state, not the original's dead stack scratch:
+ * receiver, live slots/names, all version pointer lists and tracked allocations
+ * (including old versions), live snapshot indices, input name/data, call args,
+ * cookie and FS:[0]. Unused vector capacity is outside this comparison scope.
+ * A single host allocation contains [VA, length, bytes] records. No guest
+ * allocator or guest write is involved; inability to snapshot means fallback. */
+typedef struct {
+    size_t bytes;
+    uint8_t records[];
+} UniformSnapshot;
+
+static int uniform_capture(uint8_t *out, size_t *used, uint32_t va,
+                           uint32_t len, const UniformFrame *f) {
+    if (!len) return 1;
+    if (!uniform_range(va, len, f) || *used > SIZE_MAX - 8u - len) return 0;
+    if (out) {
+        memcpy(out + *used, &va, 4u);
+        memcpy(out + *used + 4u, &len, 4u);
+        memcpy(out + *used + 8u, isaac_g(va), len);
+    }
+    *used += 8u + len;
+    return 1;
+}
+
+static int uniform_capture_name(uint8_t *out, size_t *used, uint32_t va,
+                                const UniformFrame *f) {
+    uint32_t room = uniform_string_room(va, f);
+    const uint8_t *end = room ? memchr(isaac_g(va), 0, room) : NULL;
+    return end && uniform_capture(out, used, va,
+                                  (uint32_t)(end - (const uint8_t *)isaac_g(va)) + 1u, f);
+}
+
+static int uniform_capture_vector(uint8_t *out, size_t *used, uint32_t begin,
+                                  uint32_t end, uint32_t stride, const UniformFrame *f) {
+    return end >= begin && !((end - begin) % stride)
+        && uniform_capture(out, used, begin, end - begin, f);
+}
+
+static int uniform_snapshot_walk(const CpuState *s, uint8_t *out, size_t *used) {
+    UniformFrame f;
+    if (!uniform_frame(s, &f) || !uniform_capture(out, used, s->ECX, 0x4cu, &f)
+        || !uniform_capture(out, used, s->ESP, 20u, &f)
+        || !uniform_capture(out, used, 0x00bf93b4u, 4u, &f)) return 0;
+    /* FS:[0] is restored on return, but cannot pass the input-alias guard. */
+    UniformFrame no_seh = f;
+    no_seh.seh = 0u;
+    if (!uniform_capture(out, used, s->FS_OFFSET, 4u, &no_seh)
+        || !uniform_capture_name(out, used, uniform_r32(s->ESP + 4u), &f)
+        || !uniform_capture(out, used, uniform_r32(s->ESP + 12u),
+                            uniform_size(uniform_r32(s->ESP + 8u)), &f)) return 0;
+    uint32_t begin = uniform_r32(s->ECX + 0x34u), end = uniform_r32(s->ECX + 0x38u);
+    if (!uniform_capture_vector(out, used, begin, end, 24u, &f)
+        || !uniform_capture_vector(out, used, uniform_r32(s->ECX + 0x40u),
+                                   uniform_r32(s->ECX + 0x44u), 4u, &f)) return 0;
+    for (uint32_t slot = begin; slot < end; slot += 24u) {
+        uint32_t vb = uniform_r32(slot + 12u), ve = uniform_r32(slot + 16u);
+        if (!uniform_capture_name(out, used, uniform_r32(slot), &f)
+            || !uniform_capture_vector(out, used, vb, ve, 4u, &f)) return 0;
+        for (uint32_t p = vb; p < ve; p += 4u) {
+            uint32_t buffer = uniform_r32(p);
+            if (buffer < 4u || !uniform_range(buffer - 4u, 4u, &f)) return 0;
+            uint32_t len = uniform_r32(buffer - 4u);
+            if (len > UINT32_MAX - 4u
+                || !uniform_capture(out, used, buffer - 4u, len + 4u, &f)) return 0;
+        }
+    }
+    return 1;
+}
+
+void *isaac_fast_shader_uniform_snapshot(const CpuState *s) {
+    size_t bytes = 0u;
+    if (!uniform_snapshot_walk(s, NULL, &bytes) || bytes > SIZE_MAX - sizeof(UniformSnapshot))
+        return NULL;
+    UniformSnapshot *snapshot = malloc(sizeof(*snapshot) + bytes);
+    if (!snapshot) return NULL;
+    snapshot->bytes = bytes;
+    bytes = 0u;
+    if (!uniform_snapshot_walk(s, snapshot->records, &bytes)) {
+        free(snapshot);
+        return NULL;
+    }
+    return snapshot;
+}
+
+int isaac_fast_shader_uniform_verify(const void *saved, int restore) {
+    const UniformSnapshot *snapshot = saved;
+    int equal = 1;
+    for (size_t p = 0u; p < snapshot->bytes;) {
+        uint32_t va, len;
+        memcpy(&va, snapshot->records + p, 4u);
+        memcpy(&len, snapshot->records + p + 4u, 4u);
+        if (!isaac_fast_verify_equal(snapshot->records + p + 8u, va, len)) {
+            equal = 0;
+            if (restore) memcpy(isaac_g(va), snapshot->records + p + 8u, len);
+        }
+        p += 8u + len;
+    }
+    return equal;
 }
 
 /* ---- per-quad scale inside the vertex packer (0x00a671b0) ---------------

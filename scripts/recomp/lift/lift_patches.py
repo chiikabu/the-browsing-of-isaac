@@ -98,6 +98,19 @@ PATCHES: dict[int, tuple[str, str]] = {
 # function, its first block is re-decoded from 0xa2b5c8, and both targets
 # get a case in its re-entry switch.
 BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    # The lifter keeps this CMP's flags only in locals and omits them from
+    # the return spill. Materialize the real flags on this one no-change
+    # exit so mode 2 compares CPU state, not stale entry flags.
+    ("0x00a14de7",
+     "  RECOMP_VA(0xa14de7u);\n  if (ZF) {\n    goto L_00a14ef9;\n  }\n",
+     """  RECOMP_VA(0xa14de7u);
+  if (ZF) {
+    /* LIFT-PATCH 0x00a14de7: expose the matched CMP(-4,-4) flags. */
+    s->CF = CF; s->PF = PF; s->ZF = ZF; s->SF = SF; s->OF = OF;
+    s->AF = 0u;
+    goto L_00a14ef9;
+  }
+"""),
     # Pure non-sequential pair accumulation; packet reads and scalar edges
     # stay lifted. Put the guard before the backedge label, as for packing.
     ("0x00aa27b0",
@@ -482,6 +495,41 @@ PURGE_PATCHES: dict[str, tuple[int, int]] = {
 # so the equivalence is measured on the game's own data, not assumed.
 # Each entry: va -> wrapper body text; the wrapper owns the callee's ret.
 WRAP_PATCHES: dict[int, str] = {
+    # 0x00a14c00: native unchanged-value exit only. Every change, missing slot
+    # and invalid type keeps the original allocation/version/snapshot path.
+    # Verification compares full CPU state and the live uniform graph; the
+    # original's dead stack scratch is deliberately not a compared range.
+    0x00a14c00: """void sub_00a14c00(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a14c00: unchanged shader uniform (host_fastpath.c) */
+  RECOMP_VA(0xa14c00u);
+  int mode = isaac_fastpath_mode();
+  if (mode == 2 && !g_reentry_eip) {
+    void *snapshot = isaac_fast_shader_uniform_snapshot(s);
+    if (snapshot) {
+      CpuState host = *s;
+      int handled = isaac_fast_shader_uniform(&host);
+      if (!isaac_fast_shader_uniform_verify(snapshot, 1))
+        isaac_fastpath_mismatch("shader_uniform_host_write", s->ECX, 0u);
+      if (handled) {
+        sub_00a14c00__lifted(s);
+        if (recomp_jmp_pending) recomp_run_pending(s);
+        if (memcmp(s, &host, sizeof host) || !isaac_fast_shader_uniform_verify(snapshot, 0))
+          isaac_fastpath_mismatch("shader_uniform", s->EAX, host.EAX);
+        free(snapshot);
+        isaac_fastpath_count(0xa14c00u, 2);
+        return;
+      }
+      if (memcmp(s, &host, sizeof host))
+        isaac_fastpath_mismatch("shader_uniform_reject_cpu", s->EAX, host.EAX);
+      free(snapshot);
+    }
+  } else if (mode != 0 && !g_reentry_eip && isaac_fast_shader_uniform(s)) {
+    return;  /* The helper owns the exact ret 0x10 and all CPU outputs. */
+  }
+  isaac_fastpath_count(0xa14c00u, 1);
+  sub_00a14c00__lifted(s);
+}
+""",
     # The CRT's x87 float->int64 (round 90e): ST0 in, EDX:EAX out, ST0 popped,
     # plain ret, ECX left holding the entry ESP. Not a speed wrapper -- a
     # correctness one. Its fisttp fast path is gated on the ISA cell 0xc7162c,

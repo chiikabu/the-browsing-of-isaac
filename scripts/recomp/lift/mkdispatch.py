@@ -7,12 +7,11 @@ host_trap.c):
     int  isaac_lifted_dispatch(uint32_t va, CpuState *cpu);  -> 1 if handled
     void isaac_guest_call(uint32_t va, CpuState *cpu);        -> loud on miss
 
-Lookup is a direct-mapped uint16 index over the .text VA range, built once
-at first use.  Measured at 3.98 ns/lookup against 81.33 ns for a sorted
-binary search over the same 21,375 entries (scripts/recomp/lift/
-bench_dispatch.c), which is why the 14.2 MB of index is worth it.  The
-index is malloc'd, so it lands in the host region above ISAAC_GUARD_VA
-and a guest wild pointer cannot reach it.
+Lookup uses a two-level paged uint16 index over the .text VA range, built
+once at first use. Only pages containing function entries have storage;
+empty directory slots share an all-missing page. Block re-entry uses a
+separate, lazy uint32 index with smaller pages. Each index is one allocation
+in the host region above ISAAC_GUARD_VA, unreachable by guest wild pointers.
 
 Optionally also emits image_slices.h for tests that need PE bytes at their
 real VAs without a full boot.
@@ -26,9 +25,76 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pe import PE32                                     # noqa: E402
+from split_giants import MARK as SPLIT_MARK, RE_PEND      # noqa: E402
 
 TEXT_LO = 0x00401000
 TEXT_HI = 0x00B17134
+DPAGE_BITS = 5
+BPAGE_BITS = 3
+RE_DEFINITION = re.compile(
+    r"^void (sub_([0-9a-f]{8})[A-Za-z0-9_]*)\s*"
+    r"\(CpuState\s*\*\s*(?:restrict\s+)?[A-Za-z_]\w*\)\s*\{", re.M)
+RE_RV = re.compile(r"RECOMP_VA\(0x([0-9a-fA-F]{1,8})u\)")
+RE_PART_DEFINITION = re.compile(
+    r"^static void (?:__attribute__\(\(noinline\)\) )?"
+    r"(sub_[0-9a-f]{8}[A-Za-z0-9_]*)__p[0-9]+"
+    r"\(CpuState \*restrict s, uint32_t nb\) \{")
+RE_SPLIT_TRAMPOLINE = re.compile(
+    re.escape(SPLIT_MARK) + r"(?: v[0-9]+)? (sub_[0-9a-f]{8}[A-Za-z0-9_]*):")
+
+
+def scan_lifted_sources(paths, continuations):
+    """Return definitions and first-owner block targets from generated C.
+
+    Wrapped entries keep their public name, but their continuation labels live
+    in sub_X__lifted. Split parts resume through the owning trampoline, never
+    directly: its pending/next loop completes cross-part jumps. A prototype
+    must never change the current body owner.
+    """
+    definitions = set()
+    blocks = []
+    seen = set()
+    for path in paths:
+        current = None
+        split_state = set()
+        split_trampolines = {}
+        file_blocks = []
+        with open(path, encoding="utf8") as source:
+            for line in source:
+                pending = RE_PEND.match(line)
+                if pending:
+                    split_state.add(pending.group(1))
+                definition = RE_DEFINITION.match(line)
+                part = RE_PART_DEFINITION.match(line)
+                if definition:
+                    current = (definition.group(1), False)
+                    definitions.add((definition.group(1), definition.group(2)))
+                    trampoline = RE_SPLIT_TRAMPOLINE.search(line)
+                    if trampoline:
+                        split_trampolines[trampoline.group(1)] = definition.group(1)
+                elif part and part.group(1) in split_state:
+                    current = (part.group(1), True)
+                if current is not None:
+                    for marker in RE_RV.finditer(line):
+                        va = int(marker.group(1), 16)
+                        # Explicit cross-function patch targets are resumable
+                        # too, even when they do not follow a CALL instruction.
+                        if (va in continuations or "LIFT-PATCH REENTRY" in line) and va not in seen:
+                            seen.add(va)
+                            file_blocks.append((va, current))
+                # Generated bodies close at column zero. Small hand-written
+                # bodies may also open and close on their definition line.
+                if line.startswith("}") or ((definition or part) and line.rstrip().endswith("}")):
+                    current = None
+        for va, (owner, is_part) in file_blocks:
+            if is_part:
+                # The actual definition can have been renamed by a wrapper
+                # after splitting; the marker retains the split-state stem.
+                if owner not in split_trampolines:
+                    raise ValueError("%s: split body %s has no trampoline" % (path, owner))
+                owner = split_trampolines[owner]
+            blocks.append((va, owner))
+    return definitions, sorted(blocks)
 
 
 def main():
@@ -42,14 +108,9 @@ def main():
     args = ap.parse_args()
     d = args.dir
 
-    names = set()
-    for f in sorted(glob.glob(os.path.join(d, "lifted*.c"))):
-        with open(f, encoding="utf8") as fh:
-            names.update(re.findall(r"^void (sub_([0-9a-f]{8}))\(CpuState",
-                                    fh.read(), re.M))
     # Strong implementations of callees the lifter could not decode
     # (scripts/recomp/host/src/missing_fns.c) must also resolve through the
-    # direct-mapped index: an indirect call into one of them otherwise traps
+    # paged index: an indirect call into one of them otherwise traps
     # as "inside the image, function was not lifted".  Measured: 0x00aa9350
     # was reached as `call [0xc736e0]` from the controller-DB parser at
     # 0x00a25b36 and the boot stopped there.
@@ -58,9 +119,8 @@ def main():
     hand_written = set()
     if os.path.exists(mf):
         with open(mf, encoding="utf8") as fh:
-            hand_written = set(re.findall(r"^void (sub_([0-9a-f]{8}))\(CpuState",
-                                          fh.read(), re.M))
-        names.update(hand_written)
+            hand_written = {(name, va) for name, va in RE_DEFINITION.findall(fh.read())
+                            if name == "sub_" + va}
     # Mid-function re-entry targets: every CALL continuation in the image
     # (computed by patch_reentry.py from the PE with capstone).  A return
     # address is always (call address + size), so this set is the exact
@@ -70,31 +130,10 @@ def main():
     if os.path.exists(cont_path):
         with open(cont_path) as fh:
             cont = set(int(l.strip(), 16) for l in fh if l.strip())
-    RE_RV = re.compile(r"RECOMP_VA\(0x([0-9a-fA-F]{1,8})u\)")
-    blocks = []          # (block_va, owning_function_name), first owner wins
-    seen_b = set()
-    for f in sorted(glob.glob(os.path.join(d, "lifted*.c"))):
-        cur = None
-        with open(f, encoding="utf8") as fh:
-            for line in fh:
-                mf = re.match(r"^void (sub_[0-9a-f]{8})\(", line)
-                if mf:
-                    cur = mf.group(1)
-                    continue
-                if cur is None:
-                    continue
-                mr = RE_RV.search(line)
-                if not mr:
-                    continue
-                v = int(mr.group(1), 16)
-                # A block a lift patch jumps INTO from another function is a
-                # re-entry point too (lift_patches.py BLOCK_PATCHES marks the
-                # RECOMP_VA line): round 24e restores a branch whose targets
-                # Ghidra had split off into their own function.
-                if (v in cont or "LIFT-PATCH REENTRY" in line) and v not in seen_b:
-                    seen_b.add(v)
-                    blocks.append((v, cur))
-    blocks.sort()
+    definitions, blocks = scan_lifted_sources(
+        sorted(glob.glob(os.path.join(d, "lifted*.c"))), cont)
+    names = {(name, va) for name, va in definitions if name == "sub_" + va}
+    names.update(hand_written)
     print("re-entry blocks: %d" % len(blocks))
 
     entries = sorted((int(h, 16), n) for n, h in names)
@@ -135,6 +174,12 @@ def main():
         fh.write('#ifdef __EMSCRIPTEN__\n#include <emscripten.h>\n#else\n'
                  'static double emscripten_get_now(void) { return 0.0; }\n#endif\n')
         fh.write('#include "dispatch_tbl.h"\n\n')
+        # Original bodies renamed by WRAP_PATCHES are not public entries and
+        # are absent from lifted_decls.h. Keep their declarations local here:
+        # changing a block owner must not rebuild every TU through the header.
+        entry_names = {name for _, name in entries}
+        for owner in sorted({name for _, name in blocks} - entry_names):
+            fh.write('extern void %s(CpuState *restrict s);\n' % owner)
         fh.write('const uint32_t g_ndispatch = G_NDISPATCH;   /* linkable count for recomp_rt.c */\n')
         fh.write('const uint32_t g_dva[G_NDISPATCH] = {\n')
         for i in range(0, len(entries), 8):
@@ -151,6 +196,10 @@ def main():
             for i in range(0, len(blocks), 4):
                 fh.write(','.join(n for _, n in blocks[i:i + 4]) + ',\n')
             fh.write('};\n\n')
+        fh.write('#define DPAGE_BITS %du\n#define DPAGE_COUNT %du\n' %
+                 (DPAGE_BITS, len({(v - TEXT_LO) >> DPAGE_BITS for v, _ in entries})))
+        fh.write('#define BPAGE_BITS %du\n#define BPAGE_COUNT %du\n\n' %
+                 (BPAGE_BITS, len({(v - TEXT_LO) >> BPAGE_BITS for v, _ in blocks})))
         fh.write('''/* Mid-function re-entry (guest setjmp/longjmp and the unwind after
  * longjmp): return addresses resume at CALL continuations, which are NOT
  * function entries.  The dispatcher sets this to the requested block VA
@@ -158,36 +207,59 @@ def main():
  * (see patch_reentry.py) and jumps to the matching L_ label. */
 uint32_t g_reentry_eip = 0u;
 
-static uint16_t *g_index;   /* direct-mapped VA -> dense function id */
+/* Directory offsets select compact leaf pages. Offset zero selects an
+ * all-missing leaf, so absent pages need no branch on the lookup path.
+ * Directory and leaves share one allocation per index. */
+static uint32_t *g_index_pages;
+static uint16_t *g_index;
 #if G_NBLOCK
-static uint32_t *g_bindex;  /* direct-mapped VA -> dense block id */
+static uint32_t *g_bindex_pages;
+static uint32_t *g_bindex;
 #endif
 
 static void build_index(void) {
-  size_t n = (size_t)(G_TEXT_HI - G_TEXT_LO);
-  g_index = (uint16_t *)malloc(n * sizeof(uint16_t));
-  if (!g_index) {
+  size_t pages = ((size_t)(G_TEXT_HI - G_TEXT_LO) + (1u << DPAGE_BITS) - 1u) >> DPAGE_BITS;
+  size_t directory_bytes = pages * sizeof(uint32_t);
+  size_t leaf_bytes = ((size_t)DPAGE_COUNT + 1u) * (1u << DPAGE_BITS) * sizeof(uint16_t);
+  g_index_pages = (uint32_t *)malloc(directory_bytes + leaf_bytes);
+  if (!g_index_pages) {
     fprintf(stderr, "recomp: cannot allocate %zu-byte dispatch index\\n",
-            n * sizeof(uint16_t));
+            directory_bytes + leaf_bytes);
     abort();
   }
-  memset(g_index, 0xFF, n * sizeof(uint16_t));
-  for (uint32_t i = 0; i < G_NDISPATCH; ++i)
-    g_index[g_dva[i] - G_TEXT_LO] = (uint16_t)i;
+  g_index = (uint16_t *)(g_index_pages + pages);
+  memset(g_index_pages, 0, directory_bytes);
+  memset(g_index, 0xFF, leaf_bytes);
+  uint32_t next_page = 1u << DPAGE_BITS;
+  for (uint32_t i = 0; i < G_NDISPATCH; ++i) {
+    uint32_t off = g_dva[i] - G_TEXT_LO;
+    uint32_t *page = &g_index_pages[off >> DPAGE_BITS];
+    if (!*page) { *page = next_page; next_page += 1u << DPAGE_BITS; }
+    g_index[*page + (off & ((1u << DPAGE_BITS) - 1u))] = (uint16_t)i;
+  }
 }
 
 #if G_NBLOCK
 static void build_bindex(void) {
-  size_t n = (size_t)(G_TEXT_HI - G_TEXT_LO);
-  g_bindex = (uint32_t *)malloc(n * sizeof(uint32_t));
-  if (!g_bindex) {
+  size_t pages = ((size_t)(G_TEXT_HI - G_TEXT_LO) + (1u << BPAGE_BITS) - 1u) >> BPAGE_BITS;
+  size_t directory_bytes = pages * sizeof(uint32_t);
+  size_t leaf_bytes = ((size_t)BPAGE_COUNT + 1u) * (1u << BPAGE_BITS) * sizeof(uint32_t);
+  g_bindex_pages = (uint32_t *)malloc(directory_bytes + leaf_bytes);
+  if (!g_bindex_pages) {
     fprintf(stderr, "recomp: cannot allocate %zu-byte block index\\n",
-            n * sizeof(uint32_t));
+            directory_bytes + leaf_bytes);
     abort();
   }
-  for (size_t i = 0; i < n; ++i) g_bindex[i] = 0xFFFFFFFFu;
-  for (uint32_t i = 0; i < G_NBLOCK; ++i)
-    g_bindex[g_bva[i] - G_TEXT_LO] = i;
+  g_bindex = g_bindex_pages + pages;
+  memset(g_bindex_pages, 0, directory_bytes);
+  memset(g_bindex, 0xFF, leaf_bytes);
+  uint32_t next_page = 1u << BPAGE_BITS;
+  for (uint32_t i = 0; i < G_NBLOCK; ++i) {
+    uint32_t off = g_bva[i] - G_TEXT_LO;
+    uint32_t *page = &g_bindex_pages[off >> BPAGE_BITS];
+    if (!*page) { *page = next_page; next_page += 1u << BPAGE_BITS; }
+    g_bindex[*page + (off & ((1u << BPAGE_BITS) - 1u))] = i;
+  }
 }
 #endif
 
@@ -198,7 +270,7 @@ static int dispatch_block(uint32_t va, CpuState *restrict cpu) {
   if (!g_bindex) build_bindex();
   uint32_t off = va - G_TEXT_LO;
   if (off >= (uint32_t)(G_TEXT_HI - G_TEXT_LO)) return 0;
-  uint32_t bid = g_bindex[off];
+  uint32_t bid = g_bindex[g_bindex_pages[off >> BPAGE_BITS] + (off & ((1u << BPAGE_BITS) - 1u))];
   if (bid == 0xFFFFFFFFu) return 0;
   g_reentry_eip = va;
   g_bfn[bid](cpu);
@@ -225,38 +297,39 @@ static uint32_t g_watch_va[8], g_watch_hits[8];
 static double *g_dtime;
 static double g_dself, g_dtotal;
 static int g_dtime_on = -1;
-/* Round 38: a direct-mapped cache in front of the index. g_index is one
- * uint16 per text byte -- 18 MB -- so every dispatch of a call-site's usual
- * target was a cache miss into it (10.9% of a throttled browser frame,
- * 4,400 dispatches a frame). 4096 (va, id) pairs stay in L1/L2; a hit skips
- * the index, the range check and the mode checks, and still counts (the
- * census must stay exact). Off while any dispatch mode (ISAAC_HEARTBEAT,
- * ISAAC_DISPATCH_WATCH, ISAAC_DISPATCH_TIME) is on. */
-#define DCACHE_BITS 14           /* 16384 sets x 2 ways x 8 bytes = 256 KB */
-typedef struct { uint32_t va[2]; uint16_t id[2]; uint8_t next; } dcache_set;
+/* Two-way cache in front of the paged index. Hits use the callable directly
+ * instead of a dependent g_dfn[id] load, but still update the exact census.
+ * Off while any dispatch mode (ISAAC_HEARTBEAT, ISAAC_DISPATCH_WATCH,
+ * ISAAC_DISPATCH_TIME) is on. */
+#define DCACHE_BITS 14           /* 16384 sets x 24 bytes = 384 KiB on wasm32 */
+typedef struct { uint32_t va[2]; recomp_fn fn[2]; uint16_t id[2]; uint8_t next; } dcache_set;
 static dcache_set g_dcache[1u << DCACHE_BITS];
 static int g_dfast;      /* 1 once the modes are read and none is on */
 static uint32_t g_dchits, g_dcmiss;
 static inline uint32_t dcache_slot(uint32_t va) { return ((va >> 2) ^ (va >> 16)) & ((1u << DCACHE_BITS) - 1u); }
-int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu) {
+static inline void dcache_fill(uint32_t va, uint16_t id, recomp_fn fn) {
   dcache_set *c = &g_dcache[dcache_slot(va)];
-  uint16_t id;
+  unsigned w = c->next & 1u;
+  c->va[w] = va; c->fn[w] = fn; c->id[w] = id; c->next = (uint8_t)(w ^ 1u);
+  ++g_dcmiss;
+}
+int isaac_lifted_dispatch_cached(uint32_t va, CpuState *restrict cpu) {
   if (!g_dfast || !va) return 0;
-  if (c->va[0] == va) id = c->id[0];
-  else if (c->va[1] == va) id = c->id[1];
+  dcache_set *c = &g_dcache[dcache_slot(va)];
+  unsigned w;
+  if (c->va[0] == va) w = 0;
+  else if (c->va[1] == va) w = 1;
   else return 0;
   ++g_dcalls; ++g_dchits;
-  g_dcount[id]++;
-  g_dfn[id](cpu);
+  g_dcount[c->id[w]]++;
+  c->fn[w](cpu);
   return 1;
 }
-int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
-  if (!g_index) build_index();
-  uint32_t off = va - G_TEXT_LO;
-  ++g_dcalls;
-  if (off >= (uint32_t)(G_TEXT_HI - G_TEXT_LO)) { ++g_dmisses; return 0; }
-  uint16_t id = g_index[off];
-  if (id == 0xFFFFu) { ++g_dblocks; return dispatch_block(va, cpu); }
+
+/* Keep initialization, allocation retries and diagnostic bookkeeping out of
+ * the ordinary dispatch body even in optimized builds. Modes are still read
+ * lazily on the first function entry, never on a miss or block re-entry. */
+static __attribute__((noinline,cold)) int dispatch_entry_slow(uint32_t va, uint16_t id, CpuState *restrict cpu) {
   /* ISAAC_HEARTBEAT=<n>: print every n-th dispatch with the wall clock and the
    * target. The room-entry crawl (round 15c) executes NO lifted instruction
    * for minutes -- the RECOMP_VA tick never reaches its interval -- so the
@@ -296,12 +369,7 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
     if (g_dtime_on) g_dtime = (double *)calloc(G_NDISPATCH, sizeof(double));
   }
   if (!g_dfast && g_hb_every == 0 && g_watch_n == 0 && g_dtime_on == 0 && g_dcount) g_dfast = 1;
-  if (g_dfast) {                            /* a miss: fill the set's older way */
-    dcache_set *c = &g_dcache[dcache_slot(va)];
-    unsigned w = c->next & 1u;
-    c->va[w] = va; c->id[w] = id; c->next = (uint8_t)(w ^ 1u);
-    ++g_dcmiss;
-  }
+  if (g_dfast) dcache_fill(va, id, g_dfn[id]);
   if (g_dtime_on && g_dtime) {
     double t0 = emscripten_get_now();
     g_dfn[id](cpu);
@@ -312,6 +380,21 @@ int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
     return 1;
   }
   g_dfn[id](cpu);
+  return 1;
+}
+
+int isaac_lifted_dispatch(uint32_t va, CpuState *restrict cpu) {
+  if (!g_index) build_index();
+  uint32_t off = va - G_TEXT_LO;
+  ++g_dcalls;
+  if (off >= (uint32_t)(G_TEXT_HI - G_TEXT_LO)) { ++g_dmisses; return 0; }
+  uint16_t id = g_index[g_index_pages[off >> DPAGE_BITS] + (off & ((1u << DPAGE_BITS) - 1u))];
+  if (id == 0xFFFFu) { ++g_dblocks; return dispatch_block(va, cpu); }
+  if (!g_dfast) return dispatch_entry_slow(va, id, cpu);
+  recomp_fn fn = g_dfn[id];
+  g_dcount[id]++;
+  dcache_fill(va, id, fn);
+  fn(cpu);
   return 1;
 }
 /* Monotonic progress signal for recomp_run_pending: unlike the RECOMP_VA

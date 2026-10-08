@@ -2,12 +2,13 @@
 """The shipping dist: one folder somebody can host, assembled from the bundle, the fast web module and the memory image.
 
   build  [--bundle DIR] [--module DIR] [--segs FILE] [--web DIR] [--dist DIR] [--copy]
-         [--no-compress] [--no-brotli] [--brotli-quality N] [--gzip-level N] [--window-min BYTES]
+         [--keep-wasm-names] [--no-compress] [--no-brotli] [--brotli-quality N] [--gzip-level N] [--window-min BYTES]
          assemble DIST (default .scratch/game-dist): play.html + play.mjs + boot_web.mjs at the root,
          boot.mjs / boot.wasm / isaac.segs.bin (copied, never linked: build_boot.py relinks the module
-         in place while a dist may be in use), the bundle's files under instance/ (hard links, or
+         in place while a dist may be in use; only the copied Wasm's name custom section is stripped
+         unless --keep-wasm-names is set), the bundle's files under instance/ (hard links, or
          copies with --copy), instance_index.json in the shape boot_web.mjs consumes, precompressed
-         siblings (.br / .gz) next to every file above 1 MB that compresses, dist.json (every file
+         siblings (.br / .gz) for files of at least 1 KiB that compress, dist.json (every file
          with its size, sha256 and encodings) and the size table
   check  DIST [--quick]   re-verify a dist against dist.json: every file present with its size and
          hash, every sibling present and decoding to its source (--quick: sizes only), nothing extra,
@@ -32,6 +33,7 @@ game-derived enters the repository through this tool: the dist lives under .scra
 from __future__ import annotations
 
 import argparse
+import codecs
 import gzip
 import hashlib
 import json
@@ -60,7 +62,7 @@ PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "gamepad.mjs", "menu_over
 TRAIL_NAME = "boot-trail.json"       # round 59: the boot trail a drive_boot.mjs run left, shipped for first visits (--trail)
 MODULE_FILES = ("boot.mjs", "boot.wasm")
 SEGS_NAME = "isaac.segs.bin"
-MIN_COMPRESS = 1_000_000          # "above 1 MB": a sibling is considered from here
+MIN_COMPRESS = 1 << 10            # small text and archives benefit too; probe and final size still gate siblings
 BIG_ROW = 5_000_000               # the size table lists every file above this on its own row
 WINDOW_MIN_DEFAULT = 32 << 20     # ISAAC_FS_WINDOW_MIN MiB: a lazy file this big is served as slices, never whole
 KEEP_RATIO = 0.95                 # a sibling (and a probe) must save at least 5 %
@@ -118,6 +120,78 @@ def instance_index(instance_root: str, exclude: set[str] | None = None) -> list[
             out.append({"p": rel, "s": os.stat(os.path.join(dp, f)).st_size})
     out.sort(key=lambda e: e["p"])
     return out
+
+
+def _wasm_u32(f, end: int) -> int:
+    """Read a Wasm unsigned LEB128 without crossing its enclosing boundary."""
+    value = 0
+    for shift in range(0, 35, 7):
+        if f.tell() >= end:
+            raise ValueError("truncated unsigned LEB128")
+        byte = f.read(1)
+        if not byte:
+            raise ValueError("truncated unsigned LEB128")
+        b = byte[0]
+        if shift == 28 and b & 0x70:
+            raise ValueError("unsigned LEB128 exceeds 32 bits")
+        value |= (b & 0x7f) << shift
+        if not b & 0x80:
+            return value
+    raise ValueError("unsigned LEB128 exceeds five bytes")
+
+
+def strip_wasm_names(path: str, keep_names: bool = False) -> None:
+    """Validate section framing, then remove only `name` custom sections from a copied module."""
+    with open(path, "r+b") as f:
+        size = os.fstat(f.fileno()).st_size
+        if f.read(8) != b"\0asm\x01\0\0\0":
+            raise ValueError("expected a WebAssembly version 1 header")
+        removed: list[tuple[int, int]] = []
+        while f.tell() < size:
+            start = f.tell()
+            section_id = f.read(1)[0]
+            if section_id > 13:
+                raise ValueError("unknown section id %d" % section_id)
+            section_size = _wasm_u32(f, size)
+            end = f.tell() + section_size
+            if end > size:
+                raise ValueError("section payload extends past the end of the module")
+            if section_id == 0:
+                name_size = _wasm_u32(f, end)
+                if name_size > end - f.tell():
+                    raise ValueError("custom section name extends past its payload")
+                decoder = codecs.getincrementaldecoder("utf-8")()
+                remaining = name_size
+                is_name = False
+                while remaining:
+                    chunk = f.read(min(remaining, 64 << 10))
+                    if not chunk:
+                        raise ValueError("truncated custom section name")
+                    remaining -= len(chunk)
+                    decoder.decode(chunk, final=remaining == 0)
+                    if name_size == 4:
+                        is_name = chunk == b"name"
+                if is_name:
+                    removed.append((start, end))
+            f.seek(end)
+        if keep_names or not removed:
+            return
+        # Parse the entire module before changing it. Move retained spans verbatim,
+        # including their original LEB encodings; never rewrite executable sections.
+        write_pos = removed[0][0]
+        for i, (_, read_pos) in enumerate(removed):
+            end = removed[i + 1][0] if i + 1 < len(removed) else size
+            while read_pos < end:
+                f.seek(read_pos)
+                chunk = f.read(min(1 << 20, end - read_pos))
+                if not chunk:
+                    raise ValueError("truncated section payload")
+                f.seek(write_pos)
+                f.write(chunk)
+                read_pos += len(chunk)
+                write_pos += len(chunk)
+        f.truncate(write_pos)
+
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +370,8 @@ def cmd_build(args) -> int:
     def add(rel: str, src: str, kind: str, link: bool) -> dict:
         dst = os.path.join(dist, rel)
         how[place(src, dst, link)] += 1
+        if rel == "boot.wasm":
+            strip_wasm_names(dst, keep_names=args.keep_wasm_names)
         e = {"path": rel, "size": os.stat(dst).st_size, "sha256": sha256_file(dst), "kind": kind, "linked": link}
         files.append(e)
         return e
@@ -311,8 +387,12 @@ def cmd_build(args) -> int:
         page_entry.update(size=os.stat(page_path).st_size, sha256=sha256_file(page_path))
     if getattr(args, "trail", ""):
         add(TRAIL_NAME, os.path.abspath(args.trail), "trail", link=False)
-    for f in MODULE_FILES:
-        add(f, os.path.join(module_dir, f), "module", link=False)
+    try:
+        for f in MODULE_FILES:
+            add(f, os.path.join(module_dir, f), "module", link=False)
+    except ValueError as ex:
+        print("invalid WebAssembly module: %s" % ex, file=sys.stderr)
+        return 1
     add(SEGS_NAME, segs, "image", link=False)
     bundle_files = walk_files(bundle_dir)
     for rel in sorted(bundle_files):
@@ -548,6 +628,8 @@ def main(argv=None) -> int:
     p.add_argument("--web", default=DEFAULTS["web"], help="where play.html, play.mjs and boot_web.mjs live")
     p.add_argument("--dist", default=DEFAULTS["dist"], help="the output folder, default .scratch/game-dist")
     p.add_argument("--copy", action="store_true", help="copy the bundle's files instead of hard-linking them")
+    p.add_argument("--keep-wasm-names", action="store_true",
+                   help="retain the Wasm name custom section for profiling/debugging (the build artifact is always unchanged)")
     p.add_argument("--trail", default=DEFAULTS["trail"], help="a boot trail (drive_boot.mjs writes <out>/boot-trail.json) shipped as /boot-trail.json: "
                    "when explicitly requested with ?trail=1, a first visit's reader fetches the windows it names ahead of the engine "
                    "(default: scripts/recomp/assets/boot-trail.json, recorded against this archive layout)")

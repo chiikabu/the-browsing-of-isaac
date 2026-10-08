@@ -11,8 +11,8 @@
  * This file is the object model that surface needs, and it is deliberately
  * independent of whether anything can actually be heard:
  *
- *   buffers   remember their PCM (format, channels, bit depth, rate) and the
- *             duration that implies
+ *   buffers   remember their format, channels, bit depth, rate and duration;
+ *             the backend owns any sample storage needed for playback
  *   sources   have a state, a gain, a pitch, an optional static buffer and a
  *             queue; they advance on the wall clock, so a source stops when
  *             its sound would have finished and a streaming source reports
@@ -87,6 +87,8 @@ static double emscripten_get_now(void) { return 0.0; }
 /* ---- backend hooks (weak: a profile with no output still links) ---------
  * The contract, in the order a streaming source goes through it:
  *   buffer(id, pcm...)          PCM arrived for a buffer id (re-uploads replace)
+ *                               pcm is borrowed guest memory, valid only for
+ *                               this call: consume or copy it before returning
  *   queue(src, id)              one buffer appended to the source's queue
  *   play(src, buffer, gain, pitch, looping, streaming, head, offset_sec)
  *                               static: play `buffer` (from offset_sec on a
@@ -128,8 +130,6 @@ __attribute__((weak)) double isaac_audio_clock_ms(void) { return emscripten_get_
 
 typedef struct {
     uint32_t id;
-    uint8_t *pcm;
-    uint32_t bytes;
     int channels, bits, freq;
     double seconds;
 } al_buffer;
@@ -303,7 +303,6 @@ void isaac_audio_delete_buffers(uint32_t n, uint32_t va) {
         al_buffer *b = buf_find(id);
         if (!b) continue;
         isaac_audio_backend_drop_buffer(id);
-        free(b->pcm);
         *b = g_buf[--g_nbuf];
     }
 }
@@ -328,24 +327,15 @@ void isaac_audio_buffer_data(uint32_t buf, uint32_t format, uint32_t data_va,
     int channels = (format == AL_FORMAT_STEREO8 || format == AL_FORMAT_STEREO16) ? 2 : 1;
     int bits = (format == AL_FORMAT_MONO16 || format == AL_FORMAT_STEREO16) ? 16 : 8;
     uint32_t frame = (uint32_t)channels * (uint32_t)(bits / 8);
-    free(b->pcm);
-    b->pcm = NULL;
-    b->bytes = 0;
     b->channels = channels;
     b->bits = bits;
     b->freq = (int)freq;
     b->seconds = (freq && frame) ? (double)bytes / (double)(frame * freq) : 0.0;
-    if (bytes && isaac_is_guest_va(data_va) && isaac_is_guest_va(data_va + bytes - 1u)) {
-        b->pcm = (uint8_t *)malloc(bytes);
-        if (b->pcm) {
-            memcpy(b->pcm, isaac_g(data_va), bytes);
-            b->bytes = bytes;
-        }
-    }
     ++g_stat_buffers;
     g_stat_pcm_bytes += bytes;
     g_stat_seconds += b->seconds;
-    if (b->pcm) isaac_audio_backend_buffer(b->id, b->pcm, b->bytes, channels, bits, (int)freq);
+    if (bytes && isaac_is_guest_va(data_va) && isaac_is_guest_va(data_va + bytes - 1u))
+        isaac_audio_backend_buffer(b->id, isaac_g(data_va), bytes, channels, bits, (int)freq);
     ATRACE("[isaac][audio] t=%.1f buffer %u: %u bytes, %d ch, %d bit, %u Hz, %.3f s (format 0x%x)",
            trace_t(), buf, bytes, channels, bits, freq, b->seconds, format);
 }

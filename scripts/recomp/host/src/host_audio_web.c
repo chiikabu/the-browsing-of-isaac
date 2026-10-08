@@ -180,7 +180,13 @@ EM_JS(void, isaac_audio_js_buffer, (uint32_t id, const uint8_t *pcm, uint32_t by
     var ab = A.ctx.createBuffer(channels, frames, freq);
     for (var c = 0; c < channels; c++) {
       var out = ab.getChannelData(c);
-      if (bits === 16) {
+      if (bits === 16 && !(pcm & 1)) {
+        /* Reuse the current Emscripten heap view: no per-upload view or PCM copy.
+         * The signed load and power-of-two scaling are exact for every int16. */
+        var sample = (pcm >>> 1) + c;
+        for (var i = 0; i < frames; i++, sample += channels) out[i] = HEAP16[sample] / 32768;
+      } else if (bits === 16) {
+        /* Guest PCM may be unaligned; keep the little-endian byte loads. */
         for (var i = 0; i < frames; i++) {
           var o = pcm + (i * channels + c) * 2;
           var v = HEAPU8[o] | (HEAPU8[o + 1] << 8);

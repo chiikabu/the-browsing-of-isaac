@@ -77,6 +77,13 @@ int  isaac_fast_copy44_ok(uint32_t self_va, uint32_t src_va);
 void isaac_fast_copy44(uint32_t self_va, uint32_t src_va);
 int  isaac_fast_copy36_ok(uint32_t self_va, uint32_t src_va);
 void isaac_fast_copy36(uint32_t self_va, uint32_t src_va);
+/* Exact unchanged-value exit of 0x00a14c00: 0 leaves CPU/guest untouched;
+ * 1 performs the full CPU return, without guest writes. */
+int isaac_fast_shader_uniform(struct CpuState *s);
+/* Mode-2 live graph snapshot; NULL declines verification. Caller frees it. */
+void *isaac_fast_shader_uniform_snapshot(const struct CpuState *s);
+/* restore != 0 also restores differing ranges before the original runs. */
+int isaac_fast_shader_uniform_verify(const void *snapshot, int restore);
 /* Per-quad viewport scale inside the vertex packer 0x00a671b0 (round 92). */
 void isaac_fast_entity_quad_scale(uint32_t elem_end, uint32_t scale);
 /* Four-corner tint of a 112-byte quad, 0x00a676fd (round 92). */

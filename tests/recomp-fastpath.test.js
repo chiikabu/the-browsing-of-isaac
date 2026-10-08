@@ -1,328 +1,411 @@
-// Host fastpath (recomp boot round 12d): the three deterministic leaf
-// functions that dominated the boot (PNG unfilter, adler32, premultiply) are
-// re-implemented on the host and installed by lift_patches.py WRAP_PATCHES as
-// wrappers around the lifted bodies. A wrapper owns the callee's `ret`; one
-// that forgets to pop the return address is the one-slot stack drift the
-// project keeps meeting (AGENTS.md), so the contract is pinned here:
-//   - every wrapper keeps the lifted body reachable (ISAAC_FASTPATH=0),
-//   - consults isaac_fastpath_mode() (0 lifted / 1 host / 2 verify),
-//   - ends the host path with the exact ret emulation,
-//   - calls a host function that host_fastpath.c defines and recomp_rt.h
-//     declares, and the verify path reports through isaac_fastpath_mismatch
-//     (or, where the lifted body is itself the defect, NO_VERIFY says why).
+// Execute the real host predicate and installed wrapper. The optional lifted
+// oracle uses the generated PE bodies, never a second implementation of them.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const lift = join(root, 'scripts', 'recomp', 'lift');
-const hostSrc = join(root, 'scripts', 'recomp', 'host', 'src');
+const require = createRequire(import.meta.url);
+const python = [process.env.PYTHON, 'python3', 'python'].find((p) => p &&
+  spawnSync(p, ['-B', '-c', 'import sys; sys.exit(sys.version_info < (3, 9))'],
+    { encoding: 'utf8', timeout: 10000 }).status === 0);
 
-function patchesIn(startMarker, endMarker) {
-  const lp = readFileSync(join(lift, 'lift_patches.py'), 'utf8');
-  const a = lp.indexOf(startMarker);
-  const b = lp.indexOf(endMarker, a);
-  assert.ok(a > 0 && b > a, `${startMarker} block found`);
-  const block = lp.slice(a, b);
-  const out = [];
-  for (const m of block.matchAll(/^\s*(0x[0-9a-f]{8}): """([\s\S]*?)^""",/gm)) {
-    out.push({ va: m[1], body: m[2] });
-  }
-  return out;
-}
-// the fastpath wrappers stop where the probe table starts: they are different
-// categories with different contracts (round 23)
-const wrapPatches = () => patchesIn('WRAP_PATCHES: dict', 'PROBE_PATCHES: dict');
-const probePatches = () => patchesIn('PROBE_PATCHES: dict', 'def apply_wrap_patches');
-// A wrapper may go without a verify path only where there is nothing honest to
-// compare: the lifted body is itself the defect the wrapper replaces (comparing
-// against it would report the bug, not a difference), or the wrapper is a guard
-// with no host result of its own. Each one is named here with the reason, and
-// must say so in its own body as well.
-const NO_VERIFY = {
-  '0x00af0800': 'CRT x87 float->int64: the lifted fallback tests an 80-bit exponent the runtime keeps as zero, so it returns 0 for everything (round 90e)',
-  '0x00af0780': 'CRT x87 float->int32, the same fallback and the same zero exponent word: every floor()/ceil() conversion through 0x00af0770 returned 0 (round 91)',
-  '0x00abb750': 'libvorbis mdct_bitreverse guard: it only decides whether the lifted body may run, so there is no host result to compare (round 90)',
-};
+const fixture = String.raw`
+#include "isaac_host.h"
+#include "recomp_rt.h"
+#include <emscripten.h>
+#include <setjmp.h>
+#include <stdarg.h>
 
-test('WRAP_PATCHES: every wrapper keeps the lifted body, consults the mode, and owns the ret', () => {
-  const patches = wrapPatches();
-  assert.ok(patches.length >= 3, `expected the three round-12 wrap patches, parsed ${patches.length}`);
-  const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
-  const rt = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
-  for (const { va, body } of patches) {
-    const name = `sub_${va.slice(2)}`;
-    assert.ok(body.startsWith(`void ${name}(CpuState *restrict s) {`), `${name}: wrapper signature`);
-    assert.ok(body.includes(`RECOMP_VA(0x${va.slice(2).replace(/^0+/, '')}u);`), `${name}: stamps its VA`);
-    assert.ok(body.includes(`${name}__lifted(s)`), `${name}: lifted body reachable (ISAAC_FASTPATH=0)`);
-    assert.ok(body.includes('isaac_fastpath_mode()'), `${name}: consults the fastpath mode`);
-    if (NO_VERIFY[va]) {
-      assert.ok(body.includes('no verify path, on purpose:'), `${name}: says in its body why it has no verify path`);
-    } else {
-      assert.ok(body.includes('isaac_fastpath_mismatch('), `${name}: verify path reports mismatches`);
-    }
-    // the host path must end with the callee's ret: pop EIP, ESP += 4 (+ the
-    // callee's own purge for a `ret N`, spelled `4u + Nu`)
-    const ret = /s->EIP = MEMR32\(s->ESP\);\s*\n\s*s->ESP \+= 4u(?: \+ \d+u)?;\s*\n}\s*$/;
-    assert.match(body, ret, `${name}: host path ends with the ret emulation (pop EIP, ESP += 4 [+ purge])`);
-    // the lifted fallback returns without touching the stack (the lifted
-    // body performs its own ret)
-    for (const m of body.matchAll(/__lifted\(s\);\s*(return;)?/g)) {
-      assert.ok(m[1] || /__lifted\(s\);\s*\n\s*if \(/.test(body.slice(m.index)),
-        `${name}: after the lifted body the wrapper must return or compare, never ret again`);
-    }
-    // each host function called is defined in host_fastpath.c and declared in recomp_rt.h
-    const calls = new Set([...body.matchAll(/\b(isaac_fast_[a-z0-9_]+)\(/g)].map((m) => m[1]));
-    assert.ok(calls.size >= 1, `${name}: calls a host fastpath function`);
-    for (const fn of calls) {
-      assert.match(fast, new RegExp(`^[a-z0-9_ ]*\\b${fn}\\(`, 'm'), `${fn}: defined in host_fastpath.c`);
-      assert.ok(rt.includes(`${fn}(`), `${fn}: declared in recomp_rt.h for the lifted TUs`);
-    }
-  }
-});
-
-test('WRAP_PATCHES target lifted functions (when the lift output is present)', () => {
-  const tbl = join(root, 'output', 'recomp', 'lift', 'gu', 'dispatch_tbl.c');
-  if (!existsSync(tbl)) return;   // binary-derived output is not in the tree
-  const text = readFileSync(tbl, 'utf8');
-  for (const { va } of wrapPatches()) {
-    const name = `sub_${va.slice(2)}`;
-    assert.ok(text.includes(name), `${name}: present in the dispatch table`);
-  }
-});
-
-// the body of a host function: from its definition line (not a declaration or
-// a call -- the round-27 functions call one another) to the closing brace
-function hostBody(src, fn) {
-  const m = src.match(new RegExp(`^[a-z0-9_ *]*\\b${fn}\\([^)]*\\) \\{`, 'm'));
-  assert.ok(m, `${fn} defined in host_fastpath.c`);
-  return src.slice(m.index, src.indexOf('\n}\n', m.index));
+#define ARENA 0x01800000u
+#define SELF (ARENA + 0x100u)
+#define SLOTS (ARENA + 0x200u)
+#define NAME (ARENA + 0x400u)
+#define OTHER_NAME (ARENA + 0x440u)
+#define VERSIONS (ARENA + 0x500u)
+#define OLD (ARENA + 0x604u)
+#define LATEST (ARENA + 0x704u)
+#define DATA (ARENA + 0x805u)
+#define SNAPSHOT (ARENA + 0x900u)
+#define STACK 0x01008000u
+#define SEH 0x01300000u
+#define COOKIE 0x00bf93b4u
+static const unsigned widths[] = {4,8,12,16,4,8,12,16,4,8,12,16,16,24,32,24,36,48,32,48,64};
+static int failures;
+static int fault;
+static int native_fault;
+static jmp_buf escape;
+static unsigned stop;
+uint32_t g_reentry_eip, recomp_jmp_pending, recomp_jmp_target;
+uint32_t isaac_fastpath_mismatches(void);
+int uniform_native_candidate(CpuState *s);
+int isaac_fast_shader_uniform(CpuState *s) {
+    int handled = uniform_native_candidate(s);
+    /* The real candidate runs first. Inject an illegal write afterwards to
+     * ensure verification did not take its baseline after the candidate. */
+    if (handled && native_fault) MEMW32(SNAPSHOT, 0u);
+    return handled;
 }
 
-test('host_fastpath.c: bounds-checked guest access and the verify counter', () => {
-  const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
-  for (const fn of ['isaac_fast_unfilter', 'isaac_fast_adler32', 'isaac_fast_premultiply', 'isaac_fast_pathhash']) {
-    assert.ok(hostBody(fast, fn).includes('isaac_is_guest_va('), `${fn}: checks its guest range before touching memory`);
-  }
-  // round 27: the deciding predicates check the ranges; the workers they gate
-  // (keystream_xor, read_window, mutex_take/drop) run only behind them
-  for (const fn of ['isaac_fast_guest_range', 'isaac_fast_isaac', 'isaac_fast_keystream_ok', 'isaac_fast_read_plan',
-                    'isaac_fast_mutex_std']) {
-    assert.match(hostBody(fast, fn), /isaac_is_guest_va\(|isaac_fast_guest_range\(/,
-      `${fn}: checks its guest range before touching memory`);
-  }
-  assert.ok(hostBody(fast, 'isaac_fast_guest_range').includes('va + len >= va'),
-    'guest_range: a range that wraps around the address space is rejected');
-  assert.ok(fast.includes('uint32_t isaac_fastpath_mismatches(void)'), 'mismatch counter exported');
-  assert.ok(/getenv\("ISAAC_FASTPATH"\)/.test(fast) && /getenv\("ISAAC_FASTPATH_VERIFY"\)/.test(fast),
-    'mode switches documented in the env');
-});
+void isaac_log(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt); vfprintf(stderr, fmt, ap); va_end(ap);
+    fputc('\n', stderr);
+}
+static void check(int ok, const char *label) {
+    if (!ok) { fprintf(stderr, "FAIL %s\n", label); ++failures; }
+}
+static void stopped(unsigned va) { stop = va; longjmp(escape, 1); }
+void recomp_run_pending(CpuState *s) { (void)s; stopped(0xffff0001u); }
+void recomp_jump_indirect(CpuState *s, uint32_t target) { (void)s; stopped(target); }
+void recomp_call_indirect(CpuState *s, uint32_t target) { (void)s; stopped(target); }
+void recomp_unreachable(CpuState *s, uint32_t target) { (void)s; stopped(target); }
 
-// Round 27: the leaves of the fast profile's dispatch census (recomp-
-// architecture.md 21.42). Two rules on top of the round-12 contract: the host
-// path's purge equals the callee's `ret N` (a wrong purge is the one-slot
-// stack drift again), and a verify path runs the trampoline after the lifted
-// body, because these bodies end in tail jumps -- the ISAAC core's jump-table
-// cases, AddRef's jump into Unlock -- that are only parked when the body
-// returns, so a compare without it would read the state mid-function.
-const ROUND27 = {
-  '0x00aa94a0': { purge: 0, host: 'isaac_fast_isaac' },            // ISAAC core: thiscall, no args
-  '0x00a89d70': { purge: 8, host: 'isaac_fast_keystream_xor' },    // keystream XOR: thiscall (buf, len)
-  '0x00a69510': { purge: 12, host: 'isaac_fast_read_window' },     // ArchivedFile::read: thiscall (buf, size, count)
-  '0x00a157f0': { purge: 4, host: 'isaac_fast_mutex_take' },       // Mutex::Lock(timeout)
-  '0x00a159a0': { purge: 0, host: 'isaac_fast_mutex_drop' },       // Mutex::Unlock
-  '0x0040c690': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle AddRef
-  '0x0040c6b0': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle TryAddRef
-  '0x0040c630': { purge: 0, host: 'isaac_fast_mutex_take' },       // handle Release
-  '0x00a12240': { purge: 0, host: 'isaac_fast_mutex_take' },       // owner check: cdecl(holder)
-};
-
-test('round 27 wrappers: present, purge = ret N, verify runs the trampoline, host work behind the decision', () => {
-  const patches = new Map(wrapPatches().map((p) => [p.va, p.body]));
-  for (const [va, { purge, host }] of Object.entries(ROUND27)) {
-    const body = patches.get(va);
-    assert.ok(body, `${va}: wrapped`);
-    const tail = purge ? `s->ESP += 4u + ${purge}u;` : 's->ESP += 4u;';
-    assert.ok(body.trimEnd().endsWith(`${tail}\n}`), `${va}: the host path pops the return address and ${purge} bytes of arguments`);
-    assert.match(body, /__lifted\(s\);\s*\n\s*if \(recomp_jmp_pending\) recomp_run_pending\(s\);/,
-      `${va}: the verify path runs the parked tail jump before comparing`);
-    assert.equal((body.match(/isaac_fastpath_mode\(\)/g) || []).length, 1, `${va}: the mode is read once`);
-    // the exit census (isaac_fastpath_report): every lifted fallback and every
-    // completed verify compare is counted, so "0 mismatches" comes with the
-    // number of calls that were actually compared
-    const short = va.slice(2).replace(/^0+/, '');
-    for (const m of body.matchAll(/__lifted\(s\); return; \}/g)) {
-      const line = body.slice(body.lastIndexOf('\n', m.index), m.index);
-      assert.ok(line.includes(`isaac_fastpath_count(0x${short}u, 1);`), `${va}: each lifted fallback is counted`);
+static CpuState seed(unsigned type, unsigned alignment) {
+    memset(isaac_g(ARENA), 0x5a, 0x1000u);
+    memset(isaac_g(STACK - 256u), 0xa6, 512u);
+    CpuState s;
+    memset(&s, 0x39, sizeof s);
+    s.ESP = STACK + alignment; s.ECX = SELF; s.FS_OFFSET = SEH;
+    s.CF = s.AF = s.SF = s.OF = 1u; s.PF = s.ZF = 0u;
+    MEMW32(SEH, 0x12345678u); MEMW32(COOKIE, 0x9e3779b9u);
+    MEMW32(s.ESP, 0x004095c8u);
+    MEMW32(s.ESP + 4u, NAME); MEMW32(s.ESP + 8u, type);
+    MEMW32(s.ESP + 12u, DATA); MEMW32(s.ESP + 16u, 0xdeadc0deu);
+    memcpy(isaac_g(NAME), "ChampionColor", 14u);
+    memcpy(isaac_g(OTHER_NAME), "OtherUniform!", 14u);
+    MEMW32(SELF + 0x34u, SLOTS); MEMW32(SELF + 0x38u, SLOTS + 24u);
+    MEMW32(SELF + 0x3cu, SLOTS + 72u);
+    MEMW32(SELF + 0x40u, SNAPSHOT); MEMW32(SELF + 0x44u, SNAPSHOT + 4u);
+    MEMW32(SELF + 0x48u, SNAPSHOT + 12u); MEMW32(SNAPSHOT, 1u);
+    MEMW32(SLOTS, NAME); MEMW32(SLOTS + 4u, 1u); MEMW32(SLOTS + 8u, 28u);
+    MEMW32(SLOTS + 12u, VERSIONS); MEMW32(SLOTS + 16u, VERSIONS + 8u);
+    MEMW32(SLOTS + 20u, VERSIONS + 16u);
+    MEMW32(VERSIONS, OLD); MEMW32(VERSIONS + 4u, LATEST);
+    MEMW32(OLD - 4u, 64u); MEMW32(LATEST - 4u, 64u);
+    for (unsigned p = 0; p < 64u; p += 4u) {
+        MEMW32(LATEST + p, 0x7fc01234u + p);
+        MEMW32(DATA + p, 0x7fc01234u + p);
+        MEMW32(OLD + p, 0x80000000u + p);
     }
-    assert.match(body, new RegExp(`recomp_run_pending\\(s\\);[^\\n]*\\n\\s*isaac_fastpath_count\\(0x${short}u, 2\\);`),
-      `${va}: a completed verify compare is counted`);
-    // the host worker runs only after the mode test: never before the wrapper
-    // has decided against the lifted body
-    const decide = body.indexOf('__lifted(s); return; }');
-    const work = body.indexOf(`${host}(`);
-    assert.ok(decide > 0 && work > decide, `${va}: ${host} runs only after the lifted-body decision`);
+    return s;
+}
+
+static CpuState expected(CpuState s, unsigned size) {
+    unsigned data = MEMR32(s.ESP + 12u);
+    s.EAX = MEMR32(data + size - 4u); s.EDX = data + size;
+    s.ECX = MEMR32(COOKIE) ^ ((s.ESP - 12u) & ~7u);
+    s.CF = s.AF = s.SF = s.OF = 0u; s.PF = s.ZF = 1u;
+    s.EIP = MEMR32(s.ESP); s.ESP += 20u;
+    return s;
+}
+
+static void attempt(CpuState s, int handled, unsigned size, const char *label) {
+    uint8_t before[0x1000], stack[512];
+    memcpy(before, isaac_g(ARENA), sizeof before);
+    memcpy(stack, isaac_g(STACK - 256u), sizeof stack);
+    unsigned seh = MEMR32(SEH), cookie = MEMR32(COOKIE);
+    CpuState want = handled ? expected(s, size) : s;
+    int result = isaac_fast_shader_uniform(&s);
+    check(result == handled && memcmp(&s, &want, sizeof s) == 0
+          && memcmp(before, isaac_g(ARENA), sizeof before) == 0
+          && memcmp(stack, isaac_g(STACK - 256u), sizeof stack) == 0
+          && MEMR32(SEH) == seh && MEMR32(COOKIE) == cookie, label);
+}
+
+EMSCRIPTEN_KEEPALIVE int uniform_cases(void) {
+    failures = 0;
+    for (unsigned type = 8u; type <= 28u; ++type) {
+        unsigned size = widths[type - 8u];
+        for (unsigned align = 0; align <= 4u; align += 4u) {
+            CpuState s = seed(type, align);
+            MEMW8(DATA + size, (uint8_t)(MEMR8(DATA + size) ^ 1u));
+            attempt(s, 1, size, "incoming PE type width, next byte ignored, exact CPU return");
+            MEMW8(DATA + size - 1u, (uint8_t)(MEMR8(DATA + size - 1u) ^ 1u));
+            attempt(s, 0, size, "last byte in every PE width must compare");
+            s = seed(type, align); MEMW8(DATA, (uint8_t)(MEMR8(DATA) ^ 1u));
+            attempt(s, 0, size, "first byte in every PE width must compare");
+        }
+    }
+    for (unsigned type = 0; type <= 7u; ++type) attempt(seed(type, 0), 0, 0, "low invalid types retain logger");
+    attempt(seed(29u, 0), 0, 0, "high invalid type retains logger");
+    attempt(seed(0xffffffffu, 0), 0, 0, "type comparison is unsigned");
+    CpuState s = seed(11u, 0);
+    MEMW32(SELF + 0x38u, SLOTS + 72u);
+    memcpy(isaac_g(SLOTS + 24u), isaac_g(SLOTS), 24u);
+    memcpy(isaac_g(SLOTS + 48u), isaac_g(SLOTS), 24u);
+    MEMW32(SLOTS + 4u, 0u); MEMW32(SLOTS + 16u, VERSIONS + 4u);
+    attempt(s, 1, 16u, "inactive duplicate cannot hide first active row");
+    MEMW32(SLOTS + 24u + 16u, VERSIONS + 4u);
+    attempt(s, 0, 16u, "later active duplicate cannot replace first active row");
+    s = seed(11u, 0); MEMW32(s.ESP + 4u, OTHER_NAME);
+    attempt(s, 0, 16u, "missing name declines");
+    memcpy(isaac_g(OTHER_NAME), isaac_g(NAME), 14u);
+    attempt(s, 1, 16u, "same pointer with changed string content is searched again");
+    MEMW8(OTHER_NAME, 'X');
+    attempt(s, 0, 16u, "mutable input name cannot reuse cached slot");
+    s = seed(11u, 0); memcpy(isaac_g(OTHER_NAME), isaac_g(NAME), 14u);
+    MEMW32(SLOTS, OTHER_NAME);
+    attempt(s, 1, 16u, "separate mutable stored name initially matches");
+    MEMW8(OTHER_NAME, 'X');
+    attempt(s, 0, 16u, "same stored name pointer with changed content is searched again");
+    s = seed(11u, 0);
+    attempt(s, 1, 16u, "warm match before relocation");
+    memcpy(isaac_g(SLOTS + 24u), isaac_g(SLOTS), 24u);
+    MEMW32(SELF + 0x34u, SLOTS + 24u); MEMW32(SELF + 0x38u, SLOTS + 48u);
+    MEMW32(SLOTS, 0u);
+    attempt(s, 1, 16u, "relocated slot uses current vector");
+    MEMW32(SLOTS + 24u, OTHER_NAME);
+    attempt(s, 0, 16u, "replacement slot at same address is not cached");
+    s = seed(11u, 0); memcpy(isaac_g(DATA), isaac_g(OLD), 16u);
+    attempt(s, 0, 16u, "matching historical version is not latest");
+    s = seed(8u, 0); MEMW32(SLOTS + 8u, 0u); MEMW32(DATA + 4u, 0u);
+    attempt(s, 1, 4u, "stored type does not determine incoming width");
+    s = seed(28u, 0); MEMW32(SLOTS + 8u, 8u); MEMW8(DATA + 63u, 0u);
+    attempt(s, 0, 64u, "larger incoming type cannot truncate to stored width");
+    s = seed(8u, 0); MEMW32(DATA, 0u); MEMW32(LATEST, 0x80000000u);
+    attempt(s, 0, 4u, "signed zeros differ bitwise");
+    MEMW32(DATA, 0x7fa12345u); MEMW32(LATEST, 0x7fa12345u);
+    attempt(s, 1, 4u, "identical signaling NaN bits match");
+    MEMW32(DATA, 0x7fa12344u);
+    attempt(s, 0, 4u, "NaN payload bits differ");
+    s = seed(11u, 0); MEMW32(SLOTS + 16u, VERSIONS);
+    attempt(s, 0, 0, "empty versions decline");
+    s = seed(11u, 0); MEMW32(SLOTS + 16u, VERSIONS - 4u);
+    attempt(s, 0, 0, "reversed versions decline");
+    s = seed(11u, 0); MEMW32(SLOTS + 16u, VERSIONS + 7u);
+    attempt(s, 0, 0, "partial version pointer declines");
+    s = seed(11u, 0); MEMW32(SELF + 0x38u, SLOTS + 23u);
+    attempt(s, 0, 0, "partial slot declines");
+    s = seed(11u, 0); MEMW32(SLOTS, 0u); MEMW32(SLOTS + 4u, 0u);
+    attempt(s, 0, 0, "invalid inactive name is not skipped");
+    s = seed(11u, 0); MEMW32(s.ESP + 12u, 0xfffffff8u);
+    attempt(s, 0, 0, "wrapped payload range declines");
+    s = seed(11u, 0); MEMW32(VERSIONS + 4u, 0u);
+    attempt(s, 0, 0, "null latest buffer declines");
+    s = seed(11u, 0); s.ECX = ISAAC_GUEST_LIMIT_VA - 4u;
+    attempt(s, 0, 0, "receiver outside guest range declines");
+    s = seed(11u, 0); s.ESP = ISAAC_GUEST_LIMIT_VA - 16u;
+    attempt(s, 0, 0, "truncated argument frame declines before reads");
+    /* The first PE instruction pushes EBX over these pre-call matching bytes. */
+    s = seed(8u, 0); s.EBX = 0u;
+    MEMW32(s.ESP - 4u, MEMR32(LATEST)); MEMW32(s.ESP + 12u, s.ESP - 4u);
+    attempt(s, 0, 0, "payload overwritten by original push cannot use pre-call equality");
+    s = seed(11u, 0); s.EBX = 0u;
+    MEMW32(NAME, 0x71u); MEMW32(s.ESP - 4u, 0x71u);
+    MEMW32(s.ESP + 4u, s.ESP - 4u);
+    attempt(s, 0, 0, "matching name overwritten by original push declines unchanged");
+    s = seed(11u, 0); s.FS_OFFSET = s.ESP - 8u;
+    attempt(s, 0, 0, "SEH and frame alias declines");
+    s = seed(11u, 0); s.FS_OFFSET = COOKIE;
+    attempt(s, 0, 0, "SEH and cookie alias declines");
+    s = seed(8u, 0); MEMW32(LATEST, MEMR32(SEH)); MEMW32(s.ESP + 12u, SEH);
+    attempt(s, 0, 0, "matching payload overwritten by temporary SEH frame declines");
+    s = seed(11u, 0); unsigned edge = ISAAC_GUEST_LIMIT_VA - 16u;
+    memcpy(isaac_g(edge), isaac_g(LATEST), 16u); MEMW32(s.ESP + 12u, edge);
+    attempt(s, 1, 16u, "payload ending exactly at guest limit matches");
+    MEMW32(s.ESP + 12u, edge + 1u);
+    attempt(s, 0, 0, "payload crossing guest limit declines");
+    s = seed(8u, 0); edge = ISAAC_GUEST_LIMIT_VA - 1u;
+    MEMW8(edge, 0u); MEMW8(NAME, 0u); MEMW32(s.ESP + 4u, edge);
+    attempt(s, 1, 4u, "terminator at final guest byte is valid");
+    MEMW8(edge, 'Q'); MEMW8(NAME, 'Q');
+    attempt(s, 0, 0, "unterminated equal prefix reaches guest boundary safely");
+    return failures;
+}
+
+#ifdef HAVE_UNIFORM_LIFT
+void original_shader_uniform(CpuState *restrict s);
+void sub_00a14c00(CpuState *restrict s);
+void sub_00a14c00__lifted(CpuState *restrict s) {
+    original_shader_uniform(s);
+    /* Fault injection after the REAL original returns proves mode 2 detects
+     * CPU, old payload, pointer-list and recorded-snapshot corruption. */
+    if (fault == 1) s->AF ^= 1u;
+    if (fault == 2) MEMW8(OLD, (uint8_t)(MEMR8(OLD) ^ 1u));
+    if (fault == 3) MEMW32(VERSIONS, LATEST);
+    if (fault == 4) MEMW32(SNAPSHOT, 0u);
+}
+
+EMSCRIPTEN_KEEPALIVE int uniform_wrappers(int mode) {
+    failures = 0; fault = 0;
+    setenv("ISAAC_FASTPATH", mode == 0 ? "0" : "1", 1);
+    setenv("ISAAC_FASTPATH_VERIFY", mode == 2 ? "1" : "0", 1);
+    for (unsigned type = 8u; type <= 28u; ++type) {
+        for (unsigned align = 0u; align <= 4u; align += 4u) {
+            CpuState s = seed(type, align), want = expected(s, widths[type - 8u]);
+            uint8_t before[0x1000]; memcpy(before, isaac_g(ARENA), sizeof before);
+            unsigned mismatches = isaac_fastpath_mismatches();
+            stop = 0u;
+            if (!setjmp(escape)) sub_00a14c00(&s);
+            check(!stop && memcmp(&s, &want, sizeof s) == 0
+                  && memcmp(before, isaac_g(ARENA), sizeof before) == 0
+                  && MEMR32(SEH) == 0x12345678u
+                  && isaac_fastpath_mismatches() == mismatches,
+                  "wrapper mode uses real lift or exact host result with full CPU and live memory");
+        }
+    }
+    /* These tripwires stop at the actual original side-effect callee, not a
+     * modelled return. They prove rejected calls reach allocation/insertion
+     * or logging, rather than silently emulating a successful return. */
+    static CpuState s;
+    s = seed(11u, 0); MEMW8(DATA, 0u); stop = 0u;
+    if (!setjmp(escape)) sub_00a14c00(&s);
+    check(stop == 0x00a0f4e0u && s.ECX == 16u && MEMR32(SLOTS + 16u) == VERSIONS + 8u,
+          "changed value reaches original tracked allocation");
+    s = seed(11u, 0); MEMW32(s.ESP + 4u, OTHER_NAME); stop = 0u;
+    if (!setjmp(escape)) sub_00a14c00(&s);
+    check(stop == 0x00a152a0u, "missing name reaches original slot insertion");
+    s = seed(11u, 0); s.EBX = 0u; stop = 0u;
+    MEMW32(NAME, 0x71u); MEMW32(s.ESP - 4u, 0x71u);
+    MEMW32(s.ESP + 4u, s.ESP - 4u);
+    if (!setjmp(escape)) sub_00a14c00(&s);
+    check(stop == 0x00a152a0u,
+          "original push changes matching name to empty and reaches slot insertion");
+    s = seed(8u, 0); s.EBX = 0u; stop = 0u;
+    MEMW32(s.ESP - 4u, MEMR32(LATEST)); MEMW32(s.ESP + 12u, s.ESP - 4u);
+    if (!setjmp(escape)) sub_00a14c00(&s);
+    check(stop == 0x00a0f4e0u && s.ECX == 4u,
+          "original push changes matching payload and reaches tracked allocation");
+    s = seed(8u, 0); stop = 0u;
+    MEMW32(LATEST, MEMR32(SEH)); MEMW32(s.ESP + 12u, SEH);
+    if (!setjmp(escape)) sub_00a14c00(&s);
+    check(stop == 0x00a0f4e0u && s.ECX == 4u,
+          "temporary SEH installation changes matching payload and reaches allocation");
+    const unsigned invalid[] = {0u, 7u, 29u, 0xffffffffu};
+    for (unsigned i = 0; i < 4u; ++i) {
+        s = seed(invalid[i], 0); stop = 0u;
+        if (!setjmp(escape)) sub_00a14c00(&s);
+        check(stop == 0x00a112c0u && MEMR32(s.ESP + 4u) == 16u
+              && MEMR32(s.ESP + 8u) == (invalid[i] <= 7u ? 0x00b81b40u : 0x00b81aecu),
+              "both invalid type bands retain original logger and message");
+    }
+    if (mode == 2) {
+        for (fault = 1; fault <= 4; ++fault) {
+            s = seed(11u, 0); unsigned before = isaac_fastpath_mismatches();
+            sub_00a14c00(&s);
+            check(isaac_fastpath_mismatches() == before + 1u,
+                  "verification detects actual CPU or live uniform graph corruption");
+        }
+        fault = 0;
+        native_fault = 1;
+        s = seed(11u, 0);
+        unsigned before = isaac_fastpath_mismatches();
+        CpuState want = expected(s, 16u);
+        sub_00a14c00(&s);
+        check(isaac_fastpath_mismatches() == before + 1u
+              && MEMR32(SNAPSHOT) == 1u && memcmp(&s, &want, sizeof s) == 0,
+              "verification snapshots before native work and restores an illegal write before the original");
+        native_fault = 0;
+    }
+    return failures;
+}
+#endif
+`;
+
+const buildFixture = String.raw`
+import json, re, shutil, subprocess, sys
+from pathlib import Path
+root, temporary = map(Path, sys.argv[1:3])
+lift = root / 'scripts/recomp/lift'
+host = root / 'scripts/recomp/host'
+sys.path.insert(0, str(lift))
+from build_boot import ensure_emsdk_env, find_emcc
+from lift_patches import BLOCK_PATCHES, WRAP_PATCHES, find_function
+ensure_emsdk_env()
+emcc = find_emcc()
+if not emcc:
+    print(json.dumps({'skip': 'Emscripten unavailable; set EMCC or EMSDK'}))
+    sys.exit(0)
+output = root / 'output/recomp/lift/gu'
+bodies = {}
+if (output / 'recomp_state.h').exists():
+    for path in sorted(output.glob('lifted_*.c')):
+        text = path.read_text(encoding='utf-8')
+        for va in (0xa14c00, 0xa15040):
+            if va in bodies:
+                continue
+            for suffix in ('__lifted', ''):
+                name = f'sub_{va:08x}' + suffix
+                found = find_function(text, name)
+                if found:
+                    body = text[found[0]:found[1]]
+                    body = body.replace(name + '(', f'sub_{va:08x}(', 1)
+                    bodies[va] = body
+                    break
+        if len(bodies) == 2:
+            break
+native = temporary / 'native.c'
+native.write_text('#define isaac_fast_shader_uniform uniform_native_candidate\n'
+                  + '#include "' + (host / 'src/host_fastpath.c').as_posix() + '"\n')
+sources = [temporary / 'fixture.c', native]
+flags = []
+if len(bodies) == 2:
+    shutil.copyfile(output / 'recomp_state.h', temporary / 'recomp_state.h')
+    setter = bodies[0xa14c00]
+    _, _, new = next(p for p in BLOCK_PATCHES if p[0] == '0x00a14de7')
+    # Apply today's patch even when the generated tree contains an older
+    # installed copy. Mutation runs must exercise the edited production rule.
+    start = setter.index('  RECOMP_VA(0xa14de7u);\n')
+    end = setter.index('  RECOMP_VA(0xa14dedu);\n', start)
+    setter = setter[:start] + new + setter[end:]
+    setter = setter.replace('void sub_00a14c00(', 'void original_shader_uniform(', 1)
+    callees = set(re.findall(r'\b((?:sub_|imp_)[A-Za-z0-9_]+)\(s\)', setter + bodies[0xa15040]))
+    declarations = ''.join(f'void {name}(CpuState *restrict s);\n' for name in sorted(callees))
+    tripwires = ''.join(f'void {name}(CpuState *restrict s) {{ (void)s; stopped(0x{name[4:]}u); }}\n'
+                       if name.startswith('sub_') else
+                       f'void {name}(CpuState *restrict s) {{ (void)s; stopped(0xffff0002u); }}\n'
+                       for name in sorted(callees) if name != 'sub_00a15040')
+    # Include in the same TU so fail-fast callee boundaries use the fixture's
+    # setjmp observer; the lookup and setter themselves remain real lifted C.
+    source = (temporary / 'fixture.c').read_text()
+    source += '\n' + declarations + '\n' + tripwires + '\n' + bodies[0xa15040] + '\n' + setter
+    source += '\n' + WRAP_PATCHES[0xa14c00]
+    # Initialise the actual indirect jump table from its PE-derived targets.
+    targets = [0xa14d9b] * 8 + [0xa14d5c,0xa14d63,0xa14d6a,0xa14d71] * 3
+    targets += [0xa14d71,0xa14d78,0xa14d7f,0xa14d78,0xa14d86,0xa14d8d,0xa14d7f,0xa14d8d,0xa14d94]
+    init = ''.join(f'MEMW32(0x{0xa14f10+4*i:x}u, 0x{target:x}u);\n' for i, target in enumerate(targets))
+    source = source.replace('failures = 0; fault = 0;', 'failures = 0; fault = 0;\n' + init)
+    (temporary / 'fixture.c').write_text(source)
+    flags.append('-DHAVE_UNIFORM_LIFT=1')
+command = [emcc, *map(str, sources), '-O2', '-std=gnu11', '-ffunction-sections', '-fdata-sections',
+           '-Wl,--gc-sections', '-I', str(temporary), '-I', str(host / 'include'), '-I', str(lift), *flags,
+           '--no-entry', '-sENVIRONMENT=node', '-sMODULARIZE=1', '-sSINGLE_FILE=1',
+           '-sGLOBAL_BASE=469762048', '-sINITIAL_MEMORY=503316480', '-sSTACK_SIZE=1048576',
+           '-sERROR_ON_UNDEFINED_SYMBOLS=1', '-o', str(temporary / 'uniform.cjs')]
+result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+if result.returncode:
+    raise RuntimeError(result.stdout + result.stderr)
+print(json.dumps({'lifted': len(bodies) == 2}))
+`;
+
+test('compiled uniform no-change path preserves CPU, bitwise payloads and version lifetimes', async (t) => {
+  if (!python) return t.skip('Python 3 unavailable');
+  const temporary = mkdtempSync(join(tmpdir(), 'isaac-uniform-'));
+  t.after(() => rmSync(temporary, { recursive: true, force: true }));
+  writeFileSync(join(temporary, 'fixture.c'), fixture);
+  writeFileSync(join(temporary, 'build.py'), buildFixture);
+  const built = spawnSync(python, ['-B', join(temporary, 'build.py'), root, temporary], {
+    cwd: root, encoding: 'utf8', timeout: 240000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  });
+  assert.equal(built.status, 0, built.error?.message || built.stderr || built.stdout);
+  const result = JSON.parse(built.stdout.trim());
+  if (result.skip) return t.skip(result.skip);
+  const createFixture = require(join(temporary, 'uniform.cjs'));
+  await t.test('all PE widths, duplicate/mutable names, latest values, range guards and full CPU state', async () => {
+    const module = await createFixture();
+    assert.equal(module._uniform_cases(), 0);
+  });
+  for (const mode of [0, 1, 2]) {
+    await t.test(`compiled wrapper mode ${mode}: actual lifted return, fallback side effects and verification`, async (t) => {
+      if (!result.lifted) return t.skip('generated uniform setter/lookup unavailable; build the PE lift');
+      const module = await createFixture();
+      assert.equal(module._uniform_wrappers(mode), 0);
+    });
   }
-});
-
-test('round 27: the lock-based wrappers take a mutex only through the standard-pair predicate', () => {
-  const patches = new Map(wrapPatches().map((p) => [p.va, p.body]));
-  for (const va of ['0x0040c690', '0x0040c6b0', '0x0040c630', '0x00a12240']) {
-    const body = patches.get(va);
-    assert.ok(body.includes('isaac_fast_mutex_std('), `${va}: checks the embedded mutex's vtable is the engine's Lock/Unlock pair`);
-    // every take is matched by a drop on the host path
-    assert.equal((body.match(/isaac_fast_mutex_take\(/g) || []).length, (body.match(/isaac_fast_mutex_drop\(/g) || []).length,
-      `${va}: lock and unlock in equal number`);
-  }
-  const lock = patches.get('0x00a157f0');
-  assert.ok(lock.includes('timeout != 0xffffffffu') && lock.includes('isaac_fast_mutex_free('),
-    'Lock: only the uncontended INFINITE wait is taken on the host');
-});
-
-// Round 23: observe-only probes. The dispatch watch can only see functions
-// reached through the dispatcher, and the audio investigation kept needing the
-// other question -- did this directly called function run, and with what?
-// A probe answers it, and its contract is the opposite of a fastpath wrapper's:
-// it must NOT emulate the ret, because the lifted body it always calls does
-// that itself, and it must not depend on the fastpath mode.
-test('PROBE_PATCHES: every probe delegates once and leaves the guest untouched', () => {
-  for (const { va, body } of probePatches()) {
-    const name = `sub_${va.slice(2)}`;
-    assert.ok(body.startsWith(`void ${name}(CpuState *restrict s) {`), `${name}: wrapper signature`);
-    assert.ok(body.includes(`RECOMP_VA(0x${va.slice(2).replace(/^0+/, '')}u);`), `${name}: stamps its VA`);
-    assert.equal((body.match(new RegExp(`${name}__lifted\\(s\\)`, 'g')) || []).length, 1,
-      `${name}: calls the lifted body exactly once`);
-    assert.ok(!/s->EIP\s*=/.test(body), `${name}: a probe must not touch EIP -- the lifted body owns the ret`);
-    assert.ok(!/s->ESP\s*(\+|-)?=/.test(body), `${name}: a probe must not touch ESP`);
-    assert.ok(body.includes('isaac_probe_on()'), `${name}: logging is off unless ISAAC_PROBE=1`);
-  }
-});
-
-test('the probe helpers exist where lifted code can reach them', () => {
-  const fast = readFileSync(join(hostSrc, 'host_fastpath.c'), 'utf8');
-  const rt = readFileSync(join(lift, 'recomp_rt.h'), 'utf8');
-  for (const fn of ['isaac_probe_on', 'isaac_probe_hit', 'isaac_probe_str']) {
-    assert.match(fast, new RegExp(`^[a-z0-9_ ]*\\b${fn}\\(`, 'm'), `${fn}: defined in host_fastpath.c`);
-    assert.ok(rt.includes(`${fn}(`), `${fn}: declared in recomp_rt.h`);
-  }
-});
-
-test('round 49: the imdct butterfly has a host fastpath with the verify mode', () => {
-  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
-  assert.ok(lp.includes('LIFT-PATCH wrap 0x00aa3270: host imdct butterfly (host_fastpath.c)'), 'the wrapper for 0x00aa3270');
-  assert.ok(lp.includes('isaac_fast_imdct_r_loop(lim, e, d0, koff, a, k1);'), 'the host loop runs by default');
-  assert.ok(lp.includes('if (!isaac_fast_verify_equal(host, lo, len)) isaac_fastpath_mismatch("imdct_r_loop", lim, len);'), 'ISAAC_FASTPATH_VERIFY compares the touched range');
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  assert.ok(fp.includes('void isaac_fast_imdct_r_loop(uint32_t lim, uint32_t e_va, uint32_t d0, uint32_t k_off,'), 'the host implementation');
-  assert.ok(fp.includes('e2[-7] = k00 * A3[1] + k01 * A3[0];'), 'four butterflies per iteration in the source order');
-});
-
-test('round 50: the whole inverse_mdct has a host fastpath with the verify mode', () => {
-  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
-  assert.ok(lp.includes('LIFT-PATCH wrap 0x00aa38a0: host inverse_mdct (host_fastpath.c)'), 'the wrapper for 0x00aa38a0');
-  assert.ok(lp.includes('if (!isaac_fast_verify_equal(host, buf, len)) isaac_fastpath_mismatch("inverse_mdct", n, bt);'), 'the verify mode compares the n floats at buffer');
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  for (const fn of ['imdct_iter0_loop', 'imdct_s_loop', 'imdct_ld654_loop', 'imdct_ilog'])
-    assert.ok(fp.includes(`static ${fn === 'imdct_ilog' ? 'int' : 'void'} ${fn}(`), `${fn}: the helper is on the host`);
-  assert.ok(fp.includes('if (off < so) return 0;                                       /* the original would crash here */'), 'a scratch below setup_offset is left to the lifted body');
-  assert.ok(fp.includes('buf2 = (float *)isaac_g(ab + (uint32_t)(to - (int32_t)((uint32_t)n2 * 4u)));'), 'the scratch is the guest temp region the original uses');
-  assert.ok(fp.includes('imdct_ld654_loop(n >> 5, buffer, n2 - 1, A, n);'), 'the last stage');
-});
-
-test('round 58: miniz tinfl_decompress has a host fastpath with the verify mode', () => {
-  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
-  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
-  assert.ok(lp.includes('LIFT-PATCH wrap 0x00a85710: host miniz tinfl_decompress (host_fastpath.c)'), 'the wrapper for 0x00a85710');
-  assert.ok(lp.includes('isaac_fastpath_mismatch("tinfl", (uint32_t)hr, s->EAX);') && lp.includes('memcpy(snap, RECOMP_PTR(r), 0x2aedu);'), 'the verify mode compares the decompressor, the window, both sizes and eax');
-  assert.ok(lp.includes('  s->EAX = (uint32_t)isaac_fast_tinfl(r, in_next, in_size, out_start, out_next, out_size, flags);\n  s->EIP = MEMR32(s->ESP);\n  s->ESP += 4u;\n}'), 'the host path returns in eax with a plain ret (the caller drops the arguments)');
-  assert.ok(fp.includes('int isaac_fast_tinfl(uint32_t r_va, uint32_t in_next_va, uint32_t in_size_va, uint32_t out_start_va, uint32_t out_next_va, uint32_t out_size_va, uint32_t flags) {'), 'the host tinfl');
-  for (const state of [1, 2, 3, 5, 6, 7, 9, 10, 11, 14, 16, 17, 18, 21, 23, 24, 25, 26, 27, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 51, 52, 53])
-    assert.ok(new RegExp(`TF_(CR_RETURN(_FOREVER)?|GET_BYTE|GET_BITS|SKIP_BITS|HUFF_DECODE)\\(${state},`).test(fp), `coroutine state ${state} is the source's`);
-  assert.ok(!/TF_[A-Z_]+\(54,/.test(fp), 'no state 54: the guest is miniz 1.x');
-  assert.ok(fp.includes('else { c = 0; break; }') && fp.includes('if ((dist > dist_from_out_buf_start) && (flags & 4u)) { TF_CR_RETURN_FOREVER(37, -1); }'), 'the 1.x details: a 0 byte past the input, the old distance test');
-  assert.ok(fp.includes('if (span == 0u || (span & (span - 1u)) || !isaac_fast_guest_range(out_start, span)) return 0;'), 'a ring that is not a power of two is left to the lifted body');
-  assert.ok(rt.includes('int  isaac_fast_tinfl_ok(') && rt.includes('int  isaac_fast_tinfl('), 'declared for the lifted TUs');
-  assert.ok(st.includes('reassembles byte for byte over HAS_MORE_OUTPUT rounds') && st.includes('resumes at every state and ends DONE'), 'the selftest decodes zlib-made streams whole, a byte at a time, and through a ring');
-});
-
-test('round 62: the keystream XOR goes sixteen bytes at a time where the build has wasm SIMD', () => {
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  assert.ok(fp.includes('#ifdef __wasm_simd128__\n#include <wasm_simd128.h>\n#endif'), 'the intrinsics only where the build has them');
-  assert.ok(fp.includes('wasm_v128_store(p + k, wasm_v128_xor(wasm_v128_load(p + k), wasm_v128_load(&c[idx + 1u])));'), 'one v128 XOR for four words');
-  assert.ok(fp.includes('if (idx + 4u > 256u) {') && fp.includes('if (idx + 4u > 0xffu) { isaac_fast_isaac(ctx, NULL); c[0] = 0u; }'), 'a block touching r[255] goes word by word; a block ending there refills');
-  const bs = readFileSync(join(root, 'scripts', 'recomp', 'host', 'build_selftest.py'), 'utf8');
-  assert.ok(bs.includes('"-msimd128"'), 'the selftest build has SIMD too, so its checks run the v128 path');
-  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
-  assert.ok(st.includes('isaac_fast_keystream_xor(holder, buf, 40u);') && st.includes('eight words of the new block taken'), 'forty bytes across the refill');
-});
-
-test('round 64: the archive inflater reports what it decoded', () => {
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  assert.ok(fp.includes('++g_tinfl_calls; g_tinfl_in += (uint64_t)(in_cur - in_next); g_tinfl_out += (uint64_t)(out_cur - out_next); if (status == 0) ++g_tinfl_done;'), 'counted at the exit');
-  assert.ok(fp.includes('archive inflater: %llu calls, %.1f MB in, %.1f MB out, %llu streams finished'), 'reported with the census, in every mode');
-});
-
-test('round 75: a static block takes the tables the first one built', () => {
-  // miniz fills the fixed code lengths and then runs the same table build a
-  // dynamic block runs -- 3.2 KB of memset and 320 symbols, per 0x400 block.
-  // zlib has had those tables precomputed since 1995. The archive is packed in
-  // static blocks now (optimize.py huffman), so this is the cost that was left.
-  const fp = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_fastpath.c'), 'utf8');
-  assert.ok(fp.includes('static int16_t g_tf_fix_lookup[2][TF_LOOKUP_SIZE];') && fp.includes('static int16_t g_tf_fix_tree[2][576];'),
-    'the tables are kept for both trees');
-  assert.ok(fp.includes('if (g_tf_fix_ready) {'), 'and used when there are some');
-  // m_type = -1 is what makes the build loop below run zero iterations: it is the
-  // state that loop exits in anyway, so the decode continues exactly as it did
-  assert.ok(fp.includes('TF_U32(0x18) = 0xffffffffu;'), 'the build loop is skipped by the state it would have ended in');
-  assert.ok(fp.includes('for (; (int32_t)TF_U32(0x18) >= 0; TF_U32(0x18)--) {'), 'which is still the loop');
-  // the first static block builds them the old way and they are kept from it, so
-  // the tables in use are the ones the decoder itself produced
-  assert.ok(fp.includes('g_tf_fix_pending = 1u;') && fp.includes('if (g_tf_fix_pending) {') && fp.includes('g_tf_fix_ready = 1u;'),
-    'the first build is what is kept');
-  assert.ok(fp.includes('static blocks: %llu, of which %llu took the kept tables'), 'and the census says how often it paid');
-});
-
-test('round 75: the packer can spend bytes to drop a Huffman table', () => {
-  const arc = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'archive.py'), 'utf8');
-  assert.match(arc, /def _best_piece\(block: bytes, final: bool, level: int, fixed_cost: int \| None\) -> bytes:/);
-  assert.match(arc, /fix = _deflate_piece\(block, final, level, zlib\.Z_FIXED\)/);
-  assert.match(arc, /if fix == dyn:/, 'incompressible blocks are stored either way and are left alone');
-  assert.match(arc, /if len\(fix\) - len\(dyn\) <= fixed_cost and _piece_ok\(fix, final\):/);
-  // the format's two limits are still the format's two limits
-  assert.match(arc, /return len\(piece\) <= PIECE_MAX and \(final or len\(piece\) != BLOCK\)/);
-  const opt = readFileSync(join(root, 'scripts', 'recomp', 'assets', 'optimize.py'), 'utf8');
-  assert.match(opt, /def cmd_huffman\(args\) -> int:/);
-  assert.match(opt, /"fixed_cost": BUDGET_ALL if args\.cost is None else args\.cost/, 'the default is no budget at all');
-  assert.match(opt, /if packed == 4 \* n \+ e\.size or e\.size == 0:/, 'a stored entry is passed through, not re-encoded');
-});
-
-test('round 51: the guest heap report names the touched span (the arena pages that stay resident)', () => {
-  const heap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_heap.c'), 'utf8');
-  assert.ok(heap.includes('if (b + need > g_heap_top) g_heap_top = b + need;'), 'the highest block end is tracked at every allocation');
-  assert.ok(heap.includes('touched span   : %.1f MiB (highest block end 0x%08x)'), 'and reported with the high-water figures');
-});
-
-test('round 51: a retired wrapper leaves the lifted TU clean (the body back under its own name, no stale wrapper)', () => {
-  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
-  assert.ok(lp.includes('live = set(WRAP_PATCHES) | set(PROBE_PATCHES)'), 'the live set of wrappers');
-  assert.ok(lp.includes('print("wrap-patch %s: retired, the lifted body is %s again in %s" % (name, name, tu.name))'), 'a retired wrapper is undone in the TU');
-  assert.ok(lp.includes('text = text.replace("void %s__lifted(CpuState *restrict s);\\n" % name, "", 1)'), 'its forward declaration goes too');
-});
-
-test('round 52: the save-select delete confirmation is gated by the page (EDIT FILE), the engine flow untouched without a page', () => {
-  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
-  assert.ok(lp.includes('LIFT-PATCH 0x009d9d59 (round 52): the EDIT FILE menu.'), 'the block patch at 0x9d9d59');
-  // the block text is a Python literal in lift_patches.py (its newlines are escapes there)
-  assert.ok(lp.includes('if (!isaac_editfile_gate(EDI)) {') && lp.includes('goto L_009da447;'), 'the gate skips to the common exit');
-  assert.ok(lp.includes('u44180_4 = ((uint32_t)0xb7fb20u);'), 'the block still pushes DeleteConfirmationAppear when the gate says go');
-  const win = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_shims_win.c'), 'utf8');
-  assert.ok(win.includes('if (typeof window === "undefined" || typeof window.isaacEditFile !== "function") return 1;'), 'no page menu: the engine prompt');
-  assert.ok(win.includes('if (window.isaacEditFileDelete === slot) { window.isaacEditFileDelete = -1; return 1; }'), 'the menu chose Delete: the engine prompt now');
-  assert.ok(win.includes('slot = (int)*(const uint32_t *)isaac_g(menu_va + 4u);'), 'the slot is this[1]');
-  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
-  assert.ok(rt.includes('int  isaac_editfile_gate(uint32_t menu_va);'), 'declared for the lifted TUs');
 });

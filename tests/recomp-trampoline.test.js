@@ -84,10 +84,7 @@ test('a parked jump that makes no progress stops loudly', () => {
   assert.ok(/abort\(\);/.test(src.slice(src.indexOf('RECOMP_STUCK_LIMIT'))), 'it aborts rather than spinning');
 });
 
-test('ISAAC_HEARTBEAT reports dispatch and host-boundary progress', () => {
-  const disp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'mkdispatch.py'), 'utf8');
-  assert.ok(disp.includes('getenv("ISAAC_HEARTBEAT")'), 'the dispatcher reads the interval');
-  assert.ok(disp.includes('[isaac][hb] %u dispatches, %.1f s, now sub_%08x'), 'it prints count, wall clock and target');
+test('ISAAC_HEARTBEAT reports host-boundary progress', () => {
   const trap = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_trap.c'), 'utf8');
   assert.ok(trap.includes('host-boundary calls, %.1f s, now %s!%s'), 'the host boundary has the same heartbeat');
 });

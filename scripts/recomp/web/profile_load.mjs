@@ -356,7 +356,7 @@ try {
   await page.goto(URL);
   await until((s) => s.f > 0, 900000, 'first frame');
   receipt.renderer = await page.evaluate(() => {
-    const canvas = document.querySelector('canvas');
+    const canvas = document.getElementById('canvas');
     const gl = canvas && (canvas.getContext('webgl2') || canvas.getContext('webgl'));
     const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
     return { renderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : (gl ? gl.getParameter(gl.RENDERER) : null),
