@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTouchInput, stickKeys, twinAction } from '../scripts/recomp/web/touch_input.mjs';
 import { touchMode, overlayShown, barDrawKey, backShown, nearestRow, rowTapConfirms } from '../scripts/recomp/web/touch_controls.mjs';
+import { tagLayout, TAG_ROOM } from '../scripts/recomp/web/menu_overlay.mjs';
 
 // The native poll drains every queued edge before sampling key state. A down/up
 // pair in one poll therefore cannot stand in for a usable game button press.
@@ -462,4 +463,20 @@ test('rows closer than a fingertip are chosen first and confirmed on the chosen 
   assert.equal(rowTapConfirms(2, 0, 22 * 2.5), true, 'a tablet: 55 px rows confirm at once');
   assert.equal(rowTapConfirms(2, 0, 40), true, 'a fingertip apart is enough');
   assert.equal(rowTapConfirms(2, 0, 39.9), false);
+});
+
+test('the MOD BROWSER note fits its words inside the leaning paper', () => {
+  // a font of 10 px wide caps, glyphs 4..20 px down their line
+  const font = { chars: new Map([...'MOD BROWSERTAPHEREPS'].map((ch) => [ch.codePointAt(0), { yo: 4, h: 16 }])) };
+  const measure = (t) => t.length * 10;
+  const two = tagLayout(['MOD BROWSER', 'TAP HERE'], measure, font);
+  assert.ok(two.wide * two.zoom <= TAG_ROOM[0], `the widest line fits: ${two.wide * two.zoom}`);
+  assert.ok(two.tall * two.zoom <= TAG_ROOM[1], `the stack fits: ${two.tall * two.zoom}`);
+  assert.ok(two.zoom <= 0.8, 'never larger than four fifths of the menu font');
+  // the ink is centred on the face: first line's top + glyph top, last line's bottom
+  const inkTop = two.top + 4, inkBottom = two.top + two.pitch + 20;
+  assert.equal(inkTop + inkBottom, 0);
+  // a long line shrinks the zoom to fit rather than spilling off the paper
+  const long = tagLayout(['A MUCH LONGER LINE OF WORDS'], measure, font);
+  assert.ok(long.wide * long.zoom <= TAG_ROOM[0] + 1e-9 && long.zoom < 0.8);
 });

@@ -510,11 +510,60 @@ function writeTrail() {
   trailWritten = true;
   try { localStorage.setItem(TRAIL_KEY, JSON.stringify(trail)); } catch (e) { /* no storage: the next visit is cold too */ }
 }
+// ---- the run's trail -----------------------------------------------------------------
+// The first run of a visit read its windows one at a time as the engine asked
+// (measured on tboi.online: 18 windows, 18 MB, a 5 to 9 s freeze at the first
+// room while the menu's music ran dry). The windows are the same run to run:
+// this browser keeps the ones its first run read, a build can ship a list for a
+// first visit (hooks.runTrail: the start and the first floor's three looks, 24
+// windows), and once the boot's own reads are done the Worker fetches them while
+// the player is still on the menus. A window the engine has read is never asked
+// for twice (the Worker's done set).
+const RUN_TRAIL_KEY = 'isaac-run-trail', RUN_TRAIL_MAX = 48, RUN_TRAIL_ARM_FRAME = 300, RUN_TRAIL_UNTIL = 300;
+const runTrail = [], runTrailSeen = new Set();
+let runRecording = false, runRecorded = false, runArmed = false;
+function storedRunTrail() {
+  try { const l = JSON.parse(localStorage.getItem(RUN_TRAIL_KEY) || 'null'); return Array.isArray(l) ? l : []; } catch (e) { return []; }
+}
+function saveRunTrail() {
+  if (!runTrail.length) return;
+  const seen = new Set(), merged = [];
+  for (const w of [...runTrail, ...storedRunTrail()]) {
+    if (!Array.isArray(w) || w.length !== 3) continue;
+    const k = w.join('@');
+    if (seen.has(k) || merged.length >= RUN_TRAIL_MAX) continue;
+    seen.add(k); merged.push(w);
+  }
+  try { localStorage.setItem(RUN_TRAIL_KEY, JSON.stringify(merged)); } catch (e) { /* no storage: the next visit is cold */ }
+}
+function armRunTrail() {
+  runArmed = true;
+  if (!reader) return;
+  const seen = new Set(), jobs = [];
+  let bytes = 0;
+  for (const w of [...storedRunTrail(), ...(Array.isArray(hooks.runTrail) ? hooks.runTrail : [])]) {
+    if (!Array.isArray(w) || w.length !== 3) continue;
+    const [src, off, len] = w, key = `${src}@${off}@${len}`, url = windowUrl(src, off, len);
+    if (seen.has(key) || !url || jobs.length >= RUN_TRAIL_MAX) continue;
+    seen.add(key); jobs.push([key, url, len]); bytes += len;
+  }
+  // the boot's leftovers go (round 60's clear, early), the run's windows come in their place
+  reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET + bytes });
+  if (jobs.length) reader.postMessage({ jobs, budget: READER_PLAY_BUDGET + bytes, parallel: READER_PARALLEL });
+  runPrefetched = jobs.length;
+}
+let runPrefetched = 0;
+window.isaacRunTrail = () => ({ recording: runRecording, recorded: runRecorded, read: runTrail.length, armed: runArmed, prefetched: runPrefetched, stored: storedRunTrail().length });
 startReader();
-window.addEventListener('pagehide', () => { writeTrail(); if (reader) reader.terminate(); });   // a short visit still leaves its trail
+window.addEventListener('pagehide', () => { writeTrail(); saveRunTrail(); if (reader) reader.terminate(); });   // a short visit still leaves its trail
 cfg.isaacLazyPread = (src, dst, off, len) => {
   try {
     if (!trailWritten && trail.length < TRAIL_MAX) trail.push([src, off, len]);
+    // after the boot, until the first run has played a while: the run's windows
+    if (runRecording && runTrail.length < RUN_TRAIL_MAX) {
+      const k = `${src}@${off}@${len}`;
+      if (!runTrailSeen.has(k)) { runTrailSeen.add(k); runTrail.push([src, off, len]); }
+    }
     if (!trailWritten && (window.isaacFrame | 0) >= 300) writeTrail();
     if (preadTrail.length < 60) preadTrail.push(`${src.replace(/^.*\//, '')}@${(off / 1048576).toFixed(0)}`);
     if (preadStacks.length < 3 && preads > 6) preadStacks.push((new Error().stack || '').split('\n').slice(1, 16).map((l) => l.trim().replace(/^at /, '').replace(/ \(.*$/, '')).join(' < '));
@@ -573,7 +622,16 @@ cfg.isaacWantsFrame = (n) => {
   // Worker drops the windows it fetched ahead and never handed over (up to the
   // 128 MB budget -- ~80 MB of the renderer's working set) and keeps 8 MB of
   // read-ahead for play; the trail's leftovers go with them
-  if (n === READER_CLEAR_FRAME && reader) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
+  if (n === READER_CLEAR_FRAME && reader && !runArmed) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
+  // the run's trail: fetched from here, recorded from here until the first run is
+  // RUN_TRAIL_UNTIL game frames in (Game+0x264f8, the same counter readReadyState uses)
+  if (n >= RUN_TRAIL_ARM_FRAME && !runArmed) { trailJobs = null; armRunTrail(); runRecording = !runRecorded; }
+  if (runRecording && n % 30 === 0) {
+    try {
+      const G = window.isaacGuest, game = G && G.u32(0x00c71678);
+      if (game && G.u32(game + 0x264f8) > RUN_TRAIL_UNTIL) { runRecording = false; runRecorded = true; saveRunTrail(); }
+    } catch (e) { /* the guest is not up: keep recording */ }
+  }
   const want = interactive ? (keepEvery ? n % keepEvery === 0 : false)
     : (keepEvery ? (n % keepEvery === 0) : true) || n + KEEP_FRAMES >= frameBudget;
   if (want) wantedFrame = n;

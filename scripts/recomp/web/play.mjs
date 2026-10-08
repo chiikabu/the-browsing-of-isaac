@@ -119,8 +119,30 @@ function render() {
     renderProgress();
   });
 }
+// A first visit spends most of its wait after the module has started: the boot
+// reads archive windows as it needs them, and a build that ships its boot trail
+// names exactly those (measured on tboi.online: 177 windows, 175.1 MB read, the
+// trail's 177 windows and 175.1 MB). With the trail, the whole bar is bytes --
+// the startup download, then the boot's reads -- plus a little for the two
+// steps that are work rather than download. Without one, the boot shows activity.
+function trailBytes() {
+  try {
+    const t = window.__isaacPortableData && window.__isaacPortableData.trail;
+    return Array.isArray(t) ? t.reduce((sum, w) => sum + (Number(w && w[2]) || 0), 0) : 0;
+  } catch { return 0; }
+}
+function startupPercent({ delivered, deliveredTotal, read, trail, moduleReady, bootReady, gameReady }) {
+  if (gameReady) return 100;
+  const bytes = deliveredTotal + trail;
+  const share = bytes > 0 ? (Math.min(delivered, deliveredTotal) + Math.min(read, trail)) / bytes : 0;
+  return Math.min(99, Math.floor(100 * (0.9 * share + 0.05 * Number(!!moduleReady) + 0.05 * Number(!!bootReady))));
+}
+let progressShown = 0;
 function renderProgress() {
   const bar = $('bar'), fill = $('bar-fill'), percentage = $('percentage');
+  const trail = trailBytes();
+  const stats = trail && typeof window.isaacLazyStats === 'function' ? window.isaacLazyStats() : null;
+  if (trail && !errorShown) return renderMeasured(bar, fill, percentage, trail, stats);
   const indeterminate = mainStarted && !gameReady && !errorShown && !window.isaacDone;
   bar.classList.toggle('indeterminate', indeterminate);
   percentage.hidden = indeterminate;
@@ -150,6 +172,24 @@ function renderProgress() {
   bar.setAttribute('aria-valuetext', `${text} startup complete`);
   percentage.textContent = text;
   // Each 50x18 cell is a pre-rendered label in the game's Team Meat 16-bold.
+  percentage.style.backgroundPosition = `${-pct * 50}px 0px`;
+}
+// The bar with a trail: never indeterminate, never backwards.
+function renderMeasured(bar, fill, percentage, trail, stats) {
+  const download = portable && typeof portable.progress === 'function' ? portable.progress('boot') : null;
+  let total = 0, received = 0;
+  if (download) { total = download.total; received = download.received; }
+  else for (const name of ['module', 'image', 'archives']) { total += stages[name].total; received += Math.min(stages[name].received, stages[name].total); }
+  const pct = Math.max(progressShown, startupPercent({ delivered: received, deliveredTotal: total, read: stats ? stats.windowBytes : 0,
+    trail, moduleReady, bootReady, gameReady }));
+  progressShown = pct;
+  bar.classList.remove('indeterminate');
+  percentage.hidden = false;
+  const text = `${pct}%`;
+  fill.style.width = text;
+  bar.setAttribute('aria-valuenow', String(pct));
+  bar.setAttribute('aria-valuetext', `${text} startup complete`);
+  percentage.textContent = text;
   percentage.style.backgroundPosition = `${-pct * 50}px 0px`;
 }
 // Technical preparation details are visible only with ?stats=1.
@@ -270,6 +310,9 @@ if (portable && portable.ready) {
 // the reads once the engine runs, when there is no Worker to make them
 hooks.preadBytes = portable ? (rel, off, len) => portable.bytesFor(rel, off, len) : null;
 hooks.trail = (portable && portable.trail) || null;
+// the windows a first run reads, when the build ships them (boot_web.mjs, the run's trail)
+hooks.runTrail = (typeof window !== 'undefined' && window.__isaacPortableData && Array.isArray(window.__isaacPortableData.runTrail))
+  ? window.__isaacPortableData.runTrail : null;
 hooks.chunkKey = (portable && portable.key) || null;
 const partsOf = (url) => {
   const [path, query] = url.split('?');
@@ -853,7 +896,7 @@ const coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer: 
 const modsTag = createMenuTag({
   stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'mods-tag', at: [312, 150],
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
-  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
+  lines: () => ['MOD BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
 });
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
@@ -899,12 +942,12 @@ window.addEventListener('pointerdown', (ev) => {
   if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
   if (modsTag.hit(gx, gy)) { openModBrowser(); ev.preventDefault(); }
 }, true);
-window.addEventListener('wheel', (ev) => { if (modsMenu.inBrowser()) { modsMenu.wheel(ev.deltaY); ev.preventDefault(); } }, { passive: false });
+window.addEventListener('wheel', (ev) => { if (modsMenu.inBrowser()) { modsMenu.wheel(ev.deltaY, ev.clientX, ev.clientY); ev.preventDefault(); } }, { passive: false });
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
 let finished = false;
 setInterval(() => {
-  if (mainStarted && !gameReady) { updateStreaming(); checkReady(); }
+  if (mainStarted && !gameReady) { updateStreaming(); checkReady(); if (!gameReady) renderProgress(); }
   const done = window.isaacDone;
   if (done && !finished) {
     finished = true;
@@ -1149,6 +1192,7 @@ const touchControls = createTouchControls({
   onGesture: () => { if (moduleRef) unlockAudio(moduleRef, false); },
   guest: () => window.isaacGuest || null,
   onMenuTap: pageMenuTap,
+  onMenuSwipe: (cx, cy, key) => modsMenu.inBrowser() && modsMenu.swipeClient(cx, cy, key),
   textEntry: () => modsMenu.isOpen() && modsMenu.browsing(),
   assetsUrl: `${ROOT}/instance/page-assets`,
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,

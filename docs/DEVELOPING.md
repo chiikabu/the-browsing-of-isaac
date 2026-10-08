@@ -30,13 +30,17 @@ a room is ready to show. URL options:
 | `?saves=1` | A dialog for the whole save store |
 | `?persist=0` | Don't keep saves (for testing) |
 
-The loading bar covers download, WebAssembly start-up and file system setup, a
-quarter each; while the engine initialises it shows a moving segment. The
-dancing Isaac is an 84-frame loop of 42 px pixel art, drawn on a canvas at a
+A build that ships its boot trail (the archive windows a boot reads) shows the
+loading bar in bytes: the startup download, then the boot's own reads, which are
+most of a first visit's wait; a build without one shows a moving segment while the
+engine starts. The dancing Isaac is an 84-frame loop of 42 px pixel art, drawn on a canvas at a
 whole number of device pixels per art pixel.
 
 Downloads run in parallel. Hosts that support range requests stream archive
-windows on demand; others download whole chunks in the background.
+windows on demand; others download whole chunks in the background. Once the boot
+is done, the windows a first run reads (shipped as `runTrail`, and remembered from
+this browser's own first run) are fetched while the player is still on the menus,
+so the first room doesn't wait on the network.
 
 ### Touch controls
 
@@ -69,7 +73,9 @@ frames by `touch_input.mjs`.
   screen opens the mod browser (`mod_browser.mjs`): two pages of the game's own
   MODS paper, a searchable list and the chosen mod's description, over a
   catalogue built by `scripts/recomp/assets/modpack.py`. A ZIP or folder can be
-  imported too. Workshop descriptions are cleaned of BBCode on the way in.
+  imported too. Workshop descriptions are cleaned of BBCode on the way in and
+  scroll when they are long; a catalogue built before `modpack.py` kept them whole
+  can carry a `descriptions.json` beside it with the full texts.
 - Lua mods run on Lua 5.3.3 built into the host (`scripts/recomp/host/lua_build.py`);
   the game's calls into it go through `host_lua.c`, which formats `luaL_error`
   and `lua_pushfstring` arguments off the guest stack.

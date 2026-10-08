@@ -271,6 +271,42 @@ def _paper_mark(sheet, box, glyph: str):
     return mark
 
 
+def card_fronts(anm2: bytes, pockets_xml: bytes) -> dict[str, list[int]]:
+    """card id -> [x, y, w, h] of its face in ui_cardfronts.png, the picture the
+    game's HUD shows for a held card. The sheet's animations are named for the
+    cards ("00_TheFool", "25_TwoOfClubs"), the cards by their string keys
+    ("#THE_FOOL_NAME"); a reversed card shows its upright face, as the HUD does.
+    Cards with no face of their own (runes, souls, the later additions) are left out."""
+    import re
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(anm2)
+    faces = {}
+    for anim in root.iter("Animation"):
+        name = anim.get("Name") or ""
+        frame = anim.find("LayerAnimations/LayerAnimation/Frame")
+        if frame is None or not re.match(r"^\d+_", name):
+            continue
+        key = re.sub(r"^the", "", re.sub(r"^\d+_", "", name).lower())
+        faces[key] = [int(frame.get(k)) for k in ("XCrop", "YCrop", "Width", "Height")]
+    aliases = {"qcard": "mysterycard"}               # the "?" card
+
+    def key_of(string_key: str) -> str:
+        k = string_key.lstrip("#").lower()
+        k = re.sub(r"_name$", "", k)
+        k = re.sub(r"_r$", "", k)                    # reversed: the upright face
+        k = re.sub(r"^(the|a)_", "", k).replace("_", "")
+        return aliases.get(k, k)
+    out = {}
+    for e in ET.fromstring(pockets_xml):
+        if e.tag != "card" or not e.get("id") or not e.get("pickup"):
+            continue
+        k = key_of(e.get("name") or "")
+        face = faces.get(k) or next((v for f, v in faces.items() if len(f) >= 6 and (k.startswith(f) or f.startswith(k))), None)
+        if face:
+            out[e.get("id")] = face
+    return out
+
+
 def _back_mark(png: bytes):
     """backselectwidget.png's "Back" crop trimmed to the paper (transparent margin
     off), or None when the crop is empty."""
@@ -338,6 +374,11 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
                 f = hud_frame("300", e.get("pickup"))
                 if f:
                     cards[e.get("id")] = f
+        # the faces the game's HUD shows for held cards (the pickups above are their backs)
+        fronts_anm2, fronts_png = read("gfx/ui/ui_cardfronts.anm2"), read("gfx/ui/ui_cardfronts.png")
+        fronts = card_fronts(fronts_anm2, pockets_xml) if fronts_anm2 and fronts_png else {}
+        if fronts:
+            written["hud-cardfronts.png"] = fronts_png
         pills = {}
         for colour in list(range(1, 15)) + list(range(2049, 2063)):
             f = hud_frame("70", str(colour))
@@ -386,7 +427,8 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
             "format": "isaac-touch-hud-2",
             "actives": {"sheet": "hud-actives.png", "cell": HUD_CELL,
                         "items": {k: {"at": v} for k, v in cells.items()}},
-            "pocket": {"sheet": "hud-pocket.png", "cards": cards, "pills": pills},
+            "pocket": {"sheet": "hud-pocket.png", "cards": cards, "pills": pills,
+                       **({"fronts": {"sheet": "hud-cardfronts.png", "cards": fronts}} if fronts else {})},
             "bombs": {"sheet": "hud-bombs.png", **bomb_cells},
             "marks": {"sheet": "hud-marks.png", **mark_cells},
             "chargebar": {"sheet": "hud-chargebar.png", "size": [16, 32], "pivot": [8, 16],

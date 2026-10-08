@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { safeRel, modId, stripRoots, readMetadata, planMod, seedMods, disableTarget,
+import { safeRel, modId, stripRoots, readMetadata, planMod, seedMods, disableTarget, mergeDescriptions,
          GUEST_ROOT, USER_ROOT, GUEST_ROOTS, IMPORT_DIR, IMPORT_MARK, MODS_DB, IMPORT_METADATA } from '../scripts/recomp/web/mods.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -497,4 +497,18 @@ test('round 86c: every mod in the catalogue is driven, not one of them', () => {
   assert.match(d, /unresolved indirect call\|TRAP in main/, 'a trap fails the mod');
   assert.match(d, /baseline/, 'and there is a no-mod baseline to compare the frame rate against');
   assert.match(d, /medianFps < floorFps/, 'a mod that loads and costs the frame rate has not worked');
+});
+
+test('a catalogue cut at 400 characters takes its whole descriptions from descriptions.json', () => {
+  const short = 'x'.repeat(400), whole = `${short} and the rest of it`;
+  const cat = { mods: [{ id: 'a', description: short }, { id: 'b', description: 'short and whole' }, { id: 'c', description: 'kept' }] };
+  const n = mergeDescriptions(cat, { version: 1, descriptions: { a: whole, b: 'sh', zz: 'not in the catalogue' } });
+  assert.equal(n, 1);
+  assert.equal(cat.mods[0].description, whole);
+  assert.equal(cat.mods[0].whole, true, 'marked whole, so the browser adds no ...');
+  assert.equal(cat.mods[1].description, 'short and whole', 'a shorter text never replaces a longer one');
+  assert.equal(cat.mods[1].whole, undefined);
+  assert.equal(cat.mods[2].whole, undefined);
+  assert.equal(mergeDescriptions(cat, null), 0);
+  assert.equal(mergeDescriptions(cat, { descriptions: 'nope' }), 0);
 });

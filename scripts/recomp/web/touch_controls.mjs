@@ -5,7 +5,7 @@
 //     the game's four, each holding steady (touch_input.mjs
 //     createStickDirection). In landscape a stick appears where the thumb
 //     lands, stays put while it drags and fades when it lifts; a thumb that
-//     lands again near it soon after picks the same stick back up, so a burst
+//     lands again near the fire stick soon after picks it back up, so a burst
 //     of taps keeps aiming. In portrait both rest under the picture.
 //   - The game's own HUD is the button set: tap the minimap for the big map
 //     (hold to peek), the paper pause mark beside it pauses, the trinket and
@@ -105,7 +105,7 @@ export function nearestRow(rows, gy, reach) {
 // the row already chosen.
 export const rowTapConfirms = (target, cursor, pitchCss) => target === cursor || pitchCss >= FINGER;
 
-export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, textEntry }) {
+export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, onMenuSwipe, textEntry }) {
   const preference = new URLSearchParams(location.search).get('touch');
   if (preference === '0') return { destroy() {} };
   const coarse = window.matchMedia('(pointer: coarse)');
@@ -184,7 +184,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     };
     try {
       const spec = JSON.parse(new TextDecoder().decode(await fetchBytes('hud.json')));
-      const names = { actives: spec.actives.sheet, pocket: spec.pocket.sheet, bombs: spec.bombs.sheet, marks: spec.marks.sheet, chargebar: spec.chargebar.sheet, font: spec.font.png };
+      const names = { actives: spec.actives.sheet, pocket: spec.pocket.sheet, bombs: spec.bombs.sheet, marks: spec.marks.sheet, chargebar: spec.chargebar.sheet, font: spec.font.png,
+        ...(spec.pocket.fronts ? { fronts: spec.pocket.fronts.sheet } : {}) };
       for (const [key, name] of Object.entries(names)) art.img[key] = await image(name);
       const fnt = await fetchBytes(spec.font.fnt);
       art.font = parseBmfont(fnt.buffer.slice(fnt.byteOffset, fnt.byteOffset + fnt.byteLength));
@@ -292,8 +293,20 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (notch && !active.timed) ctx.drawImage(img, notch[0], notch[1], w, h, x * k, y * k, w * k, h * k);
   }
 
+  // A held card shows its face, as the game's HUD does (ui_cardfronts, 16x24),
+  // half as large again so its pixels stay whole; a badge keeps the small icon.
+  function cardFace(item) {
+    const fronts = art.hud.pocket.fronts;
+    return item.item.kind !== POCKET_PILL && fronts && art.img.fronts ? fronts.cards[String(item.item.id)] || null : null;
+  }
   function drawPocket(ctx, item, size, x, y, k) {
     if (item.active) return drawCollectible(ctx, item.active.id, x, y, size, k);
+    const face = size >= 24 ? cardFace(item) : null;
+    if (face) {
+      const [fx, fy, fw, fh] = face, w = fw * 1.5, h = fh * 1.5;
+      ctx.drawImage(art.img.fronts, fx, fy, fw, fh, (x + (size - w) / 2) * k, (y + (size - h) / 2) * k, w * k, h * k);
+      return true;
+    }
     const table = item.item.kind === POCKET_PILL ? art.hud.pocket.pills : art.hud.pocket.cards;
     const frame = table[String(item.item.id)] || art.hud.pocket.cards['1'];
     if (!frame) return false;
@@ -879,7 +892,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     stick.pointer = pointer.id;
     pointer.stick = stick;
     if (!resting()) {
-      const margin = STICK_RADIUS + 8, again = relandBase(stick, cx, cy);
+      // only the fire stick picks its base back up: a walk starts where the thumb lands
+      const margin = STICK_RADIUS + 8, again = stick === sticks.fire ? relandBase(stick, cx, cy) : null;
       if (again) placeStick(stick, again.x, again.y);
       else placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
     }
@@ -915,7 +929,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     pointer.swiped = true;
     nav = null;
     const key = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 'right' : 'left') : (dy < 0 ? 'down' : 'up');
-    input.tap('touch:menu', key);
+    // a page's own paper may take the swipe where it started (a description scrolls)
+    if (!(onMenuSwipe && onMenuSwipe(pointer.sx, pointer.sy, key))) input.tap('touch:menu', key);
     pointer.anchorX = pointer.x; pointer.anchorY = pointer.y;
   }
   function pointerUp(event) {

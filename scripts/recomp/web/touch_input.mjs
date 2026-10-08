@@ -17,11 +17,13 @@ export function stickKeys(x, y, shooting = false) {
 // Walking takes eight directions. Firing takes four: Isaac's tears go up, down,
 // left or right, and two fire keys held at once turn his head to whichever
 // came last, so a diagonal sector fired wherever the thumb had last crossed a
-// line. Four quarter sectors fire where the thumb points. Both dead zones are
-// small, so a stick that lands under the thumb answers the first few pixels.
+// line. Four quarter sectors fire where the thumb points, from a small push.
+// Walking stops when the thumb comes back near the middle: a thumb brought back
+// to rest a few pixels off centre is a stop, not a slow walk (measured: a 5 px
+// let-go kept Isaac walking 150+ units under a thumb resting 6 px out).
 const MOVE_KEYS = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
 const FIRE_KEYS = [['right'], ['down'], ['left'], ['up']];
-export function createStickDirection({ shooting = false, deadzone = shooting ? 0.1 : 0.15, release = shooting ? 0.06 : 0.1, hold = shooting ? 15 : 12 } = {}) {
+export function createStickDirection({ shooting = false, deadzone = shooting ? 0.12 : 0.25, release = shooting ? 0.09 : 0.2, hold = shooting ? 15 : 12 } = {}) {
   const table = shooting ? FIRE_KEYS : MOVE_KEYS, width = 360 / table.length;
   let current = -1;
   return {

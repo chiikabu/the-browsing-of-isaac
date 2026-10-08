@@ -700,6 +700,34 @@ test('a fully downloaded payload stays indeterminate through early frames until 
   assertStartupProgress(page, 100);
 });
 
+test('a build that ships its boot trail shows the boot reading through it, and never goes back', async () => {
+  const page = await loadingPage('', { received: 1000, total: 4000, bootReceived: 1000, bootTotal: 1000 });
+  // the boot reads the trail's windows (3000 bytes here); the page counts what it has read
+  page.window.__isaacPortableData.trail = [['resources/packed/music.a', 0, 2000], ['resources/packed/videos.a', 0, 1000]];
+  let read = 0;
+  page.window.isaacLazyStats = () => ({ windowBytes: read, windows: 0 });
+  await page.instantiate();
+  await page.hooks.beforeMain({});
+  page.advance(1);
+  // the download done (1000 of 4000 bytes in all), both work steps done, nothing read yet
+  assertStartupProgress(page, Math.floor(100 * (0.9 * 1000 / 4000 + 0.1)));
+  read = 1500;
+  page.advance(2);
+  assertStartupProgress(page, Math.floor(100 * (0.9 * 2500 / 4000 + 0.1)));
+  read = 9000;                                   // more than the trail: it is capped
+  page.advance(3);
+  assertStartupProgress(page, 99);
+  read = 0;                                      // a counter that went back cannot move the bar back
+  page.advance(4);
+  assertStartupProgress(page, 99);
+  page.menu();
+  page.advance(5);
+  page.advance(6);
+  page.advance(7, { paint: false });
+  assertStartupProgress(page, 100);
+  assert.equal(page.elements.get('overlay').hidden, true);
+});
+
 test('background downloads preserve native activity and cannot lower completed startup', async () => {
   const page = await loadingPage('', { received: 1000, total: 4000, bootReceived: 1000, bootTotal: 1000 });
   await page.instantiate();

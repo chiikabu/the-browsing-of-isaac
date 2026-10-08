@@ -124,7 +124,7 @@ export function createModBrowser(opts) {
   const log = opts.log || (() => {});
   const touch = opts.touch || (() => false);
   const A = { ready: false, loading: null, menu: null, art: null, sheet: null, fonts: {}, sounds: new Map() };
-  const st = { open: false, ctl: null, query: '', cursor: 0, top: 0, confirm: null, caret: true, layout: null, regions: [] };
+  const st = { open: false, ctl: null, query: '', cursor: 0, top: 0, confirm: null, caret: true, layout: null, regions: [], descTop: 0, desc: null };
 
   const canvas = document.createElement('canvas');
   canvas.id = 'mod-browser';
@@ -246,18 +246,23 @@ export function createModBrowser(opts) {
       L.detail = { px: 232, py: 7, n: 5, x0: 262, x1: 462 };
       return L;
     }
-    const W = 264, H = Math.max(420, Math.round(W * innerHeight / innerWidth));
+    // The window's own shape, so the paper is never stretched: 264 game px across
+    // (the 256 px page and a margin), wider when the window is too short for the
+    // 420 the two pages need, the pages then centred.
+    const W = Math.max(264, Math.round(420 * innerWidth / innerHeight)), H = Math.round(W * innerHeight / innerWidth);
     const k = Math.max(2, Math.round((innerWidth / W) * (devicePixelRatio || 1)));
+    const px = Math.round((W - 256) / 2);
     const listN = 4, listH = 48 + listN * 32 + 48;
     const detailN = Math.max(3, Math.floor((H - listH - 16 - 96) / 32));
     const detailH = 48 + detailN * 32 + 48;
     const top = Math.max(4, Math.round((H - listH - detailH - 6) / 2));
-    return { kind: 'port', W, H, K: k,
-      list: { px: 4, py: top, n: listN, x0: 30, x1: 238 },
-      detail: { px: 4, py: top + listH + 6, n: detailN, x0: 30, x1: 238 } };
+    return { kind: 'port', W, H, K: k, cssW: innerWidth, cssH: innerHeight,
+      list: { px, py: top, n: listN, x0: px + 26, x1: px + 234 },
+      detail: { px, py: top + listH + 6, n: detailN, x0: px + 26, x1: px + 234 } };
   }
   function place(L) {
-    if (st.layout && st.layout.kind === L.kind && st.layout.W === L.W && st.layout.H === L.H && st.layout.K === L.K) return;
+    if (st.layout && st.layout.kind === L.kind && st.layout.W === L.W && st.layout.H === L.H && st.layout.K === L.K
+      && st.layout.cssW === L.cssW && st.layout.cssH === L.cssH) return;
     st.layout = L; K = L.K;
     canvas.width = L.W * K; canvas.height = L.H * K;
     g.imageSmoothingEnabled = false;
@@ -266,7 +271,9 @@ export function createModBrowser(opts) {
       canvas.style.cssText = `position:absolute;inset:0;width:100%;height:100%;z-index:30;${base}`;
       if (canvas.parentNode !== stage) stage.appendChild(canvas);
     } else {
-      canvas.style.cssText = `position:fixed;inset:0;width:100vw;height:100vh;z-index:60;${base}`;
+      // the window as it is now, in CSS pixels: 100vh on a phone counts the space
+      // under the address bar, which stretched the paper and hid its foot
+      canvas.style.cssText = `position:fixed;left:0;top:0;width:${innerWidth}px;height:${innerHeight}px;z-index:60;${base}`;
       if (canvas.parentNode !== document.body) document.body.appendChild(canvas);
     }
   }
@@ -375,9 +382,26 @@ export function createModBrowser(opts) {
     rect(d.x0, y, width, 1, HILITE);
     y += 7;
     const actionY = d.py + dh - 62;
-    const descLines = Math.max(1, Math.floor((actionY - 6 - y) / 13));
+    // The whole description, a window of it at a time: when it runs longer than
+    // the room, a scrollbar shows where the window is, and a tap on the text, a
+    // swipe, the wheel or Left/Right move it.
+    const fit = Math.max(1, Math.floor((actionY - 6 - y) / 13));
     const desc = it.desc || 'This mod has no description.';
-    wrapText(desc, width, (t) => measure(F10, t), descLines).forEach((line, i) => text(F10, line, d.x0, y + i * 13, it.desc ? 'ink' : 'light'));
+    let lines = wrapText(desc, width, (t) => measure(F10, t));
+    const scrolls = lines.length > fit;
+    if (scrolls) lines = wrapText(desc, width - 8, (t) => measure(F10, t));
+    const last = Math.max(0, lines.length - fit);
+    st.desc = { fit, last, key: `${it.id}:${st.query}` };
+    st.descTop = Math.max(0, Math.min(st.descTop, last));
+    lines.slice(st.descTop, st.descTop + fit).forEach((line, i) => text(F10, line, d.x0, y + i * 13, it.desc ? 'ink' : 'light'));
+    if (scrolls) {
+      const trackY = y, trackH = fit * 13 - 2;
+      const barH = Math.max(8, Math.round(trackH * fit / lines.length));
+      const barY = trackY + Math.round((trackH - barH) * st.descTop / Math.max(1, last));
+      rect(d.x1 - 1, trackY, 1, trackH, HILITE);
+      rect(d.x1 - 2, barY, 3, barH, LIGHT);
+      st.regions.push({ kind: 'desc', x: d.x0 - 4, y: y - 2, w: width + 8, h: fit * 13 + 2 });
+    }
 
     // what Enter or a tap does
     rect(d.x0, actionY - 4, width, 1, HILITE);
@@ -421,8 +445,29 @@ export function createModBrowser(opts) {
   function move(by) {
     const n = shown().length; if (!n) return;
     const next = Math.max(0, Math.min(n - 1, st.cursor + by));
-    if (next !== st.cursor) { st.cursor = next; st.confirm = null; play('move'); draw(); }
+    if (next !== st.cursor) { st.cursor = next; st.confirm = null; st.descTop = 0; play('move'); draw(); }
   }
+  // The description's window: by lines, or a page at a time; paging on from the
+  // end goes back to the top, so a tap always does something.
+  function scrollDesc(by, wrap = false) {
+    const d = st.desc;
+    if (!d || d.last <= 0) return false;
+    let next = st.descTop + by;
+    if (wrap && by > 0 && st.descTop >= d.last) next = 0;
+    next = Math.max(0, Math.min(d.last, next));
+    if (next === st.descTop) return true;
+    st.descTop = next;
+    play('move');
+    draw();
+    return true;
+  }
+  const pageDesc = (dir, wrap = false) => scrollDesc(dir * Math.max(1, (st.desc ? st.desc.fit : 1) - 1), wrap);
+  const inDesc = (x, y) => st.regions.some((g2) => g2.kind === 'desc' && x >= g2.x && x < g2.x + g2.w && y >= g2.y && y < g2.y + g2.h);
+  const toLayout = (cx, cy) => {
+    const r = canvas.getBoundingClientRect();
+    if (!st.layout || !r.width || !r.height) return null;
+    return [(cx - r.left) / r.width * st.layout.W, (cy - r.top) / r.height * st.layout.H];
+  };
   function act() {
     const it = current(), s = status();
     if (!it || !st.ctl || s.busyId) return;
@@ -437,7 +482,7 @@ export function createModBrowser(opts) {
     play('select');
     Promise.resolve(st.ctl.install(it.id)).then(draw, draw);
   }
-  function setQuery(q) { st.query = q.slice(0, 32); st.cursor = 0; st.top = 0; st.confirm = null; draw(); }
+  function setQuery(q) { st.query = q.slice(0, 32); st.cursor = 0; st.top = 0; st.confirm = null; st.descTop = 0; draw(); }
   function close(sound = 'back') {
     if (!st.open) return;
     st.open = false; canvas.hidden = true;
@@ -455,6 +500,8 @@ export function createModBrowser(opts) {
     else if (code === 'ArrowDown') move(1);
     else if (code === 'PageUp') move(-visibleRows());
     else if (code === 'PageDown') move(visibleRows());
+    else if (code === 'ArrowRight') pageDesc(1);
+    else if (code === 'ArrowLeft') pageDesc(-1);
     else if (code === 'Home' && !st.query) move(-1e6);
     else if (code === 'End' && !st.query) move(1e6);
     else if (code === 'Enter' || code === 'NumpadEnter') act();
@@ -476,7 +523,8 @@ export function createModBrowser(opts) {
     const x = (cx - r.left) / r.width * st.layout.W, y = (cy - r.top) / r.height * st.layout.H;
     const hit = st.regions.filter((g2) => g2.kind !== 'paper').find((g2) => x >= g2.x && x < g2.x + g2.w && y >= g2.y && y < g2.y + g2.h);
     if (hit) {
-      if (hit.kind === 'row') { if (hit.index !== st.cursor) { st.cursor = hit.index; st.confirm = null; play('move'); draw(); } return true; }
+      if (hit.kind === 'row') { if (hit.index !== st.cursor) { st.cursor = hit.index; st.confirm = null; st.descTop = 0; play('move'); draw(); } return true; }
+      if (hit.kind === 'desc') { pageDesc(1, true); return true; }
       if (hit.kind === 'act') { act(); return true; }
       if (hit.kind === 'search') return 'keyboard';
       if (hit.kind === 'back') { close(); return true; }
@@ -485,11 +533,26 @@ export function createModBrowser(opts) {
     if (!st.regions.some((g2) => g2.kind === 'paper' && x >= g2.x && x < g2.x + g2.w && y >= g2.y && y < g2.y + g2.h)) { close(); return true; }
     return true;
   };
-  const wheel = (dy) => { if (st.open) move(dy > 0 ? 3 : -3); };
+  // The wheel over the description scrolls it; anywhere else it moves the list.
+  const wheel = (dy, cx, cy) => {
+    if (!st.open) return;
+    const at = cx === undefined ? null : toLayout(cx, cy);
+    if (at && inDesc(at[0], at[1]) && scrollDesc(dy > 0 ? 3 : -3)) return;
+    move(dy > 0 ? 3 : -3);
+  };
+  // A swipe that starts on a description that scrolls moves it two lines a step
+  // (a finger moving up is the 'down' key, as for the list); true when it did.
+  const swipeClient = (cx, cy, key) => {
+    if (!st.open || (key !== 'up' && key !== 'down')) return false;
+    const at = toLayout(cx, cy);
+    if (!at || !inDesc(at[0], at[1])) return false;
+    scrollDesc(key === 'down' ? 2 : -2);
+    return true;
+  };
 
   const open = async (ctl) => {
     await load();
-    st.ctl = ctl; st.query = ''; st.cursor = 0; st.top = 0; st.confirm = null; st.layout = null;
+    st.ctl = ctl; st.query = ''; st.cursor = 0; st.top = 0; st.confirm = null; st.layout = null; st.descTop = 0;
     st.open = true;
     place(layout());
     canvas.hidden = false;
@@ -498,15 +561,19 @@ export function createModBrowser(opts) {
     st.blink = setInterval(() => { st.caret = !st.caret; draw(); }, 500);
     draw();
   };
-  if (typeof addEventListener === 'function') addEventListener('resize', () => { if (st.open) { st.layout = null; draw(); } });
+  const relayout = () => { if (st.open) { st.layout = null; draw(); } };
+  if (typeof addEventListener === 'function') addEventListener('resize', relayout);
+  // a phone's address bar coming and going resizes the visual viewport only
+  if (typeof window !== 'undefined' && window.visualViewport) window.visualViewport.addEventListener('resize', relayout);
 
   return {
-    open, close, onKey, tapClient, wheel, redraw: draw, preload: load,
+    open, close, onKey, tapClient, wheel, swipeClient, redraw: draw, preload: load,
     isOpen: () => st.open,
     supported: async () => { try { await load(); return true; } catch (e) { log(`[mods] the browser art: ${e.message}`); return false; } },
     element: () => canvas,
     // what a driver can see
     state: () => ({ open: st.open, query: st.query, cursor: st.cursor, layout: st.layout && st.layout.kind,
+      descTop: st.descTop, descLast: st.desc ? st.desc.last : 0,
       shown: shown().map((x) => x.name), current: current() ? current().name : null, confirm: st.confirm }),
   };
 }

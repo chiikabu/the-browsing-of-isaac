@@ -359,11 +359,30 @@ export async function archiveEntries(bytes, name) {
 // only when it is asked for.
 export async function fetchCatalogue(base) {
   if (!base) throw new Error('no catalogue is configured for this build');
-  const r = await fetch(`${String(base).replace(/\/$/, '')}/catalogue.json`, { cache: 'no-cache' });
+  const root = String(base).replace(/\/$/, '');
+  const r = await fetch(`${root}/catalogue.json`, { cache: 'no-cache' });
   if (!r.ok) throw new Error(`the catalogue answered ${r.status}`);
   const j = await r.json();
   if (!j || !Array.isArray(j.mods)) throw new Error('that is not a catalogue');
+  // A catalogue built before modpack.py kept whole descriptions cut them at 400
+  // characters; a descriptions.json beside it, when there is one, has them whole.
+  try {
+    const d = await fetch(`${root}/descriptions.json`, { cache: 'no-cache' });
+    const full = d.ok ? await d.json() : null;
+    mergeDescriptions(j, full);
+  } catch { /* the short ones stand */ }
   return j;
+}
+// The whole description for every catalogue entry the file names, marked as whole.
+export function mergeDescriptions(catalogue, full) {
+  const texts = full && full.descriptions && typeof full.descriptions === 'object' ? full.descriptions : null;
+  if (!texts) return 0;
+  let n = 0;
+  for (const m of catalogue.mods) {
+    const t = texts[m.id];
+    if (typeof t === 'string' && t.length >= String(m.description || '').length) { m.description = t; m.whole = true; n++; }
+  }
+  return n;
 }
 
 // The parts of one mod, joined back into the zip they were cut from. Each part
@@ -608,14 +627,15 @@ export function createModsMenu(opts) {
     paper.redraw();
   }
 
-  // modpack.py keeps the first 400 characters of a description: one that long was cut
-  const describe = (raw) => { const t = cleanModText(raw); return String(raw || '').length >= 398 && t ? `${t.replace(/[\s.,;:-]+$/, '')}...` : t; };
+  // an older modpack.py kept the first 400 characters of a description: one that
+  // long, and not known to be whole, was cut
+  const describe = (raw, whole) => { const t = cleanModText(raw); return !whole && String(raw || '').length >= 398 && t ? `${t.replace(/[\s.,;:-]+$/, '')}...` : t; };
   // What the browser lists: the catalogue, cleaned of its BBCode, plus the mods
   // added from this device that the catalogue does not have (so they can go).
   function browserItems() {
     const have = new Map(mods.map((m) => [m.id, m]));
     const list = ((catalogue && catalogue.mods) || []).map((m) => ({
-      id: m.id, name: cleanModName(m.name), desc: describe(m.description), version: m.version || '',
+      id: m.id, name: cleanModName(m.name), desc: describe(m.description, m.whole), version: m.version || '',
       bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: (m.bytes || 0) > SEED_BUDGET,
     }));
     const listed = new Set(list.map((m) => m.id));
@@ -770,7 +790,9 @@ export function createModsMenu(opts) {
     // the browser takes taps and clicks in client pixels (it may cover the whole screen)
     inBrowser: () => !!(browser && browser.isOpen()),
     tapClient: (cx, cy) => (browser && browser.isOpen() ? browser.tapClient(cx, cy) : false),
-    wheel: (dy) => { if (browser && browser.isOpen()) browser.wheel(dy); },
+    wheel: (dy, cx, cy) => { if (browser && browser.isOpen()) browser.wheel(dy, cx, cy); },
+    // a swipe that starts on the chosen mod's description scrolls it; true when it did
+    swipeClient: (cx, cy, key) => (browser && browser.isOpen() && browser.swipeClient ? browser.swipeClient(cx, cy, key) : false),
     browsing: () => (browser && browser.isOpen()) || view === 'browse',
     onKey: (ev, down) => (browser && browser.isOpen() ? browser.onKey(ev, down) : paper.onKey(ev, down)),
     element: () => (browser && browser.isOpen() ? browser.element() : paper.element()),

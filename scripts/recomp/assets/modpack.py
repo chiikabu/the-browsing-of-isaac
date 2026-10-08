@@ -57,7 +57,8 @@ def read_metadata(path: str) -> dict:
         v = re.sub(r"<!\[CDATA\[([\s\S]*?)\]\]>", r"\1", m.group(1)).strip()
         v = re.sub(r"\s+", " ", v)
         if v:
-            out[tag] = v[:400]
+            # a description is shown whole (the browser scrolls it); the rest are labels
+            out[tag] = v[:8000] if tag == "description" else v[:400]
     return out
 
 

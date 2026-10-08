@@ -422,6 +422,25 @@ export function createEditFileMenu(opts) {
 }
 
 // ---- a hint paper, like the game's own PRESS TAB TO ... papers ------------------
+// seedwidget.png's paper leans: its top edge climbs 20 px over 120, and its face
+// is about 124x46 game px around (69, 39) of the widget rect.
+export const TAG_TILT = Math.atan2(20, 120), TAG_FACE = [69, 39], TAG_ROOM = [104, 40];
+// How the lines go on it: a common zoom (at most 4/5 of the menu font) that fits
+// the widest line and the stack into the face's room, and the first line's top
+// relative to the face's centre so the glyphs' ink is centred.
+export function tagLayout(lines, measure, font) {
+  const pitch = 18;
+  let lo = Infinity, hi = -Infinity;
+  for (const text of lines) for (const ch of text) {
+    const c = font && font.chars.get(ch.codePointAt(0));
+    if (c) { lo = Math.min(lo, c.yo); hi = Math.max(hi, c.yo + c.h); }
+  }
+  if (!Number.isFinite(lo)) { lo = 0; hi = pitch; }
+  const wide = Math.max(1, ...lines.map((t) => measure(t)));
+  const tall = (lines.length - 1) * pitch + (hi - lo);
+  const zoom = Math.min(0.8, TAG_ROOM[0] / wide, TAG_ROOM[1] / tall);
+  return { zoom, pitch, top: -((lines.length - 1) * pitch + lo + hi) / 2, wide, tall };
+}
 // The blank widget paper the game's menus print their hints on (seedwidget.png),
 // with two lines of our own in the menu font. opts: { stage, assetsUrl, readAsset,
 // audioContext, log, at: [x, y] (game px), lines: () => [first, second] }.
@@ -440,9 +459,17 @@ export function createMenuTag(opts) {
     const [sx, sy, sw, sh] = A.menu.rects.widget, [x, y] = opts.at;
     ctx.clearRect(0, 0, el.width, el.height);
     ctx.drawImage(A.widget, sx, sy, sw, sh, x * SCALE, y * SCALE, sw * SCALE, sh * SCALE);
-    // the paper leans; the words sit in its middle, a line apart
-    const top = y + (sh - 8 - lines.length * 18) / 2;
-    lines.forEach((text, i) => drawText(ctx, text, x + (sw - 8 - measure(text)) / 2, top + i * 18, A.atlas));
+    // The paper leans (its top edge climbs 20 px over 120) and its face is about
+    // 124x46 around (69, 39): the words lean with it, centred on the face, the
+    // game's own hint papers' way, small enough that the widest fits with room.
+    const { zoom, top, pitch } = tagLayout(lines, measure, A.font);
+    ctx.save();
+    ctx.translate((x + TAG_FACE[0]) * SCALE, (y + TAG_FACE[1]) * SCALE);
+    ctx.rotate(TAG_TILT);
+    ctx.scale(zoom, zoom);
+    ctx.imageSmoothingEnabled = true;
+    lines.forEach((text, i) => drawText(ctx, text, -measure(text) / 2, top + i * pitch, A.atlas));
+    ctx.restore();
   };
   return {
     // the screen the engine is on; `when(id)` decides

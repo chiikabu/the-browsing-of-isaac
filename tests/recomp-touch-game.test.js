@@ -43,10 +43,19 @@ test('the fire stick holds its direction across a diagonal until the thumb is cl
 
 test('the fire stick answers a short push', () => {
   const stick = createStickDirection({ shooting: true });
-  assert.deepEqual(stick.keys(...at(270, 0.09)), []);
-  assert.deepEqual(stick.keys(...at(270, 0.11)), ['up']);
-  assert.deepEqual(stick.keys(...at(270, 0.07)), ['up']);
-  assert.deepEqual(stick.keys(...at(270, 0.05)), []);
+  assert.deepEqual(stick.keys(...at(270, 0.11)), []);
+  assert.deepEqual(stick.keys(...at(270, 0.13)), ['up']);
+  assert.deepEqual(stick.keys(...at(270, 0.1)), ['up']);
+  assert.deepEqual(stick.keys(...at(270, 0.08)), []);
+});
+
+test('a walking thumb brought back to rest near the middle stops Isaac', () => {
+  // a 52 px stick, the thumb out 40 px, then back to 6.4 px off centre without lifting
+  const stick = createStickDirection();
+  assert.deepEqual(stick.keys(...at(90, 40 / 52)), ['s']);
+  assert.deepEqual(stick.keys(...at(39, 6.4 / 52)), [], 'a thumb at rest is a stop');
+  assert.deepEqual(stick.keys(...at(90, 10 / 52)), [], 'and stays one until the thumb pushes out again');
+  assert.deepEqual(stick.keys(...at(90, 14 / 52)), ['s']);
 });
 
 test('a thumb wobbling across a sector edge keeps its direction: no diagonal jitter', () => {
@@ -63,10 +72,10 @@ test('a thumb wobbling across a sector edge keeps its direction: no diagonal jit
 test('the dead zone lets go later than it catches', () => {
   const stick = createStickDirection();
   assert.deepEqual(stick.keys(0, 0), []);
-  assert.deepEqual(stick.keys(...at(0, 0.14)), []);
-  assert.deepEqual(stick.keys(...at(0, 0.16)), ['d']);
-  assert.deepEqual(stick.keys(...at(0, 0.11)), ['d']);
-  assert.deepEqual(stick.keys(...at(0, 0.09)), []);
+  assert.deepEqual(stick.keys(...at(0, 0.24)), []);
+  assert.deepEqual(stick.keys(...at(0, 0.26)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.21)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.19)), []);
   // held, 120 degrees stays down; released, a fresh push takes the nearest sector
   assert.deepEqual(stick.keys(...at(100)), ['s']);
   assert.deepEqual(stick.keys(...at(120)), ['s']);
@@ -229,6 +238,33 @@ test('build_hud takes the HUD frame from the layer that draws ui_cardspills', ()
   const r = spawnSync('python', ['-c', script, join(root, 'scripts', 'recomp', 'assets')], { input: anm2, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), [32, 96, 32, 32, 16, 16]);
+});
+
+test('a held card shows the face the game\'s HUD shows, found by name; runes keep their stone', () => {
+  const anim = (name, x, y) => `<Animation Name="${name}" FrameNum="1"><RootAnimation/><LayerAnimations><LayerAnimation LayerId="0"><Frame XCrop="${x}" YCrop="${y}" Width="16" Height="24" XPivot="8" YPivot="12" Visible="true"/></LayerAnimation></LayerAnimations></Animation>`;
+  const anm2 = `<AnimatedActor><Content><Spritesheets><Spritesheet Id="0" Path="ui_CardFronts.png"/></Spritesheets></Content><Animations>
+    ${anim('00_TheFool', 0, 0)}${anim('25_TwoOfClubs', 64, 48)}${anim('22_TheJoker', 64, 96)}${anim('33_MysteryCard', 80, 120)}
+    ${anim('31_CardAgainstHumanity', 80, 96)}${anim('53_AncientRecall', 112, 24)}${anim('Outline', 240, 120)}</Animations></AnimatedActor>`;
+  const card = (id, name, type = 'tarot') => `<card type="${type}" pickup="1" id="${id}" name="#${name}_NAME" />`;
+  const xml = `<pocketitems><card id="0" name="NULL" />${card(1, 'THE_FOOL')}${card(23, 'TWO_OF_CLUBS', 'suit')}${card(31, 'JOKER', 'suit')}
+    ${card(48, 'Q_CARD', 'special')}${card(45, 'A_CARD_AGAINST_HUMANITY', 'special')}${card(53, 'ANCIENT_RECALL', 'special')}
+    ${card(56, 'THE_FOOL_R', 'tarot_reverse')}${card(79, 'QUEEN_OF_HEARTS', 'suit')}<rune type="rune" pickup="18" id="81" name="#SOUL_OF_ISAAC_NAME" /></pocketitems>`;
+  const script = [
+    'import sys, json',
+    'sys.path.insert(0, sys.argv[1])',
+    'import page_assets as P',
+    'a, x = sys.stdin.read().split("\\0")',
+    'print(json.dumps(P.card_fronts(a.encode(), x.encode())))',
+  ].join('\n');
+  const r = spawnSync('python', ['-c', script, join(root, 'scripts', 'recomp', 'assets')], { input: `${anm2}\0${xml}`, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), {
+    1: [0, 0, 16, 24], 23: [64, 48, 16, 24], 31: [64, 96, 16, 24],
+    48: [80, 120, 16, 24],           // the ? card is the Mystery Card's face
+    45: [80, 96, 16, 24],            // "A Card Against Humanity"
+    53: [112, 24, 16, 24],           // Ancient Recall keeps its R
+    56: [0, 0, 16, 24],              // a reversed card shows its upright face
+  });                                // no face: Queen of Hearts, and the rune keeps its stone
 });
 
 test('the BACK sticker is backselectwidget\'s Back crop, trimmed to its paper', () => {
