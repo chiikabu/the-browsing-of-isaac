@@ -3648,3 +3648,18 @@ __attribute__((weak)) void imp_steam_api__CSteamAPIContext_Zero(CpuState *restri
     if (!self) self = &isaac_imports[727];
     isaac_trap(self, cpu);
 }
+__attribute__((weak)) void imp_xinput1_4__XInputGetState(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[728];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_xinput1_4__XInputSetState(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[729];
+    isaac_trap(self, cpu);
+}
+__attribute__((weak)) void imp_xinput1_4__XInputGetCapabilities(CpuState *restrict cpu) {
+    static const isaac_import *self;
+    if (!self) self = &isaac_imports[730];
+    isaac_trap(self, cpu);
+}

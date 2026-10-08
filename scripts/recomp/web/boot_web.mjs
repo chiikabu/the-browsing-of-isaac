@@ -9,6 +9,7 @@
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
 import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget } from './mods.mjs';
+import { createPads, createPadGate, rumble } from './gamepad.mjs';
 
 const logEl = document.getElementById('log');
 // Round 34: the shipping page (play.mjs) sets window.isaacPageHooks before importing this module:
@@ -81,6 +82,24 @@ const cfg = {
     for (const [k, v] of params) if (k.startsWith('ISAAC_')) cfg.ENV[k] = v;
   }],
 };
+// ---- controllers -----------------------------------------------------------------------
+// The game polls XInput for four slots (host_shims_xinput.c); the page answers
+// from the browser's Gamepad API (gamepad.mjs) and plays the game's rumble on the
+// pad. A browser shows a pad to the page once one of its buttons is pressed.
+const pads = createPads(() => (typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : []));
+// a page menu that has the pad (play.mjs: EDIT FILE, the mods menus) shows the game a resting one
+const padGates = [createPadGate(), createPadGate(), createPadGate(), createPadGate()];
+cfg.isaacPadState = (slot) => {
+  const captured = typeof window.isaacPadCaptured === 'function' && !!window.isaacPadCaptured();
+  return padGates[slot & 3](pads.state(slot), captured);
+};
+window.isaacPadReader = pads;
+cfg.isaacPadRumble = (slot, left, right) => { rumble(pads.pad(slot), left, right); };
+window.isaacPads = () => ({ count: pads.count(), slots: [0, 1, 2, 3].map((i) => pads.state(i)) });
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('gamepadconnected', (e) => log(`[pad] ${e.gamepad.id} connected (browser pad ${e.gamepad.index})`));
+  window.addEventListener('gamepaddisconnected', (e) => log(`[pad] ${e.gamepad.id} disconnected`));
+}
 let lazyReads = 0, lazyBytes = 0;
 const lazyByFile = new Map();                              // src -> bytes (round 40: what the run start reads)
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)

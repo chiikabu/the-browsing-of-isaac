@@ -24,6 +24,7 @@ import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overl
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
 import { createModBrowser } from './mod_browser.mjs';
+import { createPadKeys } from './gamepad.mjs';
 import { createTouchControls } from './touch_controls.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
@@ -896,10 +897,40 @@ const coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer: 
 const modsTag = createMenuTag({
   stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'mods-tag', at: [312, 150],
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
-  lines: () => ['MOD BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
+  // a pad that has been used reads X (its B is the game's back, its Y the game's on/off)
+  lines: () => ['MOD BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : padSeen ? 'PRESS X' : 'PRESS B'],
 });
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
+
+// ---- a controller in the page's own menus ------------------------------------------------
+// The game reads the pad itself (XInput, boot_web.mjs). The page's own papers --
+// EDIT FILE, the mods menus, the mod browser -- read keys: while one is open the
+// pad is theirs (the game is shown a resting pad), its d-pad or left stick, A and
+// B become the arrows, Enter and Escape. On the MODS screen, X opens the browser
+// (the game's own Y there turns a mod on or off).
+window.isaacPadCaptured = () => modsMenu.isOpen() || editMenu.isOpen();
+const padKeys = typeof createPadKeys === 'function' ? createPadKeys() : null;
+let padSeen = false, padHadPaper = false;
+const PAD_CODES = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', a: 'Enter', b: 'Escape' };
+setInterval(() => {
+  const reader = window.isaacPadReader;
+  if (!padKeys || !reader || !gameReady || errorShown) return;
+  const st = reader.state(0), now = performance.now();
+  if (st) padSeen = true;
+  const paper = window.isaacPadCaptured();
+  // a paper that just opened (A on a file, under a held A) starts from what is held
+  if (paper !== padHadPaper) { padHadPaper = paper; padKeys.settle(st, now); return; }
+  for (const k of padKeys.read(st, now)) {
+    if (paper) {
+      const code = PAD_CODES[k];
+      if (!code || typeof window.isaacKeyCapture !== 'function') continue;
+      const ev = { code, key: code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, preventDefault() {} };
+      window.isaacKeyCapture(ev, true);
+      window.isaacKeyCapture(ev, false);
+    } else if (k === 'x' && readMenuId() === MODS_SCREEN && modsBrowsable()) openModBrowser();
+  }
+}, 50);
 // Touch: the page's own papers take their taps here, before the game's screens.
 // (gx, gy) is the tap in game pixels, (cx, cy) in client pixels: the browser
 // can cover the whole screen, so it takes the latter.

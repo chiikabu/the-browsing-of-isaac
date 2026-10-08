@@ -1,8 +1,8 @@
 /* host_shims_dinput8.c -- strong implementations for the DInput8 surface.
  *
  * Reachability: Gamepad_init (0x00a6cf80) probes XInput1_4.dll /
- * bin\XInput1_4.dll / XInput1_3.dll / bin\XInput1_3.dll (NOT registered,
- * so the game degrades with "proceeding with DInput only"), then
+ * bin\XInput1_4.dll / XInput1_3.dll / bin\XInput1_3.dll (XInput1_4.dll is
+ * registered: controllers come through XInput, host_shims_xinput.c), then
  * LoadLibraryA("DINPUT8.dll") -- a NULL module here is FATAL (log
  * 0x00ba17e4 -> abort via 0xb18880), so dinput8.dll is registered in
  * host_shims_module.c:dynamic_dlls and DirectInput8Create is a curated
@@ -19,10 +19,10 @@
  *   GetDeviceCount/AddRef/Release/QueryInterface: never reached in the
  *     observed flow, but present so the vtable is fully token-backed.
  *
- * The per-frame poller (0x00a6dab0) with zero devices only pumps the
- * (nonexistent) hidden notification window: PeekMessageA on the fake
- * hwnd returns 0 immediately and the XInput joystick loop is skipped via
- * [0xc7e301]==0. DI_OK == 0 everywhere.
+ * The per-frame poller (0x00a6dab0) with zero DInput devices pumps the
+ * (nonexistent) hidden notification window -- PeekMessageA on the fake hwnd
+ * returns 0 immediately -- and runs its XInput loop ([0xc7e301]==1 since
+ * XInput1_4.dll loads; host_shims_xinput.c). DI_OK == 0 everywhere.
  */
 #include "isaac_host.h"
 #include "shim_decls.h"

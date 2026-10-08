@@ -731,5 +731,8 @@ void imp_steam_api__CSteamAPIContext_ConnectToGlobalUser(CpuState *restrict cpu)
 void imp_steam_api__CSteamAPIContext_ReleaseInterface(CpuState *restrict cpu);
 void imp_steam_api__CSteamAPIContext_Init(CpuState *restrict cpu);
 void imp_steam_api__CSteamAPIContext_Zero(CpuState *restrict cpu);
+void imp_xinput1_4__XInputGetState(CpuState *restrict cpu);
+void imp_xinput1_4__XInputSetState(CpuState *restrict cpu);
+void imp_xinput1_4__XInputGetCapabilities(CpuState *restrict cpu);
 
 #endif

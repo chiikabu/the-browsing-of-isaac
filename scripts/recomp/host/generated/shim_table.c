@@ -6,7 +6,7 @@
 #include "isaac_host.h"
 #include "shim_decls.h"
 
-/* 622 IAT imports + 106 dynamic (LoadLibrary/GetProcAddress) exports */
+/* 622 IAT imports + 109 dynamic (LoadLibrary/GetProcAddress) exports */
 isaac_import isaac_imports[] = {
   { "lua5.3.3r.dll", "lua_absindex", 0x00b18418u, 0x1b000000u, 0, 0, ISAAC_V_PROVIDED, 2350, imp_lua5_3_3r__lua_absindex },
   { "lua5.3.3r.dll", "lua_pushstring", 0x00b18414u, 0x1b000010u, 0, 0, ISAAC_V_PROVIDED, 2336, imp_lua5_3_3r__lua_pushstring },
@@ -736,6 +736,9 @@ isaac_import isaac_imports[] = {
   { "steam_api.dll", "CSteamAPIContext_ReleaseInterface", 0x00000000u, 0x1b002d50u, 8, 1, ISAAC_V_PROVIDED, 0, imp_steam_api__CSteamAPIContext_ReleaseInterface },
   { "steam_api.dll", "CSteamAPIContext_Init", 0x00000000u, 0x1b002d60u, 4, 1, ISAAC_V_PROVIDED, 0, imp_steam_api__CSteamAPIContext_Init },
   { "steam_api.dll", "CSteamAPIContext_Zero", 0x00000000u, 0x1b002d70u, 4, 1, ISAAC_V_PROVIDED, 0, imp_steam_api__CSteamAPIContext_Zero },
+  { "xinput1_4.dll", "XInputGetState", 0x00000000u, 0x1b002d80u, 8, 1, ISAAC_V_PROVIDED, 0, imp_xinput1_4__XInputGetState },
+  { "xinput1_4.dll", "XInputSetState", 0x00000000u, 0x1b002d90u, 8, 1, ISAAC_V_PROVIDED, 0, imp_xinput1_4__XInputSetState },
+  { "xinput1_4.dll", "XInputGetCapabilities", 0x00000000u, 0x1b002da0u, 12, 1, ISAAC_V_PROVIDED, 0, imp_xinput1_4__XInputGetCapabilities },
 };
 const unsigned isaac_import_count = sizeof(isaac_imports)/sizeof(isaac_imports[0]);
 

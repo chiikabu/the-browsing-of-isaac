@@ -255,8 +255,9 @@ int main(int argc, char **argv) {
      * wgl*, gl*, xinput, steam ctx, ...). The exact total is a canary that
      * moves only when gen_shims.py's DYNAMIC_EXPORTS changes. */
     /* 106 since round 22 (the five ALC_SOFT_system_events / reopen / pause /
-     * resume entry points the mixer asks alcGetProcAddress for). */
-    check(isaac_import_count == 728, "622 IAT + 106 dynamic imports linked");
+     * resume entry points the mixer asks alcGetProcAddress for); 109 with the
+     * three XInput exports Gamepad_init resolves (controllers). */
+    check(isaac_import_count == 731, "622 IAT + 109 dynamic imports linked");
 
     /* 3. tokens are unique and round-trip */
     unsigned round = 0, uniq = 1;
@@ -2106,6 +2107,57 @@ int main(int argc, char **argv) {
     check(lc.EAX > 0, "the Lua VM really allocated after openlibs");
 
     /* doubles: two stack slots in, round-trip out without narrowing. */
+
+        /* Controllers: Gamepad_init's first probe, LoadLibraryA("XInput1_4.dll"),
+         * must load, and all three names it resolves must resolve (none is
+         * NULL-checked before the call). With no page to ask, every slot is
+         * empty: ERROR_DEVICE_NOT_CONNECTED from all three, and nothing written. */
+        {
+            const char *xi = "XInput1_4.dll";
+            for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)xi[i]; if (!xi[i]) break; }
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF);
+            isaac_w32(cpu.ESP + 4, sbuf);
+            imp_kernel32__LoadLibraryA(&cpu);
+            uint32_t hxi = cpu.EAX;
+            check(hxi != 0, "LoadLibraryA(\"XInput1_4.dll\") loads: the game polls XInput");
+            const char *names[] = { "XInputGetState", "XInputSetState", "XInputGetCapabilities" };
+            int found = 0;
+            for (unsigned n = 0; n < 3; ++n) {
+                for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)names[n][i]; if (!names[n][i]) break; }
+                memset(&cpu, 0, sizeof cpu);
+                cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                isaac_w32(cpu.ESP, 0xDEADBEEF);
+                isaac_w32(cpu.ESP + 4, hxi);
+                isaac_w32(cpu.ESP + 8, sbuf);
+                imp_kernel32__GetProcAddress(&cpu);
+                isaac_import *xiimp = isaac_resolve_shim(cpu.EAX);
+                if (cpu.EAX && xiimp && !strcmp(xiimp->symbol, names[n]) && !strcmp(xiimp->dll, "xinput1_4.dll")) ++found;
+            }
+            check(found == 3, "XInputGetState, XInputSetState and XInputGetCapabilities all resolve");
+            uint32_t xbuf = sbuf + 64;
+            for (unsigned i = 0; i < 20; ++i) *(uint8_t *)isaac_g(xbuf + i) = 0xa5;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
+            imp_xinput1_4__XInputGetState(&cpu);
+            uint32_t r_state = cpu.EAX;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, 0); isaac_w32(cpu.ESP + 12, xbuf);
+            imp_xinput1_4__XInputGetCapabilities(&cpu);
+            uint32_t r_caps = cpu.EAX;
+            memset(&cpu, 0, sizeof cpu);
+            cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+            isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, 0); isaac_w32(cpu.ESP + 8, xbuf);
+            imp_xinput1_4__XInputSetState(&cpu);
+            uint32_t r_set = cpu.EAX;
+            check(r_state == 1167u && r_caps == 1167u && r_set == 1167u,
+                  "with no page, every XInput slot answers ERROR_DEVICE_NOT_CONNECTED");
+            check(*(uint8_t *)isaac_g(xbuf) == 0xa5 && *(uint8_t *)isaac_g(xbuf + 19) == 0xa5,
+                  "and a slot with nothing in it writes nothing");
+        }
     dbl = 1.5;
     LFRAME();
     LARG(0, isaac_va(L));

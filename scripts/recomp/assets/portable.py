@@ -47,7 +47,7 @@ import urllib.request
 MIB = 1 << 20
 PAGE = "play.html"
 TOP_FILES = ("boot.wasm", "isaac.segs.bin", "boot-trail.json")
-MODULES = ("boot.mjs", "boot_web.mjs", "menu_overlay.mjs", "zip.mjs", "mod_browser.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs", "play.mjs")
+MODULES = ("boot.mjs", "boot_web.mjs", "gamepad.mjs", "menu_overlay.mjs", "zip.mjs", "mod_browser.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs", "play.mjs")
 # the archives the engine reads as 1 MiB windows (boot_web.mjs LAZY_ARCHIVES)
 WINDOWED = ("resources/packed/music.a", "resources/packed/videos.a",
             "resources/packed/afterbirth.a", "resources/packed/afterbirthp.a")
@@ -911,7 +911,7 @@ MODULE_LOADER_JS = r"""
   // blob URL, and a blob's imports do not resolve relative to the page -- so the
   // sources are rewritten to import from the map before they are turned into blobs.
   var src = window.__isaacModules, url = {};
-  var order = ['boot.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mod_browser.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs', 'boot_web.mjs', 'play.mjs'];
+  var order = ['boot.mjs', 'gamepad.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mod_browser.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs', 'boot_web.mjs', 'play.mjs'];
   for (var i = 0; i < order.length; i++) {
     var name = order[i];
     var text = src[name].replace(/(["'])\.\/([A-Za-z0-9_.-]+\.mjs)\1/g, function (_m, _q, dep) {

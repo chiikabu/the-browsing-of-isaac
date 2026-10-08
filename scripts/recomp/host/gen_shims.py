@@ -973,6 +973,14 @@ def main():
         ("steam_api.dll", "CSteamAPIContext_ReleaseInterface", 8),
         ("steam_api.dll", "CSteamAPIContext_Init", 4),
         ("steam_api.dll", "CSteamAPIContext_Zero", 4),
+        # XInput (controllers): Gamepad_init (0x00a6cf80) LoadLibraryA's
+        # XInput1_4.dll and resolves these three by name into [0xc7e2dc],
+        # [0xc7e2f0], [0xc7e2f4]; none is NULL-checked before use, so all three
+        # must resolve. WINAPI: the callee purges its params. Strong bodies in
+        # host_shims_xinput.c. Appended last so every earlier token stays put.
+        ("xinput1_4.dll", "XInputGetState", 8),          # (index, state)
+        ("xinput1_4.dll", "XInputSetState", 8),          # (index, vibration)
+        ("xinput1_4.dll", "XInputGetCapabilities", 12),  # (index, flags, caps)
     ]
     dynamic_rows = []  # runtime-resolved (wglGetProcAddress/steam ctx): NOT IAT symbols
     # Tokens/indices continue the stride AFTER the last IAT row so

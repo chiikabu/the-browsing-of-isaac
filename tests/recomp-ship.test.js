@@ -108,7 +108,7 @@ function makeTree(dir, segsBytes = noise(1500000, 1234)) {
   const pageDir = join(dir, 'web');
   mkdirSync(pageDir);
   writeFileSync(join(pageDir, 'play.html'), '<html><body><script type="module" src="./play.mjs"></script></body></html>');
-  for (const name of ['play.mjs', 'boot_web.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mod_browser.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs']) {
+  for (const name of ['play.mjs', 'boot_web.mjs', 'gamepad.mjs', 'menu_overlay.mjs', 'zip.mjs', 'mod_browser.mjs', 'mods.mjs', 'touch_input.mjs', 'touch_game.mjs', 'touch_controls.mjs']) {
     writeFileSync(join(pageDir, name), 'export {};');
   }
   return { inst, bundle, mod, segs, web: pageDir, instFiles, modFiles, segsBytes };

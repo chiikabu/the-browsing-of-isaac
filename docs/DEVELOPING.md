@@ -63,6 +63,16 @@ frames by `touch_input.mjs`.
 - Rumble comes from the game itself (screen shakes and taking damage) and follows
   the RUMBLE option.
 
+### Controllers
+
+The game polls XInput; `host_shims_xinput.c` provides `XInput1_4.dll`'s
+`XInputGetState`, `XInputGetCapabilities` and `XInputSetState`, and asks the page
+(`gamepad.mjs`), which reads the browser's Gamepad API: the first four pads in
+the browser's order are slots 0..3, the standard mapping laid out as XInput names
+it, rumble played on the pad's vibration actuator. The page's own menus (EDIT
+FILE, the mod browser) take the d-pad, A and B while they are open, and the game
+sees a resting pad meanwhile.
+
 ### Saves and mods
 
 - Saves and options live in IndexedDB and load before the engine starts.

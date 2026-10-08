@@ -56,6 +56,13 @@ Vibration follows the game's Rumble option.
 | <kbd>Esc</kbd> | Pause |
 | <kbd>F</kbd> | Fullscreen |
 
+## On a controller
+
+Plug in a controller (USB or Bluetooth), press any button so the browser sees it,
+and start the run with it: the game gives player one to whichever device starts
+the run. Buttons are the Xbox layout, sticks are analog, and rumble follows the
+game's Rumble option. On the MODS screen, <kbd>X</kbd> opens the mod browser.
+
 <p align="center"><img src="docs/media/menus.webp" width="640" alt="Loading, the title screen and the main menu"></p>
 
 ## Mods
