@@ -1156,6 +1156,34 @@ test('touch state rejects invalid gameplay and follows the native pause menu pre
     assert.equal(page.memoryReads.has(offset), false, `null owners are not dereferenced at ${offset.toString(16)}`);
 });
 
+test('touch state marks room and floor transitions inside a started run', async () => {
+  const { page, game } = await liveTouchPage();
+  for (const frame of [1, 2, 3]) {
+    page.words.set(game + 0x264f8, frame);
+    page.advance(frame);
+  }
+  let state = page.readTouchState();
+  assert.equal(state.running, true);
+  assert.equal(state.transit, false, 'a live room is not a transition');
+  page.words.set(game + 0x1b83c, 1);
+  state = page.readTouchState();
+  assert.equal(state.running, false, 'a room transition is not a playable room');
+  assert.equal(state.transit, true, 'a door transition inside a run');
+  page.words.set(game + 0x1b83c, 0);
+  page.words.set(game + 0x68d78, 2);
+  assert.equal(page.readTouchState().transit, true, 'a floor transition too');
+  page.modsMenu.open = true;
+  assert.equal(page.readTouchState().transit, false, 'a paper menu over the run is not a transition');
+  page.modsMenu.open = false;
+  page.words.set(game + 0x264f8, 0);
+  assert.equal(page.readTouchState().transit, false, 'nor is anything before the run has a logic frame');
+  page.words.set(game + 0x264f8, 3);
+  page.words.set(game + 0x68d78, 0);
+  state = page.readTouchState();
+  assert.equal(state.running, true, 'the next room is live again');
+  assert.equal(state.transit, false);
+});
+
 test('touch state routes paper menus without blocking and blocks the saves dialog', async () => {
   const { page, game } = await liveTouchPage();
   for (const frame of [1, 2, 3]) {

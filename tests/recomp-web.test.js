@@ -650,7 +650,7 @@ test('round 87: the credit is drawn on the menu paper and nowhere else', () => {
   // picture and the canvas fills it, so a percentage from the left edge is a
   // percentage into the game rather than into the letterbox around it.
   const ov = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
-  assert.match(ov, /const CREDIT_TEXT = 'ported by vun';/, 'the text');
+  assert.match(ov, /const CREDIT_TEXT = 'ported by shisa';/, 'the text');
   assert.match(ov, /creditEl\.id = 'credit';/, 'its own surface');
   assert.match(ov, /left:1%;bottom:1\.2%/, 'bottom-left');
   assert.match(ov, /const CREDIT_ON = new Set\(\[3, 7, 9, 10, 19\]\);/,

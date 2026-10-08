@@ -560,10 +560,14 @@ function readTouchState() {
   const paper = modsMenu.isOpen() ? 'mods' : editMenu.isOpen() ? 'edit-file' : null;
   const native = ready && !paper ? readReadyState() : null;
   const running = !!(native && native.run);
-  let paused = false, twins = false, better = false;
+  let paused = false, twins = false, better = false, transit = false;
   const G = window.isaacGuest;
   try {
     if (G) {
+      // A room or floor transition: the same two words readReadyState tests,
+      // inside a run that has started (logic frame nonzero).
+      const game = ready && !paper ? G.u32(0x00c71678) : 0;
+      transit = !running && !!game && G.u32(game + 0x264f8) > 0 && (G.u32(game + 0x1b83c) !== 0 || G.u32(game + 0x68d78) !== 0);
       // Same PE as readReadyState: 0x0095273f forms Manager+0x2a33c for
       // options loader 0x00924440. Its "JacobEsauControls" lookup at
       // 0x0092498f stores receiver+0x98 at 0x009249a9. Read the live option.
@@ -584,7 +588,7 @@ function readTouchState() {
       }
     }
   } catch { /* state can disappear while the native run is closing */ }
-  return { ready, running, paused, menu: paper || readMenuId(), twins, better,
+  return { ready, running, transit, paused, menu: paper || readMenuId(), twins, better,
     frame: window.isaacFrame || 0, blocked: !ready || $('saves').open };
 }
 let readyCandidate = null;

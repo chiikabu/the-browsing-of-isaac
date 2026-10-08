@@ -52,6 +52,16 @@ function hudLayout(offset) {
 
 const inside = (r, x, y, pad = 0) => !!r && x >= r.x - pad && x < r.x + r.w + pad && y >= r.y - pad && y < r.y + r.h + pad;
 
+// What the touch layer is for this frame. A room or floor transition reads as
+// "no run" for a few frames; a run that was being played stays 'game' through
+// it, so thumbs held while walking through a door keep working on the far side.
+export function touchMode(previous, { available, running, transit, paused, dead }) {
+  if (!available) return 'off';
+  if (paused || dead) return 'menu';
+  if (running || (transit && previous === 'game')) return 'game';
+  return 'menu';
+}
+
 export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, textEntry }) {
   const preference = new URLSearchParams(location.search).get('touch');
   if (preference === '0') return { destroy() {} };
@@ -582,12 +592,14 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     state = readState();
     const g = G();
     options = readOptions(g);
-    run = state.running ? readRun(g) : null;
+    // through a transition the bar keeps the last look at the run
+    const crossing = !state.running && !!state.transit && mode === 'game';
+    run = state.running ? readRun(g) : crossing ? run : null;
     menu = readMenu(g);
     // Every player dead is the death paper: a menu to tap, not a room to walk.
     const dead = !!run && run.players.length > 0 && run.players.every((p) => p.dead);
     const nextAvailable = enabled && !!state.ready && !state.blocked && !document.hidden && !blurred;
-    const nextMode = !nextAvailable ? 'off' : state.running && !state.paused && !dead ? 'game' : 'menu';
+    const nextMode = touchMode(mode, { available: nextAvailable, running: state.running, transit: state.transit, paused: state.paused, dead });
     if (nextMode !== mode || state.frame < previousFrame) {
       reset();
       mode = nextMode;

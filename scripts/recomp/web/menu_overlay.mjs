@@ -21,7 +21,7 @@
 
 const GAME_W = 480, GAME_H = 270, SCALE = 2;
 // the credit on the menu paper (round 87)
-const CREDIT_TEXT = 'ported by vun';
+const CREDIT_TEXT = 'ported by shisa';
 
 export function parseBmfont(buf) {
   const b = new Uint8Array(buf), dv = new DataView(buf);

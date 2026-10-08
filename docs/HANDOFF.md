@@ -182,7 +182,7 @@ REQUIRE emsdk on PATH:
   `tests/recomp-audio.test.js` 10 (the EM_JS bodies run in node against a
   fake AudioContext), selftest 316 (20 `audio:` checks on a fake clock).
 - **Round 87: the credit, and the page reading the engine's mind** (§21.103).
-  `ported by vun` in the game's own font, bottom-left of the menu paper, on that
+  `ported by shisa` in the game's own font, bottom-left of the menu paper, on that
   screen and nowhere else. The useful half is the mechanism: **a guest VA is a
   wasm address** (`isaac_g` is the identity), so `window.isaacGuest` lets the
   page read engine variables with no host call and no export -- through HEAPU8,

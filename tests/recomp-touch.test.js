@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTouchInput, stickKeys, twinAction } from '../scripts/recomp/web/touch_input.mjs';
+import { touchMode } from '../scripts/recomp/web/touch_controls.mjs';
 
 // The native poll drains every queued edge before sampling key state. A down/up
 // pair in one poll therefore cannot stand in for a usable game button press.
@@ -399,4 +400,17 @@ test('queued Ctrl swap after a twin chord rotates the remaining front pocket', (
   assert.deepEqual(h.players.map(player => player.hearts), [4, 3]);
   assert.deepEqual(h.players.map(player => player.charge), [8, 8]);
   assert.deepEqual(h.poll(), []);
+});
+
+test('a room transition keeps a played run in game mode, and only a played one', () => {
+  const live = { available: true, running: true, transit: false, paused: false, dead: false };
+  const crossing = { ...live, running: false, transit: true };
+  assert.equal(touchMode('menu', live), 'game');
+  assert.equal(touchMode('game', crossing), 'game', 'thumbs held through a door keep working');
+  assert.equal(touchMode('menu', crossing), 'menu', 'a transition does not start game mode from a menu');
+  assert.equal(touchMode('off', crossing), 'menu');
+  assert.equal(touchMode('game', { ...crossing, paused: true }), 'menu', 'the pause paper is a menu');
+  assert.equal(touchMode('game', { ...crossing, dead: true }), 'menu', 'the death paper is a menu');
+  assert.equal(touchMode('game', { ...crossing, transit: false }), 'menu', 'no run and no transition is a menu');
+  assert.equal(touchMode('game', { ...live, available: false }), 'off');
 });
