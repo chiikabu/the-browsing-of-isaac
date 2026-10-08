@@ -9,31 +9,30 @@ export function stickKeys(x, y, shooting = false) {
   return keys;
 }
 
-// Any-angle movement through eight keyboard directions. The game samples input
-// once per logic frame (30 a second, Game+0x264f8) and eases the player's
-// velocity toward it, so alternating between the two nearest directions in the
-// right proportion moves along the angle in between. A first-order sigma-delta
-// keeps the running error under half a frame; call step() once per logic frame.
+// Eight directions that stay put. A thumb resting near a sector edge must not
+// flick between a diagonal and its neighbour: Isaac's body and head would turn
+// on every flip. A direction is kept until the stick leaves its 45-degree sector
+// by `hold` degrees; the dead zone has the same give, in and out.
 const MOVE_KEYS = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
-export function createAnalogMove({ deadzone = 0.18, snap = 0.06 } = {}) {
-  let error = 0, last = -1;
+const FIRE_KEYS = [['right'], ['down', 'right'], ['down'], ['down', 'left'], ['left'], ['left', 'up'], ['up'], ['right', 'up']];
+export function createStickDirection({ shooting = false, deadzone = 0.2, release = 0.14, hold = 12 } = {}) {
+  const table = shooting ? FIRE_KEYS : MOVE_KEYS;
+  let current = -1;
   return {
-    reset() { error = 0; last = -1; },
-    // x right, y down, |(x, y)| <= 1 -> the movement keys for this logic frame
-    step(x, y) {
-      if (x * x + y * y <= deadzone * deadzone) { error = 0; last = -1; return []; }
-      let sector = Math.atan2(y, x) / (Math.PI / 4);
-      if (sector < 0) sector += 8;
-      const low = Math.floor(sector) % 8, high = (low + 1) % 8;
-      let frac = sector - Math.floor(sector);
-      if (frac < snap) frac = 0;
-      else if (frac > 1 - snap) frac = 1;
-      // A new sector pair keeps no debt from the old one.
-      if (last !== low) { error = 0; last = low; }
-      error += frac;
-      const pick = error >= 0.5 ? high : low;
-      if (pick === high) error -= 1;
-      return MOVE_KEYS[pick].slice();
+    reset() { current = -1; },
+    get sector() { return current; },
+    // x right, y down, |(x, y)| <= 1 -> the held keys
+    keys(x, y) {
+      const length = Math.hypot(x, y);
+      if (length <= (current < 0 ? deadzone : release)) { current = -1; return []; }
+      let angle = Math.atan2(y, x) * 180 / Math.PI;
+      if (angle < 0) angle += 360;
+      if (current >= 0) {
+        const off = Math.abs(((angle - current * 45) % 360 + 540) % 360 - 180);
+        if (off <= 22.5 + hold) return table[current].slice();
+      }
+      current = Math.round(angle / 45) % 8;
+      return table[current].slice();
     },
   };
 }

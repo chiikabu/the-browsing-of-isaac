@@ -674,7 +674,8 @@ test('round 87: the credit is drawn on the menu paper and nowhere else', () => {
   assert.match(play, /const MENU_MGR_PTR = 0x00c72a20, MENU_SCREEN_OFF = 0x40;/,
     'the manager pointer and the screen field');
   assert.ok(!/0x00c79970/.test(play), 'and not the word that merely correlated');
-  assert.match(play, /editMenu\.setScreen\(readMenuId\(\)\)/, 'and the credit follows it');
+  assert.match(play, /const screen = readMenuId\(\), view = menuView\(\)/, 'the screen, polled');
+  assert.match(play, /editMenu\.setScreen\(screen\);/, 'and the credit follows it');
   const boot = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
   assert.match(boot, /window\.isaacGuest = \{/, 'the page can read guest memory');
   // HEAPU32 is not exported by this build: touching it aborts the runtime

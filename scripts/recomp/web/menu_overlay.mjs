@@ -95,6 +95,8 @@ function menuAssets(opts) {
       A.atlas = tintAtlas(A.atlasImg, A.menu.colours.ink);
       A.atlasLight = tintAtlas(A.atlasImg, [140, 120, 120]);
       A.atlasWhite = tintAtlas(A.atlasImg, [255, 255, 255]);
+      // the hint papers' blank sheet (a build without it simply has no tags)
+      if (A.menu.widget) { try { A.widget = await fetchAsset(A.menu.widget, 'image'); } catch (e) { log(`[menu] ${e.message}`); } }
       st.ready = true;
       // the sounds decode lazily on the first open (the AudioContext exists once the engine runs)
       const ctx = opts.audioContext && opts.audioContext();
@@ -336,6 +338,41 @@ export function createEditFileMenu(opts) {
   };
 }
 
+// ---- a hint paper, like the game's own PRESS TAB TO ... papers ------------------
+// The blank widget paper the game's menus print their hints on (seedwidget.png),
+// with two lines of our own in the menu font. opts: { stage, assetsUrl, readAsset,
+// audioContext, log, at: [x, y] (game px), lines: () => [first, second] }.
+export function createMenuTag(opts) {
+  const M = menuAssets(opts);
+  const { A, load, measure, drawText } = M;
+  const { el, ctx } = M.surface(opts.stage, opts.id || 'menu-tag', GAME_W * SCALE, GAME_H * SCALE);
+  const st = { shown: false, key: '' };
+  const rect = () => { const [w, h] = A.menu && A.menu.rects.widget ? A.menu.rects.widget.slice(2) : [144, 96]; return { x: opts.at[0], y: opts.at[1], w, h }; };
+  const draw = () => {
+    if (!st.shown || !M.isReady() || !A.widget) { el.hidden = true; return; }
+    const lines = opts.lines(), key = lines.join('|');
+    el.hidden = false;
+    if (key === st.key) return;
+    st.key = key;
+    const [sx, sy, sw, sh] = A.menu.rects.widget, [x, y] = opts.at;
+    ctx.clearRect(0, 0, el.width, el.height);
+    ctx.drawImage(A.widget, sx, sy, sw, sh, x * SCALE, y * SCALE, sw * SCALE, sh * SCALE);
+    // the paper leans; the words sit in its middle, a line apart
+    const top = y + (sh - 8 - lines.length * 18) / 2;
+    lines.forEach((text, i) => drawText(ctx, text, x + (sw - 8 - measure(text)) / 2, top + i * 18, A.atlas));
+  };
+  return {
+    // the screen the engine is on; `when(id)` decides
+    setShown(on) {
+      st.shown = !!on;
+      if (st.shown && !M.isReady()) { load().then(draw).catch(() => {}); return; }
+      draw();
+    },
+    hit: (gx, gy) => st.shown && !el.hidden && gx >= rect().x && gx < rect().x + rect().w && gy >= rect().y && gy < rect().y + rect().h,
+    element: el,
+  };
+}
+
 // ---- a paper menu of arbitrary rows (round 76) --------------------------------
 // The mods menus use this. opts: { stage, assetsUrl, readAsset, audioContext,
 // log }. open(model, { onKey }) takes a function returning the model, so the
@@ -411,9 +448,47 @@ export function createPaperMenu(opts) {
     }
     const msg = st.model && st.model.message;
     const footY = py + panelH - TAIL - lh;
-    if (msg) drawText(g, clip(msg, PANEL_W - SIDE * 2), px + SIDE, footY - lh, A.atlas);
-    const hint = st.model && st.model.footer;
-    if (hint) drawText(g, clip(hint, PANEL_W - SIDE * 2), px + SIDE, footY, A.atlasLight);
+    // The two lines under the list: a message first, else the row's own words
+    // (a mod's description), else the footer hint.
+    const detail = rows[st.cursor] && rows[st.cursor].detail;
+    const lines = msg ? [msg, st.model.footer || ''] : detail ? wrap(detail, PANEL_W - SIDE * 2, 2) : ['', (st.model && st.model.footer) || ''];
+    if (lines[0]) drawText(g, clip(lines[0], PANEL_W - SIDE * 2), px + SIDE, footY - lh, msg ? A.atlas : A.atlasLight);
+    if (lines[1]) drawText(g, clip(lines[1], PANEL_W - SIDE * 2), px + SIDE, footY, A.atlasLight);
+    geom = { px, py, h: panelH, lh, rowsY: top, span, searchY: hasSearch ? top - lh : null };
+  };
+  let geom = null;
+  // Words into lines no wider than `width`; the last line ends in ... if the words run out of room.
+  const wrap = (text, width, max) => {
+    const words = String(text).toUpperCase().replace(/\s+/g, ' ').trim().split(' ');
+    const lines = [];
+    let line = '';
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word;
+      if (measure(next) <= width) { line = next; continue; }
+      if (line) lines.push(line);
+      line = word;
+      if (lines.length === max) break;
+    }
+    if (lines.length < max && line) lines.push(line);
+    if (lines.length === max && words.join(' ').length > lines.join(' ').length) lines[max - 1] = clip(lines[max - 1] + ' ...', width);
+    return lines.concat(['', '']).slice(0, max);
+  };
+  // Where a tap at game (x, y) lands: { row }, { search }, { outside } or {}.
+  const hit = (gx, gy) => {
+    if (!st.open || !st.model || !geom) return null;
+    if (gx < geom.px || gx >= geom.px + PANEL_W || gy < geom.py || gy >= geom.py + geom.h) return { outside: true };
+    if (geom.searchY !== null && gy >= geom.searchY && gy < geom.searchY + geom.lh) return { search: true };
+    const i = st.top + Math.floor((gy - geom.rowsY) / geom.lh);
+    if (gy >= geom.rowsY && i < Math.min(rowsOf().length, st.top + geom.span)) return { row: i };
+    return {};
+  };
+  // A tapped row: the first tap points at it, the second does it.
+  const tapRow = (i) => {
+    if (!st.open || !st.model) return;
+    const row = rowsOf()[i];
+    if (!row) return;
+    if (i !== st.cursor) { st.cursor = i; play('move'); redraw(); return; }
+    if (row.action) { play('select'); Promise.resolve(row.action()).then(redraw, redraw); }
   };
 
   const redraw = () => { st.model = st.get ? st.get() : st.model; draw(); };
@@ -452,7 +527,7 @@ export function createPaperMenu(opts) {
     return true;
   };
   return {
-    open, close, onKey, redraw,
+    open, close, onKey, redraw, hit, tapRow,
     isOpen: () => st.open,
     currentRow: () => rowsOf()[st.cursor] || null,
     cursor: () => st.cursor,

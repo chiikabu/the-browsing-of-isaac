@@ -1,25 +1,27 @@
 // touch_controls.mjs -- the phone's way into the game, with nothing on screen
 // that the game does not already show.
 //
-//   - Sticks appear where a thumb lands and fade when it lifts: the left half
-//     moves (any angle, touch_input.mjs createAnalogMove), the right half fires.
+//   - Sticks: the left half moves, the right half fires, eight directions that
+//     hold steady (touch_input.mjs createStickDirection). In landscape a stick
+//     appears where the thumb lands, stays put while it drags and fades when it
+//     lifts; in portrait both rest under the picture, always in view.
 //   - The game's own HUD is the button set: tap the minimap for the big map
-//     (hold to peek), the pause mark beside it pauses, the trinket and pocket
-//     corners swap on a tap and drop on a hold. Under the room, the mobile
-//     item bar: the active item with its charge, the pocket item and the bombs,
-//     drawn with the HUD's own art (page_assets.py build_hud). Tap to use; the
-//     small second item swaps.
+//     (hold to peek), the paper pause mark beside it pauses, the trinket and
+//     pocket corners swap or use on a tap and drop on a hold. Under the room,
+//     the mobile item bar, evenly spaced: the active item with its charge, the
+//     pocket item and the bomb with its count, drawn with the game's own art
+//     (page_assets.py build_hud). Tap to use; a small second item swaps.
 //   - Menus are tapped: rows, files, characters, the game's BACK/SELECT papers;
 //     a swipe steps the cursor, two fingers go back, so does Android's back.
 //   - The game's rumble (Options > RUMBLE) drives navigator.vibrate.
 //
 // Every action is one of the game's keyboard keys, paced on native frames by
 // touch_input.mjs. Guest state comes from touch_game.mjs, read-only.
-import { createTouchInput, stickKeys, twinAction, createAnalogMove } from './touch_input.mjs';
+import { createTouchInput, twinAction, createStickDirection } from './touch_input.mjs';
 import { parseBmfont } from './menu_overlay.mjs';
 import {
   GAME_W, GAME_H, MENU, POCKET_ACTIVE, POCKET_PILL, PLAYER_JACOB, PLAYER_ESAU, PLAYER_FORGOTTEN, PLAYER_SOUL,
-  readOptions, readRun, readMenu, createHapticDetector, hapticPattern,
+  readOptions, readRun, readMenu, readPause, createHapticDetector, hapticPattern,
 } from './touch_game.mjs';
 
 const STICK_RADIUS = 52;        // css px from the base to a full push
@@ -39,8 +41,9 @@ function hudLayout(offset) {
   const map = { x: right - 66, y: top, w: 66 + 20 * o, h: 56 };
   return {
     map,
-    pause: { x: map.x - 22, y: top + 2, w: 18, h: 18 },
-    twin: { x: map.x - 44, y: top + 2, w: 18, h: 18 },
+    // the paper marks are drawn at half their sprite's size: 26x25 game px
+    pause: { x: map.x - 29, y: top + 1, w: 26, h: 25 },
+    twin: { x: map.x - 57, y: top + 1, w: 26, h: 25 },
     active: { x: Math.max(0, left - 12), y: top, w: 52, h: 40 },
     trinket: { x: left + 4, y: GAME_H - 16 * o - 44, w: 56, h: 44 + 16 * o },
     pocket: { x: GAME_W - 16 * o - 56, y: GAME_H - 6 * o - 50, w: 56 + 16 * o, h: 50 + 6 * o },
@@ -49,7 +52,7 @@ function hudLayout(offset) {
 
 const inside = (r, x, y, pad = 0) => !!r && x >= r.x - pad && x < r.x + r.w + pad && y >= r.y - pad && y < r.y + r.h + pad;
 
-export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset }) {
+export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, textEntry }) {
   const preference = new URLSearchParams(location.search).get('touch');
   if (preference === '0') return { destroy() {} };
   const coarse = window.matchMedia('(pointer: coarse)');
@@ -86,6 +89,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   const keysInput = root.querySelector('.touch-keys');
   const sticks = Object.fromEntries([...root.querySelectorAll('.touch-stick')].map((el) => [el.dataset.stick, {
     el, knob: el.querySelector('.touch-stick-knob'), pointer: null, bx: 0, by: 0, x: 0, y: 0,
+    dir: createStickDirection({ shooting: el.dataset.stick === 'fire' }),
   }]));
 
   let state = readState();
@@ -93,11 +97,11 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   let available = false, blurred = false, destroyed = false, raf = 0, timer = 0, lastTick = 0;
   let mode = 'off';                 // off | game | menu
   let run = null, menu = { screen: -1 }, options = null, hudBox = hudLayout(0);
-  let mapLatched = false, logicFrame = -1, lastViewY = NaN, viewSettled = false;
+  let mapLatched = false, lastViewY = NaN, viewSettled = false;
   let fullscreenTried = false, backArmed = false;
   let nav = null;                   // a menu cursor walk in progress
+  let shownAt = 0, page = '';       // the frame the current menu or paper came up, and which
   const pointers = new Map();
-  const analog = createAnalogMove();
   const haptics = createHapticDetector();
   const input = createTouchInput({ readFrame: () => state.frame, emit });
   const gesture = () => { if (onGesture) onGesture(); };
@@ -121,7 +125,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     };
     try {
       const spec = JSON.parse(new TextDecoder().decode(await fetchBytes('hud.json')));
-      const names = { actives: spec.actives.sheet, pocket: spec.pocket.sheet, pickups: spec.pickups.sheet, chargebar: spec.chargebar.sheet, font: spec.font.png };
+      const names = { actives: spec.actives.sheet, pocket: spec.pocket.sheet, bombs: spec.bombs.sheet, marks: spec.marks.sheet, chargebar: spec.chargebar.sheet, font: spec.font.png };
       for (const [key, name] of Object.entries(names)) art.img[key] = await image(name);
       const fnt = await fetchBytes(spec.font.fnt);
       art.font = parseBmfont(fnt.buffer.slice(fnt.byteOffset, fnt.byteOffset + fnt.byteLength));
@@ -142,9 +146,11 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   // ---- the item bar -------------------------------------------------------------
   // Laid out in game px; drawn 4x into the canvas, shown at the stage's own
   // scale in landscape (it sits on the room's bottom wall, as on the mobile
-  // Rebirth) and larger in the portrait deck under the picture.
+  // Rebirth) and larger in the portrait deck under the picture. Every item gets
+  // the same slot, so the bar is evenly spaced whatever is in it; a second item
+  // (Schoolbag, a second pocket slot) is a small badge on its slot's corner.
   let barItems = [], barKey = '', barScale = 1, barRect = null;
-  const BAR_K = 4;
+  const BAR_K = 4, SLOT = 44, SLOT_H = 36, BADGE = 16;
 
   function players() {
     if (!run || !run.players.length) return [];
@@ -161,24 +167,35 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   function planBar() {
     const list = players(), items = [];
     const twins = list.length === 2;
-    let x = 0;
-    const push = (item) => { items.push({ ...item, x }); x += item.w + 6; };
+    let slot = 0;
+    const place = (item) => { items.push({ ...item, x: slot * SLOT, y: 0, w: SLOT, h: SLOT_H }); return slot++; };
+    const badge = (item, at, corner) => items.push({ ...item, badge: true, w: BADGE, h: BADGE,
+      x: at * SLOT + (corner === 'left' ? 1 : SLOT - BADGE - 1), y: 0 });
+    // A pocket active item lives in the active slots (2, then 3): no item there, nothing to show.
+    const shown = (slotItem, player, index) => slotItem && (slotItem.kind !== POCKET_ACTIVE || player.actives[index]);
     list.forEach((player, index) => {
       const who = twins ? (index === 0 ? 'jacob' : 'esau') : null;
+      // the twins share their bombs: one bomb, between the brothers
+      if (twins && index === 1 && (list[0].bombs > 0 || list[0].goldenBomb)) place({ kind: 'bomb', player: list[0] });
       const active = player.actives[0];
-      if (player.actives[1] && !twins) push({ kind: 'swap-active', w: 16, h: 16, y: 16, player, item: player.actives[1] });
-      if (active) push({ kind: 'active', w: active.max > 0 && !active.special ? 46 : 32, h: 32, y: 0, player, item: active, who });
-      const pocket = player.pockets[0];
-      if (pocket) push({ kind: 'pocket', w: 32, h: 32, y: 0, player, item: pocket, who,
-        active: pocket.kind === POCKET_ACTIVE ? player.actives[2] : null });
-      if (player.pockets[1] && !twins) push({ kind: 'swap-pocket', w: 16, h: 16, y: 16, player, item: player.pockets[1] });
-      if (index === 0) {
-        if (player.bombs > 0 || player.goldenBomb) push({ kind: 'bomb', w: 32, h: 16, y: 16, player });
+      if (active) {
+        const at = place({ kind: 'active', player, item: active, who });
+        if (player.actives[1] && !twins) badge({ kind: 'swap-active', player, item: player.actives[1] }, at, 'left');
       }
+      const pocket = player.pockets[0];
+      if (shown(pocket, player, 2)) {
+        const at = place({ kind: 'pocket', player, item: pocket, who, active: pocket.kind === POCKET_ACTIVE ? player.actives[2] : null });
+        const second = player.pockets[1];
+        if (shown(second, player, 3) && !twins) {
+          badge({ kind: 'swap-pocket', player, item: second, active: second.kind === POCKET_ACTIVE ? player.actives[3] : null }, at, 'right');
+        }
+      }
+      if (!twins && (player.bombs > 0 || player.goldenBomb)) place({ kind: 'bomb', player });
     });
-    return { items, width: Math.max(0, x - 6), height: 32 };
+    return { items, width: Math.max(0, slot * SLOT), height: SLOT_H };
   }
 
+  // The HUD's number font: white on a black edge, as the game draws its counts.
   function drawText(ctx, text, x, y, k) {
     const font = art.font, img = art.img.font;
     if (!font || !img) return;
@@ -189,6 +206,11 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       ctx.drawImage(img, c.x, c.y, c.w, c.h, (cx + c.xo) * k, (y + c.yo) * k, c.w * k, c.h * k);
       cx += c.xa;
     }
+  }
+  function textWidth(text) {
+    let w = 0;
+    for (const ch of text) { const c = art.font && art.font.chars.get(ch.codePointAt(0)); w += c ? c.xa : 4; }
+    return w;
   }
 
   function drawCollectible(ctx, id, x, y, size, k) {
@@ -225,7 +247,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     const plan = planBar();
     const pressed = new Set([...pointers.values()].filter((p) => p.barItem).map((p) => p.barItem.kind + (p.barItem.who || '')));
     const key = JSON.stringify([plan.items.map((i) => [i.kind, i.who, i.item && i.item.id, i.item && i.item.charge, i.item && i.item.kind,
-      i.player && i.player.bombs, i.player && i.player.goldenBomb, i.active && i.active.id]), [...pressed], barScale, portrait()]);
+      i.player && i.player.bombs, i.player && i.player.goldenBomb, i.active && i.active.id]), [...pressed], barScale, portrait(), mode]);
     if (key === barKey) return;
     barKey = key;
     barItems = plan.items;
@@ -238,20 +260,28 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (bar.hidden) return;
     for (const item of plan.items) {
       const down = pressed.has(item.kind + (item.who || '')) ? 1 : 0;
-      const x = item.x, y = item.y + down;
+      // a slot's art is centred in it; the active item leaves room for its charge
+      const cy = item.y + down + (SLOT_H - 32) / 2;
       if (item.kind === 'active') {
-        drawCollectible(barCtx, item.item.id, x, y, 32, k);
-        if (item.w > 32) drawChargeBar(barCtx, item.item, x + 31, y, k);
-      } else if (item.kind === 'swap-active') {
-        drawCollectible(barCtx, item.item.id, x, y, 16, k);
+        const charged = chargeFraction(item.item) !== null && !item.item.special;
+        const x = item.x + (SLOT - (charged ? 42 : 32)) / 2;
+        drawCollectible(barCtx, item.item.id, x, cy, 32, k);
+        if (charged) drawChargeBar(barCtx, item.item, x + 30, cy, k);
       } else if (item.kind === 'pocket') {
-        drawPocket(barCtx, item, 32, x, y, k);
-      } else if (item.kind === 'swap-pocket') {
-        drawPocket(barCtx, { item: item.item, active: item.item.kind === POCKET_ACTIVE ? item.player.actives[3] : null }, 16, x, y, k);
+        drawPocket(barCtx, item, 32, item.x + (SLOT - 32) / 2, cy, k);
       } else if (item.kind === 'bomb') {
-        const [sx, sy, sw, sh] = item.player.goldenBomb ? art.hud.pickups.goldenBomb : art.hud.pickups.bomb;
-        barCtx.drawImage(art.img.pickups, sx, sy, sw, sh, x * k, y * k, sw * k, sh * k);
-        drawText(barCtx, String(Math.min(99, item.player.bombs)).padStart(2, '0'), x + 16, y + 3, k);
+        // the bomb pickup itself, its count over its lower right as the mobile HUD shows it
+        const golden = item.player.goldenBomb && art.hud.bombs.goldenBomb;
+        const [sx, sy, sw, sh] = golden || art.hud.bombs.bomb;
+        const x = item.x + (SLOT - sw) / 2;
+        barCtx.drawImage(art.img.bombs, sx, sy, sw, sh, x * k, cy * k, sw * k, sh * k);
+        const count = String(Math.min(99, item.player.bombs)).padStart(2, '0');
+        // the pickup's bomb fills 6..26 x 8..30 of its cell: the count overlaps its lower right
+        drawText(barCtx, count, x + 26 - Math.round(textWidth(count) / 2), cy + 17, k);
+      } else if (item.kind === 'swap-active') {
+        drawCollectible(barCtx, item.item.id, item.x, item.y + down, BADGE, k);
+      } else if (item.kind === 'swap-pocket') {
+        drawPocket(barCtx, item, BADGE, item.x, item.y + down, k);
       }
     }
     positionBar(plan);
@@ -261,45 +291,48 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     const box = stageBox();
     if (portrait()) {
       const deckTop = box.y + box.h, deckH = innerHeight - deckTop;
-      barScale = Math.max(1.4, Math.min(2.6, Math.min(innerWidth / 230, deckH / 120)));
+      barScale = Math.max(1.4, Math.min(2.4, Math.min(innerWidth / 260, deckH / 140)));
       const w = plan.width * barScale, h = plan.height * barScale;
-      barRect = { x: (innerWidth - w) / 2, y: deckTop + Math.max(10, Math.min(28, deckH * 0.05)), w, h };
+      barRect = { x: (innerWidth - w) / 2, y: deckTop + Math.max(8, Math.min(24, deckH * 0.04)), w, h };
     } else {
       barScale = box.s;
       const w = plan.width * barScale, h = plan.height * barScale;
-      barRect = { x: box.x + (box.w - w) / 2, y: box.y + box.h - (plan.height + 5) * box.s, w, h };
+      barRect = { x: box.x + (box.w - w) / 2, y: box.y + box.h - (plan.height + 2) * box.s, w, h };
     }
     Object.assign(bar.style, { left: `${barRect.x}px`, top: `${barRect.y}px`, width: `${barRect.w}px`, height: `${barRect.h}px` });
+
+    restSticks();
   }
 
+  // Badges first: they sit on their slot's corner and take the taps there.
   function barHit(cx, cy) {
     if (bar.hidden || !barRect) return null;
-    const s = barScale, pad = Math.max(6, 22 - s * 6);
-    for (const item of barItems) {
-      const r = { x: barRect.x + item.x * s, y: barRect.y + item.y * s, w: item.w * s, h: item.h * s };
-      if (inside(r, cx, cy, pad)) return item;
-    }
+    const s = barScale, pad = Math.max(4, 16 - s * 4);
+    const rect = (item) => ({ x: barRect.x + item.x * s, y: barRect.y + item.y * s, w: item.w * s, h: item.h * s });
+    for (const item of barItems) if (item.badge && inside(rect(item), cx, cy, pad / 2)) return item;
+    for (const item of barItems) if (!item.badge && inside(rect(item), cx, cy, pad)) return item;
     return null;
   }
 
   // ---- the HUD marks the game does not draw: pause, and the twins' freeze ----
+  // Cut from the pause screen's own paper buttons (hud-marks.png) and drawn at
+  // half their size, one canvas pixel to a sprite pixel: the overlay is 2x.
+  let hudKey = '';
   function drawHud() {
+    const twin = mode === 'game' ? twinRole() : null;
+    const key = `${mode}:${art.ready}:${twin}:${pointersHold('pause')}:${pointersHold('twin')}:${hudBox.pause.x}:${hudBox.pause.y}`;
+    if (key === hudKey) return;
+    hudKey = key;
     hudCtx.clearRect(0, 0, hud.width, hud.height);
-    if (mode !== 'game') return;
-    const k = 2, p = hudBox.pause;
-    // a scrap of paper with two strokes, in the HUD's black outline
-    const px = (x, y, w, h, colour) => { hudCtx.fillStyle = colour; hudCtx.fillRect((p.x + x) * k, (p.y + y) * k, w * k, h * k); };
-    px(2, 1, 12, 14, '#000'); px(1, 2, 14, 12, '#000');
-    px(2, 2, 12, 12, '#d9cbb0'); px(3, 13, 11, 1, '#b3a184');
-    px(5, 4, 2, 8, '#2a211b'); px(9, 4, 2, 8, '#2a211b');
-    const twin = twinRole();
-    if (twin) {
-      const t = hudBox.twin, cx = (t.x + 8) * k, cy = (t.y + 8) * k;
-      hudCtx.fillStyle = '#000'; hudCtx.beginPath(); hudCtx.arc(cx, cy, 7.5 * k, 0, Math.PI * 2); hudCtx.fill();
-      hudCtx.fillStyle = pointersHold('twin') ? '#f1e5c8' : '#d9cbb0'; hudCtx.beginPath(); hudCtx.arc(cx, cy, 6.5 * k, 0, Math.PI * 2); hudCtx.fill();
-      hudCtx.fillStyle = '#2a211b';
-      hudCtx.fillRect(cx - 4 * k, cy - 2 * k, 3 * k, 4 * k); hudCtx.fillRect(cx + 1 * k, cy - 2 * k, 3 * k, 4 * k);
-    }
+    if (mode !== 'game' || !art.ready) return;
+    const draw = (name, at) => {
+      const cell = art.hud.marks[name];
+      if (!cell) return;
+      const [sx, sy, sw, sh] = cell, down = pointersHold(name) ? 2 : 0;
+      hudCtx.drawImage(art.img.marks, sx, sy, sw, sh, Math.round(at.x * 2), Math.round(at.y * 2) + down, sw, sh);
+    };
+    draw('pause', hudBox.pause);
+    if (twin) draw('twin', hudBox.twin);
   }
   const pointersHold = (kind) => [...pointers.values()].some((p) => p.hot === kind);
   function twinRole() {
@@ -311,14 +344,19 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     return null;
   }
 
-  function hotspotAt(gx, gy) {
-    const list = players(), main = list[0];
-    if (inside(hudBox.pause, gx, gy, 6)) return 'pause';
-    if (twinRole() && inside(hudBox.twin, gx, gy, 5)) return 'twin';
+  // The small marks grow to a thumb's width (44 css px) however small the picture.
+  function hotspotAt(gx, gy, scale) {
+    const list = players(), main = list[0], twins = list.length === 2;
+    const grow = (r) => Math.max(4, (44 / scale - Math.min(r.w, r.h)) / 2);
+    const marks = [['pause', hudBox.pause], ...(twinRole() ? [['twin', hudBox.twin]] : [])]
+      .filter(([, r]) => inside(r, gx, gy, grow(r)))
+      .sort((a, b) => Math.hypot(a[1].x + a[1].w / 2 - gx, a[1].y + a[1].h / 2 - gy) - Math.hypot(b[1].x + b[1].w / 2 - gx, b[1].y + b[1].h / 2 - gy));
+    if (marks.length) return marks[0][0];
     if (inside(hudBox.map, gx, gy, 4)) return 'map';
-    if (main && main.actives[0] && inside(hudBox.active, gx, gy)) return 'active';
+    // The twins' items are each brother's own: the bar names the actor, a corner cannot.
+    if (main && !twins && main.actives[0] && inside(hudBox.active, gx, gy)) return 'active';
     if (main && (main.trinkets[0] || main.trinkets[1]) && inside(hudBox.trinket, gx, gy)) return 'trinket';
-    if (main && main.pockets[0] && inside(hudBox.pocket, gx, gy)) return 'pocket';
+    if (main && !twins && main.pockets[0] && inside(hudBox.pocket, gx, gy)) return 'pocket';
     return null;
   }
 
@@ -352,33 +390,45 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   }
 
   // ---- sticks -------------------------------------------------------------------
-  function showStick(stick, on) {
-    stick.el.classList.toggle('is-on', on);
-    if (!on) stick.knob.style.transform = 'translate(-50%, -50%)';
+  // A stick's base stays where it was put while the thumb drags; the knob
+  // follows to the rim and no further. Landscape puts the base under the thumb
+  // and fades it on lift. Portrait keeps both resting under the picture, in
+  // view all the time; a thumb anywhere on that side steers from the rest.
+  const resting = () => mode === 'game' && portrait();
+  function stickHome(stick) {
+    const box = stageBox(), deckTop = box.y + box.h, deckH = innerHeight - deckTop;
+    const below = barRect && !bar.hidden ? barRect.y + barRect.h : deckTop;
+    const y = Math.min(innerHeight - STICK_RADIUS - 28, Math.max(below + STICK_RADIUS + 36, deckTop + deckH * 0.6));
+    return { x: innerWidth * (stick === sticks.move ? 0.27 : 0.73), y };
+  }
+  function showStick(stick, held) {
+    stick.el.classList.toggle('is-held', held);
+    stick.el.classList.toggle('is-shown', held || resting());
   }
   function placeStick(stick, x, y) {
     stick.bx = x; stick.by = y;
     stick.el.style.transform = `translate(${x}px, ${y}px)`;
   }
+  const setKnob = (stick, dx, dy) => { stick.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`; };
   function moveStick(stick, cx, cy) {
     let dx = cx - stick.bx, dy = cy - stick.by;
     const length = Math.hypot(dx, dy);
-    // Floating: past the rim the base follows the thumb, so reversing is instant.
-    if (length > STICK_RADIUS) {
-      const pull = (length - STICK_RADIUS) / length;
-      placeStick(stick, stick.bx + dx * pull, stick.by + dy * pull);
-      dx = cx - stick.bx; dy = cy - stick.by;
-    }
+    if (length > STICK_RADIUS) { dx *= STICK_RADIUS / length; dy *= STICK_RADIUS / length; }
     stick.x = dx / STICK_RADIUS; stick.y = dy / STICK_RADIUS;
-    stick.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
-    if (stick === sticks.fire) input.setKeys('touch:fire', stickKeys(stick.x, stick.y, true));
+    setKnob(stick, dx, dy);
+    input.setKeys(stick === sticks.fire ? 'touch:fire' : 'touch:move', stick.dir.keys(stick.x, stick.y));
+  }
+  function restStick(stick) {
+    if (resting()) { const home = stickHome(stick); placeStick(stick, home.x, home.y); setKnob(stick, 0, 0); }
+    showStick(stick, false);
   }
   function releaseStick(stick) {
     stick.pointer = null; stick.x = stick.y = 0;
-    if (stick === sticks.fire) input.release('touch:fire');
-    else { analog.reset(); input.release('touch:move'); }
-    showStick(stick, false);
+    stick.dir.reset();
+    input.release(stick === sticks.fire ? 'touch:fire' : 'touch:move');
+    restStick(stick);
   }
+  const restSticks = () => { for (const stick of Object.values(sticks)) if (stick.pointer === null) restStick(stick); };
 
   // ---- menus ---------------------------------------------------------------------
   // A tap names a target; the cursor is walked to it one key at a time, each
@@ -392,6 +442,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (menu.screen !== nav.screen) { nav = null; return; }
     const cursor = nav.read(menu);
     if (cursor === nav.target) {
+      // A paper still sliding in, or a cursor that just moved, ignores a confirm.
+      if (nav.confirm && (state.frame < shownAt + 32 || (nav.presses && state.frame < nav.moved + 12))) return;
       if (nav.confirm) input.tap('touch:menu', nav.confirm);
       nav = null;
       return;
@@ -403,22 +455,26 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     // disabled (CONTINUE with no run saved). Stop where the game put it.
     if (!key || key === OPPOSITE[nav.lastKey]) { nav = null; return; }
     input.tap('touch:menu', key);
-    nav.presses++; nav.last = cursor; nav.lastKey = key; nav.wait = state.frame + 10;
+    nav.presses++; nav.last = cursor; nav.lastKey = key; nav.wait = state.frame + 10; nav.moved = state.frame;
   }
   const upDown = (cursor, target) => (cursor > target ? 'up' : 'down');
+  // Confirm in place, once the paper has settled.
+  const confirm = (key = 'enter') => walk(menu.screen, () => 0, 0, () => null, key);
   const PAPER_BACK = { x: 0, y: 200, w: 76, h: 70 }, PAPER_SELECT = { x: 392, y: 192, w: 88, h: 78 };
 
   // A tap at game (x, y) on the current screen -> handled?
   function menuTap(gx, gy) {
     const screen = menu.screen;
     if (state.paused && state.running) return pauseTap(gx, gy);
+    // In a run the menu manager still names the last menu screen: only the pause is mapped.
+    if (state.running) return false;
     if (typeof state.menu === 'string') return false;            // the page's own paper menus: generic
     if (!viewSettled) return true;                              // the menu camera is still travelling
     switch (screen) {
-      case MENU.TITLE: input.tap('touch:menu', 'enter'); return true;
+      case MENU.TITLE: confirm(); return true;
       case MENU.SAVES: {
         if (inside(PAPER_BACK, gx, gy)) { input.tap('touch:menu', 'escape'); return true; }
-        if (inside(PAPER_SELECT, gx, gy)) { input.tap('touch:menu', 'enter'); return true; }
+        if (inside(PAPER_SELECT, gx, gy)) { confirm(); return true; }
         const files = [[35, 160], [175, 305], [318, 445]];
         let target = files.findIndex(([a, b]) => gx >= a && gx < b && gy >= 25 && gy < 215);
         if (target < 0 && gx >= 110 && gx < 360 && gy >= 222 && gy < 268) target = 3;
@@ -444,19 +500,30 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
         if (row < 0 || row > 22) return true;
         if (row !== menu.cursor) { walk(screen, (m) => m.cursor, row, upDown, null); return true; }
         // The selected row: CONTROLS opens, any other value steps left or right.
-        if (row === 0) input.tap('touch:menu', 'enter');
+        if (row === 0) confirm();
         else input.tap('touch:menu', gx < 262 ? 'left' : 'right');
         return true;
       }
       case MENU.CHARACTER: {
-        if (gx >= 340 && gx < 475 && gy >= 30 && gy < 105) { input.tap('touch:menu', 'tab'); return true; }
+        // The seed paper: a tap on it brings the keyboard back, anywhere else cancels.
+        if (seedEntryOpen()) {
+          if (gx >= 140 && gx < 320 && gy < 140) summonKeyboard();
+          else input.tap('touch:menu', 'escape');
+          return true;
+        }
+        if (gx >= 340 && gx < 475 && gy >= 30 && gy < 105) {
+          input.tap('touch:menu', 'tab');
+          // A phone shows its keyboard only for a focus made inside the tap.
+          summonKeyboard();
+          return true;
+        }
         if (gx >= 350 && gx < 480 && gy >= 112 && gy < 200) {
           const target = Math.max(0, Math.min(3, Math.round((gy - 136) / 21)));
-          walk(screen, () => readDifficulty(), target, upDown, null);
+          walk(screen, (m) => m.difficulty, target, upDown, null);
           return true;
         }
         if (gx < 120 && gy >= 205) { input.tap('touch:menu', 'escape'); return true; }
-        if (gx >= 205 && gx < 275 && gy >= 60 && gy < 175) { input.tap('touch:menu', 'enter'); return true; }
+        if (gx >= 205 && gx < 275 && gy >= 60 && gy < 175) { confirm(); return true; }
         if (gx >= 120 && gx < 205 && gy >= 40 && gy < 200) { input.tap('touch:menu', 'left'); return true; }
         if (gx >= 275 && gx < 350 && gy >= 40 && gy < 200) { input.tap('touch:menu', 'right'); return true; }
         return true;
@@ -464,33 +531,38 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     }
     return false;
   }
-  function readDifficulty() {
-    const g = G();
-    try { const m = g.u32(0x00c72a20); return m ? g.u32(m + 0x153c) | 0 : -1; } catch { return -1; }
-  }
+  // The pause paper (state 1) sits at the bottom centre: OPTIONS, MY STUFF!,
+  // RESUME GAME, EXIT GAME. Its options (state 2) are a second paper whose rows
+  // are 23 px apart under a scroll the game eases. A tap on the room goes back.
   function pauseTap(gx, gy) {
-    // The pause paper sits at the bottom centre: OPTIONS, MY STUFF!, RESUME GAME,
-    // EXIT GAME (cursor 0..3 at Game+0x23a7c). A tap on the room resumes.
-    if (gx < 165 || gx >= 340 || gy < 172) { input.tap('touch:menu', 'escape'); return true; }
+    const pause = readPause(G());
+    if (!pause) { confirm(); return true; }
+    if (pause.state === 2) {
+      if (gx < 135 || gx >= 350) { input.tap('touch:menu', 'escape'); return true; }
+      const row = Math.round((gy - 72 - pause.optionsScroll) / 23);
+      if (row < 0) return true;
+      if (row !== pause.optionsCursor) {
+        walk(menu.screen, () => { const p = readPause(G()); return p ? p.optionsCursor : -1; }, row, upDown, null);
+        return true;
+      }
+      if (row === 0) confirm();                                  // CHANGE CONTROLLER
+      else input.tap('touch:menu', gx < 262 ? 'left' : 'right');
+      return true;
+    }
+    if (pause.state !== 1 || gx < 165 || gx >= 340 || gy < 172) { input.tap('touch:menu', 'escape'); return true; }
     const stops = [188, 208, 226, 245];
     const target = stops.findIndex((y) => Math.abs(gy - y) <= 10);
-    if (target < 0) return true;
-    const read = () => readPauseCursor();
-    if (read() < 0) { input.tap('touch:menu', 'enter'); return true; }
-    walk(menu.screen, read, target, upDown, 'enter');
+    if (target >= 0) walk(menu.screen, () => { const p = readPause(G()); return p ? p.cursor : -1; }, target, upDown, 'enter');
     return true;
-  }
-  function readPauseCursor() {
-    const g = G();
-    try { const game = g.u32(0x00c71678); return game ? g.u32(game + 0x23a7c) | 0 : -1; } catch { return -1; }
   }
 
   // ---- the soft keyboard for seeds -------------------------------------------------
-  function seedEntryOpen() {
-    if (menu.screen !== MENU.CHARACTER) return false;
-    const g = G();
-    try { const m = g.u32(0x00c72a20); return !!m && (g.u32(m + 0x1534) | 0) === 1; } catch { return false; }
+  let keyboardUntil = 0;
+  function summonKeyboard() {
+    keyboardUntil = performance.now() + 2000;      // the paper takes a moment to come up
+    keysInput.focus({ preventScroll: true });
   }
+  const seedEntryOpen = () => menu.screen === MENU.CHARACTER && !!menu.seedEntry && !state.running;
 
   // ---- state ---------------------------------------------------------------------------
   function reset() {
@@ -500,29 +572,36 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       try { if (root.hasPointerCapture(pointer.id)) root.releasePointerCapture(pointer.id); } catch { /* gone */ }
     }
     pointers.clear();
-    for (const stick of Object.values(sticks)) { stick.pointer = null; showStick(stick, false); }
-    analog.reset();
+    for (const stick of Object.values(sticks)) { stick.pointer = null; stick.dir.reset(); }
+    restSticks();
     mapLatched = false;
     barKey = '';
   }
   function refresh() {
     const previousFrame = state.frame;
     state = readState();
+    const g = G();
+    options = readOptions(g);
+    run = state.running ? readRun(g) : null;
+    menu = readMenu(g);
+    // Every player dead is the death paper: a menu to tap, not a room to walk.
+    const dead = !!run && run.players.length > 0 && run.players.every((p) => p.dead);
     const nextAvailable = enabled && !!state.ready && !state.blocked && !document.hidden && !blurred;
-    const nextMode = !nextAvailable ? 'off' : state.running && !state.paused ? 'game' : 'menu';
+    const nextMode = !nextAvailable ? 'off' : state.running && !state.paused && !dead ? 'game' : 'menu';
     if (nextMode !== mode || state.frame < previousFrame) {
       reset();
       mode = nextMode;
       root.dataset.mode = mode;
+      shownAt = state.frame;
+      restSticks();
     }
     available = nextAvailable;
     root.hidden = !available;
     document.documentElement.classList.toggle('isaac-touch', enabled);
     document.documentElement.classList.toggle('isaac-touch-ready', enabled && !!state.ready);
-    const g = G();
-    options = readOptions(g);
-    run = state.running ? readRun(g) : null;
-    menu = readMenu(g);
+    const pause = state.paused && state.running ? readPause(g) : null;
+    const nextPage = `${mode}:${menu.screen}:${pause ? pause.state : ''}:${dead}`;
+    if (nextPage !== page) { page = nextPage; shownAt = state.frame; }
     viewSettled = menu.viewY === lastViewY;
     lastViewY = menu.viewY;
     hudBox = hudLayout(options ? options.hudOffset : 0);
@@ -533,16 +612,12 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     lastTick = performance.now();
     refresh();
     if (available) {
-      // Movement is re-chosen once per logic frame, not per presented frame.
-      if (mode === 'game' && run && run.frame !== logicFrame) {
-        logicFrame = run.frame;
-        const move = sticks.move;
-        if (move.pointer !== null) input.setKeys('touch:move', analog.step(move.x, move.y));
-      }
       if (mode === 'menu') stepWalk();
+      // The seed paper holds the keyboard up; a page's search keeps it while it is up.
       const typing = enabled && seedEntryOpen();
+      const searching = enabled && !!textEntry && textEntry();
       if (typing && document.activeElement !== keysInput) keysInput.focus({ preventScroll: true });
-      else if (!typing && document.activeElement === keysInput) keysInput.blur();
+      else if (!typing && !searching && document.activeElement === keysInput && performance.now() > keyboardUntil) keysInput.blur();
     }
     drawBar();
     drawHud();
@@ -590,7 +665,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     const box = stageBox();
     const [gx, gy] = toGame(box, cx, cy);
     const item = barHit(cx, cy);
-    const hot = item ? null : (gx >= 0 && gx < GAME_W && gy >= 0 && gy < GAME_H ? hotspotAt(gx, gy) : null);
+    const hot = item ? null : (gx >= 0 && gx < GAME_W && gy >= 0 && gy < GAME_H ? hotspotAt(gx, gy, box.s) : null);
     if (item || hot) {
       pointer.barItem = item;
       pointer.hot = item ? item.kind : hot;
@@ -611,17 +686,20 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (stick.pointer !== null) { pointers.delete(pointer.id); return; }
     stick.pointer = pointer.id;
     pointer.stick = stick;
-    const margin = STICK_RADIUS + 8;
-    placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
+    if (!resting()) {
+      const margin = STICK_RADIUS + 8;
+      placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
+    }
     showStick(stick, true);
     moveStick(stick, cx, cy);
-    if (stick === sticks.move) input.setKeys('touch:move', analog.step(stick.x, stick.y));
   }
+
   function pointerMove(event) {
     const pointer = pointers.get(event.pointerId);
     if (!pointer) return;
     event.preventDefault();
     event.stopPropagation();
+    refresh();                       // a tap paced from here counts from the current frame
     pointer.x = event.clientX; pointer.y = event.clientY;
     if (Math.hypot(pointer.x - pointer.sx, pointer.y - pointer.sy) > TAP_SLOP) pointer.moved = true;
     if (pointer.stick) { moveStick(pointer.stick, pointer.x, pointer.y); return; }
@@ -657,7 +735,11 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       if (pointer.second && !pointer.moved && performance.now() - pointer.at < 400) { nav = null; input.tap('touch:menu', 'escape'); return; }
       if (pointer.moved || pointer.swiped || pointers.size) return;
       const [gx, gy] = toGame(stageBox(), pointer.sx, pointer.sy);
-      if (!menuTap(gx, gy)) input.tap('touch:menu', 'enter');
+      // The page's own papers (the mods browser, EDIT FILE) answer first.
+      const page = onMenuTap ? onMenuTap(gx, gy) : false;
+      if (page === 'keyboard') { summonKeyboard(); return; }
+      if (page) return;
+      if (!menuTap(gx, gy)) confirm();
       return;
     }
     clearTimeout(pointer.holdTimer);
@@ -686,7 +768,8 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     for (const ch of text) input.tap('touch:keys', ch);
   });
   listen(keysInput, 'keydown', (event) => {
-    if (event.key === 'Enter') { event.preventDefault(); input.tap('touch:keys', 'enter'); }
+    // Done on a search puts the keyboard away; on the seed paper it confirms the seed.
+    if (event.key === 'Enter') { event.preventDefault(); if (seedEntryOpen()) input.tap('touch:keys', 'enter'); else keysInput.blur(); }
     else if (event.key === 'Backspace') { event.preventDefault(); input.tap('touch:keys', 'backspace'); }
   });
 

@@ -3,75 +3,48 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { createAnalogMove } from '../scripts/recomp/web/touch_input.mjs';
+import { createStickDirection } from '../scripts/recomp/web/touch_input.mjs';
 import {
-  readOptions, readRun, readMenu, createHapticDetector, hapticPattern, MENU, POCKET_CARD, POCKET_PILL, POCKET_ACTIVE,
+  readOptions, readRun, readMenu, readPause, createHapticDetector, hapticPattern, MENU, POCKET_CARD, POCKET_PILL, POCKET_ACTIVE,
 } from '../scripts/recomp/web/touch_game.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// ---- any-angle movement through eight keys ------------------------------------
-const VEC = { d: [1, 0], a: [-1, 0], s: [0, 1], w: [0, -1] };
-function direction(keys) {
-  let x = 0, y = 0;
-  for (const key of keys) { x += VEC[key][0]; y += VEC[key][1]; }
-  const n = Math.hypot(x, y);
-  return n ? [x / n, y / n] : [0, 0];
-}
+// ---- sticks: eight directions that hold steady ----------------------------------
+const at = (degrees, length = 1) => [Math.cos(degrees * Math.PI / 180) * length, Math.sin(degrees * Math.PI / 180) * length];
 
-test('analog movement holds the eight exact directions without alternating', () => {
-  const move = createAnalogMove();
+test('sticks give the eight keyboard directions, movement and firing', () => {
+  const expected = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
+  const fire = [['right'], ['down', 'right'], ['down'], ['down', 'left'], ['left'], ['left', 'up'], ['up'], ['right', 'up']];
   for (let i = 0; i < 8; i++) {
-    const angle = i * Math.PI / 4, first = move.step(Math.cos(angle), Math.sin(angle)).sort();
-    for (let frame = 0; frame < 20; frame++) assert.deepEqual(move.step(Math.cos(angle), Math.sin(angle)).sort(), first);
-    assert.equal(first.length, i % 2 ? 2 : 1);
+    assert.deepEqual(createStickDirection().keys(...at(i * 45)), expected[i]);
+    assert.deepEqual(createStickDirection({ shooting: true }).keys(...at(i * 45)), fire[i]);
   }
 });
 
-test('analog movement splits frames between neighbouring directions in proportion to the angle', () => {
-  for (const degrees of [10, 22.5, 30, 100, 200, 341]) {
-    const move = createAnalogMove(), angle = degrees * Math.PI / 180;
-    const sector = Math.floor(degrees / 45), frac = degrees / 45 - sector;
-    let high = 0;
-    const frames = 360;
-    for (let frame = 0; frame < frames; frame++) {
-      const keys = move.step(Math.cos(angle), Math.sin(angle));
-      const [x, y] = direction(keys), got = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-      if (Math.abs(got - ((sector + 1) * 45) % 360) < 1) high++;
-      else assert.ok(Math.abs(got - sector * 45) < 1, `${degrees} deg chose ${keys}`);
-    }
-    // The running error stays under one frame: the split is exact to a frame.
-    assert.ok(Math.abs(high - frac * frames) <= 1, `${degrees} deg: ${high} of ${frames} high frames`);
-  }
+test('a thumb wobbling across a sector edge keeps its direction: no diagonal jitter', () => {
+  // Resting on the up-right diagonal and drifting either side of its sector edges.
+  const stick = createStickDirection();
+  assert.deepEqual(stick.keys(...at(315)), ['d', 'w']);
+  for (const degrees of [292, 338, 289, 341, 300, 330, 291]) assert.deepEqual(stick.keys(...at(degrees)), ['d', 'w'], `${degrees} deg`);
+  // Clearly past the edge, the neighbour takes over, and holds the same way.
+  assert.deepEqual(stick.keys(...at(275)), ['w']);
+  assert.deepEqual(stick.keys(...at(300)), ['w']);
+  assert.deepEqual(stick.keys(...at(312)), ['d', 'w']);
 });
 
-test('analog movement eases a damped body onto the stick angle', () => {
-  // The player's velocity eases toward the sampled direction every logic frame.
-  for (const degrees of [15, 22.5, 37, 120, 290]) {
-    const move = createAnalogMove(), angle = degrees * Math.PI / 180;
-    let vx = 0, vy = 0;
-    const angles = [];
-    for (let frame = 0; frame < 120; frame++) {
-      const [x, y] = direction(move.step(Math.cos(angle), Math.sin(angle)));
-      vx = vx * 0.7 + x * 0.3; vy = vy * 0.7 + y * 0.3;
-      if (frame >= 30) angles.push(Math.atan2(vy, vx));
-    }
-    const mean = Math.atan2(angles.reduce((s, a) => s + Math.sin(a), 0), angles.reduce((s, a) => s + Math.cos(a), 0));
-    const error = Math.abs(((mean - angle) * 180 / Math.PI + 540) % 360 - 180);
-    assert.ok(error < 1.5, `${degrees} deg drifted ${error.toFixed(2)} deg`);
-    // An 8-way snap would sit up to 22.5 degrees off; the wobble stays small.
-    const wobble = Math.max(...angles.map((a) => Math.abs(((a - angle) * 180 / Math.PI + 540) % 360 - 180)));
-    assert.ok(wobble < 12, `${degrees} deg wobbled ${wobble.toFixed(2)} deg`);
-  }
-});
-
-test('analog movement has a radial dead zone and snaps near-exact angles', () => {
-  const move = createAnalogMove();
-  assert.deepEqual(move.step(0, 0), []);
-  assert.deepEqual(move.step(0.12, -0.12), []);
-  assert.deepEqual(move.step(0.19, 0), ['d']);
-  const nearly = 2 * Math.PI / 180;
-  for (let frame = 0; frame < 90; frame++) assert.deepEqual(move.step(Math.cos(nearly), Math.sin(nearly)), ['d']);
+test('the dead zone lets go later than it catches', () => {
+  const stick = createStickDirection();
+  assert.deepEqual(stick.keys(0, 0), []);
+  assert.deepEqual(stick.keys(...at(0, 0.19)), []);
+  assert.deepEqual(stick.keys(...at(0, 0.21)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.16)), ['d']);
+  assert.deepEqual(stick.keys(...at(0, 0.13)), []);
+  // held, 120 degrees stays down; released, a fresh push takes the nearest sector
+  assert.deepEqual(stick.keys(...at(100)), ['s']);
+  assert.deepEqual(stick.keys(...at(120)), ['s']);
+  stick.reset();
+  assert.deepEqual(stick.keys(...at(120)), ['a', 's']);
 });
 
 // ---- guest memory -----------------------------------------------------------------
@@ -134,6 +107,13 @@ test('the run reader returns the HUD the item bar draws', () => {
   assert.deepEqual(p.pockets, [{ id: 26, kind: POCKET_CARD }, { id: 2051, kind: POCKET_PILL }, { id: 0, kind: POCKET_ACTIVE }, null]);
   assert.deepEqual(p.trinkets, [2, 0]);
   assert.equal(p.collectibles, 4);
+  assert.equal(p.dead, false);
+});
+
+test('a dead player is reported, so the touch layer treats the death paper as a menu', () => {
+  const { G, putByte, player } = fixtureRun();
+  putByte(player + 0x173, 1);
+  assert.equal(readRun(G).players[0].dead, true);
 });
 
 test('the readers survive a missing game, a hostile vector and a faulting accessor', () => {
@@ -163,7 +143,21 @@ test('the menu reader reports each screen with the cursor measured for it', () =
     assert.deepEqual(readMenu(m.G), { screen, viewY: -1180, cursor });
   }
   m.put(menu + 0x40, MENU.CHARACTER);
-  assert.deepEqual(readMenu(m.G), { screen: MENU.CHARACTER, viewY: -1180 });
+  m.put(menu + 0x1534, 1); m.put(menu + 0x153c, 2); m.put(menu + 0x1544, 9);
+  assert.deepEqual(readMenu(m.G), { screen: MENU.CHARACTER, viewY: -1180, cursor: 9, difficulty: 2, seedEntry: true });
+  m.put(menu + 0x1534, 4);                         // turning to the tainted side is not the seed paper
+  assert.equal(readMenu(m.G).seedEntry, false);
+  m.put(menu + 0x40, MENU.STATS);
+  assert.deepEqual(readMenu(m.G), { screen: MENU.STATS, viewY: -1180 });
+});
+
+test('the pause reader reports the paper, its options cursor and the eased scroll', () => {
+  const { G, put, putFloat, game } = fixtureRun();
+  put(game + 0x23a74, 2); put(game + 0x23a7c, 3); put(game + 0x2402c, 6); putFloat(game + 0x2403c, -44.5);
+  assert.deepEqual(readPause(G), { state: 2, cursor: 3, optionsCursor: 6, optionsScroll: -44.5 });
+  put(game + 0x2403c, 0x7fc00000);                 // a NaN scroll is no scroll
+  assert.equal(readPause(G).optionsScroll, 0);
+  assert.equal(readPause(memory().G), null);
 });
 
 // ---- haptics --------------------------------------------------------------------------
@@ -173,7 +167,10 @@ test('rumble events follow the game: screen shakes, hits and new items, behind t
   assert.deepEqual(detector.update(sample(10, 0, 3)), []);              // the first look sets the baseline
   assert.deepEqual(detector.update(sample(9, 0, 3)), []);               // a shake counting down
   assert.deepEqual(detector.update(sample(20, 0, 3)), [{ kind: 'shake', strength: 20 }]);
+  // Two presented frames read one logic frame: the same sample is not a second event.
+  assert.deepEqual(detector.update(sample(20, 0, 3)), []);
   assert.deepEqual(detector.update(sample(19, 60, 3)), [{ kind: 'damage', strength: 60 }]);
+  assert.deepEqual(detector.update(sample(19, 60, 3)), []);
   assert.deepEqual(detector.update(sample(18, 59, 4)), [{ kind: 'item', strength: 1 }]);
   assert.deepEqual(detector.update(sample(30, 90, 5, false)), []);      // RUMBLE off: nothing
   assert.deepEqual(detector.update(sample(29, 89, 5)), []);             // and no replay when it comes back on

@@ -482,6 +482,7 @@ async function loadingPage(search = '', {
     requestAnimationFrame: (fn) => frames.push(fn),
     setInterval: (fn, ms) => { intervals.push({ fn, ms, next: now + ms }); },
     createEditFileMenu: () => editMenu, createPaperMenu: () => ({}), createModsMenu: () => modsMenu,
+    createMenuTag: () => ({ setShown() {}, hit: () => false }),
     createTouchControls: ({ readState }) => { readTouchState = readState; return { destroy() {} }; },
   };
   const source = readFileSync(join(web, 'play.mjs'), 'utf8')

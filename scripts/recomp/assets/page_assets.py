@@ -44,6 +44,7 @@ EXTRACT = {  # archive key -> page-assets file name
     FONT_FNT: "teammeatfont16bold.fnt",
     FONT_PNG: "teammeatfont16bold_0.png",
     "resources/gfx/ui/main menu/cursor.png": "cursor.png",
+    "resources/gfx/ui/main menu/seedwidget.png": "seedwidget.png",
     "resources/sfx/V2/Menu_Scroll.wav": "menu_scroll.wav",
     "resources/sfx/V2/Menu_NoteAppear.wav": "menu_noteappear.wav",
     "resources/sfx/V2/Menu_NoteHide.wav": "menu_notehide.wav",
@@ -180,12 +181,11 @@ def patch_sheet(sheet_png: bytes, fnt: bytes, atlas_png: bytes) -> tuple[bytes, 
 # active item with its charge bar, the pocket item, the bombs -- with the art the
 # game's HUD draws them with: each pocket pickup's own "HUD" animation (a frame
 # of ui/ui_cardspills.png), the collectible's sprite, ui_chargebar's segments,
-# hudpickups' bomb and the HUD's own number font. Resolved here, at build time,
+# the bomb pickup and the HUD's own number font. Resolved here, at build time,
 # in the archive order the engine mounts them (afterbirthp.a wins).
 HUD_ARCHIVES = ("afterbirthp.a", "afterbirth.a", "graphics.a", "config.a", "fonts.a", "animations.a")
 HUD_FILES = {  # archive key -> page-assets file name
     "resources/gfx/ui/ui_cardspills.png": "hud-pocket.png",
-    "resources/gfx/ui/hudpickups.png": "hud-pickups.png",
     "resources/gfx/ui/ui_chargebar.png": "hud-chargebar.png",
     "resources/font/pftempestasevencondensed.fnt": "hud-font.fnt",
     "resources/font/pftempestasevencondensed_0.png": "hud-font_0.png",
@@ -210,25 +210,63 @@ def _hud_reader(bundle_dir: str):
     return read, opened
 
 
-def _anm2_hud_frame(anm2: bytes, sheet_suffix: str = "ui_cardspills.png") -> list[int] | None:
-    """The first frame of an anm2's HUD animation on the layer drawing `sheet_suffix`:
-    [x, y, w, h, pivot_x, pivot_y] in that sheet."""
+def _anm2_frame(anm2: bytes, anim_name: str, sheet_suffix: str | None = None):
+    """The first visible frame of `anim_name` on the first layer drawing `sheet_suffix`
+    (any sheet when None): ([x, y, w, h, pivot_x, pivot_y], the sheet's path as written)."""
     import xml.etree.ElementTree as ET
     root = ET.fromstring(anm2)
-    sheets = {s.get("Id"): (s.get("Path") or "").replace("\\", "/").lower() for s in root.iter("Spritesheet")}
+    sheets = {s.get("Id"): (s.get("Path") or "").replace("\\", "/") for s in root.iter("Spritesheet")}
     layers = {l.get("Id"): sheets.get(l.get("SpritesheetId"), "") for l in root.iter("Layer")}
     for anim in root.iter("Animation"):
-        if anim.get("Name") != "HUD":
+        if anim.get("Name") != anim_name:
             continue
         las = anim.find("LayerAnimations")
         for la in (list(las) if las is not None else []):
-            if not layers.get(la.get("LayerId"), "").endswith(sheet_suffix):
+            sheet = layers.get(la.get("LayerId"), "")
+            if sheet_suffix is not None and not sheet.lower().endswith(sheet_suffix):
                 continue
             for f in la.iter("Frame"):
                 if f.get("Visible", "true") != "true":
                     continue
-                return [int(float(f.get(k, "0"))) for k in ("XCrop", "YCrop", "Width", "Height", "XPivot", "YPivot")]
-    return None
+                return [int(float(f.get(k, "0"))) for k in ("XCrop", "YCrop", "Width", "Height", "XPivot", "YPivot")], sheet
+    return None, None
+
+
+def _anm2_hud_frame(anm2: bytes, sheet_suffix: str = "ui_cardspills.png") -> list[int] | None:
+    """The first frame of an anm2's HUD animation on the layer drawing `sheet_suffix`:
+    [x, y, w, h, pivot_x, pivot_y] in that sheet."""
+    return _anm2_frame(anm2, "HUD", sheet_suffix)[0]
+
+
+# The pause screen's paper buttons (pausescreen.png: KICK at 245,168 and INVITE at
+# 245,103, 52x49 each) are the touch layer's pause and twin marks: the same paper,
+# outline and shading, their words replaced by a glyph in the same ink.
+PAPER_MARKS = {"pause": (245, 168, 52, 49), "twin": (245, 103, 52, 49)}
+PAPER, PAPER_INK = (199, 178, 154), (54, 47, 45)
+
+
+def _paper_mark(sheet, box, glyph: str):
+    from PIL import ImageDraw
+    x, y, w, h = box
+    mark = sheet.crop((x, y, x + w, y + h)).convert("RGBA")
+    px = mark.load()
+    if px[w // 2, h // 3][:3] != PAPER:
+        return None                       # not the sheet this was measured on
+    # the word and its anti-aliased edges sit in the face above the bottom shading
+    for j in range(4, 40):
+        for i in range(5, w - 5):
+            r, g, b, alpha = px[i, j]
+            if alpha == 255 and (r, g, b) != (0, 0, 0):
+                px[i, j] = PAPER + (255,)
+    draw = ImageDraw.Draw(mark)
+    cx, cy = 25, 20                       # the face's centre, above the bottom shading
+    if glyph == "pause":
+        draw.rectangle((cx - 9, cy - 9, cx - 4, cy + 9), fill=PAPER_INK)
+        draw.rectangle((cx + 3, cy - 9, cx + 8, cy + 9), fill=PAPER_INK)
+    else:                                 # two heads: the other body
+        draw.ellipse((cx - 13, cy - 6, cx - 1, cy + 6), fill=PAPER_INK)
+        draw.ellipse((cx + 1, cy - 6, cx + 13, cy + 6), fill=PAPER_INK)
+    return mark
 
 
 def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
@@ -293,14 +331,46 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
             f = hud_frame("70", str(colour))
             if f:
                 pills[str(colour)] = f
-        # hudpickups.png is a 16x16 grid: the bomb at 0,16 and the golden bomb at 48,16;
+        # the bar's bomb is the bomb pickup itself (5.40.1, golden 5.40.4): its Idle frame
+        bombs = Image.new("RGBA", (2 * HUD_CELL, HUD_CELL), (0, 0, 0, 0))
+        bomb_cells = {}
+        anm2s = {(e.get("variant"), e.get("subtype")): anm2_root + e.get("anm2path")
+                 for e in ents if e.get("id") == "5" and e.get("variant") == "40" and e.get("anm2path")}
+        for n, (name, subtype) in enumerate((("bomb", "1"), ("goldenBomb", "4"))):
+            data = read(anm2s.get(("40", subtype), ""))
+            frame, sheet = _anm2_frame(data, "Idle") if data else (None, None)
+            png = read(anm2_root + sheet) if sheet else None
+            if not (frame and png):
+                continue
+            fx, fy, fw, fh, pvx, pvy = frame
+            cell = Image.open(io.BytesIO(png)).convert("RGBA").crop((fx, fy, fx + fw, fy + fh))
+            bombs.alpha_composite(cell.crop((0, 0, HUD_CELL, HUD_CELL)), (n * HUD_CELL, 0))
+            bomb_cells[name] = [n * HUD_CELL, 0, min(fw, HUD_CELL), min(fh, HUD_CELL)]
+        out = io.BytesIO()
+        bombs.save(out, format="PNG", optimize=True)
+        written["hud-bombs.png"] = out.getvalue()
+        # the pause and twin marks, cut from the pause screen's own paper buttons
+        marks_sheet = read("gfx/ui/pausescreen.png")
+        marks = Image.new("RGBA", (2 * 56, 52), (0, 0, 0, 0))
+        mark_cells = {}
+        if marks_sheet:
+            paper = Image.open(io.BytesIO(marks_sheet)).convert("RGBA")
+            for n, (name, box) in enumerate(PAPER_MARKS.items()):
+                mark = _paper_mark(paper, box, name)
+                if mark is not None:
+                    marks.alpha_composite(mark, (n * 56, 0))
+                    mark_cells[name] = [n * 56, 0, box[2], box[3]]
+        out = io.BytesIO()
+        marks.save(out, format="PNG", optimize=True)
+        written["hud-marks.png"] = out.getvalue()
         # ui_chargebar.anm2's BarEmpty/BarFull/BarOverlayN crops (16x32, pivot 8,16)
         hud = {
-            "format": "isaac-touch-hud-1",
+            "format": "isaac-touch-hud-2",
             "actives": {"sheet": "hud-actives.png", "cell": HUD_CELL,
                         "items": {k: {"at": v} for k, v in cells.items()}},
             "pocket": {"sheet": "hud-pocket.png", "cards": cards, "pills": pills},
-            "pickups": {"sheet": "hud-pickups.png", "bomb": [0, 16, 16, 16], "goldenBomb": [48, 16, 16, 16]},
+            "bombs": {"sheet": "hud-bombs.png", **bomb_cells},
+            "marks": {"sheet": "hud-marks.png", **mark_cells},
             "chargebar": {"sheet": "hud-chargebar.png", "size": [16, 32], "pivot": [8, 16],
                           "empty": [0, 0], "full": [16, 0],
                           "overlay": {"1": [48, 32], "2": [32, 32], "3": [16, 32], "4": [0, 32], "5": [64, 0],
@@ -402,11 +472,12 @@ def build(bundle_dir: str, quiet: bool = False) -> dict:
     written.update(build_hud(bundle_dir, out_dir))
     menu = {
         "format": "isaac-page-assets-1",
-        "sheet": "saveselectmenu.png", "paper": "seedunlockpaper.png", "cursor": "cursor.png",
+        "sheet": "saveselectmenu.png", "paper": "seedunlockpaper.png", "cursor": "cursor.png", "widget": "seedwidget.png",
         "font": {"fnt": "teammeatfont16bold.fnt", "png": "teammeatfont16bold_0.png",
                  "lineHeight": facts["font_lineHeight"], "base": facts["font_base"]},
         "rects": {"strip": list(STRIP), "prompt_paper": list(PROMPT_PAPER), "prompt_at": list(PROMPT_AT),
-                  "cursor": list(CURSOR), "title": list(TITLE)},
+                  "cursor": list(CURSOR), "title": list(TITLE),
+                  "widget": [0, 0, 144, 96]},
         "colours": {"paper": list(facts["paper"]), "ink": list(facts["ink"])},
         "sounds": {"open": "menu_noteappear.wav", "close": "menu_notehide.wav", "move": "menu_scroll.wav",
                    "select": "menu_flip_light.wav", "back": "paper_out.wav", "delete": "menu_rip.wav", "paper_in": "paper_in.wav"},

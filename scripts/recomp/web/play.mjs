@@ -20,7 +20,7 @@
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
-import { createEditFileMenu, createPaperMenu } from './menu_overlay.mjs';
+import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, MODS_DB } from './mods.mjs';
 import { createTouchControls } from './touch_controls.mjs';
@@ -503,7 +503,15 @@ const readMenuId = () => {
 };
 // four bytes every 200 ms: the credit appears within a frame or two of the
 // paper and is gone the moment a run starts
-const watchScreen = () => setInterval(() => editMenu.setScreen(readMenuId()), 200);
+// The menu camera's position: the tag waits for the MODS screen to stop sliding in.
+const menuView = () => { const G = window.isaacGuest; try { const mgr = G && G.u32(MENU_MGR_PTR); return mgr ? `${G.u32(mgr + 0x44)}:${G.u32(mgr + 0x48)}` : ''; } catch { return ''; } };
+let lastView = '';
+const watchScreen = () => setInterval(() => {
+  const screen = readMenuId(), view = menuView(), still = view === lastView;
+  lastView = view;
+  editMenu.setScreen(screen);
+  modsTag.setShown(screen === MODS_SCREEN && still && !modsMenu.isOpen() && gameReady && modsBrowsable());
+}, 200);
 
 function updateStreaming() {
   streamingEl.textContent = `requested ${mb(streamed)} MB of archives in ${streamedRequests} reads`;
@@ -669,14 +677,21 @@ const editMenu = createEditFileMenu({
   audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
   injectKey: (name, down) => { if (typeof window.isaacInjectKey === 'function') window.isaacInjectKey(name, down); },
   log: (line) => console.log(line),
-  // MODS: the way into the mods menu when the game's own list has no IMPORT MOD
-  // row to press Enter on, which is any save with no mods of its own. modsMenu is
-  // built further down; this runs when the row is chosen, long after.
-  actions: { export: exportSlot, import: importSlot, mods: () => modsMenu.open() },
+  // The mods live on the game's own MODS screen now (its BROWSE MODS paper,
+  // below), not on the file's paper.
+  actions: { export: exportSlot, import: importSlot },
 });
 window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;
-window.isaacKeyCapture = (ev, down) => (modsMenu.isOpen() ? modsMenu.onKey(ev, down) : editMenu.onKey(ev, down));
+window.isaacKeyCapture = (ev, down) => {
+  if (modsMenu.isOpen()) return modsMenu.onKey(ev, down);
+  // B on the game's MODS screen: the browser, as its paper says (the game has no B there)
+  if (ev.code === 'KeyB' && readMenuId() === MODS_SCREEN && modsBrowsable()) {
+    if (down && !ev.repeat) openModBrowser();
+    return true;
+  }
+  return editMenu.onKey(ev, down);
+};
 window.isaacEditFileMenu = editMenu;                      // the drivers look at it
 
 // ---- mods (round 74) ---------------------------------------------------------------
@@ -701,6 +716,30 @@ const modsMenu = createModsMenu({
   onInstalled: enableModsInOptions,
 });
 hooks.onModImport = () => { modsMenu.open(); };
+// The browser's place is the game's own MODS screen (16, MenuManager+0x40): a hint
+// paper like its PRESS TAB TO ENABLE MODS one, below it, opens it -- B, or a tap.
+const MODS_SCREEN = 16;
+const coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+const modsTag = createMenuTag({
+  stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'mods-tag', at: [312, 150],
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
+  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
+});
+const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
+const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
+// Touch: the page's own papers take their taps here, before the game's screens.
+function pageMenuTap(gx, gy) {
+  if (modsMenu.isOpen()) {
+    const at = modsMenu.hit(gx, gy);
+    if (!at) return false;
+    if (at.outside) { modsMenu.close(); return true; }
+    if (at.search) return 'keyboard';
+    if (at.row !== undefined) modsMenu.tapRow(at.row);
+    return true;
+  }
+  if (readMenuId() === MODS_SCREEN && modsTag.hit(gx, gy)) { openModBrowser(); return true; }
+  return false;
+}
 window.isaacModsMenu = modsMenu;                          // the drivers look at it too
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
@@ -754,7 +793,9 @@ async function seedDefaultOptions() {
     } catch { resolve(true); }
   });
   if (have) return 'kept';
-  const bytes = new TextEncoder().encode(DEFAULT_OPTIONS);
+  // A phone plays with the mobile item bar on the room's bottom wall, where the
+  // boss's health bar would sit: as on the mobile Rebirth, the boss bar goes on top.
+  const bytes = new TextEncoder().encode(coarsePointer ? DEFAULT_OPTIONS.replace('BossHpOnBottom=1', 'BossHpOnBottom=0') : DEFAULT_OPTIONS);
   try { await writeSaves(db, [{ key: OPTIONS_KEY, src: null, bytes }], false); } catch { return 'write failed'; }
   return 'written';
 }
@@ -948,6 +989,8 @@ const touchControls = createTouchControls({
   emit: (name, down) => { if (window.isaacInjectKey) window.isaacInjectKey(name, down, 'touch'); },
   onGesture: () => { if (moduleRef) unlockAudio(moduleRef, false); },
   guest: () => window.isaacGuest || null,
+  onMenuTap: pageMenuTap,
+  textEntry: () => modsMenu.isOpen() && modsMenu.browsing(),
   assetsUrl: `${ROOT}/instance/page-assets`,
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
 });
@@ -970,6 +1013,26 @@ try {
     if (done === 'turned on') console.log('[isaac] a mod is installed and this browser had mods off; turned on');
   }
 } catch (e) { console.warn('[isaac] could not check the mods:', e.message); }
+
+// The same move, once, for a phone whose options were written before the item
+// bar existed. Remembered per browser, so a later change in the file stands.
+try {
+  if (coarsePointer && !(() => { try { return localStorage.getItem('isaac-touch-bossbar-once') === '1'; } catch { return true; } })()) {
+    const db = await openStore();
+    if (db) {
+      const cur = await new Promise((resolve) => {
+        try { const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).get(OPTIONS_KEY); req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); }
+        catch { resolve(null); }
+      });
+      const text = cur && cur.bytes ? new TextDecoder().decode(cur.bytes) : '';
+      if (/^BossHpOnBottom=1[ \t]*$/m.test(text)) {
+        await writeSaves(db, [{ key: OPTIONS_KEY, src: cur.src || null, bytes: new TextEncoder().encode(text.replace(/^BossHpOnBottom=1[ \t]*$/m, 'BossHpOnBottom=0')) }], false);
+        console.log('[isaac] touch: the boss health bar moves to the top, clear of the item bar');
+      }
+    }
+    try { localStorage.setItem('isaac-touch-bossbar-once', '1'); } catch { /* no storage */ }
+  }
+} catch (e) { console.warn('[isaac] could not move the boss bar:', e.message); }
 
 // ---- go: the pipeline runs to the end of main; this import resolves when it does
 setStatus('loading');

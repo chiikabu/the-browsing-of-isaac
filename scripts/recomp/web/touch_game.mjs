@@ -23,10 +23,17 @@ const ITEM_CHARGE_TYPE = 0xac;    // Lua "ChargeType" property registration 0x00
 // Game.
 const GAME_PLAYERS = 0x1baa8;     // vector<Player*> begin/end, ShakeScreen 0x00703696
 const GAME_SHAKE = 0x26508;       // ShakeScreen 0x00703683 stores its timeout; Update counts it down
-const GAME_PAUSE = 0x23a74;       // pause state (play.mjs readTouchState)
+const GAME_PAUSE = 0x23a74;       // pause state (play.mjs readTouchState): 1 the paper, 2 its options
+// Measured on the pause paper by stepping it: its cursor (OPTIONS, MY STUFF!,
+// RESUME GAME, EXIT GAME), then the options it opens -- their cursor, and the
+// list's scroll (target -20 per row past the fourth; the drawn value eases to it).
+const PAUSE_CURSOR = 0x23a7c;
+const PAUSE_OPTIONS_CURSOR = 0x2402c;
+const PAUSE_OPTIONS_SCROLL = 0x2403c;
 const GAME_FRAME = 0x264f8;       // logic frames, 30 a second (play.mjs readReadyState)
 
 // Player.
+const E_DEAD = 0x173;             // Entity IsDead 0x00417470 (play.mjs readReadyState tests it too)
 const P_GOLDEN_BOMB = 0x1361;     // HasGoldenBomb 0x0065cf50
 const P_BOMBS = 0x1364;           // GetNumBombs 0x0065cf30
 const P_DAMAGE_COOLDOWN = 0x13bc; // GetDamageCooldown 0x0060d080
@@ -47,6 +54,10 @@ const MENU_VIEW_Y = 0x48;         // the menu camera; the options list scrolls i
 const MENU_SAVE_CURSOR = 0x2f8;   // 0..2 files, 3 the EDIT FILE strip
 const MENU_GAME_CURSOR = 0xb94;   // 0 NEW RUN .. 5 OPTIONS, disabled rows skipped
 const MENU_OPTIONS_CURSOR = 0xced4;
+// Menu_Character at +0x1530, measured by stepping it: +4 the seed paper's state
+// (1 while it is up), +0xc the difficulty (0 normal .. 3 greedier), +0x14 the
+// character the wheel is on.
+const MENU_CHARACTER = 0x1530;
 
 const f32 = (u) => { const v = new DataView(new ArrayBuffer(4)); v.setUint32(0, u >>> 0, true); return v.getFloat32(0, true); };
 const s32 = (u) => u | 0;
@@ -103,6 +114,7 @@ export function readPlayer(G, mgr, player) {
   }
   return {
     ptr: player,
+    dead: G.u8(player + E_DEAD) !== 0,
     type: s32(G.u32(player + P_TYPE)),
     bombs: s32(G.u32(player + P_BOMBS)),
     goldenBomb: G.u8(player + P_GOLDEN_BOMB) !== 0,
@@ -131,6 +143,16 @@ export function readRun(G) {
   }, null);
 }
 
+export function readPause(G) {
+  return guard(G, () => {
+    const game = G.u32(GAME_PTR);
+    if (!game) return null;
+    const scroll = f32(G.u32(game + PAUSE_OPTIONS_SCROLL));
+    return { state: s32(G.u32(game + GAME_PAUSE)), cursor: s32(G.u32(game + PAUSE_CURSOR)),
+      optionsCursor: s32(G.u32(game + PAUSE_OPTIONS_CURSOR)), optionsScroll: Number.isFinite(scroll) ? scroll : 0 };
+  }, null);
+}
+
 export function readMenu(G) {
   return guard(G, () => {
     const menu = G.u32(MENU_PTR);
@@ -140,6 +162,11 @@ export function readMenu(G) {
     if (screen === MENU.SAVES) out.cursor = s32(G.u32(menu + MENU_SAVE_CURSOR));
     else if (screen === MENU.GAME) out.cursor = s32(G.u32(menu + MENU_GAME_CURSOR));
     else if (screen === MENU.OPTIONS) out.cursor = s32(G.u32(menu + MENU_OPTIONS_CURSOR));
+    else if (screen === MENU.CHARACTER) {
+      out.cursor = s32(G.u32(menu + MENU_CHARACTER + 0x14));
+      out.difficulty = s32(G.u32(menu + MENU_CHARACTER + 0xc));
+      out.seedEntry = s32(G.u32(menu + MENU_CHARACTER + 4)) === 1;
+    }
     return out;
   }, { screen: -1 });
 }

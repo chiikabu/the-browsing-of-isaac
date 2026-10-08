@@ -587,7 +587,10 @@ export function createModsMenu(opts) {
     try {
       say('fetching the catalogue...');
       catalogue = await fetchCatalogue(o.catalogueBase);
-      say(`${catalogue.mods.length} mod(s) to choose from`);
+      // the footer counts them; the line under the list is the chosen mod's own words
+      log(`[mods] ${catalogue.mods.length} mod(s) to choose from`);
+      message = null;
+      paper.redraw();
     } catch (e) { say(`catalogue: ${e.message}`); }
   }
 
@@ -625,14 +628,19 @@ export function createModsMenu(opts) {
       const list = ((catalogue && catalogue.mods) || []).filter((m) =>
         !q || m.name.toLowerCase().includes(q) || (m.description || '').toLowerCase().includes(q));
       const rows = list.map((m) => ({
-        label: m.name,
+        label: m.name.replace(/^[!\s]+/, ''),
         note: busyId === m.id && progress != null ? `${progress}%`
           : have.has(m.id) ? 'INSTALLED' : (m.bytes > SEED_BUDGET ? 'TOO BIG' : mib(m.bytes)),
         dim: have.has(m.id) || m.bytes > SEED_BUDGET,
+        // what the mod does, under the list, as the game's own mods screen shows it
+        detail: [m.version ? `V${m.version}` : '', m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),
       }));
-      rows.push({ label: 'BACK', action: () => { view = 'installed'; search = ''; message = null; paper.redraw(); } });
-      return { title: 'MOD BROWSER', rows, search, searchHint: 'TYPE TO SEARCH', message };
+      rows.push({ label: 'FROM THIS DEVICE', detail: 'A .ZIP OR A FOLDER OF A MOD YOU ALREADY HAVE', action: () => fileInput.click() });
+      if (mods.length) rows.push({ label: 'REMOVE A MOD', detail: `${mods.length} INSTALLED`, action: () => { view = 'remove'; message = null; paper.redraw(); } });
+      rows.push({ label: 'BACK', action: () => paper.close('back') });
+      return { title: 'MOD BROWSER', rows, search, searchHint: 'SEARCH', message,
+        footer: catalogue ? `${list.length} OF ${catalogue.mods.length} MODS` : null };
     }
     // Round 84: what is installed belongs on the game's own mods screen, which
     // lists it, greys it and toggles it already. This menu is what that screen
@@ -673,9 +681,12 @@ export function createModsMenu(opts) {
   // R still does it early, for anyone who wants it before closing.
   const reloadIfNew = () => { if (dirty) location.reload(); };
 
-  const open = async () => {
+  // 'browse' opens straight onto the catalogue (the MODS screen's BROWSE MODS
+  // paper); with no catalogue configured it is the import menu.
+  const open = async (start) => {
     view = 'installed'; search = ''; message = null;
     await refresh();
+    if (start === 'browse' && o.catalogueBase) openBrowse();
     await paper.open(model, {
       onClose: reloadIfNew,
       onKey: (code, key) => {
@@ -696,6 +707,9 @@ export function createModsMenu(opts) {
   };
   return {
     open, close: () => paper.close('back'), isOpen: () => paper.isOpen(), refresh,
+    // touch: where a tap lands on the paper, and acting on a row
+    hit: (gx, gy) => paper.hit(gx, gy), tapRow: (i) => paper.tapRow(i),
+    browsing: () => view === 'browse',
     onKey: (ev, down) => paper.onKey(ev, down), element: () => paper.element(),
     // What a driver can see: the same model the paper draws, flattened. Rows are
     // labels rather than the rows themselves, so nothing outside can call an

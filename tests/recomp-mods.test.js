@@ -295,13 +295,18 @@ test('round 82: the import row is not seeded until the player has a mod', () => 
   const seed = mods.slice(mods.indexOf('export async function seedMods'));
   assert.ok(seed.indexOf('const on = index.filter') < seed.indexOf('o.sentinel !== false && on.length'),
     'the installed mods are counted before the sentinel is decided');
-  // the way in with no mods: the page's own file menu
+  // the way in with no mods: the page's own papers (EDIT FILE keeps its MODS row
+  // when a caller hands it the action; the shipping page now opens the browser
+  // from the game's own MODS screen instead)
   const ov = readFileSync(join(root, 'scripts', 'recomp', 'web', 'menu_overlay.mjs'), 'utf8');
   assert.match(ov, /actions\.mods \? \['EXPORT FILE', 'IMPORT FILE', 'DELETE FILE', 'MODS', 'BACK'\]/);
   assert.match(ov, /if \(rows\[i\] === 'MODS'\) \{ play\('select'\); close\(null\); actions\.mods\(\); return; \}/);
   assert.match(ov, /if \(rows\[i\] === 'BACK'\) \{ close\('back'\); return; \}/, 'BACK is found by name, not by index');
   const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
-  assert.match(play, /mods: \(\) => modsMenu\.open\(\)/);
+  assert.match(play, /actions: \{ export: exportSlot, import: importSlot \}/, 'EDIT FILE no longer carries MODS');
+  assert.match(play, /const MODS_SCREEN = 16;/, 'the MODS screen, MenuManager+0x40');
+  assert.match(play, /const openModBrowser = \(\) => \{ modsTag\.setShown\(false\); modsMenu\.open\('browse'\); \};/, 'its BROWSE MODS paper opens the browser');
+  assert.match(play, /ev\.code === 'KeyB' && readMenuId\(\) === MODS_SCREEN && modsBrowsable\(\)/, 'and so does B on that screen');
   // the paper grows with the entries rather than clipping the fifth
   assert.match(ov, /const sh = sh0 \+ 24 \+ \(items\(\)\.length - 4\) \* 17/);
 });
