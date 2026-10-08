@@ -47,6 +47,7 @@
 // which the engine cannot argue with.
 
 import { unzip, archiveKind } from './zip.mjs';
+import { cleanModName, cleanModText } from './mod_browser.mjs';
 
 export const MODS_DB = 'isaac-mods', F_STORE = 'files', M_STORE = 'mods', S_STORE = 'state';
 // The two places the engine looks. `c:/isaac/mods/` is what the resource layer
@@ -476,7 +477,12 @@ export function createModsMenu(opts) {
   const o = opts || {};
   const log = o.log || (() => {});
   const paper = o.paper;
+  // the browser (mod_browser.mjs) when the build carries its art; the paper otherwise
+  const browser = o.browser || null;
   let db = null, mods = [], catalogue = null, message = null, dirty = false, busy = false;
+  let catalogueLoading = false, catalogueError = null, phase = null;
+  const fresh = new Set();                     // installed during this visit: they load on close
+  const redraw = () => { paper.redraw(); if (browser && browser.isOpen()) browser.redraw(); };
   let progress = null, busyId = null;        // per cent of the mod being downloaded, and which
   let view = 'installed';                      // or 'browse'
   let search = '';
@@ -497,7 +503,7 @@ export function createModsMenu(opts) {
     message = text ? String(text).toUpperCase().slice(0, 64) : null;
     if (changed) dirty = true;
     log(`[mods] ${text}`);
-    paper.redraw();
+    redraw();
   };
 
   async function refresh() {
@@ -580,18 +586,61 @@ export function createModsMenu(opts) {
     busy = false;
   }
 
+  async function loadCatalogue() {
+    if (catalogue || catalogueLoading) return;
+    catalogueLoading = true; catalogueError = null;
+    redraw();
+    try {
+      catalogue = await fetchCatalogue(o.catalogueBase);
+      log(`[mods] ${catalogue.mods.length} mod(s) to choose from`);
+    } catch (e) { catalogueError = `the catalogue: ${e.message}`; log(`[mods] ${catalogueError}`); }
+    catalogueLoading = false;
+    redraw();
+  }
+
   async function openBrowse() {
     view = 'browse'; search = ''; message = null;
     paper.redraw();
     if (catalogue) return;
-    try {
-      say('fetching the catalogue...');
-      catalogue = await fetchCatalogue(o.catalogueBase);
-      // the footer counts them; the line under the list is the chosen mod's own words
-      log(`[mods] ${catalogue.mods.length} mod(s) to choose from`);
-      message = null;
-      paper.redraw();
-    } catch (e) { say(`catalogue: ${e.message}`); }
+    say('fetching the catalogue...');
+    await loadCatalogue();
+    message = catalogueError ? String(catalogueError).toUpperCase() : null;
+    paper.redraw();
+  }
+
+  // modpack.py keeps the first 400 characters of a description: one that long was cut
+  const describe = (raw) => { const t = cleanModText(raw); return String(raw || '').length >= 398 && t ? `${t.replace(/[\s.,;:-]+$/, '')}...` : t; };
+  // What the browser lists: the catalogue, cleaned of its BBCode, plus the mods
+  // added from this device that the catalogue does not have (so they can go).
+  function browserItems() {
+    const have = new Map(mods.map((m) => [m.id, m]));
+    const list = ((catalogue && catalogue.mods) || []).map((m) => ({
+      id: m.id, name: cleanModName(m.name), desc: describe(m.description), version: m.version || '',
+      bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: (m.bytes || 0) > SEED_BUDGET,
+    }));
+    const listed = new Set(list.map((m) => m.id));
+    for (const m of mods) {
+      if (listed.has(m.id)) continue;
+      list.push({ id: m.id, name: cleanModName(m.name), desc: 'Added from this device.', version: m.version || '',
+        bytes: m.bytes || 0, files: m.files || 0, installed: true, big: false });
+    }
+    return list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+
+  async function openBrowser() {
+    await refresh();
+    if (!browser || !(await browser.supported())) return false;
+    message = null;
+    await browser.open({
+      items: browserItems,
+      status: () => ({ loading: catalogueLoading, error: catalogueError, busyId, progress, phase, message, fresh }),
+      install: (id) => { const entry = catalogue && catalogue.mods.find((m) => m.id === id); return entry ? add(entry) : null; },
+      remove: async (id) => { const mod = mods.find((m) => m.id === id); if (mod) await remove(mod); },
+      addFromDevice: () => fileInput.click(),
+      onClose: () => reloadIfNew(),
+    });
+    loadCatalogue();
+    return true;
   }
 
   async function add(entry) {
@@ -603,21 +652,26 @@ export function createModsMenu(opts) {
       // the row carries the percentage while it downloads, the line says what for
       busyId = entry.id;
       progress = 0;
-      message = 'DOWNLOADING...';
-      paper.redraw();
+      phase = 'download';
+      message = browser && browser.isOpen() ? null : 'DOWNLOADING...';
+      redraw();
       const zip = await fetchMod(o.catalogueBase, entry, (n, total) => {
         const pct = total ? Math.min(100, Math.round(100 * n / total)) : 0;
         if (pct === progress) return;                    // a redraw a frame is plenty
         progress = pct;
-        paper.redraw();
+        redraw();
       });
       progress = null;
-      busyId = null;
-      message = 'UNPACKING...';
-      paper.redraw();
+      phase = 'unpack';
+      message = browser && browser.isOpen() ? null : 'UNPACKING...';
+      redraw();
       await install(await unzip(zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength)), entry.name);
+      fresh.add(entry.id);
+      if (browser && browser.isOpen()) message = null;
     } catch (e) { say(`${entry.name}: ${e.message}`); }
+    busyId = null; progress = null; phase = null;
     busy = false;
+    redraw();
   }
 
   // ---- what the paper shows
@@ -685,6 +739,7 @@ export function createModsMenu(opts) {
   // paper); with no catalogue configured it is the import menu.
   const open = async (start) => {
     view = 'installed'; search = ''; message = null;
+    if (start === 'browse' && o.catalogueBase && await openBrowser()) return;
     await refresh();
     if (start === 'browse' && o.catalogueBase) openBrowse();
     await paper.open(model, {
@@ -706,15 +761,28 @@ export function createModsMenu(opts) {
     });
   };
   return {
-    open, close: () => paper.close('back'), isOpen: () => paper.isOpen(), refresh,
+    open,
+    close: () => { if (browser && browser.isOpen()) browser.close(); else paper.close('back'); },
+    isOpen: () => paper.isOpen() || !!(browser && browser.isOpen()),
+    refresh,
     // touch: where a tap lands on the paper, and acting on a row
     hit: (gx, gy) => paper.hit(gx, gy), tapRow: (i) => paper.tapRow(i),
-    browsing: () => view === 'browse',
-    onKey: (ev, down) => paper.onKey(ev, down), element: () => paper.element(),
+    // the browser takes taps and clicks in client pixels (it may cover the whole screen)
+    inBrowser: () => !!(browser && browser.isOpen()),
+    tapClient: (cx, cy) => (browser && browser.isOpen() ? browser.tapClient(cx, cy) : false),
+    wheel: (dy) => { if (browser && browser.isOpen()) browser.wheel(dy); },
+    browsing: () => (browser && browser.isOpen()) || view === 'browse',
+    onKey: (ev, down) => (browser && browser.isOpen() ? browser.onKey(ev, down) : paper.onKey(ev, down)),
+    element: () => (browser && browser.isOpen() ? browser.element() : paper.element()),
     // What a driver can see: the same model the paper draws, flattened. Rows are
     // labels rather than the rows themselves, so nothing outside can call an
     // action -- a driver has to press the key a player would.
     state: () => {
+      if (browser && browser.isOpen()) {
+        const b = browser.state();
+        return { view: 'browser', dirty, message, search: b.query, title: 'MOD BROWSER', rows: b.shown, current: b.current,
+                 browser: b, mods: mods.map((x) => ({ id: x.id, name: x.name, enabled: x.enabled })) };
+      }
       const m = model();
       return { view, dirty, message, search, title: m.title, rows: m.rows.map((r) => r.label),
                current: (paper.currentRow() || {}).label || null,

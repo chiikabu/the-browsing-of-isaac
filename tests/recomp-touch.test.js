@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTouchInput, stickKeys, twinAction } from '../scripts/recomp/web/touch_input.mjs';
-import { touchMode } from '../scripts/recomp/web/touch_controls.mjs';
+import { touchMode, overlayShown, barDrawKey } from '../scripts/recomp/web/touch_controls.mjs';
 
 // The native poll drains every queued edge before sampling key state. A down/up
 // pair in one poll therefore cannot stand in for a usable game button press.
@@ -413,4 +413,19 @@ test('a room transition keeps a played run in game mode, and only a played one',
   assert.equal(touchMode('game', { ...crossing, dead: true }), 'menu', 'the death paper is a menu');
   assert.equal(touchMode('game', { ...crossing, transit: false }), 'menu', 'no run and no transition is a menu');
   assert.equal(touchMode('game', { ...live, available: false }), 'off');
+});
+
+test('the bar, the pause mark and the sticks hide for menus and cinematics', () => {
+  assert.equal(overlayShown('game', false), true);
+  assert.equal(overlayShown('game', true), false, 'a VS card or a nightmare shows no HUD');
+  assert.equal(overlayShown('menu', false), false);
+  assert.equal(overlayShown('off', false), false);
+});
+
+test('the bar redraws when a cinematic starts or ends, and not otherwise', () => {
+  const plan = { items: [{ kind: 'bomb', player: { bombs: 3, goldenBomb: false } }] };
+  const key = (cinematic, bombs = 3) => barDrawKey({ items: [{ ...plan.items[0], player: { bombs, goldenBomb: false } }] }, new Set(), 2, false, 'game', cinematic);
+  assert.notEqual(key(true), key(false), 'a VS card hides the bar, so the drawing must run');
+  assert.equal(key(false), key(false), 'nothing changed, nothing redrawn');
+  assert.notEqual(key(false, 4), key(false, 3), 'a bomb picked up redraws it');
 });

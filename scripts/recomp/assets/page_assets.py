@@ -392,6 +392,64 @@ def build_hud(bundle_dir: str, out_dir: str) -> dict[str, bytes]:
             ar.close()
 
 
+# The mod browser (mod_browser.mjs) is drawn on the paper the game's own MODS
+# screen is: modsmenu.png, cut the way modsmenu.anm2 cuts it -- Top, Piece1..5,
+# Bottom and the Cursor -- in two of the Team Meat fonts besides the menu's
+# 16 bold: 16 for nothing yet, 10 for the list and the descriptions.
+BROWSER_FILES = {  # archive key -> page-assets file name
+    "resources/gfx/ui/main menu/modsmenu.png": "modsmenu.png",
+    "resources/font/teammeatfont10.fnt": "teammeatfont10.fnt",
+    "resources/font/teammeatfont10_0.png": "teammeatfont10_0.png",
+    "resources/font/teammeatfont16.fnt": "teammeatfont16.fnt",
+    "resources/font/teammeatfont16_0.png": "teammeatfont16_0.png",
+}
+BROWSER_ANM2 = "resources/gfx/ui/main menu/modsmenu.anm2"
+
+
+def browser_layout(anm2: bytes) -> dict:
+    """The MODS paper as modsmenu.anm2 cuts it, for menu.json: Piece1..5, Bottom
+    and the Cursor from their animations; the Top is the sheet above Piece1."""
+    cut = {}
+    for anim in ("Piece1", "Piece2", "Piece3", "Piece4", "Piece5", "Bottom", "Cursor"):
+        frame, _sheet = _anm2_frame(anm2, anim, "modsmenu.png")
+        if frame is None:
+            raise SystemExit("page-assets: modsmenu.anm2 has no %s" % anim)
+        cut[anim] = frame[:4]
+    return {
+        "sheet": "modsmenu.png", "top": [0, 0, cut["Piece1"][2], cut["Piece1"][1]],
+        "pieces": [cut["Piece%d" % i] for i in range(1, 6)],
+        "bottom": cut["Bottom"], "cursor": cut["Cursor"],
+        # the MODS lettering and its underline, covered on a page with no title
+        "title": [22, 5, 214, 31],
+        "fonts": {"small": {"fnt": "teammeatfont10.fnt", "png": "teammeatfont10_0.png"},
+                  "body": {"fnt": "teammeatfont16.fnt", "png": "teammeatfont16_0.png"}},
+    }
+
+
+def build_browser(bundle_dir: str, out_dir: str) -> tuple[dict[str, bytes], dict | None]:
+    """The mod browser's paper and fonts. Returns ({file name: bytes}, its menu.json entry)."""
+    read, opened = _hud_reader(bundle_dir)
+    try:
+        anm2 = read(BROWSER_ANM2)
+        if anm2 is None:
+            return {}, None
+        written: dict[str, bytes] = {}
+        for key, name in BROWSER_FILES.items():
+            data = read(key)
+            if data is None:
+                raise SystemExit("page-assets: no %s in the archives" % key)
+            written[name] = data
+        meta = browser_layout(anm2)
+        os.makedirs(out_dir, exist_ok=True)
+        for name, data in written.items():
+            with open(os.path.join(out_dir, name), "wb") as f:
+                f.write(data)
+        return written, meta
+    finally:
+        for ar in opened:
+            ar.close()
+
+
 def entry_bytes(ar: A.Archive, path: str) -> bytes:
     e = ar.by_key.get(A.key_of(A.resource_key(path)))
     if e is None:
@@ -470,6 +528,8 @@ def build(bundle_dir: str, quiet: bool = False) -> dict:
                 f.write(data)
             written[name] = data
     written.update(build_hud(bundle_dir, out_dir))
+    browser_files, browser = build_browser(bundle_dir, out_dir)
+    written.update(browser_files)
     menu = {
         "format": "isaac-page-assets-1",
         "sheet": "saveselectmenu.png", "paper": "seedunlockpaper.png", "cursor": "cursor.png", "widget": "seedwidget.png",
@@ -486,6 +546,8 @@ def build(bundle_dir: str, quiet: bool = False) -> dict:
         "game_size": [480, 270],
         "editfile_text_at": facts["editfile_text_at"],
     }
+    if browser:
+        menu["browser"] = browser
     mj = (json.dumps(menu, indent=1) + "\n").encode()
     with open(os.path.join(out_dir, "menu.json"), "wb") as f:
         f.write(mj)

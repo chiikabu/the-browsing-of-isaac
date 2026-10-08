@@ -62,6 +62,19 @@ export function touchMode(previous, { available, running, transit, paused, dead 
   return 'menu';
 }
 
+// The bar, the pause mark and the sticks are for a room being played: not for
+// a menu, and not for the game's own full-screen moments (a boss's VS card,
+// the jump into a trapdoor, the nightmare between floors), which draw no HUD.
+export const overlayShown = (mode, cinematic) => mode === 'game' && !cinematic;
+
+// The bar is redrawn only when this changes, so it names everything the drawing
+// reads: what is on the bar, what is pressed, its scale and orientation, the
+// mode -- and whether a cinematic is hiding it.
+export const barDrawKey = (plan, pressed, scale, upright, mode, cinematic) => JSON.stringify([
+  plan.items.map((i) => [i.kind, i.who, i.item && i.item.id, i.item && i.item.charge, i.item && i.item.kind,
+    i.player && i.player.bombs, i.player && i.player.goldenBomb, i.active && i.active.id]),
+  [...pressed], scale, upright, mode, cinematic]);
+
 export function createTouchControls({ readState, emit, onGesture, guest, assetsUrl, readAsset, onMenuTap, textEntry }) {
   const preference = new URLSearchParams(location.search).get('touch');
   if (preference === '0') return { destroy() {} };
@@ -256,8 +269,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   function drawBar() {
     const plan = planBar();
     const pressed = new Set([...pointers.values()].filter((p) => p.barItem).map((p) => p.barItem.kind + (p.barItem.who || '')));
-    const key = JSON.stringify([plan.items.map((i) => [i.kind, i.who, i.item && i.item.id, i.item && i.item.charge, i.item && i.item.kind,
-      i.player && i.player.bombs, i.player && i.player.goldenBomb, i.active && i.active.id]), [...pressed], barScale, portrait(), mode]);
+    const key = barDrawKey(plan, pressed, barScale, portrait(), mode, !!state.cinematic);
     if (key === barKey) return;
     barKey = key;
     barItems = plan.items;
@@ -266,7 +278,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (bar.width !== width * k || bar.height !== height * k) { bar.width = width * k; bar.height = height * k; }
     barCtx.imageSmoothingEnabled = false;
     barCtx.clearRect(0, 0, bar.width, bar.height);
-    bar.hidden = !art.ready || !plan.items.length || mode !== 'game';
+    bar.hidden = !art.ready || !plan.items.length || !overlayShown(mode, state.cinematic);
     if (bar.hidden) return;
     for (const item of plan.items) {
       const down = pressed.has(item.kind + (item.who || '')) ? 1 : 0;
@@ -330,11 +342,12 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   let hudKey = '';
   function drawHud() {
     const twin = mode === 'game' ? twinRole() : null;
-    const key = `${mode}:${art.ready}:${twin}:${pointersHold('pause')}:${pointersHold('twin')}:${hudBox.pause.x}:${hudBox.pause.y}`;
+    const shown = overlayShown(mode, state.cinematic);
+    const key = `${mode}:${shown}:${art.ready}:${twin}:${pointersHold('pause')}:${pointersHold('twin')}:${hudBox.pause.x}:${hudBox.pause.y}`;
     if (key === hudKey) return;
     hudKey = key;
     hudCtx.clearRect(0, 0, hud.width, hud.height);
-    if (mode !== 'game' || !art.ready) return;
+    if (!shown || !art.ready) return;
     const draw = (name, at) => {
       const cell = art.hud.marks[name];
       if (!cell) return;
@@ -408,7 +421,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   function stickHome(stick) {
     const box = stageBox(), deckTop = box.y + box.h, deckH = innerHeight - deckTop;
     const below = barRect && !bar.hidden ? barRect.y + barRect.h : deckTop;
-    const y = Math.min(innerHeight - STICK_RADIUS - 28, Math.max(below + STICK_RADIUS + 36, deckTop + deckH * 0.6));
+    const y = Math.min(innerHeight - STICK_RADIUS - 36, Math.max(below + STICK_RADIUS + 40, deckTop + deckH * 0.64));
     return { x: innerWidth * (stick === sticks.move ? 0.27 : 0.73), y };
   }
   function showStick(stick, held) {
@@ -609,6 +622,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     }
     available = nextAvailable;
     root.hidden = !available;
+    root.classList.toggle('is-cinematic', mode === 'game' && !!state.cinematic);
     document.documentElement.classList.toggle('isaac-touch', enabled);
     document.documentElement.classList.toggle('isaac-touch-ready', enabled && !!state.ready);
     const pause = state.paused && state.running ? readPause(g) : null;
@@ -677,7 +691,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     const box = stageBox();
     const [gx, gy] = toGame(box, cx, cy);
     const item = barHit(cx, cy);
-    const hot = item ? null : (gx >= 0 && gx < GAME_W && gy >= 0 && gy < GAME_H ? hotspotAt(gx, gy, box.s) : null);
+    const hot = item || state.cinematic ? null : (gx >= 0 && gx < GAME_W && gy >= 0 && gy < GAME_H ? hotspotAt(gx, gy, box.s) : null);
     if (item || hot) {
       pointer.barItem = item;
       pointer.hot = item ? item.kind : hot;
@@ -748,7 +762,7 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
       if (pointer.moved || pointer.swiped || pointers.size) return;
       const [gx, gy] = toGame(stageBox(), pointer.sx, pointer.sy);
       // The page's own papers (the mods browser, EDIT FILE) answer first.
-      const page = onMenuTap ? onMenuTap(gx, gy) : false;
+      const page = onMenuTap ? onMenuTap(gx, gy, pointer.sx, pointer.sy) : false;
       if (page === 'keyboard') { summonKeyboard(); return; }
       if (page) return;
       if (!menuTap(gx, gy)) confirm();
@@ -775,9 +789,11 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
 
   // The soft keyboard: letters and digits become the game's keys.
   listen(keysInput, 'input', () => {
-    const text = keysInput.value.toLowerCase().replace(/[^a-z0-9]/g, '');
+    // a search takes spaces too; the seed paper takes letters and digits only
+    const spaces = !!(textEntry && textEntry());
+    const text = keysInput.value.toLowerCase().replace(spaces ? /[^a-z0-9 ]/g : /[^a-z0-9]/g, '');
     keysInput.value = '';
-    for (const ch of text) input.tap('touch:keys', ch);
+    for (const ch of text) input.tap('touch:keys', ch === ' ' ? 'space' : ch);
   });
   listen(keysInput, 'keydown', (event) => {
     // Done on a search puts the keyboard away; on the seed paper it confirms the seed.

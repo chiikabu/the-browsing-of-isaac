@@ -483,6 +483,7 @@ async function loadingPage(search = '', {
     setInterval: (fn, ms) => { intervals.push({ fn, ms, next: now + ms }); },
     createEditFileMenu: () => editMenu, createPaperMenu: () => ({}), createModsMenu: () => modsMenu,
     createMenuTag: () => ({ setShown() {}, hit: () => false }),
+    createModBrowser: () => ({ isOpen: () => false }),
     createTouchControls: ({ readState }) => { readTouchState = readState; return { destroy() {} }; },
   };
   const source = readFileSync(join(web, 'play.mjs'), 'utf8')
@@ -1182,6 +1183,45 @@ test('touch state marks room and floor transitions inside a started run', async 
   state = page.readTouchState();
   assert.equal(state.running, true, 'the next room is live again');
   assert.equal(state.transit, false);
+});
+
+test('touch state marks the full-screen moments of the game, and only those', async () => {
+  const { page, game } = await liveTouchPage();
+  for (const frame of [1, 2, 3]) {
+    page.words.set(game + 0x264f8, frame);
+    page.advance(frame);
+  }
+  assert.equal(page.readTouchState().cinematic, false, 'a live room');
+  page.words.set(game + 0x1b83c, 3);
+  assert.equal(page.readTouchState().cinematic, false, 'a door slide keeps the HUD');
+  page.words.set(game + 0x1b83c, 1);
+  assert.equal(page.readTouchState().cinematic, false, 'nor does the start of one');
+  page.words.set(game + 0x1b83c, 2);
+  assert.equal(page.readTouchState().cinematic, true, 'the boss VS card');
+  page.words.set(game + 0x1b83c, 0);
+  for (const [step, want] of [[1, true], [2, true], [3, false], [0, false]]) {
+    page.words.set(game + 0x1ba78, step);
+    assert.equal(page.readTouchState().cinematic, want, `stage transition step ${step}`);
+  }
+  page.words.set(game + 0x1ba78, 2);
+  page.words.set(game + 0x264f8, 0);
+  assert.equal(page.readTouchState().cinematic, false, 'nothing before the run has a logic frame');
+});
+
+test('the crash panel shows what led to the stop, not the report printed after it', async () => {
+  const { page } = await liveTouchPage();
+  const before = [...Array(30)].map((_, i) => `[odsa] [INFO] - line ${i}`);
+  const cause = ['glFoo() not found in OPENGL32: (null)', '[isaac][crt] exit(1) from 0x00a62543'];
+  const report = ['[isaac][dispatch] 70539132 dispatches (3083 block re-entries, 0 misses); hottest entries:',
+    ...[...Array(16)].map((_, i) => `[isaac][dispatch]     ${i + 1} x sub_0040c6b0`), '[isaac][input] 3 messages dispatched'];
+  const end = ['  TRAP in main @ 0x00931050: Program terminated with exit(1)'];
+  const out = page.window.isaacCrashExcerpt([...before, ...cause, ...report, ...end]);
+  for (const line of cause) assert.ok(out.includes(line), `the cause: ${line}`);
+  assert.ok(out.includes('[odsa] [INFO] - line 29') && out.includes('[odsa] [INFO] - line 12'), 'the lines leading up to it');
+  assert.ok(!out.includes('[odsa] [INFO] - line 11'), 'eighteen of them');
+  assert.ok(!out.some((l) => l.startsWith('[isaac][dispatch]') || l.startsWith('[isaac][input]')), 'not the report');
+  assert.ok(out.includes(end[0]), 'and the stop itself');
+  assert.deepEqual(page.window.isaacCrashExcerpt(['a', 'b']), ['a', 'b'], 'with no stop in the log, its tail');
 });
 
 test('touch state routes paper menus without blocking and blocks the saves dialog', async () => {

@@ -203,3 +203,23 @@ test('build_hud takes the HUD frame from the layer that draws ui_cardspills', ()
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), [32, 96, 32, 32, 16, 16]);
 });
+
+test('browser_layout cuts the MODS paper the way modsmenu.anm2 does', () => {
+  const frame = (x, y, w, h) => `<Frame XCrop="${x}" YCrop="${y}" Width="${w}" Height="${h}" XPivot="0" YPivot="0" Visible="true"/>`;
+  const anim = (name, layer, f) => `<Animation Name="${name}"><LayerAnimations><LayerAnimation LayerId="${layer}">${f}</LayerAnimation></LayerAnimations></Animation>`;
+  const anm2 = `<AnimatedActor><Content><Spritesheets><Spritesheet Path="ModsMenu.png" Id="0"/><Spritesheet Path="SeedWidget.png" Id="1"/></Spritesheets>
+    <Layers><Layer Name="Main" Id="0" SpritesheetId="0"/><Layer Name="Widget" Id="1" SpritesheetId="1"/></Layers></Content><Animations>
+    ${anim('Piece1', 1, frame(1, 1, 9, 9))}${anim('Piece1', 0, frame(0, 48, 256, 32))}
+    ${anim('Piece2', 0, frame(0, 80, 256, 32))}${anim('Piece3', 0, frame(0, 112, 256, 32))}${anim('Piece4', 0, frame(0, 144, 256, 32))}
+    ${anim('Piece5', 0, frame(0, 176, 256, 32))}${anim('Bottom', 0, frame(0, 208, 256, 48))}${anim('Cursor', 0, frame(272, 0, 16, 16))}
+    </Animations></AnimatedActor>`;
+  const script = 'import sys,json; sys.path.insert(0, sys.argv[1]); import page_assets as P; print(json.dumps(P.browser_layout(sys.stdin.read().encode())))';
+  const r = spawnSync('python', ['-c', script, join(root, 'scripts', 'recomp', 'assets')], { input: anm2, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const m = JSON.parse(r.stdout);
+  assert.deepEqual(m.top, [0, 0, 256, 48], 'the top is the sheet above Piece1');
+  assert.deepEqual(m.pieces, [[0, 48, 256, 32], [0, 80, 256, 32], [0, 112, 256, 32], [0, 144, 256, 32], [0, 176, 256, 32]]);
+  assert.deepEqual(m.bottom, [0, 208, 256, 48]);
+  assert.deepEqual(m.cursor, [272, 0, 16, 16]);
+  assert.equal(m.fonts.small.fnt, 'teammeatfont10.fnt');
+});

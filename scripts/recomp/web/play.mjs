@@ -23,6 +23,7 @@ const $ = (id) => document.getElementById(id);
 import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, MODS_DB } from './mods.mjs';
+import { createModBrowser } from './mod_browser.mjs';
 import { createTouchControls } from './touch_controls.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
@@ -78,9 +79,11 @@ document.addEventListener('fullscreenchange', () => {
 });
 window.addEventListener('keydown', (ev) => {
   if (pageInputTarget(ev.target)) return;
-  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())) toggleFullscreen().catch(() => {});
+  if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())
+    && !(window.isaacModsMenu && window.isaacModsMenu.isOpen())) toggleFullscreen().catch(() => {});
   // N flips the FPS readout (round 52c-e; unbound in the game's default keys); the key still reaches the game
-  if (ev.code === 'KeyN' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()) window.isaacEditFileMenu.toggleFps();
+  if (ev.code === 'KeyN' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && window.isaacEditFileMenu && !window.isaacEditFileMenu.isOpen()
+    && !(window.isaacModsMenu && window.isaacModsMenu.isOpen())) window.isaacEditFileMenu.toggleFps();
 });
 const mb = (n) => (n / 1048576).toFixed(1);
 const fmtBytes = (n) => n >= 1048576 ? `${mb(n)} MB` : n >= 1024 ? `${(n / 1024).toFixed(0)} KB` : `${n} B`;
@@ -461,9 +464,53 @@ function showError(title, text, ended = false) {
   panel.className = ended ? 'ended' : '';
   $('error-title').textContent = title;
   $('error-text').textContent = text || '';
-  $('errlog').textContent = (window.isaacLog || []).slice(-24).join('\n');
+  $('errlog').textContent = crashExcerpt(window.isaacLog || []).join('\n');
   panel.hidden = false;
 }
+// What the panel shows: the lines that led up to the stop, not the end of the
+// engine's report. A stop prints a long report (dispatch, fast paths, audio,
+// input...) after its cause, so the last lines of the log are the report and
+// the cause had scrolled out of the panel. The excerpt is the 18 lines before
+// the first line of a stop, and the stop's own lines; Copy log has the rest.
+function crashExcerpt(lines) {
+  const stop = /\[isaac\]\[(?:crt|TRAP|c\+\+|k32)\]|\[isaac\] =+ STOPPING|\[isaac\] reason:|\bnot found in\b|Unable to interpret GL_VERSION|No provider of|^\s*TRAP in |RESULT: |Aborted\(/;
+  const report = /^\[isaac\]\[(?:dispatch|fastpath|audio|audio-web|threads|input|web-gl|gl|profile|heap|stub|mod)\]|^\[isaac\]\s+\d+ x |stub report|^\s+\d+ x sub_/;
+  const first = lines.findIndex((l) => stop.test(l));
+  if (first < 0) return lines.slice(-24);
+  const before = lines.slice(Math.max(0, first - 18), first);
+  const after = lines.slice(first).filter((l) => stop.test(l) || !report.test(l)).slice(0, 12);
+  return before.concat(after);
+}
+window.isaacCrashExcerpt = crashExcerpt;
+
+// Portrait touch play: the black around the picture takes the room's colours.
+// A 48x27 copy of the picture, a few times a second, shown blurred and dimmed
+// behind the stage (the GL context keeps its drawing buffer, so a copy can be
+// taken whenever).
+(function ambientLight() {
+  try {
+    if (typeof matchMedia !== 'function' || typeof requestAnimationFrame !== 'function') return;
+    const upright = matchMedia('(orientation: portrait)');
+    const el = document.createElement('canvas');
+    el.id = 'ambient'; el.width = 48; el.height = 27; el.hidden = true;
+    el.setAttribute('aria-hidden', 'true');
+    $('stage').parentNode.insertBefore(el, $('stage'));
+    const g = el.getContext('2d');
+    let n = 0;
+    const step = () => {
+      requestAnimationFrame(step);
+      const on = gameReady && upright.matches && document.documentElement.classList.contains('isaac-touch-ready');
+      if (el.hidden === on) el.hidden = !on;
+      if (on && ++n % 8 === 0) { try { g.drawImage($('canvas'), 0, 0, el.width, el.height); } catch { /* not drawable yet */ } }
+    };
+    requestAnimationFrame(step);
+  } catch { /* decoration */ }
+})();
+$('copylog-btn').addEventListener('click', () => {
+  const text = (window.isaacLog || []).join('\n');
+  const done = () => { $('copylog-btn').textContent = 'Copied'; };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => {});
+});
 $('reload-btn').addEventListener('click', () => location.reload());
 $('dismiss-btn').addEventListener('click', () => { $('error').hidden = true; });
 window.addEventListener('error', (ev) => showError('A script error', ev.message));
@@ -560,7 +607,7 @@ function readTouchState() {
   const paper = modsMenu.isOpen() ? 'mods' : editMenu.isOpen() ? 'edit-file' : null;
   const native = ready && !paper ? readReadyState() : null;
   const running = !!(native && native.run);
-  let paused = false, twins = false, better = false, transit = false;
+  let paused = false, twins = false, better = false, transit = false, cinematic = false;
   const G = window.isaacGuest;
   try {
     if (G) {
@@ -568,6 +615,14 @@ function readTouchState() {
       // inside a run that has started (logic frame nonzero).
       const game = ready && !paper ? G.u32(0x00c71678) : 0;
       transit = !running && !!game && G.u32(game + 0x264f8) > 0 && (G.u32(game + 0x1b83c) !== 0 || G.u32(game + 0x68d78) !== 0);
+      // The game's own full-screen moments, which draw no HUD: the room
+      // transition in its boss-intro mode (Game+0x1b83c == 2: the VS card; a
+      // door slide is mode 3), and a stage transition (Game+0x1ba78 1 while
+      // Isaac jumps into the trapdoor, 2 through the nightmare).
+      if (game && G.u32(game + 0x264f8) > 0) {
+        const stageStep = G.u32(game + 0x1ba78);
+        cinematic = G.u32(game + 0x1b83c) === 2 || stageStep === 1 || stageStep === 2;
+      }
       // Same PE as readReadyState: 0x0095273f forms Manager+0x2a33c for
       // options loader 0x00924440. Its "JacobEsauControls" lookup at
       // 0x0092498f stores receiver+0x98 at 0x009249a9. Read the live option.
@@ -588,7 +643,7 @@ function readTouchState() {
       }
     }
   } catch { /* state can disappear while the native run is closing */ }
-  return { ready, running, transit, paused, menu: paper || readMenuId(), twins, better,
+  return { ready, running, transit, cinematic, paused, menu: paper || readMenuId(), twins, better,
     frame: window.isaacFrame || 0, blocked: !ready || $('saves').open };
 }
 let readyCandidate = null;
@@ -713,8 +768,19 @@ const modsPaper = createPaperMenu({
   audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
   log: (line) => console.log(line),
 });
+// The browser proper: two pages of the MODS screen's own paper, the list and
+// the chosen mod with its description (mod_browser.mjs). A build without its
+// art keeps the paper above.
+const modBrowser = createModBrowser({
+  stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`,
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
+  audioContext: () => (moduleRef && moduleRef.isaacAudio && moduleRef.isaacAudio.ctx) || null,
+  log: (line) => console.log(line),
+  touch: () => document.documentElement.classList.contains('isaac-touch'),
+});
 const modsMenu = createModsMenu({
   paper: modsPaper,
+  browser: modBrowser,
   log: (line) => console.log(line),
   catalogueBase: params.get('catalogue') || (typeof window !== 'undefined' ? window.isaacModCatalogue : null) || null,
   onInstalled: enableModsInOptions,
@@ -727,12 +793,15 @@ const coarsePointer = typeof matchMedia === 'function' && matchMedia('(pointer: 
 const modsTag = createMenuTag({
   stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'mods-tag', at: [312, 150],
   readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
-  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'PRESS B'],
+  lines: () => ['MOD', 'BROWSER', coarsePointer || params.get('touch') === '1' ? 'TAP HERE' : 'CLICK OR B'],
 });
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
 // Touch: the page's own papers take their taps here, before the game's screens.
-function pageMenuTap(gx, gy) {
+// (gx, gy) is the tap in game pixels, (cx, cy) in client pixels: the browser
+// can cover the whole screen, so it takes the latter.
+function pageMenuTap(gx, gy, cx, cy) {
+  if (modsMenu.inBrowser()) return cx === undefined ? true : modsMenu.tapClient(cx, cy);
   if (modsMenu.isOpen()) {
     const at = modsMenu.hit(gx, gy);
     if (!at) return false;
@@ -745,6 +814,18 @@ function pageMenuTap(gx, gy) {
   return false;
 }
 window.isaacModsMenu = modsMenu;                          // the drivers look at it too
+// A mouse: the MOD BROWSER paper is a button on the MODS screen, and the browser
+// takes clicks and the wheel. (A touch layer, when there is one, routes its own.)
+const touchLayer = () => document.documentElement.classList.contains('isaac-touch');
+window.addEventListener('pointerdown', (ev) => {
+  if (ev.pointerType === 'touch' || ev.button !== 0 || touchLayer()) return;
+  if (modsMenu.inBrowser()) { modsMenu.tapClient(ev.clientX, ev.clientY); ev.preventDefault(); return; }
+  if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
+  const r = $('stage').getBoundingClientRect();
+  if (!r.width) return;
+  if (modsTag.hit((ev.clientX - r.left) / r.width * 480, (ev.clientY - r.top) / r.height * 270)) { openModBrowser(); ev.preventDefault(); }
+}, true);
+window.addEventListener('wheel', (ev) => { if (modsMenu.inBrowser()) { modsMenu.wheel(ev.deltaY); ev.preventDefault(); } }, { passive: false });
 
 // ---- chrome: fullscreen, fps, the live status --------------------------------------
 let finished = false;
