@@ -1,104 +1,81 @@
-# Developing the-browsing-of-isaac
+# Developing
 
-The technical side of the project: how the game becomes a web page, how to
-build and verify it, and how a release is published. The [README](../README.md)
-is the overview.
+How the game becomes a web page, how to build it from your own copy, and how a
+release goes out. The [README](../README.md) is the overview.
 
-## What it is
+## How it works
 
-A static recompilation of *The Binding of Isaac: Repentance+* (Windows x86) to
-WebAssembly: Ghidra p-code → C → Emscripten, with a host layer for Win32,
-OpenGL, OpenAL and CRT calls. The full-game runtime does not interpret or
-emulate x86, and does not reimplement gameplay. Behavior-preserving host fast
-paths supplement the lifted code; original game behavior and bugs are retained.
+*The Binding of Isaac: Repentance+* for Windows is statically recompiled to
+WebAssembly: Ghidra p-code → C → Emscripten. A host layer stands in for Win32,
+OpenGL, OpenAL and the C runtime. Nothing is emulated and no gameplay is
+rewritten, so the game behaves exactly like the PC version, bugs included.
 
-**This source repository contains no game data, lifted sources or compiled
-module.** Local builds require your own legally owned executable and assets.
+This repository holds the tools only. It contains no game data, lifted sources
+or compiled module; a build needs your own copy of the game.
 
 ## The page
 
-The page is hosted on GitHub Pages; its separate payload is served by jsDelivr.
-It needs WebAssembly JSPI, WebGL2 and WebAudio; JSPI and WebGL2 feature
-detection decides support, not user-agent names. Chromium is the browser the
-verification tools use.
+The page lives on GitHub Pages and streams its payload from jsDelivr. It needs
+WebAssembly JSPI, WebGL 2 and WebAudio, and checks for them rather than for
+browser names.
 
-The page starts automatically. Its loading screen stays up until a loaded native
-cutscene, menu or playable room is ready; audio output stays silent until then.
-`?autoplay=0` starts with a Play button instead, `?stats=1` shows loading and
-runtime diagnostics, `?touch=1`/`?touch=0` force the touch controls on or off,
-`?saves=1` adds a whole-store saves dialog, `?persist=0` turns save persistence
-off for testing.
+It starts on its own and keeps the loading screen up until the intro, a menu or
+a room is ready to show. URL options:
 
-The loading bar and Isaac-font percentage measure bootstrap delivery, WebAssembly
-instantiation and filesystem/CRT preparation; each phase contributes 25% and
-only delivery has byte-level progress. Native initialization has no measured
-remainder, so the bar shows an activity segment instead of freezing at 75%.
-Startup reaches 100% when the loaded intro, menu or live room is ready.
+| Option | Effect |
+| --- | --- |
+| `?autoplay=0` | Start with a Play button |
+| `?touch=1` / `?touch=0` | Force the touch controls on or off |
+| `?stats=1` | Loading and runtime diagnostics |
+| `?saves=1` | A dialog for the whole save store |
+| `?persist=0` | Don't keep saves (for testing) |
 
-The loader's dancing Isaac (the [Specialist dance](https://tenor.com/view/isaac-tboi-dance-gif-7352492888219360785)
-by dazlex) is a 120-frame, 42 px pixel-art strip inlined in `play.html` and
-stepped by CSS: rebuilt on its native pixel grid from the published GIF, eight
-colours, a transparent background, and a loop whose seam is smaller than an
-ordinary frame step. Reduced-motion preferences hold its first frame.
+The loading bar covers download, WebAssembly start-up and file system setup, a
+quarter each; while the engine initialises it shows a moving segment. The
+dancing Isaac is a 120-frame pixel-art strip stepped by CSS.
 
-Engine downloads and range checks overlap with bounded concurrency. Exact-range
-hosts stream archive windows; unreliable range hosts download whole chunks in the
-background without blocking startup. Compressed archive windows decode only when
-read. Immutable window URLs preserve the browser's download cache.
+Downloads run in parallel. Hosts that support range requests stream archive
+windows on demand; others download whole chunks in the background.
 
 ### Touch controls
 
-`scripts/recomp/web/touch_controls.mjs` draws nothing but sticks, a pause mark
-and the item bar; everything else is the game's own HUD and menus, read out of
-guest memory by `touch_game.mjs` (every offset cites the instruction that reads
-it). Every action is one of the game's keyboard keys, paced on native frames by
-`touch_input.mjs`.
+`scripts/recomp/web/touch_controls.mjs` draws only the sticks, the pause mark
+and the item bar. Everything else is the game's own HUD and menus, read from
+game memory by `touch_game.mjs`. Every action is a keyboard key, paced on game
+frames by `touch_input.mjs`.
 
-- Sticks are eight-way with hysteresis (`createStickDirection`): a thumb resting
-  on a sector edge keeps its direction, so diagonals never jitter.
+- The sticks are eight-way with a little hysteresis, so a thumb resting between
+  two directions doesn't flicker between them.
 - The item bar's art is extracted from the game's archives at build time
-  (`scripts/recomp/assets/page_assets.py` `build_hud`): the collectibles' icons,
-  each pocket pickup's own `HUD` frame, the charge bar, the bomb pickup, the HUD
-  number font and the pause screen's paper buttons for the pause mark.
-- Menu taps walk the game's own cursor to the tapped row, one key at a time,
-  each step confirmed by the cursor in memory; confirms wait for the menu's paper
-  to settle.
-- Haptics come from the game: `Game::ShakeScreen` stores its timeout at
-  `Game+0x26508` before it tests the RUMBLE option, and a hit starts the damage
-  cooldown. The options' RUMBLE row gates both.
-
-Rebuild the native engine when shipping these controls. Its `PeekMessageW` shim
-must honor `PM_NOREMOVE`: the game's Ctrl lookahead otherwise deletes the
-following item or pocket key.
+  (`build_hud` in `scripts/recomp/assets/page_assets.py`).
+- Tapping a menu row moves the game's own cursor there one step at a time, then
+  confirms once the menu has settled.
+- Rumble comes from the game itself (screen shakes and taking damage) and follows
+  the RUMBLE option.
 
 ### Saves and mods
 
-- Saves and options persist in the browser's IndexedDB and load before the
-  engine starts. **EDIT FILE** on the file-selection screen exports a file as a
-  ZIP or imports a ZIP or native `.dat` into that slot.
-- Mods live in their own store (`isaac-mods`); the page seeds the enabled ones
-  before the engine scans its directories. On the game's MODS screen a hint paper
-  opens the mod browser (B, or a tap): a CDN catalogue built by
-  `scripts/recomp/assets/modpack.py`, searchable, with each mod's description,
-  plus import from a ZIP or folder. RAR and 7z are refused.
+- Saves and options live in IndexedDB and load before the engine starts.
+  **EDIT FILE** on the file screen exports a slot as a ZIP or imports a ZIP or a
+  PC `.dat` save.
+- Mods have their own store (`isaac-mods`); enabled mods are seeded before the
+  engine scans for them. The MODS screen opens the mod browser: a catalogue
+  built by `scripts/recomp/assets/modpack.py`, plus import from a ZIP or folder.
 
 ## Requirements
 
-- Python 3.11+ with `pypcode`, Node.js 20+, and your own game executable and assets.
-- Emscripten 6.x (6.0.5+) with the emsdk environment activated; set `EMSDK`
-  if needed.
-- Ghidra and its supported Java runtime for analysis and lifting.
-- A C++20-capable host `clang++` for native/decomp verification. Slice builds
-  accept `CLANGXX` and `EMXX` overrides.
-- Playwright's Chromium for browser drivers (`npx playwright install chromium`).
+- Your own copy of the game.
+- Python 3.11+ with `pypcode`, and Node.js 20+.
+- Emscripten 6.0.5+ with emsdk activated (set `EMSDK` if needed).
+- Ghidra and its Java runtime, for analysis and lifting.
+- A C++20 `clang++` for the native decomp checks (`CLANGXX`/`EMXX` override it).
+- Playwright's Chromium for the browser drivers: `npx playwright install chromium`.
 
-The first lift and link are expensive. See the [boot notes](recomp-boot.md)
-and [architecture history](recomp-architecture.md) for input layout and
-pipeline details. Generated binaries, game data and oracle inputs remain local.
+The first lift and link take a while. [recomp-boot.md](recomp-boot.md) and
+[recomp-architecture.md](recomp-architecture.md) cover inputs and the pipeline.
+Everything generated stays local.
 
-## Build and run the full game
-
-After preparing the local executable and analysis inputs:
+## Build and run
 
 ```sh
 npm install
@@ -109,7 +86,7 @@ python scripts/recomp/host/memimage.py
 python scripts/recomp/host/verify_memimage.py
 python scripts/recomp/host/gen_shims.py
 
-# Lift and check the host
+# Lift, then check the host
 python scripts/recomp/lift/lift_parallel.py --jobs 4 \
     --exe tools/isaac-ng.unpacked.exe \
     --ghidra-functions output/recomp/export/functions.jsonl \
@@ -125,7 +102,7 @@ python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu \
     --exe tools/isaac-ng.unpacked.exe
 python scripts/recomp/host/build_selftest.py
 
-# Replace <game-dir> with your local game directory
+# Bundle the game files (replace <game-dir>), build the module, ship, serve
 python scripts/recomp/assets/bundle.py build <game-dir> .scratch/game-bundle --strict
 python scripts/recomp/lift/build_boot.py --web --fast --jobs 3
 python scripts/recomp/assets/ship.py build
@@ -133,89 +110,64 @@ python scripts/recomp/assets/ship.py check .scratch/game-dist
 node scripts/recomp/web/serve_dist.mjs .scratch/game-dist 8200
 ```
 
-Open http://127.0.0.1:8200/. The server is loopback-only; keep its terminal
-running.
+Then open http://127.0.0.1:8200/.
 
-For subsequent module changes:
+After a change to the module:
 
 ```sh
 python scripts/recomp/lift/build_boot.py --web --fast --jobs 3
 python scripts/recomp/assets/ship.py build --no-compress
 ```
 
-Reload the browser after shipping. Module files are copied, not linked;
-`--no-compress` avoids compression during local iteration. Lifted-object cache
-receipts validate both build inputs and object bytes.
+`npm run serve` runs the separate decomp-slice host, not the full game. The
+`native/decomp/`, `decomp/`, `platform/` and `web/` trees belong to that
+hand-translation track.
 
-**`npm run serve` serves the separate decomp-slice host, not the full game.**
-The `native/decomp/`, `decomp/`, `platform/` and `web/` trees support that
-incremental porting track; they do not replace `scripts/recomp/`.
-
-## Verify
+## Tests
 
 ```sh
-npm run decomp:status
-npm run repo:check
 npm test
+npm run repo:check
 python scripts/recomp/host/build_selftest.py
-python scripts/recomp/assets/ship.py check .scratch/game-dist
 
-# Page, loading, audio, shipping and touch suites
+# Page, loading, audio, shipping and touch
 node --test tests/recomp-portable.test.js tests/recomp-audio.test.js tests/recomp-web.test.js tests/recomp-ship.test.js
 node --test tests/recomp-touch.test.js tests/recomp-touch-game.test.js tests/recomp-host-input.test.js
 
-# Real-page smoke with save persistence disabled
+# Boot the real page and play a few frames
 node scripts/recomp/web/drive_interactive.mjs "http://127.0.0.1:8200/?frames=1500&persist=0" output/recomp/local-smoke
-
-# Loading: visible native title and advancing gameplay
 node scripts/recomp/web/drive_boot.mjs "http://127.0.0.1:8200/play.html?ISAAC_EPOCH=1700000000" output/recomp/boot-check visits=2 cpu=4 gl=hw profile=0 timeout=600
 
-# Separate hardware-rendered CPU attribution
+# CPU profile of a live session
 node scripts/recomp/web/profile_play.mjs "http://127.0.0.1:8200/?persist=0" output/recomp/local-profile cpu=1 gl=hw seconds=10
 ```
 
-The interactive smoke uses software rendering. Automated game drivers mute
-speaker output; native mixing and WebAudio still run. Drivers for saves, mods,
-floors and stress workloads live in [`scripts/recomp/web`](../scripts/recomp/web).
-Run timing comparisons sequentially, without competing builds, profilers or game
-tabs. Frame counters alone do not prove readiness.
-
-The full decomp handoff gate has a separate legacy-host prerequisite:
-
-```sh
-node scripts/build-wasm.mjs
-node scripts/decomp/verify-unit.mjs --handoff
-```
-
-These commands require an activated emsdk environment. See the
-[unit runbook](unit-runbook.md) and
-[oracle specification](../scripts/recomp/oracle/SPEC_FORMAT.md) for focused checks.
+More drivers (saves, mods, floors, stress) are in
+[`scripts/recomp/web`](../scripts/recomp/web). The decomp track has its own gate,
+`node scripts/decomp/verify-unit.mjs`; see the [unit runbook](unit-runbook.md).
 
 ## Portable builds and releases
 
 ```sh
-# Single HTML file with its payload inline; no network required
+# One HTML file with everything inside; works offline
 python scripts/recomp/assets/portable.py offline .scratch/game-dist .scratch/isaac.html
 
-# Page and separate payload chunks for a static host
+# A page plus payload chunks for a static host
 python scripts/recomp/assets/portable.py chunks .scratch/game-dist .scratch/portable-local --chunks 33 \
     --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c
 
-# Optional CDN mod catalogue
+# Optional mod catalogue
 python scripts/recomp/assets/modpack.py <mods-dir> out/mods --base https://cdn.example.com/mods
 ```
 
-Chunking follows access patterns. Windowed archives use range requests; hosts
-that ignore ranges download whole chunks. Check actual sizes against jsDelivr's
-20 MB limit. Chunks are XOR-scrambled and inline modules minified by default;
-`--plain` disables both. Scrambling is not encryption.
+Chunks stay under jsDelivr's 20 MB file limit. They are lightly scrambled (not
+encrypted) and the inline modules minified; `--plain` turns both off.
 
-### Updating the public release
+### Publishing
 
-This repository's `main` serves the page. `chiikabu/boi-portable` stores the
-payload; binary chunks do not belong in this source repository. A local vanilla
-bundle is **not** the deployed optimized bundle. Verify every instance file
-against the deployed manifest before replacing it.
+`main` of this repository serves the page; `chiikabu/boi-portable` holds the
+payload. Build from the published bundle, reuse the existing key, and pin the
+page to the payload commit:
 
 ```sh
 python scripts/recomp/assets/ship.py build --bundle .scratch/publish-bundle \
@@ -226,44 +178,26 @@ python scripts/recomp/assets/portable.py chunks .scratch/publish-dist .scratch/p
     --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c \
     --base-b https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@79d199a/c \
     --catalogue https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/mods
-```
 
-Preserve the key, 19 MiB B-chunk geometry and compressed-window metadata
-(`wl`, `wz`, `win`). Retain `@79d199a` only after all 28 rebuilt B chunks match
-its published bytes. Commit A chunks first, then pin the page's A base to that
-immutable payload commit. Purge mutable `@main` URLs, not immutable commit URLs:
-
-```sh
+# After pushing the chunks
 node scripts/recomp/assets/purge_cdn.mjs .scratch/publish-chunks gh/chiikabu/boi-portable@main
 node scripts/recomp/assets/check_deployed.mjs \
     https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@<payload-commit> \
     https://chiikabu.github.io/the-browsing-of-isaac/ .scratch/publish-chunks
 ```
 
-The verifier checks A in full and B by 64 KiB prefixes. Also verify the public
-page through visible title and advancing gameplay; a successful push or purge
-is not deployment proof.
+## Known gaps
 
-## Performance and limitations
+- Busy fights can drop below 60 fps on slower machines.
+- The Bloom and Hallucination shaders log warnings.
+- Steam and EOS online features are stubbed out.
+- Language packs aren't mounted; the game runs in English.
 
-- No consistent 60 FPS claim is established. Crowded combat can be slower, and
-  CPU throttling does not reproduce a physical Chromebook's GPU or memory limits.
-- Existing checks do not prove every floor, save, mod or visual effect. Known
-  Bloom/Hallucination shader diagnostics remain.
-- Steam/EOS online services are stubbed. Language archives are deliberately not
-  mounted because they would shadow English assets.
-- Rendering, simulation cadence and audio quality must not be reduced to improve
-  benchmark numbers. Presentation counts are not simulation ticks.
+## Where things are
 
-Historical measurements and correctness scope live in the
-[port log](decomp-port.md), [architecture log](recomp-architecture.md)
-and [handoff notes](HANDOFF.md). `npm run decomp:status` reports live port state.
-
-## Source map
-
-- [`scripts/recomp/host`](../scripts/recomp/host): host layer and fast paths.
-- [`scripts/recomp/lift`](../scripts/recomp/lift): lifter, code generation and module builds.
-- [`scripts/recomp/assets`](../scripts/recomp/assets): archives, shipping, portable builds and mod catalogues.
-- [`scripts/recomp/web`](../scripts/recomp/web): page, boot pipeline, touch controls and browser drivers.
-- [`tests`](../tests): Node test suites.
-- [Decomp port](decomp-port.md) and [unit runbook](unit-runbook.md): incremental native/Wasm work.
+- [`scripts/recomp/host`](../scripts/recomp/host): the host layer.
+- [`scripts/recomp/lift`](../scripts/recomp/lift): the lifter and module builds.
+- [`scripts/recomp/assets`](../scripts/recomp/assets): archives, shipping, portable builds, mod catalogues.
+- [`scripts/recomp/web`](../scripts/recomp/web): the page, boot, touch controls and browser drivers.
+- [`tests`](../tests): test suites.
+- [decomp-port.md](decomp-port.md) and [recomp-architecture.md](recomp-architecture.md): the working logs of the port.
