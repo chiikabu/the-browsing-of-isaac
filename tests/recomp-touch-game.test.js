@@ -34,11 +34,11 @@ test('the fire stick gives four directions, one key each, split on the diagonals
 test('the fire stick holds its direction across a diagonal until the thumb is clearly past it', () => {
   const stick = createStickDirection({ shooting: true });
   assert.deepEqual(stick.keys(...at(0)), ['right']);
-  // 45 is the edge; 15 degrees of give on top
-  for (const degrees of [44, 50, 58, -50, -58, 30]) assert.deepEqual(stick.keys(...at(degrees)), ['right'], `${degrees} deg`);
-  assert.deepEqual(stick.keys(...at(62)), ['down']);
-  assert.deepEqual(stick.keys(...at(35)), ['down']);
-  assert.deepEqual(stick.keys(...at(28)), ['right']);
+  // 45 is the edge; 8 degrees of give on top
+  for (const degrees of [44, 50, 52, -50, -52, 30]) assert.deepEqual(stick.keys(...at(degrees)), ['right'], `${degrees} deg`);
+  assert.deepEqual(stick.keys(...at(56)), ['down']);
+  assert.deepEqual(stick.keys(...at(38)), ['down']);
+  assert.deepEqual(stick.keys(...at(35)), ['right']);
 });
 
 test('the fire stick answers a short push', () => {
@@ -59,14 +59,15 @@ test('a walking thumb brought back to rest near the middle stops Isaac', () => {
 });
 
 test('a thumb wobbling across a sector edge keeps its direction: no diagonal jitter', () => {
-  // Resting on the up-right diagonal and drifting either side of its sector edges.
+  // Resting on the up-right diagonal and drifting either side of its sector edges
+  // (22.5 degrees each way, and 6 more of give).
   const stick = createStickDirection();
   assert.deepEqual(stick.keys(...at(315)), ['d', 'w']);
-  for (const degrees of [292, 338, 289, 341, 300, 330, 291]) assert.deepEqual(stick.keys(...at(degrees)), ['d', 'w'], `${degrees} deg`);
+  for (const degrees of [292, 338, 288, 342, 300, 330, 291]) assert.deepEqual(stick.keys(...at(degrees)), ['d', 'w'], `${degrees} deg`);
   // Clearly past the edge, the neighbour takes over, and holds the same way.
-  assert.deepEqual(stick.keys(...at(275)), ['w']);
-  assert.deepEqual(stick.keys(...at(300)), ['w']);
-  assert.deepEqual(stick.keys(...at(312)), ['d', 'w']);
+  assert.deepEqual(stick.keys(...at(285)), ['w']);
+  assert.deepEqual(stick.keys(...at(296)), ['w']);
+  assert.deepEqual(stick.keys(...at(300)), ['d', 'w'], '30 degrees off is a new direction, not a sticky old one');
 });
 
 test('the dead zone lets go later than it catches', () => {
@@ -76,9 +77,9 @@ test('the dead zone lets go later than it catches', () => {
   assert.deepEqual(stick.keys(...at(0, 0.26)), ['d']);
   assert.deepEqual(stick.keys(...at(0, 0.21)), ['d']);
   assert.deepEqual(stick.keys(...at(0, 0.19)), []);
-  // held, 120 degrees stays down; released, a fresh push takes the nearest sector
+  // held, 115 degrees stays down; released, a fresh push takes the nearest sector
   assert.deepEqual(stick.keys(...at(100)), ['s']);
-  assert.deepEqual(stick.keys(...at(120)), ['s']);
+  assert.deepEqual(stick.keys(...at(115)), ['s']);
   stick.reset();
   assert.deepEqual(stick.keys(...at(120)), ['a', 's']);
 });

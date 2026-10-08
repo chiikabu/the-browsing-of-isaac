@@ -11,8 +11,10 @@ export function stickKeys(x, y, shooting = false) {
 
 // Directions that stay put. A thumb resting near a sector edge must not flick
 // between neighbours: Isaac's body and head would turn on every flip. A
-// direction is kept until the stick leaves its sector by `hold` degrees; the
-// dead zone has the same give, in and out.
+// direction is kept until the stick leaves its sector by `hold` degrees -- a
+// few, no more: a wider margin (12 and 15) kept a thumb aimed 30 degrees off
+// still walking straight, which read as the stick not listening. The dead zone
+// has the same give, in and out.
 //
 // Walking takes eight directions. Firing takes four: Isaac's tears go up, down,
 // left or right, and two fire keys held at once turn his head to whichever
@@ -23,7 +25,7 @@ export function stickKeys(x, y, shooting = false) {
 // let-go kept Isaac walking 150+ units under a thumb resting 6 px out).
 const MOVE_KEYS = [['d'], ['d', 's'], ['s'], ['a', 's'], ['a'], ['a', 'w'], ['w'], ['d', 'w']];
 const FIRE_KEYS = [['right'], ['down'], ['left'], ['up']];
-export function createStickDirection({ shooting = false, deadzone = shooting ? 0.12 : 0.25, release = shooting ? 0.09 : 0.2, hold = shooting ? 15 : 12 } = {}) {
+export function createStickDirection({ shooting = false, deadzone = shooting ? 0.12 : 0.25, release = shooting ? 0.09 : 0.2, hold = shooting ? 8 : 6 } = {}) {
   const table = shooting ? FIRE_KEYS : MOVE_KEYS, width = 360 / table.length;
   let current = -1;
   return {

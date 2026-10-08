@@ -3,10 +3,11 @@
 //
 //   - Sticks: the left half moves in eight directions, the right half fires in
 //     the game's four, each holding steady (touch_input.mjs
-//     createStickDirection). In landscape a stick appears where the thumb
-//     lands, stays put while it drags and fades when it lifts; a thumb that
-//     lands again near the fire stick soon after picks it back up, so a burst
-//     of taps keeps aiming. In portrait both rest under the picture.
+//     createStickDirection). A stick appears where the thumb lands and follows
+//     a thumb that runs past its rim, so turning round is never far; in
+//     landscape it fades when the thumb lifts, in portrait it goes back to its
+//     rest under the picture. A thumb that lands again near the fire stick soon
+//     after picks it back up, so a burst of taps keeps aiming.
 //   - The game's own HUD is the button set: tap the minimap for the big map
 //     (hold to peek), the paper pause mark beside it pauses, the trinket and
 //     pocket corners swap or use on a tap and drop on a hold. Under the room,
@@ -462,10 +463,10 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
   }
 
   // ---- sticks -------------------------------------------------------------------
-  // A stick's base stays where it was put while the thumb drags; the knob
-  // follows to the rim and no further. Landscape puts the base under the thumb
-  // and fades it on lift. Portrait keeps both resting under the picture, in
-  // view all the time; a thumb anywhere on that side steers from the rest.
+  // A stick's base goes under the thumb that lands on its half; the knob follows
+  // to the rim, and a thumb past the rim drags the base behind it. Landscape
+  // fades a stick on lift; portrait shows both resting under the picture, and a
+  // stick goes back to its rest when its thumb lifts.
   const resting = () => mode === 'game' && portrait();
   function stickHome(stick) {
     const box = stageBox(), deckTop = box.y + box.h, deckH = innerHeight - deckTop;
@@ -482,9 +483,25 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     stick.el.style.transform = `translate(${x}px, ${y}px)`;
   }
   const setKnob = (stick, dx, dy) => { stick.knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`; };
+  // Where a stick's base may sit: on screen, and upright inside the deck under
+  // the picture.
+  function baseBounds() {
+    const margin = STICK_RADIUS + 8;
+    const top = portrait() ? stageBox().y + stageBox().h + STICK_RADIUS * 0.6 : margin;
+    return { x0: margin, x1: innerWidth - margin, y0: Math.min(top, innerHeight - margin), y1: innerHeight - margin };
+  }
+  const clampBase = (x, y) => { const b = baseBounds(); return [Math.max(b.x0, Math.min(b.x1, x)), Math.max(b.y0, Math.min(b.y1, y))]; };
   function moveStick(stick, cx, cy) {
     let dx = cx - stick.bx, dy = cy - stick.by;
-    const length = Math.hypot(dx, dy);
+    let length = Math.hypot(dx, dy);
+    // A thumb that runs past the rim drags the base along behind it, so turning
+    // round is always one radius of travel away, wherever the thumb has wandered.
+    if (length > STICK_RADIUS) {
+      const pull = (length - STICK_RADIUS) / length;
+      const [bx, by] = clampBase(stick.bx + dx * pull, stick.by + dy * pull);
+      placeStick(stick, bx, by);
+      dx = cx - stick.bx; dy = cy - stick.by; length = Math.hypot(dx, dy);
+    }
     if (length > STICK_RADIUS) { dx *= STICK_RADIUS / length; dy *= STICK_RADIUS / length; }
     stick.x = dx / STICK_RADIUS; stick.y = dy / STICK_RADIUS;
     setKnob(stick, dx, dy);
@@ -891,12 +908,12 @@ export function createTouchControls({ readState, emit, onGesture, guest, assetsU
     if (stick.pointer !== null) { pointers.delete(pointer.id); return; }
     stick.pointer = pointer.id;
     pointer.stick = stick;
-    if (!resting()) {
-      // only the fire stick picks its base back up: a walk starts where the thumb lands
-      const margin = STICK_RADIUS + 8, again = stick === sticks.fire ? relandBase(stick, cx, cy) : null;
-      if (again) placeStick(stick, again.x, again.y);
-      else placeStick(stick, Math.max(margin, Math.min(innerWidth - margin, cx)), Math.max(margin, Math.min(innerHeight - margin, cy)));
-    }
+    // The base goes under the thumb, upright too (the resting stick is where to
+    // look, not a point to steer from: a thumb landing beside it used to send
+    // Isaac off at once). Only the fire stick picks its base back up.
+    const again = stick === sticks.fire ? relandBase(stick, cx, cy) : null;
+    if (again) placeStick(stick, again.x, again.y);
+    else placeStick(stick, ...clampBase(cx, cy));
     showStick(stick, true);
     moveStick(stick, cx, cy);
   }
