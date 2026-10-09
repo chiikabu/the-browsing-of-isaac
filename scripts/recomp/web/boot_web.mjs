@@ -1067,7 +1067,11 @@ try {
       if (ok) memfs(path, bytes);
       return !!ok;
     };
-    const r = await seedMods(modDb, seed, log);
+    // A page with a catalogue has the MOD BROWSER paper on the MODS screen (play.mjs),
+    // and the browser adds a .zip too, so the IMPORT MOD row would be a second way
+    // in to the same place: it is seeded only where there is no browser.
+    const modBrowser = !!(params.get('catalogue') || window.isaacModCatalogue);
+    const r = await seedMods(modDb, seed, log, { sentinel: !modBrowser });
     log(`  ${r.mods} mod(s), ${r.files} file(s), ${(r.bytes / 1048576).toFixed(2)} MB`
       + (r.off ? `, ${r.off} off` : '') + (r.state ? `, ${r.state} state file(s)` : '')
       + (r.skipped ? `, ${r.skipped} skipped` : '')

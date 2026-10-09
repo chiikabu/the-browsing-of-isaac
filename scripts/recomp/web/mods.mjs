@@ -38,6 +38,10 @@
 //                had installed nothing. With no mods the way in is the EDIT FILE
 //                menu's MODS row, which is the page's own and costs nothing.
 //
+//                And only on a page with no catalogue: where there is one, the
+//                MODS screen carries the MOD BROWSER paper, whose browser adds a
+//                .zip as well, so the row is left out (seedMods' sentinel: false).
+//
 // On enabled and disabled: the engine writes `disable.it` when a mod is toggled
 // off in its own list and greys the row, but it does not read that file back at
 // the next start -- measured, with the fs layer tracing, under both of the mods

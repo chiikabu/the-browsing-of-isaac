@@ -858,10 +858,12 @@ window.isaacKeyCapture = (ev, down) => {
 window.isaacEditFileMenu = editMenu;                      // the drivers look at it
 
 // ---- mods (round 74) ---------------------------------------------------------------
-// The game's own mods list carries a row named IMPORT MOD, which is a mod seeded
-// by the pipeline with nothing in it but a name. Enter on that row makes the game
-// write a disable.it into its folder; the pipeline claims that write instead of
-// storing it and calls this. So the button is the game's, and the menu is ours.
+// On a page with no catalogue, the game's own mods list carries a row named IMPORT
+// MOD, a mod seeded by the pipeline with nothing in it but a name. (With one, the
+// MOD BROWSER paper below is the way in and the row is left out.) Enter on that
+// row makes the game write a disable.it into its folder; the pipeline claims that
+// write instead of storing it and calls this. So the button is the game's, and the
+// menu is ours.
 // Drawn on the game's own paper, in the game's own font, with the game's own
 // cursor and menu sounds (menu_overlay.mjs) -- the browser's chrome has no place
 // on top of the game. The catalogue the browser reads is a URL the build carries

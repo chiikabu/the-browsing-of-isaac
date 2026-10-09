@@ -158,6 +158,45 @@ test('seeding builds every path itself, under mods/ and nowhere else', async () 
   assert.equal(r.off, 0);
 });
 
+test('with the MOD BROWSER on the page the import row is left out, and the mods are not', async () => {
+  const run = async (opts) => {
+    const seen = [];
+    const store = {
+      mods: [{ key: 'fiendfolio', value: { id: 'fiendfolio', name: 'Fiend Folio', files: 1, bytes: 2, added: 1 } }],
+      files: [{ key: 'fiendfolio/main.lua', value: { bytes: bytes('ab') } }],
+      state: [],
+    };
+    const fake = {
+      transaction: (name) => ({ objectStore: () => ({ openCursor: () => {
+        const rows = store[name].slice();
+        const req = {};
+        queueMicrotask(function step() {
+          if (!rows.length) { req.result = null; req.onsuccess(); return; }
+          const r = rows.shift();
+          req.result = { key: r.key, value: r.value, continue: () => queueMicrotask(step) };
+          req.onsuccess();
+        });
+        return req;
+      } }) }),
+    };
+    await seedMods(fake, (path) => { seen.push(path); return true; }, null, opts);
+    return seen;
+  };
+  const without = await run({ sentinel: false });
+  for (const root of GUEST_ROOTS) {
+    assert.ok(without.includes(`${root}fiendfolio/main.lua`), `the mod is still seeded under ${root}`);
+    assert.ok(!without.includes(`${root}${IMPORT_DIR}/metadata.xml`), `no import row under ${root}`);
+  }
+  const plain = await run(undefined);
+  assert.ok(plain.includes(`${GUEST_ROOTS[0]}${IMPORT_DIR}/metadata.xml`), 'a page with no browser still gets the row');
+  // the boot asks the same question the page asks before it shows the MOD BROWSER paper
+  const b = src('boot_web.mjs'), p = src('play.mjs');
+  assert.ok(b.includes("const modBrowser = !!(params.get('catalogue') || window.isaacModCatalogue);"), 'the boot looks for a catalogue');
+  assert.ok(b.includes('await seedMods(modDb, seed, log, { sentinel: !modBrowser });'), 'and leaves the row out when there is one');
+  assert.ok(p.includes("const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));"),
+    'the paper is shown on the same condition');
+});
+
 test('the import row is a mod, and the toggle on it is the button', () => {
   // the game prints the folder name in its list, so the folder is the label; the
   // leading space is what keeps it at the top of a sorted list
