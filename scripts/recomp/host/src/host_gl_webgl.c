@@ -150,6 +150,40 @@ static void glu_forget(uint32_t prog) {
     for (unsigned i = 0; i < GLU_SLOTS; ++i) if (g_glu[i].live && g_glu[i].prog == prog) g_glu[i].live = 0;
 }
 
+/* Fingerprints cover the canonical fragment GLSL bytes, including CRLF,
+ * so compatibility fixes never rewrite unknown/mod shaders. */
+static int canonical_shader_kind(const char *source) {
+    size_t length = strlen(source);
+    int kind;
+    uint64_t expected;
+    if (length == 679u) {
+        kind = 2; expected = UINT64_C(0x67586182f37f0e86);
+    } else if (length == 1243u) {
+        kind = 3; expected = UINT64_C(0x0265052d96e9aff9);
+    } else return 0;
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < length; ++i)
+        hash = (hash ^ (uint8_t)source[i]) * UINT64_C(1099511628211);
+    return hash == expected ? kind : 0;
+}
+/* GLSL ES 1.00 requires a loop-local index declaration. Both fingerprinted
+ * fragments (Bloom and Hallucination) declare i/j outside their two loops
+ * and never use either index afterward. Shadowing those unused declarations
+ * preserves every iteration and fixes the measured ANGLE compile errors.
+ * Exactly eight bytes are added, within glShaderSource's existing padding.
+ * Unknown/mod shaders are not rewritten. */
+static void canonical_shader_loops(char *source) {
+    char *cursor = source;
+    while ((cursor = strstr(cursor, "for")) != NULL) {
+        cursor += 3;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor != '(') continue;
+        ++cursor;
+        memmove(cursor + 4, cursor, strlen(cursor) + 1);
+        memcpy(cursor, "int ", 4);
+        cursor += 4;
+    }
+}
 /* ---- context capability answers the shared shim delegates here ---------- */
 void isaac_web_get_integerv(uint32_t pname, uint32_t out) {
     GLint v[4] = {0, 0, 0, 0};
@@ -480,6 +514,7 @@ GLFN(glShaderSource) {
     /* strip a desktop #version line */
     char *ver = strstr((char *)body, "#version");
     if (ver) { char *nl = strchr(ver, '\n'); if (nl) memmove(ver, nl + 1, strlen(nl + 1) + 1); else *ver = 0; }
+    if (frag && canonical_shader_kind(body)) canonical_shader_loops((char *)body);
     const GLchar *one = body;
     glShaderSource(shader, 1, &one, NULL);
     glCompileShader(shader);

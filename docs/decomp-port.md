@@ -5,6 +5,151 @@ measured static-port workflow. This is not a claim that decompiler output can be
 compiled unchanged: recovered C still needs types, object layouts, platform
 boundaries, and behavioral tests before it becomes trustworthy source.
 
+## 2026-10-08 — Remove reduced bloom; retain measured improvements
+
+The failed reduced-resolution bloom experiment has been removed, not merely
+disabled. The compositor, geometry proof, shader/program eligibility metadata,
+runtime switch, draw interception, diagnostic counters, and bloom-only
+selftests are gone. The fingerprinted stock Bloom/Hallucination loop-declaration
+repair remains; both effects render at the game's original resolution.
+Dispatch/audio optimizations and uniform/client-array correctness remain.
+
+The retained FPS gains come from two separate matched benchmark rounds:
+
+| Change | Heavy-scene pooled FPS | Change | Ordinary-scene pooled FPS |
+|---|---:|---:|---:|
+| Dispatcher and audio | 33.37 to 35.64 | +6.79% | 52.72 to 52.64 |
+| Uniform and vertex work | 32.36 to 33.36 | +3.06% | 51.15 to 51.79 |
+
+These values pool presentation counts over elapsed interval time. The first
+round's older narrative used arithmetic mean per-run FPS (+6.7%); pooling
+gives +6.8%. Each round used two repetitions per variant/workload, CPU ×4,
+hardware NVIDIA/ANGLE, stage 8, 18 scattered Hosts, seed `3JY16FLR`,
+180 warmup presentations, and 900 measured presentations per run. Heavy
+used 16 items; ordinary used zero.
+
+There is no original-versus-current cumulative measurement in these
+receipts, so adding or multiplying the two percentages is not a measured
+total improvement. Ordinary-scene changes (-0.16% and +1.24%) are small;
+no meaningful general ordinary-scene speedup or physical-phone gain is
+established. Source receipts are `output/recomp/lowend-verification/comparison.json`
+and `output/recomp/lowend-next/comparison-final.json`; the recomputed summary
+is `output/recomp/lowend-bloom-removed/retained-fps.json`.
+
+Removal verification: the 35-TU native host build links successfully;
+`build_selftest.py` passes **604 checks, zero failures/warnings**.
+`verify-unit.mjs --handoff` passes **4,267 npm results, zero failures** and
+**5,392 differential cases**. Actual native WebGL gameplay compiles both
+repaired stock shaders, renders Bloom at 960×540 even with the obsolete
+enable parameter supplied, and creates no compositor. Firing and movement
+remain visible; 58 presentations after the effect stops have no GL errors.
+No removed runtime identifiers remain in `scripts`, `tests`, `native`, or
+`web`. All 67 local distribution hashes pass `ship.py check`.
+
+The rebuilt local module is `96f59eab` at
+`output/recomp/lowend-bloom-removed/dist` (uncompressed smoke distribution).
+No production deployment was performed. ABI 101, 24 open boundaries,
+27 resolved boundaries, and next untranslated VA `0x00a14e2d` are unchanged.
+
+## 2026-10-08 — APK-style bloom and stock shader compatibility (experiment withdrawn)
+
+Historical record: the reduced-resolution path and its switch described below
+were subsequently removed. Only the independent stock-shader repair remains.
+
+The approved APK tradeoff is now implemented in the native WebGL frame path:
+qualified Bloom draws use half the viewport width and height, followed by
+NEAREST upscaling. A 960×540 pass becomes 480×270, reducing the expensive
+fragment shader's invocations by 75%; the extra composition pass is not free.
+The minimum target height is 270. Assets, simulation, and other effect
+resolutions are unchanged. Reduction is opt-in with `ISAAC_GL_BLOOM=1`;
+full resolution remains the default, also selected by `ISAAC_GL_BLOOM=0`.
+
+The evidence is the local `apk/tboi1.71.apk`, SHA-256
+`830b5d1bc54bc0a2c58e37f0635cbc8f911136a824aab20c482117d790232f62`.
+Its ARM64 `shim_bloom_draw` at `0x136308` is reached from `shim_DrawElements`
+at `0x0cef7c`; its private low-resolution target uses NEAREST magnification.
+No APK code, shader source, assets, or libraries are bundled into the port.
+
+Implementation and correctness:
+
+- `host_gl_webgl.c` fingerprints the actual stock vertex/fragment sources,
+  tracks shader-object lifetime rather than recycled numeric names, and
+  invalidates program eligibility on relink/deletion. Unknown programs retain
+  their original rendering path.
+- `isaac_gl_bloom_quad` proves full viewport coverage from the actual indexed
+  client geometry and cached transform. It checks the shared diagonal, common
+  winding, guest-memory spans, clipping, and CPU/GPU floating-point uncertainty.
+  A bounding box alone would not prove coverage.
+- `host_gl_bloom.c` reuses one private target and compositor. It preserves
+  draw/read framebuffers, post-source VAO and buffers, sampler/texture bindings,
+  viewport, masks, blending, and culling. Effective depth/stencil and other
+  unsupported coverage states fall back. The native renderer enables depth
+  testing on a color-only framebuffer; that inert state is supported.
+- Stock Bloom and Hallucination were failing ANGLE compilation because their
+  loop indices were declared outside the loops. A fingerprinted eight-byte
+  declaration repair preserves their equations and iterations. It remains
+  enabled with `ISAAC_GL_BLOOM=0`; comparing against a broken, invisible effect
+  would not be a valid performance control.
+- Review exposed an HDR error in the first compositor: an original value
+  near 2.2 became 1.0 through RGBA8. Actual WebGL2 pixels reproduced it.
+  Eligibility now requires a linear, unsigned-normalized 8-bit RGB target
+  with zero or eight alpha bits. Floating, integer, sRGB, and higher-precision
+  destinations retain the original path. The repaired fixture preserves HDR
+  and the GPU's original 10-bit rounding. See the
+  [Khronos floating-color contract](https://registry.khronos.org/webgl/extensions/EXT_color_buffer_float/).
+
+Verification: host selftest **672 checks, zero failures**; seven geometry
+mutants and eight actual-WebGL mutants killed through `mutate.mjs`, with
+byte-identical source restoration. Real NVIDIA/D3D11 WebGL2 checks cover
+shader compilation, pixels, target reuse/resizing, a bound pixel-unpack
+buffer, default and offscreen framebuffers, state restoration, unsupported
+color formats, and context loss/restoration. A managed-browser native run
+performed **378 reduced composites with one target allocation and no GL
+errors**, showed firing and movement, then advanced 38 ordinary presentations
+without another composite after the effect ended.
+
+Final matched timing used the same immutable module and assets, a fixed
+seed, 16 items, 18 scattered Hosts, 180 warmup frames, and 600 measured
+presentations at CPU ×4 on NVIDIA/D3D11. Order was reduced/full/full/reduced.
+Full versus reduced mean FPS was **25.28 versus 22.80** and **21.17 versus
+18.19**: reductions of **9.8% and 14.1%**, not a performance win. Accordingly,
+reduction is available for device-specific experiments but is not enabled
+by default. The stock-shader compatibility repairs remain enabled.
+The whole-runtime CPU profile records 1,127.566 ms (2.8% of 40,560 ms
+sampled) in `getFramebufferAttachmentParameter`, directly beneath
+`isaac_gl_bloom_begin`. This establishes query overhead, not the complete
+cause of the slowdown. The safe default avoids the compositor entirely;
+no attachment-format cache with unproved invalidation was introduced.
+The final `ce750351` module was rebuilt with this opt-in policy and the full
+handoff gate rerun: **4,267 passed, zero failed**, plus **5,392 differential
+cases**. Actual native gameplay verified default 960×540 Bloom without a
+compositor, explicit opt-in 480×270 Bloom (170 composites, one allocation),
+and 43 subsequent ordinary presentations with no extra composites or GL
+errors. Visible firing and movement were checked. The final local
+distribution is `output/recomp/lowend-third/shipping-optin`; all 67 files
+and 88 compressed siblings pass hash/decode verification. Best-encoding
+transfer size is 585,531,360 bytes, effectively unchanged from the preceding
+optimization unit (384 bytes smaller).
+
+Additional APK mechanisms were investigated rather than copied blindly.
+Its resource pack has 13,859 aliases accounting for 1,285,185,171 logical
+payload bytes. The current web archives contain only **141,600 bytes of
+identical packed-payload duplication**; decoded equality is not sufficient
+for direct sharing because the version-2 decoder uses each entry's `h2` key.
+No archive-format fork was introduced. Its four-bank sound cache validates
+owner state and only samples parts of the input payload; importing that
+cache without the same ownership guarantees risks stale audio. WebAudio
+already reuses uploaded buffers by AL identity. The texture-upload wrapper
+does not establish that uploads can be omitted; broader filter substitutions
+were not made.
+
+Evidence: `output/recomp/lowend-third/` contains the GPU, native-surface,
+geometry-mutation, and APK transfer receipts. `docs/DEVELOPING.md` documents
+the switch and rebuild/verification workflow. These are local native builds,
+not a production deployment or a physical-phone benchmark. Update ABI 101,
+24 open boundaries, and 27 resolved boundaries are unchanged. The next
+untranslated shader-uniform instruction remains **`0x00a14e2d`**.
+
 ## 2026-10-08 — Unchanged uniforms, exact vertex spans, and continuation ownership
 
 This unit keeps the lifted native/Wasm frame path, assets, resolution, effects,

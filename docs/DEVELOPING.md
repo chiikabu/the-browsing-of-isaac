@@ -189,6 +189,28 @@ Pool FPS as total presented intervals divided by total interval time.
 HUD canvas. CPU throttling is not proof of performance on physical low-end
 hardware.
 
+**Stock shader compatibility.**
+
+The native WebGL backend repairs the loop-index declarations in the
+fingerprinted stock Bloom and Hallucination fragments. Their original
+declarations failed GLSL ES 1.00 compilation in ANGLE. The repair preserves
+their equations and iteration counts; custom shaders are not rewritten.
+
+The reduced-resolution bloom experiment was removed after both final
+matched comparisons regressed FPS. Bloom renders at its original resolution;
+there is no reduced-bloom switch or compositor.
+
+Rebuild the native module and verify actual bloom in gameplay, including
+subsequent ordinary draws, rather than inferring delivery from shader
+compilation alone. The host regressions run with:
+
+```sh
+python scripts/recomp/host/build_selftest.py
+```
+
+See [decomp-port.md](decomp-port.md) for verification and measured FPS gains
+from the retained optimizations.
+
 Audio uploads borrow guest PCM only for the synchronous backend call.
 WebAudio owns the converted samples afterward, including queued versions
 whose guest buffers have been replaced or deleted. Aligned 16-bit uploads
@@ -276,7 +298,6 @@ node scripts/recomp/assets/check_deployed.mjs \
 ## Known gaps
 
 - Busy fights can drop below 60 fps on slower machines.
-- The Bloom and Hallucination shaders log warnings.
 - Steam and EOS online features are stubbed out.
 - Language packs aren't mounted; the game runs in English.
 
