@@ -272,6 +272,28 @@ python scripts/recomp/assets/modpack.py <mods-dir> out/mods --base https://cdn.e
 Chunks stay under jsDelivr's 20 MB file limit. They are lightly scrambled (not
 encrypted) and the inline modules minified; `--plain` turns both off.
 
+### Window recipes
+
+Most of the archive bytes a boot reads are 16-bit WAV sound effects, and a KAGE
+archive's version-2 (MiniZ) compression barely touches them. A version-0 archive
+(entries only XORed and byte-permuted) can instead ship each 1 MiB window as a
+*recipe*: the entries' plain bytes, with the PCM coded losslessly (FLAC-style
+fixed predictors, Rice codes, stereo side channels). The page's
+[`recipe.js`](../scripts/recomp/web/recipe.js) rebuilds the window into the
+archive's exact bytes; the engine reads version-0 archives itself.
+
+```sh
+python scripts/recomp/assets/archive.py repack --version 0 <in.a> <out.a>   # per DLC archive
+python scripts/recomp/assets/recipe.py size <out.a>                          # what recipes would save
+python scripts/recomp/assets/portable.py chunks <dist> <out> --part-mib 1 --window-gz \
+    --recipe resources/packed/afterbirthp.a resources/packed/afterbirth.a ...
+```
+
+A window ships as a recipe (flag 2) only when that takes at least 1.6% off it;
+windows of Ogg or PNG entries ship as they are. The game's own `sfx.a` is
+already version 0, so its recipes need no repack. Recipes shrank stream B
+from 525.8 to 454.0 MB, and a cold boot's reads from 171.8 to 119.9 MB.
+
 ### Publishing
 
 `main` of this repository serves the page; `chiikabu/boi-portable` holds the

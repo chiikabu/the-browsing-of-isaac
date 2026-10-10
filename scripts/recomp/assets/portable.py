@@ -53,6 +53,11 @@ WINDOWED = ("resources/packed/music.a", "resources/packed/videos.a",
             "resources/packed/afterbirth.a", "resources/packed/afterbirthp.a")
 SCRIPT_BYTES = 48 << 20        # one inline script's worth of base64
 WINDOW = MIB                   # the engine's window, and the range granularity
+# Window recipes (recipe.py): a window of a version-0 archive shipped as its entries' plain
+# bytes, PCM coded losslessly, rebuilt by isaacRecipeDecode. The page defines the function
+# globally ahead of the provider, which hands its source text to the reader Worker too.
+RECIPE_JS = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web", "recipe.js"),
+                 encoding="utf-8").read()
 LOADER_GIF_NAME = "loader-isaac.gif"
 LOADER_GIF_CACHE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
                                              ".scratch", "loader-assets"))
@@ -227,6 +232,38 @@ def plan(dist: str, skip: set[str]) -> list[dict]:
     return out
 
 
+def _recipe_windows(windowed: list[dict], b_len: int, rels: list[str]):
+    """window index -> recipe bytes for the windows of the named version-0 archives (None
+    for every other window). Files are window-aligned (lay_out), so a window belongs to one
+    file; its tail past the file's end is the zero padding before the next one."""
+    if not rels:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import recipe as R
+    want = set(rels)
+    missing = want - {f["rel"] for f in windowed}
+    if missing:
+        raise SystemExit("--recipe names no windowed file: %s" % ", ".join(sorted(missing)))
+    spans = []
+    for f in windowed:
+        if f["rel"] in want:
+            arch = R.V0Archive(f["path"])
+            if arch.size != f["size"]:
+                raise SystemExit("%s: archive is %d bytes, the layout says %d" % (f["rel"], arch.size, f["size"]))
+            spans.append((f["at"], f["size"], arch, R._KeyCache()))
+
+    def recipe_for(i: int):
+        start = i * WINDOW
+        for at, size, arch, keys in spans:
+            if at <= start < at + size:
+                lo = start - at
+                hi = min(size, lo + WINDOW)
+                tail = min(WINDOW, b_len - start) - (hi - lo)
+                return R.window_recipe(arch, arch.a.buf, lo, hi, keys, tail)
+        return None
+    return recipe_for
+
+
 def split_parts(files: list[dict]) -> tuple[list[dict], list[dict]]:
     """(read whole, read as windows)."""
     return ([f for f in files if f["rel"] not in WINDOWED],
@@ -288,12 +325,14 @@ class WindowPacker:
     stored as it is rather than paying an inflate on every read for nothing.
     """
 
-    def __init__(self, per_chunk: int, key: bytes, out_dir: str, tag: str, gzfn):
+    def __init__(self, per_chunk: int, key: bytes, out_dir: str, tag: str, gzfn, recipe_for=None):
         self.per_chunk = per_chunk
         self.key = key
         self.out_dir = out_dir
         self.tag = tag
         self.gzfn = gzfn
+        # window index -> recipe bytes (recipe.py) for a window of a version-0 archive, or None
+        self.recipe_for = recipe_for
         self.lens: list[int] = []          # compressed length of every window, in order
         self.flags: list[str] = []         # '1' where that window really is compressed
         self.chunks = 0
@@ -302,12 +341,20 @@ class WindowPacker:
         self._phys = 0                     # where this chunk starts in the stored stream
         self.written = 0
 
-    def add(self, _i: int, window: bytes) -> None:
-        packed = self.gzfn(window)
-        use = len(packed) <= len(window) - (len(window) >> 6)     # at least 1.6% off
-        body = packed if use else window
+    def add(self, i: int, window: bytes) -> None:
+        recipe = self.recipe_for(i) if self.recipe_for else None
+        cut = len(window) - (len(window) >> 6)                       # at least 1.6% off
+        # a version-0 archive's bytes are XOR noise; its recipe is plain bytes and coded
+        # PCM (flag '2', inflated then rebuilt). A window of entries that were already
+        # compressed (Ogg, PNG) gains nothing from one and ships as it is, unread.
+        packed = self.gzfn(recipe) if recipe is not None else None
+        if packed is not None and len(packed) <= cut:
+            body, flag = packed, "2"
+        else:
+            packed = self.gzfn(window)
+            body, flag = (packed, "1") if len(packed) <= cut else (window, "0")
         self.lens.append(len(body))
-        self.flags.append("1" if use else "0")
+        self.flags.append(flag)
         self._buf += body
         self._in_chunk += 1
         if self._in_chunk == self.per_chunk:
@@ -633,7 +680,10 @@ PROVIDER_JS = r"""
       new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
   }
   async function window1(s, k, stored) {
-    return S[s].wz.charAt(k) === '1' ? await inflate(stored) : stored;
+    var z = S[s].wz.charAt(k);
+    // '2': a recipe (recipe.js) -- inflated, then rebuilt into the archive's own bytes
+    if (z === '2') return isaacRecipeDecode(await inflate(stored));
+    return z === '1' ? await inflate(stored) : stored;
   }
   async function unpackWhole(s, i, raw) {
     if (S[s].wl) return raw;
@@ -880,7 +930,7 @@ PROVIDER_JS = r"""
         var w = P.workerWindows ? inWindow(p) : null;
         if (!w) return null;
         return name(p.s, p.i, w) + '#w=' + w.from + '-' + w.to + '@' + w.abs
-          + '!' + (S[p.s].wz.charAt(w.k) === '1' ? 1 : 0) + '*' + w.at + '-' + p.take;
+          + '!' + (+S[p.s].wz.charAt(w.k) || 0) + '*' + w.at + '-' + p.take;
       }
       var rawRange = { from: p.within, to: p.within + p.take - 1 };
       return name(p.s, p.i, rawRange) + '#r=' + rawRange.from + '-' + rawRange.to
@@ -978,6 +1028,8 @@ def cmd_chunks(args) -> int:
     # The chunk keeps its size and its logical contents; only the way it is
     # stored changes, so the file count does not move.
     b_wingz = bool(args.window_gz)
+    if getattr(args, "recipe", None) and not b_wingz:
+        raise SystemExit("--recipe ships windows of their own, so it needs --window-gz (--part-mib 1)")
     b_gz = False
     written = [0]
 
@@ -1042,7 +1094,8 @@ def cmd_chunks(args) -> int:
     else:
         n_a = cut(whole, a_size, emit_for("a", True, a_size))
         if b_wingz:
-            packer = WindowPacker(b_size // WINDOW, key, data_dir, "b", _gzip)
+            packer = WindowPacker(b_size // WINDOW, key, data_dir, "b", _gzip,
+                                  recipe_for=_recipe_windows(windowed, b_len, args.recipe or []))
             cut(windowed, WINDOW, packer.add)
             packer.flush()
             n_b = packer.chunks
@@ -1100,7 +1153,7 @@ def cmd_chunks(args) -> int:
         data["trail"] = json.loads(read(trail).decode("utf-8"))
     head = ('<script>window.__isaacPortableData = ' + json.dumps(data, separators=(",", ":")) + ';</script>\n'
             + catalogue_script(args) +
-            '<script>' + PROVIDER_JS + '</script>')
+            '<script>' + RECIPE_JS + PROVIDER_JS + '</script>')
     mods = {rel: read(os.path.join(args.dist, rel)).decode("utf-8") for rel in MODULES}
     if not args.plain:
         before = sum(len(v) for v in mods.values())
@@ -1173,7 +1226,7 @@ def cmd_offline(args) -> int:
         if state["budget"] >= SCRIPT_BYTES:
             flush()
     flush()
-    parts.append('<script>' + PROVIDER_JS + '</script>')
+    parts.append('<script>' + RECIPE_JS + PROVIDER_JS + '</script>')
     mods = {rel: read(os.path.join(args.dist, rel)).decode("utf-8") for rel in MODULES}
     parts.append('\n<script>window.__isaacModules = ' + json.dumps(mods) + ';</script>\n'
                  '<script>' + MODULE_LOADER_JS + '</script>')
@@ -1210,6 +1263,10 @@ def main(argv=None) -> int:
                    help="compress the ranged half too, one chunk per window (needs --part-mib 1). "
                         "The reader takes such a chunk whole, so it can be gzipped like part A: "
                         "-19.3 MB, and no byte range is ever asked for (round 89)")
+    p.add_argument("--recipe", nargs="*",
+                   help="windowed archives (version 0, archive.py repack --version 0) to ship as "
+                        "window recipes: plain entry bytes plus losslessly coded 16-bit PCM, "
+                        "rebuilt by the page (recipe.py, recipe.js); needs --window-gz")
     p.add_argument("--zopfli", action="store_true",
                    help="compress the whole-read chunks with zopfli instead of gzip -9 -- the same "
                         "gzip format the page already decodes, ~0.55 MB smaller, ~6 minutes slower "

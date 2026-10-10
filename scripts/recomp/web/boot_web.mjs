@@ -399,6 +399,10 @@ function start(key, url, len, why, want) {
         const ds = new DecompressionStream('gzip');
         win = new Uint8Array(await new Response(new Blob([win]).stream().pipeThrough(ds)).arrayBuffer());
       }
+      // 2: a window recipe -- plain entry bytes and coded PCM, rebuilt into the
+      // version-0 archive's own bytes by isaacRecipeDecode (recipe.js, appended
+      // to this Worker's source by the page)
+      if (winPacked === 2) win = isaacRecipeDecode(win);
       buf = win.slice(winFrom, winFrom + winTake).buffer;
     }
     // a host that ignored the Range sent the whole chunk: put it back from the
@@ -472,7 +476,9 @@ function startReader() {
   if (!Array.isArray(list)) list = [];
   const jobs = list.map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len]);
   let w;
-  try { w = new Worker(URL.createObjectURL(new Blob([READER_WORKER], { type: 'text/javascript' }))); } catch (e) { return; }
+  // the page's recipe decoder (recipe.js, defined by the portable page) goes along, as text
+  const recipeSrc = typeof window.isaacRecipeDecode === 'function' ? '\n' + String(window.isaacRecipeDecode) + '\n' : '';
+  try { w = new Worker(URL.createObjectURL(new Blob([READER_WORKER + recipeSrc], { type: 'text/javascript' }))); } catch (e) { return; }
   // round 77: a chunked build's payload is scrambled, and a window is a range the
   // Worker fetches, so the Worker is where it has to be put back
   if (hooks.chunkKey) w.postMessage({ xorKey: hooks.chunkKey });
