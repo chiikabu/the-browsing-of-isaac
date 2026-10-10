@@ -40,12 +40,19 @@ export function xinputState(gp) {
 
 // The slots: the browser's pads in its own order, four at most, each with the
 // packet number XInput keeps (it goes up when the state changes).
-export function createPads(getGamepads) {
+// memoMs (round 93): the game asks for each of its four slots, every frame, and each
+// ask was a navigator.getGamepads() -- 0.5% of a busy frame at CPU x4. Asks within
+// memoMs of the last real read share it; the page's menus see a pad at most that old.
+export function createPads(getGamepads, { memoMs = 0, now = () => performance.now() } = {}) {
   const packets = [0, 0, 0, 0], last = ['', '', '', ''];
+  let memo = null, memoAt = -Infinity;
   const list = () => {
+    if (memo && memoMs > 0 && now() - memoAt < memoMs) return memo;
     let raw = [];
     try { raw = Array.from((getGamepads && getGamepads()) || []); } catch { raw = []; }
-    return raw.filter((gp) => gp && gp.connected !== false).sort((p, q) => p.index - q.index).slice(0, 4);
+    memo = raw.filter((gp) => gp && gp.connected !== false).sort((p, q) => p.index - q.index).slice(0, 4);
+    memoAt = memoMs > 0 ? now() : -Infinity;
+    return memo;
   };
   return {
     // slot -> { packet, buttons, lt, rt, lx, ly, rx, ry } or null (not connected)

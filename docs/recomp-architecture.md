@@ -8581,3 +8581,58 @@ second pass, a viewport whose high bit is set, and the four tinted
 corners. A mutant that adds the x scale instead of multiplying is killed
 by that selftest. The running module does not have either patch until
 `build_boot.py --web --fast`.
+
+### 21.118 Round 93: what a busy frame costs, measured without the harness
+
+**The measurement first.** Three traps, each found by measuring twice:
+
+- Playwright turns on the DevTools Network domain on every page, which keeps
+  every response body for the inspector. That is ~250 MB of 0.5-1.4 MB
+  objects in the renderer's partition_alloc `buffer` partition. They survive
+  a forced GC, and no player has them. Renderer memory is quoted from
+  `.scratch/mobile-ui/raw-mem.mjs`: Chromium started by hand and driven over a
+  raw CDP socket with `Runtime.evaluate` only. The real footprint at frame
+  750 is ~970 MB, most of it the 704 MB `INITIAL_MEMORY`.
+- fps over a moving workload swings by +-3 fps (8%) between identical runs.
+  The floor and every Host's position come from the run's RNG. The useful
+  number is CPU per simulation tick: `heavy-bench.mjs --still` (seed
+  `3JY1 6FLR`, stage 8, 16 items, 18 Hosts, no input, CPU x4) divides
+  `Performance.getMetrics` TaskDuration by Game+0x264f8 ticks. It repeats to
+  ~0.05 ms per tick within a pair, though it drifts ~3 ms over an hour.
+- The game ticks at 29-32 per second while it presents 42-48 frames (fixed
+  seed, CPU x4). The simulation is time-based above ~30 fps, and the
+  in-between frames are the ones that drop. Skipping the render of those
+  frames (`0x009551cf` picks the tick frame by parity) buys game speed only
+  below 30 fps.
+
+**The page.** With `VSync=0`, the page's old `options.ini` default, main's
+limiter (`0x0093134d`) sleeps and then spins on QueryPerformanceCounter
+toward its own 1/60 s. That deadline beats against the browser's vsync, so
+every ~25th frame took 33 ms, with 2,500 clock reads per frame.
+`VSync=1` (SetVSync `0x00925ce0` sets bit `0x200` of `[0x00c798e4]`) skips
+the limiter: p99 33.4 -> 16.8 ms, clock reads -99%. The page now writes
+`VSync=1`, and flips a stored `0` once (eb1860c). `gamepad.mjs` gives the
+four slot asks of a frame one `getGamepads()` read (0.5% of a busy frame).
+
+**Measured and not shipped.** The engine enables its attributes, draws, and
+disables them around every draw: 518 enable/disable calls per frame at
+stage 8. Deferring both to the draw cut WebGL calls per frame from ~1,300
+to ~700. It synced GL's enabled set to the recorded one, and also skipped
+re-binds of the vertex ring, framebuffer, renderbuffer and cull face. The
+real-WebGL pixel suite passed, including a case that toggles only the
+recorded state. Five interleaved pairs measured 31.5 ms per tick before and
+32.2 after: no gain. A Chrome enable/disable is a few bytes in the command
+buffer. Reverted; a new engine also costs every returning visitor stream A
+(24 MB) again.
+
+An earlier try in this round deferred `AudioBuffer`s to first play and woke
+`Sleep` 2 ms early. Neither was measurable, and both were reverted. Only 38
+buffers exist at the title, because the game does not `alBufferData` every
+sound at boot. `setTimeout` is only 0.8 ms late in play.
+
+Where a stage-8 frame goes at CPU x4 (self time): lifted game code 51%,
+indirect dispatch 10% (V8 inlines hot callees into it), WebGL calls 10%,
+`(program)` 8%, host 7%, page JS 7%. The render path `0x009555c0` is 56%
+inclusive, the tick `0x006fadc0` 26%. Under the render, `0x006fbf42` takes
+31% and the batch flush `0x00a19180` 29%. Any gain left is in those, as
+21.112 says.

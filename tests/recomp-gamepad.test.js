@@ -91,3 +91,21 @@ test('the menu keys: edges of A, B, Y, Start, directions with a held repeat, and
   assert.deepEqual(keys.read(st(XI.Y | XI.B | XI.START), 500), ['b', 'start']);
   assert.deepEqual(keys.read(null, 510), []);
 });
+
+test('round 93: with memoMs, the slots of one frame share one Gamepad API read', () => {
+  let reads = 0, t = 0;
+  let list = [pad(0, { buttons: { 0: 1 } })];
+  const pads = createPads(() => { reads++; return list; }, { memoMs: 2, now: () => t });
+  for (let s = 0; s < 4; s++) pads.state(s);
+  pads.count();
+  assert.equal(reads, 1, 'four slots and a count inside the window: one read');
+  list = [pad(0, { buttons: { 1: 1 } })];
+  assert.equal(pads.state(0).buttons, XI.A, 'inside the window the frame keeps the state it read');
+  t = 2.5;
+  assert.equal(pads.state(0).buttons, XI.B, 'past the window the change is read');
+  assert.equal(reads, 2);
+  let plain = 0;
+  const unmemo = createPads(() => { plain++; return list; });
+  unmemo.state(0); unmemo.state(1);
+  assert.equal(plain, 2, 'without memoMs every ask reads');
+});

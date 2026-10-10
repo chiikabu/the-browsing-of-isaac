@@ -86,7 +86,7 @@ const cfg = {
 // The game polls XInput for four slots (host_shims_xinput.c); the page answers
 // from the browser's Gamepad API (gamepad.mjs) and plays the game's rumble on the
 // pad. A browser shows a pad to the page once one of its buttons is pressed.
-const pads = createPads(() => (typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : []));
+const pads = createPads(() => (typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : []), { memoMs: 2 });
 // a page menu that has the pad (play.mjs: EDIT FILE, the mods menus) shows the game a resting one
 const padGates = [createPadGate(), createPadGate(), createPadGate(), createPadGate()];
 cfg.isaacPadState = (slot) => {
