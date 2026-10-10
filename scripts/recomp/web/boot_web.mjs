@@ -285,6 +285,28 @@ let jobs = [], ji = 0, budget = 0, held = 0, inflightBytes = 0, parallel = 4, pr
 // a backslash -- see the note above the template, which is where the reason can
 // be written down with the characters it is about.
 let xorKey = null;
+// A body or a stream read chunk by chunk into one buffer. Response.arrayBuffer() left a
+// native copy of every window it read in the renderer, freed by no garbage collection
+// (197 MB of it by frame 150 in memory-infra; .scratch/mobile-ui/api-bytes.mjs).
+async function drain(readable) {
+  const rd = readable.getReader(), parts = [];
+  let n = 0;
+  for (;;) {
+    const c = await rd.read();
+    if (c.done) break;
+    parts.push(c.value); n += c.value.length;
+  }
+  if (parts.length === 1) return parts[0];
+  const out = new Uint8Array(n);
+  let o = 0;
+  for (const part of parts) { out.set(part, o); o += part.length; }
+  return out;
+}
+async function bodyBuffer(r) {
+  if (!r.body || !r.body.getReader) return r.arrayBuffer();
+  const u = await drain(r.body);
+  return u.byteOffset === 0 && u.byteLength === u.buffer.byteLength ? u.buffer : u.slice().buffer;
+}
 function unscramble(buf, pos) {
   if (!xorKey || pos < 0) return buf;
   const b = new Uint8Array(buf);
@@ -363,7 +385,7 @@ function start(key, url, len, why, want) {
               throw new Error('the host returned a different byte range');
             }
           }
-          const buf = await r.arrayBuffer();
+          const buf = await bodyBuffer(r);
           if (r.status === 206 && want0 >= 0) {
             if (buf.byteLength !== want1 - want0 + 1) throw new Error('short or oversized range body');
             postMessage({ download: { url, from: want0, to: want1 + 1 } });
@@ -381,7 +403,7 @@ function start(key, url, len, why, want) {
       if (r.body) await r.body.cancel().catch(() => {});
       throw new Error('whole chunk: HTTP ' + r.status);
     }
-    const buf = await r.arrayBuffer();
+    const buf = await bodyBuffer(r);
     if (r.status === 200) postMessage({ download: { url, from: 0, to: buf.byteLength } });
     return buf;
   };
@@ -396,8 +418,10 @@ function start(key, url, len, why, want) {
       // an ArrayBuffer and every such read came back undefined. Take a view.
       let win = new Uint8Array(unscramble(buf, winAt));
       if (winPacked) {
-        const ds = new DecompressionStream('gzip');
-        win = new Uint8Array(await new Response(new Blob([win]).stream().pipeThrough(ds)).arrayBuffer());
+        // into the stream's writer and drained: neither a Blob nor a Response keeps a copy
+        const ds = new DecompressionStream('gzip'), dw = ds.writable.getWriter();
+        dw.write(win).catch(() => {}); dw.close().catch(() => {});
+        win = await drain(ds.readable);
       }
       // 2: a window recipe -- plain entry bytes and coded PCM, rebuilt into the
       // version-0 archive's own bytes by isaacRecipeDecode (recipe.js, appended
@@ -648,6 +672,11 @@ cfg.isaacWantsFrame = (n) => {
   // 128 MB budget -- ~80 MB of the renderer's working set) and keeps 8 MB of
   // read-ahead for play; the trail's leftovers go with them
   if (n === READER_CLEAR_FRAME && reader && !runArmed) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
+  // the same moment for the portable page's cached whole-read chunks (stream A: the
+  // engine, the image, the eagerly seeded archives), spent once the boot is over
+  if (n === READER_CLEAR_FRAME && window.isaacPortable && typeof window.isaacPortable.release === 'function') {
+    try { const r = window.isaacPortable.release(); log(`  released the boot's chunks: ${(r.freed / 1048576).toFixed(0)} MB, ${r.kept} small files kept`); } catch (e) { /* they stay cached */ }
+  }
   // the run's trail: fetched from here, recorded from here until the first run is
   // RUN_TRAIL_UNTIL game frames in (Game+0x264f8, the same counter readReadyState uses)
   if (n >= RUN_TRAIL_ARM_FRAME && !runArmed) { trailJobs = null; armRunTrail(); runRecording = !runRecorded; }

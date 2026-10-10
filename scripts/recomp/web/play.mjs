@@ -1011,7 +1011,8 @@ const DEFAULT_OPTIONS = ['[Options]', 'Language=0', 'MusicVolume=0.7000', 'Music
   'MultiplayerColorSet=0', 'OnlineInputDelay=3', 'ItemInfoDisplayEnabled=0',
   'AcceptedPublicBeta_v1.9.7.17=1',        // the beta notice
   'AcceptedDataCollectionDisclaimer=1',    // the data-collection prompt; nothing here collects any
-  'EnableDebugConsole=0', 'MaxScale=99', 'MaxRenderScale=2', 'VSync=0', 'PauseOnFocusLost=1',
+  // VSync=1: see the one-time flip below for why
+  'EnableDebugConsole=0', 'MaxScale=99', 'MaxRenderScale=2', 'VSync=1', 'PauseOnFocusLost=1',
   'SteamCloud=0', 'MouseControl=0', 'BossHpOnBottom=1', 'AnnouncerVoiceMode=0', 'ConsoleFont=0',
   'FadedConsoleDisplay=0', 'SaveCommandHistory=1', 'WindowWidth=960', 'WindowHeight=540',
   'WindowPosX=8', 'WindowPosY=32', 'UseExclusiveFullscreen=0', 'EnableEpicOverlay=0',
@@ -1294,6 +1295,33 @@ try {
     try { localStorage.setItem('isaac-touch-bossbar-once', '1'); } catch { /* no storage */ }
   }
 } catch (e) { console.warn('[isaac] could not move the boss bar:', e.message); }
+
+// VSync on, once. With VSync=0 the game's own frame limiter (main, 0x0093134d) sleeps
+// and then spins on QueryPerformanceCounter to its 1/60 s, while the browser presents
+// on its vsync: the two clocks drift, and every ~25 frames one missed its vsync (56 fps
+// in play, a 33 ms frame each time, 2,500 clock reads a frame). With VSync=1
+// (SetVSync, 0x00925ce0) the game skips the limiter and paces on SwapBuffers, which
+// already waits for the browser's frame; the game's own guard (over 66 fps for 30
+// frames) turns the limiter back on for a faster display. DEFAULT_OPTIONS wrote VSync=0
+// until now, so a returning browser has it: flipped once, remembered, so a player who
+// turns it off in the game's options keeps it off.
+try {
+  if (!(() => { try { return localStorage.getItem('isaac-vsync-once') === '1'; } catch { return true; } })()) {
+    const db = await openStore();
+    if (db) {
+      const cur = await new Promise((resolve) => {
+        try { const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).get(OPTIONS_KEY); req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); }
+        catch { resolve(null); }
+      });
+      const text = cur && cur.bytes ? new TextDecoder().decode(cur.bytes) : '';
+      if (/^VSync=0[ \t]*$/m.test(text)) {
+        await writeSaves(db, [{ key: OPTIONS_KEY, src: cur.src || null, bytes: new TextEncoder().encode(text.replace(/^VSync=0[ \t]*$/m, 'VSync=1')) }], false);
+        console.log('[isaac] VSync on: the game paces on the browser\'s frames');
+      }
+    }
+    try { localStorage.setItem('isaac-vsync-once', '1'); } catch { /* no storage */ }
+  }
+} catch (e) { console.warn('[isaac] could not turn VSync on:', e.message); }
 
 // ---- go: the pipeline runs to the end of main; this import resolves when it does
 setStatus('loading');

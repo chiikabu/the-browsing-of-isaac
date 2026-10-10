@@ -19,13 +19,18 @@
 //            | 1 u8 channels u32 frames u32 skip u32 take u32 coded bytes
 //              16-bit PCM, `frames` frames coded below; the plain bytes are bytes
 //              [skip, skip + take) of the decoded interleaved little-endian samples.
+//            | 2 u8 channels u32 frames u32 skip u32 take u32 coded u16 first u16 block bytes
+//              the same in blocks of `block` frames, the first `first` long (0: a whole
+//              one): the blocks stay on the sound's own grid where a window cuts it.
 //
-// PCM code (MSB-first bits): blocks of up to 4096 frames. Stereo blocks start with
+// PCM code (MSB-first bits): blocks of up to 4096 frames (part 2: its block). Stereo blocks start with
 // 2 bits: 0 left/right, 1 left/side, 2 right/side (side = right - left, 17-bit). Per coded
 // channel: 3 bits predictor -- 0..4 FLAC's fixed order, 7 verbatim -- then verbatim
 // samples, or `order` warm-up samples and the residual in 4 partitions (the first
 // count % 4 one longer), each a 5-bit Rice parameter k and per residual a unary quotient
-// (ones ended by a zero) and k low bits; zigzag decoded.
+// (ones ended by a zero) and k low bits; zigzag decoded. Predictor 5: 4 bits s, then the
+// channel coded at width - s, every sample shifted left by s (FLAC's wasted bits: a
+// block whose low s bits are all zero, as near-lossless sound effects make them).
 function isaacRecipeDecode(src) {
   var B = src;
   var p = 0;
@@ -33,7 +38,7 @@ function isaacRecipeDecode(src) {
   function u16() { var v = B[p] | (B[p + 1] << 8); p += 2; return v; }
   function u32() { var v = (B[p] | (B[p + 1] << 8) | (B[p + 2] << 16) | (B[p + 3] << 24)) >>> 0; p += 4; return v; }
 
-  function pcmDecode(code, ch, frames) {
+  function pcmDecode(code, ch, frames, first, block) {
     var n = code.length;
     var C = new Uint8Array(n + 8);
     C.set(code);
@@ -68,10 +73,16 @@ function isaacRecipeDecode(src) {
       }
     }
     var out = new Int16Array(frames * ch);
-    var a = new Int32Array(4096), b = new Int32Array(4096);
+    var a = new Int32Array(block), b = new Int32Array(block);
     function channel(dst, len, width) {
       var t = bits(3);
       var i;
+      if (t === 5) {
+        var sh = bits(4), m = Math.pow(2, sh);
+        channel(dst, len, width - sh);
+        for (i = 0; i < len; i++) dst[i] *= m;
+        return;
+      }
       if (t === 7) { for (i = 0; i < len; i++) dst[i] = signed(width); return; }
       for (i = 0; i < t; i++) dst[i] = signed(width);
       var r = len - t, q = Math.floor(r / 4), extra = r % 4, at = t;
@@ -92,8 +103,8 @@ function isaacRecipeDecode(src) {
         }
       }
     }
-    for (var f0 = 0; f0 < frames; f0 += 4096) {
-      var len = Math.min(4096, frames - f0), i2;
+    for (var f0 = 0, blk = first > 0 && first < block ? first : block; f0 < frames; f0 += blk, blk = block) {
+      var len = Math.min(blk, frames - f0), i2;
       if (ch === 1) {
         channel(a, len, 16);
         for (i2 = 0; i2 < len; i2++) out[f0 + i2] = a[i2];
@@ -135,9 +146,11 @@ function isaacRecipeDecode(src) {
       if (pk === 0) {
         var ln = u32();
         plain.set(B.subarray(p, p + ln), w); p += ln; w += ln;
-      } else if (pk === 1) {
+      } else if (pk === 1 || pk === 2) {
         var chn = u8(), fr = u32(), sk = u32(), tk = u32(), cl = u32();
-        var pcm = pcmDecode(B.subarray(p, p + cl), chn, fr);
+        var first = pk === 2 ? u16() : 0, block = pk === 2 ? u16() : 4096;
+        if (!block || block > 4096) throw new Error('recipe PCM block ' + block);
+        var pcm = pcmDecode(B.subarray(p, p + cl), chn, fr, first, block);
         p += cl;
         plain.set(pcm.subarray(sk, sk + tk), w); w += tk;
       } else throw new Error('recipe part kind ' + pk);

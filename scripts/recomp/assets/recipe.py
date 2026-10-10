@@ -22,8 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from archive import Archive, raw_decode, raw_keys, RAW_XOR_CONST, MASK32  # noqa: E402
 
 WINDOW = 1 << 20
-BLOCK = 4096
+BLOCK = 4096                   # part 1's fixed block
+PCM_BLOCK = 1024               # the block window_recipe codes in (part 2 names it)
 STEREO_MODES = [0, 0, 0]       # blocks coded left/right, left/side, right/side (fixture report)
+SHIFTED = [0]                  # channel blocks coded with wasted bits (fixture report)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,23 @@ def _plan_channel(x, width):
     return best
 
 
+def _plan(x, width):
+    """_plan_channel, or ('s', shift, plan) when every sample's low `shift` bits are zero
+    (FLAC's wasted bits; recipe.js predictor 5): the block coded shifted right."""
+    best = _plan_channel(x, width)
+    orv = int(np.bitwise_or.reduce(x)) if len(x) else 0
+    if orv == 0:
+        return best
+    shift = 0
+    while shift < 15 and width - shift > 2 and not (orv >> shift) & 1:
+        shift += 1
+    if shift:
+        cost, plan = _plan_channel(x >> shift, width - shift)
+        if 7 + cost < best[0]:
+            return 7 + cost, ("s", shift, plan)
+    return best
+
+
 class _Bits:
     """MSB-first bit writer over numpy arrays of bit values."""
     def __init__(self):
@@ -116,23 +135,33 @@ class _Bits:
         return np.packbits(np.concatenate(self.chunks)).tobytes()
 
 
-def pcm_encode(pcm: bytes, channels: int) -> bytes:
-    """16-bit little-endian interleaved PCM (whole frames) -> the code recipe.js reads."""
+def _blocks(n, first, block=BLOCK):
+    """block bounds: a `first`-frame block (0: none) and then `block` frames each"""
+    starts = list(range(first, n, block)) if first else list(range(0, n, block))
+    if first:
+        starts = [0] + starts
+    return [(a, min(n, b)) for a, b in zip(starts, starts[1:] + [n])]
+
+
+def pcm_encode(pcm: bytes, channels: int, first: int = 0, block: int = BLOCK) -> bytes:
+    """16-bit little-endian interleaved PCM (whole frames) -> the code recipe.js reads, in
+    blocks of `block` frames; `first` is the first block's length (0: a whole block), to
+    keep the blocks on a sound's own grid."""
     s = np.frombuffer(pcm, dtype="<i2").astype(np.int64)
     w = _Bits()
     if channels == 1:
-        for f0 in range(0, len(s), BLOCK):
-            x = s[f0:f0 + BLOCK]
-            _cost, plan = _plan_channel(x, 16)
+        for a, b in _blocks(len(s), first, block):
+            x = s[a:b]
+            _cost, plan = _plan(x, 16)
             _emit_channel(w, x, plan, 16)
         return w.bytes()
     L, R = s[0::2], s[1::2]
-    for f0 in range(0, len(L), BLOCK):
-        l, r = L[f0:f0 + BLOCK], R[f0:f0 + BLOCK]
+    for a, b in _blocks(len(L), first, block):
+        l, r = L[a:b], R[a:b]
         side = r - l
-        cl, pl = _plan_channel(l, 16)
-        cr, pr = _plan_channel(r, 16)
-        cs, ps = _plan_channel(side, 17)
+        cl, pl = _plan(l, 16)
+        cr, pr = _plan(r, 16)
+        cs, ps = _plan(side, 17)
         modes = [(cl + cr, 0, (l, pl, 16), (r, pr, 16)),
                  (cl + cs, 1, (l, pl, 16), (side, ps, 17)),
                  (cr + cs, 2, (r, pr, 16), (side, ps, 17))]
@@ -145,6 +174,12 @@ def pcm_encode(pcm: bytes, channels: int) -> bytes:
 
 
 def _emit_channel(w, x, plan, width):
+    if plan[0] == "s":
+        SHIFTED[0] += 1
+        w.put(5, 3)
+        w.put(plan[1], 4)
+        _emit_channel(w, x >> plan[1], plan[2], width - plan[1])
+        return
     if plan[0] == "v":
         w.put(7, 3)
         w.put_signed(x, width)
@@ -158,7 +193,7 @@ def _emit_channel(w, x, plan, width):
         w.put_rice(u, k)
 
 
-def pcm_decode(code: bytes, channels: int, frames: int) -> bytes:
+def pcm_decode(code: bytes, channels: int, frames: int, first: int = 0, block: int = BLOCK) -> bytes:
     """Reference decoder (slow, for checks); recipe.js is the one the page runs."""
     bits = np.unpackbits(np.frombuffer(code, dtype=np.uint8))
     pos = [0]
@@ -182,6 +217,9 @@ def pcm_decode(code: bytes, channels: int, frames: int) -> bytes:
 
     def channel(n, width):
         t = get(3)
+        if t == 5:
+            sh = get(4)
+            return [v << sh for v in channel(n, width - sh)]
         if t == 7:
             return [signed(width) for _ in range(n)]
         x = [signed(width) for _ in range(t)]
@@ -199,8 +237,8 @@ def pcm_decode(code: bytes, channels: int, frames: int) -> bytes:
         return x
 
     out = []
-    for f0 in range(0, frames, BLOCK):
-        n = min(BLOCK, frames - f0)
+    for a0, b0 in _blocks(frames, first if 0 < first < block else 0, block):
+        n = b0 - a0
         if channels == 1:
             out.extend(channel(n, 16)); continue
         mode = get(2)
@@ -300,7 +338,8 @@ class _KeyCache:
         return k
 
 
-def window_recipe(arch: V0Archive, file_bytes, lo: int, hi: int, keys: _KeyCache, tail: int = 0) -> bytes:
+def window_recipe(arch: V0Archive, file_bytes, lo: int, hi: int, keys: _KeyCache, tail: int = 0,
+                  block: int = PCM_BLOCK) -> bytes:
     """The recipe for archive bytes [lo, hi) of one file (a window's share of it), then
     `tail` zero bytes (the padding that window-aligns the next file in the stream)."""
     segs = []
@@ -334,8 +373,13 @@ def window_recipe(arch: V0Archive, file_bytes, lo: int, hi: int, keys: _KeyCache
             s, t = max(d0, p0), min(d1, p1)
             if t > s:
                 f0, f1 = (s - p0) // frame, (t - p0 + frame - 1) // frame
-                code = pcm_encode(plain[p0 + f0 * frame:p0 + f1 * frame], ch)
-                parts.append(b"\1" + struct.pack("<BIIII", ch, f1 - f0, (s - p0) - f0 * frame, t - s, len(code)) + code)
+                first = (-f0) % block                   # back onto the sound's own block grid
+                code = pcm_encode(plain[p0 + f0 * frame:p0 + f1 * frame], ch, first, block)
+                head = struct.pack("<BIIII", ch, f1 - f0, (s - p0) - f0 * frame, t - s, len(code))
+                if first or block != BLOCK:
+                    parts.append(b"\2" + head + struct.pack("<HH", first, block) + code)
+                else:
+                    parts.append(b"\1" + head + code)
             lit(max(d0, p1), d1)
         else:
             lit(d0, d1)
@@ -367,7 +411,10 @@ def decode_recipe(r: bytes) -> bytes:
                 plain += r[p:p + n]; p += n
             else:
                 ch, fr, sk, tk, cl = struct.unpack_from("<BIIII", r, p); p += 17
-                pcm = pcm_decode(r[p:p + cl], ch, fr); p += cl
+                first, block = 0, BLOCK
+                if pk == 2:
+                    first, block = struct.unpack_from("<HH", r, p); p += 4
+                pcm = pcm_decode(r[p:p + cl], ch, fr, first, block); p += cl
                 plain += pcm[sk:sk + tk]
         ndw = len(plain) // 4
         keys = []
@@ -452,6 +499,9 @@ def cmd_fixture(args) -> int:
         ("sfx/stereo.wav", _wav(stereo.tobytes(), 44100, 2, extra=b"LIST" + struct.pack("<I", 6) + b"abcdef")),
         ("sfx/odd.wav", _wav(walk(5001).tobytes(), 24000, 1, odd=b"\x7f")),
         ("sfx/noise.wav", _wav(noise.tobytes(), 48000, 1)),
+        # near-lossless sound: low bits zeroed (lossy.py), 4 of them mono, 3 stereo
+        ("sfx/trim4.wav", _wav((walk(9000) // 16 * 16).astype("<i2").tobytes(), 44100, 1)),
+        ("sfx/trim3.wav", _wav((walk(12000) // 8 * 8).astype("<i2").tobytes(), 44100, 2)),
         ("sfx/eight.wav", _wav(bytes(range(256)) * 20, 11025, 1, bits=8)),
         ("gfx/a.anm2", (b"<AnimatedActor>" + b"<Frame XPosition=\"1\"/>" * 400 + b"</AnimatedActor>")),
         ("gfx/b.bin", rng.integers(0, 256, 30001).astype(np.uint8).tobytes()),
@@ -491,7 +541,7 @@ def cmd_fixture(args) -> int:
     while lo < len(data):
         hi = min(len(data), lo + args.piece)
         tail = 5 if hi == len(data) else 0
-        r = window_recipe(arch, data, lo, hi, keys, tail)
+        r = window_recipe(arch, data, lo, hi, keys, tail, BLOCK if len(pieces) % 2 else PCM_BLOCK)
         name = "p%d.recipe" % len(pieces)
         (out / name).write_bytes(r)
         assert decode_recipe(r) == data[lo:hi] + bytes(tail), "piece %d" % len(pieces)
@@ -499,7 +549,7 @@ def cmd_fixture(args) -> int:
         lo = hi
     import json
     (out / "pieces.json").write_text(json.dumps({"archive": "fixture.a", "pieces": pieces,
-                                                 "stereoModes": STEREO_MODES}, indent=1))
+                                                 "stereoModes": STEREO_MODES, "shifted": SHIFTED[0]}, indent=1))
     print("fixture: %d bytes, %d entries, %d pieces" % (len(data), len(items), len(pieces)))
     return 0
 

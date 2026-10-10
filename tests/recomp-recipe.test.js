@@ -36,7 +36,7 @@ function getFixture() {
   const r = spawnSync(python, [tool, 'fixture', dir], { cwd: root, encoding: 'utf8', stdio: 'pipe', timeout: 300000 });
   assert.equal(r.status, 0, `recipe.py fixture failed:\n${r.stdout}\n${r.stderr}`);
   const meta = JSON.parse(readFileSync(join(dir, 'pieces.json'), 'utf8'));
-  fixture = { dir, archive: new Uint8Array(readFileSync(join(dir, meta.archive))), pieces: meta.pieces, modes: meta.stereoModes };
+  fixture = { dir, archive: new Uint8Array(readFileSync(join(dir, meta.archive))), pieces: meta.pieces, modes: meta.stereoModes, shifted: meta.shifted };
   return fixture;
 }
 process.on('exit', () => { if (fixture) rmSync(fixture.dir, { recursive: true, force: true }); });
@@ -57,8 +57,11 @@ function inspect(r) {
       const pk = r[p++];
       if (pk === 0) { seen.lit++; p += 4 + dv.getUint32(p, true); continue; }
       seen.pcm++; seen.channels.add(r[p]);
+      if (pk === 2) seen.aligned = (seen.aligned || 0) + 1;
       p += 1 + 4 + 4 + 4;
-      p += 4 + dv.getUint32(p, true);
+      const coded = dv.getUint32(p, true);
+      p += 4 + (pk === 2 ? 4 : 0) + coded;
+      if (pk === 1) seen.whole = (seen.whole || 0) + 1;
     }
   }
   return seen;
@@ -90,6 +93,12 @@ test('the fixture really codes PCM, mono and stereo, beside plain bytes', { skip
   assert.ok(all.lit > 0 && all.v0 > 0 && all.raw > 0, JSON.stringify({ ...all, channels: [...all.channels] }));
   const { modes } = getFixture();
   assert.ok(modes.every((n) => n > 0), `every stereo mode is coded at least once (left/right, left/side, right/side): ${modes}`);
+  const { shifted } = getFixture();
+  assert.ok(shifted >= 4, `blocks coded with wasted bits (predictor 5): ${shifted}`);
+  const aligned = pieces.reduce((n, pc) => n + (inspect(new Uint8Array(readFileSync(join(dir, pc.file)))).aligned || 0), 0);
+  assert.ok(aligned >= 3, `PCM parts with their own block grid (part 2): ${aligned}`);
+  const whole = pieces.reduce((n, pc) => n + (inspect(new Uint8Array(readFileSync(join(dir, pc.file)))).whole || 0), 0);
+  assert.ok(whole >= 1, `PCM parts in 4096-frame blocks from their first frame (part 1): ${whole}`);
 });
 
 test('a damaged recipe never rebuilds the archive bytes silently', { skip: !python && 'needs python with numpy' }, () => {
@@ -143,4 +152,21 @@ test('a recipe ships only where it shrinks the window, else the window as it is'
   assert.deepEqual(flags, ['2', '0', '1'], 'shrinking recipe -> 2; incompressible recipe of noise -> the raw window; no recipe -> gzip');
   assert.equal(lens[1], 65536);
   assert.ok(lens[0] < 1000 && lens[2] < 1000);
+});
+
+// Near-lossless sound (lossy.py): low bits under a sound's own noise floor are rounded
+// away in place; nothing else in the archive moves, and silence keeps every bit.
+test('lossy.py trims only sound under its own floor and leaves the archive otherwise intact', { skip: !python && 'needs python with numpy' }, () => {
+  const r = spawnSync(python, [join(root, 'scripts', 'recomp', 'assets', 'lossy.py'), 'selftest'], { cwd: root, encoding: 'utf8', stdio: 'pipe', timeout: 300000 });
+  assert.equal(r.status, 0, r.stderr);
+  const o = JSON.parse(r.stdout.trim());
+  assert.ok(o.checksums, 'every rewritten entry carries its new mount checksum');
+  assert.ok(o.otherUnchanged, 'an entry that is not 16-bit PCM is byte for byte the same');
+  for (const n of ['sfx/tone.wav', 'sfx/gap.wav', 'sfx/stereo.wav']) {
+    assert.ok(o[n].headerSame, `${n}: the WAV header is untouched`);
+    assert.ok(o[n].changed > 0, `${n}: a loud sound over a noise floor loses low bits`);
+    assert.ok(o[n].snrDb > 70, `${n}: and stays at ${o[n].snrDb} dB SNR`);
+  }
+  assert.ok(o['sfx/gap.wav'].silenceUntouched, 'digital silence keeps every bit');
+  assert.ok(o.stats.bitsPerSample > 0.3 && o.stats.bitsPerSample < 4, JSON.stringify(o.stats));
 });

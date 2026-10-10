@@ -675,9 +675,27 @@ PROVIDER_JS = r"""
     return a;
   }
   function perChunk(s) { return S[s].size / S[s].win; }
+  // Fed into the stream's writer and read back chunk by chunk. `new Response(readable)
+  // .arrayBuffer()` here left a native copy of every inflated window and chunk in the
+  // renderer that no garbage collection ever freed: 199 calls, 197 MB of the renderer's
+  // buffer partition by frame 150 (memory-infra; .scratch/mobile-ui/api-bytes.mjs).
   async function inflate(bytes) {
-    return new Uint8Array(await new Response(
-      new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+    var ds = new DecompressionStream('gzip'), w = ds.writable.getWriter();
+    w.write(bytes).catch(function () { /* the readable side reports it */ });
+    w.close().catch(function () { /* the readable side reports it */ });
+    return await drain(ds.readable);
+  }
+  async function drain(readable) {
+    var rd = readable.getReader(), parts = [], n = 0;
+    for (;;) {
+      var c = await rd.read();
+      if (c.done) break;
+      parts.push(c.value); n += c.value.length;
+    }
+    if (parts.length === 1) return parts[0];
+    var out = new Uint8Array(n), o = 0;
+    for (var i = 0; i < parts.length; i++) { out.set(parts[i], o); o += parts[i].length; }
+    return out;
   }
   async function window1(s, k, stored) {
     var z = S[s].wz.charAt(k);
@@ -891,7 +909,41 @@ PROVIDER_JS = r"""
     // Observed inside fetchList; failed prefetches remain retryable by demands.
     fetchList(jobs, STREAM_WIDTH, true);
   }
+  // After the boot (boot_web calls this at frame 600) the whole-read chunks have done
+  // their work -- the engine compiled, the image placed, the archives copied into the
+  // engine's file system -- yet stayed cached: 72 MB of a 76 MB stream A, all session.
+  // The small files the page and the engine still read later (page-assets, scripts,
+  // loose resources: 2.4 MB) are copied out and kept; the chunks go. Anything else read
+  // later fetches its chunk again.
+  var kept = Object.create(null), KEEP_MAX = WIN;
+  function release() {
+    var names = Object.keys(P.files), n = 0, freed = 0;
+    for (var j = 0; j < names.length; j++) {
+      var f = P.files[names[j]];
+      if (!S[f.s].gz || f.size > KEEP_MAX || kept[names[j]]) continue;
+      var parts = span(f.s, f.at, f.at + f.size), out = new Uint8Array(f.size), ok = true;
+      for (var q = 0; q < parts.length; q++) {
+        var u = cache.get(parts[q].s + ':' + parts[q].i);
+        if (!u) { ok = false; break; }
+        out.set(u.subarray(parts[q].within, parts[q].within + parts[q].take), parts[q].at);
+      }
+      if (ok) { kept[names[j]] = out; n++; }
+    }
+    var keys = Array.from(cache.keys());
+    for (var k = 0; k < keys.length; k++) {
+      if (!S[Number(keys[k].split(':')[0])].gz) continue;
+      freed += cache.get(keys[k]).length;
+      forget(keys[k]);
+    }
+    return { kept: n, freed: freed };
+  }
+  function keptBytes(rel, off, len) {
+    var u = kept[rel];
+    if (!u) return null;
+    return Promise.resolve(u.slice(off, len ? Math.min(off + len, u.length) : u.length));
+  }
   window.isaacPortable = {
+    release: release,
     manifest: P.manifest,
     index: P.index,
     trail: P.trail || null,
@@ -937,7 +989,7 @@ PROVIDER_JS = r"""
         + '@' + (p.i * S[p.s].size + p.within) + '!' + chunkLen(p.s, p.i);
     } : null,
     bytesFor: P.base
-      ? function (rel, off, len) { var p = locate(rel, off, len); return p ? gather(p) : null; }
+      ? function (rel, off, len) { var p = keptBytes(rel, off, len) || locate(rel, off, len); return p && p.then ? p : p ? gather(p) : null; }
       : function (rel, off, len) {
           var parts = locate(rel, off, len);
           if (!parts) return null;

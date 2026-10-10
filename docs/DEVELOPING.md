@@ -294,6 +294,21 @@ windows of Ogg or PNG entries ship as they are. The game's own `sfx.a` is
 already version 0, so its recipes need no repack. Recipes shrank stream B
 from 525.8 to 454.0 MB, and a cold boot's reads from 171.8 to 119.9 MB.
 
+The shipped sound is near-lossless:
+[`lossy.py`](../scripts/recomp/assets/lossy.py) `trim` rounds away the low
+bits of each 1024-frame block that sit at least 6 dB under that moment's
+quietest spectral band (lossyWAV's rule; digital silence keeps every bit). It
+rewrites the archive in place, with the same layout and fresh entry
+checksums, and the recipe coder then never sends those bits.
+
+```sh
+python scripts/recomp/assets/lossy.py trim <v0.a> <trimmed.a> --margin 6
+```
+
+The page also starts with `VSync=1` in `options.ini`. With VSync off, the
+game's own frame limiter spins to a 60 Hz deadline that drifts against the
+browser's vsync, and every ~25th frame takes two vsyncs.
+
 ### Publishing
 
 `main` of this repository serves the page; `chiikabu/boi-portable` holds the
