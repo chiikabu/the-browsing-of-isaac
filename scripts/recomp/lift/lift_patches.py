@@ -98,6 +98,32 @@ PATCHES: dict[int, tuple[str, str]] = {
 # function, its first block is re-decoded from 0xa2b5c8, and both targets
 # get a case in its re-entry switch.
 BLOCK_PATCHES: list[tuple[str, str, str]] = [
+    # Round 93: main's render call. The in-between render (the pass after a
+    # tick, which Manager::Update spent doing nothing) is skipped when drawing
+    # it would make the next tick late (host_shims_win.c isaac_render_gate);
+    # the frame's audio iteration and thread slices still run. Nothing is
+    # pushed, and nothing from 0x009312f6 on reads what the render returns.
+    ("0x009312f1",
+     "L_009312f1: ;\n  RECOMP_VA(0x9312f1u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, ((uint32_t)0x9312f6u));\n",
+     """L_009312f1: ;
+  RECOMP_VA(0x9312f1u);
+  /* LIFT-PATCH 0x009312f1 (round 93): main's Manager render. Skipped on the
+     in-between pass after a tick when the next tick is already due, so a
+     device too slow for both passes keeps the game's speed; the skipped
+     frame's other duties run on the state a call would see. */
+  if (isaac_render_gate()) {
+    s->EBP = EBP; s->ESP = ESP; s->FS_OFFSET = FS_OFFSET; s->EAX = EAX; s->EBX = EBX;
+    s->ESI = ESI; s->EDI = EDI; s->ECX = ECX; s->EDX = EDX;
+    s->FPUInstructionPointer = FPUInstructionPointer; s->EIP = EIP;
+    isaac_render_skipped(s);
+    EBP = s->EBP; ESP = s->ESP; FS_OFFSET = s->FS_OFFSET; EAX = s->EAX; EBX = s->EBX;
+    ESI = s->ESI; EDI = s->EDI; ECX = s->ECX; EDX = s->EDX;
+    FPUInstructionPointer = s->FPUInstructionPointer; EIP = s->EIP;
+    goto L_009312f6;
+  }
+  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));
+  MEMW32(ESP, ((uint32_t)0x9312f6u));
+"""),
     # The lifter keeps this CMP's flags only in locals and omits them from
     # the return spill. Materialize the real flags on this one no-change
     # exit so mode 2 compares CPU state, not stale entry flags.

@@ -8636,3 +8636,88 @@ indirect dispatch 10% (V8 inlines hot callees into it), WebGL calls 10%,
 inclusive, the tick `0x006fadc0` 26%. Under the render, `0x006fbf42` takes
 31% and the batch flush `0x00a19180` 29%. Any gain left is in those, as
 21.112 says.
+
+### 21.119 Round 93b: the in-between frame a slow device skips
+
+**Why a slow device ran in slow motion.** The game ticks on every other pass
+of main's loop. Manager::Update (`0x00954cd0`) returns at once when its frame
+count `[+0x4abbc]` is odd, and the render after it (`0x009555c0`, called at
+`0x009312f1`) draws the scene again between two ticks. Each present yields to
+the browser, so the game keeps its speed only while one pass fits in 16.7 ms.
+On a slower device the whole game slows down: stage 8 at CPU x6 ran 42
+passes and 21 ticks a second, 70% speed.
+
+**The gate.** A block patch at `0x009312f1` asks `isaac_render_gate()`
+(host_shims_win.c) before the render call. The in-between render is skipped
+when drawing it would make the next tick late: the time since the last tick,
+plus the render's measured cost, plus the next update's measured cost, comes
+to a tick (1/30 s) or more. Render cost is timed from the gate to the
+present; the wait for the browser's frame is not counted. Both costs are
+EMAs (3:1).
+
+- A skipped frame keeps the frame's other duties (one audio-thread
+  iteration, one slice per thread job). It then sleeps out what is left
+  before the next tick is due, so the game never ticks faster than 30 a
+  second.
+- A drawn in-between frame is paced the same way, but only when its present
+  did not wait for the browser's frame. `isaac_yield_js` now returns whether
+  it waited: a pass of 15 ms or more yields at once.
+- The due instant runs on a schedule. A tick that came late makes the next
+  wait that much shorter, by at most 8 ms: under CPU throttling, a sleep fired
+  a measured +5 ms late on average. An early tick is not made up, so a display
+  a little faster than 60 Hz cannot grow into waits on every frame.
+- Whether to draw is decided from the last tick alone; only the waits read
+  the schedule. A device that keeps up never skips, however its ticks drift.
+- One skip at most after each tick, and none before the first. A paused game
+  or a menu never ticks, so it always draws.
+
+The decision is pure: the selftest drives it with exact instants (34
+checks: the rule, the schedule, the cap, the pace). 13 mutants were killed.
+Each broke one of these:
+
+- the update term, the render term or the render EMA;
+- the one-skip guard, or the wait;
+- the carry, the 8 ms cap or the early-tick floor;
+- the interval class;
+- the pace's target, or setting the pending pace;
+- clearing the pending pace on a tick, or on leaving the Game.
+
+Four more mutants were killed in `tests/recomp-web.test.js`, which pins the
+lift patch's register sync, the skip's jump, the yield's answer and the pace
+condition.
+
+`ISAAC_RENDER_GATE=0` turns the gate off. `=2` logs the tick intervals,
+sleeps and presents every 150 ticks. `=3` logs the same while drawing every
+frame and pacing nothing, which measures the plain loop.
+
+**Measured** (`heavy-bench.mjs --still`, stage 8 with 16 items and 18 Hosts,
+per second; same machine, gate on/off pairs back to back):
+
+| CPU | ticks on / off | displayed on / off | CPU per tick on / off |
+|---|---|---|---|
+| x1 | 30.0 / 30.1 | 60.0 / 60.0 | 5.3 / 5.2 ms |
+| x2 | 30.1 / 30.1 | 60.0 / 59.9 | 11.5 / 11.9 ms |
+| x4 | 31.0 / 30.0 | 52.1 / 53.0 | 26.3 / 27.0 ms |
+| x6 | 27.7 / 21.1 | 28.3 / 32.1 | 33.6 / 47.5 ms |
+| x6 | 28.6 / 22.7 | 32.8 / 32.3 | (a second pair) |
+| x8 | 17.7 / 13.8 | 17.4 / 27.2 | 58.2 / 73.5 ms |
+
+At x1 and x2 nothing is skipped and every tick interval is 33.33 ms (the
+`=2` log). At x6 the game runs at 92-95% speed instead of 70-76%, and CPU per
+game second drops by a quarter. The cost is the interpolated frames: at x8,
+17 frames a second, each a new tick, against 27 frames at 46% speed.
+
+Other checks under the gate:
+
+- Music at x6: the master output was never silent (50 ms samples), and the
+  two streams kept playing.
+- Three door transitions at x6 rendered cleanly, including frames in the
+  middle of the slide (`transition-check.mjs`).
+- `sound-check.mjs` passed.
+
+**Found on the way, not changed.** Without the gate, x4 on an idle machine
+runs 30-32 ticks a second (`=3`: drawn cycles average 30.4-31.2 ms). A pass
+of 15 ms or more yields through a MessageChannel instead of waiting for the
+animation frame. Chromium also runs a late frame's rAF as soon as the main
+thread frees. So two passes can share one vsync. The gate does not change
+this (x4: 31.0 against 29.7-31.7 off).

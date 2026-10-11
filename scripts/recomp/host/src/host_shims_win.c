@@ -662,9 +662,12 @@ int isaac_editfile_gate(uint32_t menu_va) {
     return isaac_editfile_js(slot);
 }
 
-EM_ASYNC_JS(void, isaac_yield_js, (void), {
+/* returns 1 when the frame waited (for the browser's frame, or the hidden
+ * page's timer), 0 when it only yielded (round 93's render gate paces those) */
+EM_ASYNC_JS(int, isaac_yield_js, (void), {
     var now = performance.now();
     var work = Module.isaacYieldResumed ? now - Module.isaacYieldResumed : 1e9;
+    var waited = 1;
     if (typeof document !== "undefined" && document.hidden) {
         await new Promise(function (resolve) { setTimeout(resolve, 250); });
     } else if (work < 15 && typeof requestAnimationFrame === "function") {
@@ -683,6 +686,7 @@ EM_ASYNC_JS(void, isaac_yield_js, (void), {
             requestAnimationFrame(function () { if (done) return; done = true; clearTimeout(timer); resolve(); });
         });
     } else {
+        waited = 0;
         if (!Module.isaacYieldChannel) {
             Module.isaacYieldChannel = new MessageChannel();
             Module.isaacYieldChannel.port1.onmessage = function () {
@@ -695,6 +699,7 @@ EM_ASYNC_JS(void, isaac_yield_js, (void), {
         });
     }
     Module.isaacYieldResumed = performance.now();
+    return waited;
 });
 /* ISAAC_YIELD=1: the web build yields to the event loop per frame and paces
  * itself on the wall clock -- interactive mode (round 25). */
@@ -718,6 +723,181 @@ int isaac_web_yield_enabled(void) {
  * 0x009d9d59 calls this in every profile. */
 int isaac_editfile_gate(uint32_t menu_va) { (void)menu_va; return 1; }
 #endif
+/* ---- round 93: the in-between frame a slow device does not draw ----------
+ * The engine ticks on every other pass of main's loop: Manager::Update
+ * (0x00954cd0) returns at once when its frame count [+0x4abbc] is odd, and the
+ * render that follows (0x009555c0, called at 0x009312f1) then draws the scene
+ * again between two ticks. Each pass waits for the browser's frame, so the
+ * game holds its speed only while a pass fits in 16.7 ms: a device slower than
+ * that runs the whole game slower (stage 8 at CPU x6: 29 passes and 14.6 ticks
+ * a second, half speed). The lift patch at 0x009312f1 asks this gate first,
+ * and the in-between render is skipped when drawing it would make the next
+ * tick late: when this render (its measured cost, from the gate to the
+ * present -- the wait for the browser's frame is not cost) and the next
+ * pass's update would end a tick (1/30 s) or more after the last tick's
+ * update ended. A skipped frame then waits out what is left before the
+ * next tick is due -- less than the render would have cost -- so the game
+ * never ticks faster than 30 a second either; and so does a drawn in-between
+ * frame whose present did not wait for the browser's frame (a pass of 15 ms
+ * or more yields at once, isaac_yield_js): two such passes in 30 ms ran the
+ * game 10% fast. The due instant runs on a schedule: a tick that came late (a
+ * browser timer fires late; measured +5 ms a sleep under CPU throttling)
+ * makes the next wait that much shorter, at most 8 ms, so the waits' errors
+ * do not add up into a slower game. An early tick is not made up -- a display
+ * a little faster than 60 Hz must not grow into waits on every frame. Only a
+ * wait reads the schedule; whether to draw is decided from the last tick
+ * alone, so a device that keeps up never skips however its ticks drift. One
+ * skip at most after each tick and none before the first: a paused game or a
+ * menu never ticks and always draws, and a device that keeps up never skips,
+ * so nothing changes where the game already runs at full speed (CPU x1 and
+ * x2: 0 skips, every tick 33.33 ms). Stage 8 at CPU x6: 21.1 -> 27.7 ticks a
+ * second; x8: 13.8 -> 17.7. The decision is pure (the selftest drives it);
+ * the web build feeds it the clock, the Game's frame counter [Game+0x264f8]
+ * and the resume of the last present. ISAAC_RENDER_GATE=0 turns it off; =2
+ * logs the tick intervals, waits and presents every 150 ticks; =3 logs the
+ * same with nothing skipped or paced, a measure of the plain loop. */
+static double g_rg_tick_at, g_rg_update, g_rg_resume, g_rg_render, g_rg_draw_at, g_rg_wait, g_rg_due, g_rg_carry;
+static double g_rg_pace_at;
+static uint32_t g_rg_ticks, g_rg_skipped, g_rg_drawn;
+static int g_rg_after_tick, g_rg_seen, g_rg_cls, g_rg_pace_pending;
+/* tick intervals by what the pass between them did: 0 no decision, 1 drew, 2 skipped */
+static double g_rg_iv_sum[3], g_rg_iv_max[3];
+static uint32_t g_rg_iv_n[3];
+void isaac_render_gate_reset(void) {
+    g_rg_tick_at = g_rg_update = g_rg_resume = g_rg_render = g_rg_draw_at = g_rg_wait = 0.0;
+    g_rg_due = g_rg_carry = g_rg_pace_at = 0.0;
+    g_rg_ticks = g_rg_skipped = g_rg_drawn = 0u;
+    g_rg_after_tick = g_rg_seen = g_rg_cls = g_rg_pace_pending = 0;
+    for (int i = 0; i < 3; ++i) { g_rg_iv_sum[i] = g_rg_iv_max[i] = 0.0; g_rg_iv_n[i] = 0u; }
+}
+/* when the loop resumed after a present (or a skipped one): the next update's start */
+void isaac_render_gate_resumed(double now_ms) { g_rg_resume = now_ms; }
+/* a present begins: the render drawn since the gate said draw cost this much */
+void isaac_render_gate_presenting(double now_ms) {
+    if (g_rg_draw_at > 0.0) {
+        double r = now_ms - g_rg_draw_at;
+        if (r >= 0.0 && r < 250.0) g_rg_render = g_rg_render > 0.0 ? g_rg_render * 0.75 + r * 0.25 : r;
+    }
+    g_rg_draw_at = 0.0;
+}
+double isaac_render_gate_render_ms(void) { return g_rg_render; }
+/* after a skip: how long to wait so the next tick is not early */
+double isaac_render_gate_wait_ms(void) { return g_rg_wait; }
+uint32_t isaac_render_gate_skipped(void) { return g_rg_skipped; }
+uint32_t isaac_render_gate_drawn(void) { return g_rg_drawn; }
+double isaac_render_gate_update_ms(void) { return g_rg_update; }
+double isaac_render_gate_carry_ms(void) { return g_rg_carry; }
+/* a present has ended: after a drawn in-between frame, how long until the next
+ * tick's update may begin (asked once; the caller waits only when the present
+ * did not wait for the browser's frame) */
+double isaac_render_gate_pace_ms(double now_ms) {
+    if (!g_rg_pace_pending) return 0.0;
+    g_rg_pace_pending = 0;
+    return g_rg_pace_at > now_ms ? g_rg_pace_at - now_ms : 0.0;
+}
+/* the mean and longest tick interval of a class since the last call, then forgotten */
+uint32_t isaac_render_gate_intervals(int cls, double *mean_ms, double *max_ms) {
+    uint32_t n = g_rg_iv_n[cls];
+    *mean_ms = n ? g_rg_iv_sum[cls] / n : 0.0;
+    *max_ms = g_rg_iv_max[cls];
+    g_rg_iv_n[cls] = 0u; g_rg_iv_sum[cls] = g_rg_iv_max[cls] = 0.0;
+    return n;
+}
+int isaac_render_gate_decide(double now_ms, int have_game, uint32_t game_ticks) {
+    if (!have_game) { g_rg_after_tick = g_rg_seen = g_rg_pace_pending = 0; g_rg_due = g_rg_carry = 0.0; return 0; }
+    if (!g_rg_seen || game_ticks != g_rg_ticks) {
+        int first = !g_rg_seen;
+        g_rg_seen = 1;
+        g_rg_ticks = game_ticks;
+        g_rg_draw_at = now_ms;
+        if (first) { g_rg_due = g_rg_carry = 0.0; g_rg_cls = 0; return 0; }   /* a counter seen first is not a tick */
+        if (g_rg_resume > 0.0) {                 /* this tick's update, from the last resume */
+            double u = now_ms - g_rg_resume;
+            if (u >= 0.0 && u < 250.0) g_rg_update = g_rg_update > 0.0 ? g_rg_update * 0.75 + u * 0.25 : u;
+        }
+        if (g_rg_tick_at > 0.0) {
+            double iv = now_ms - g_rg_tick_at;
+            if (iv >= 0.0 && iv < 250.0) {
+                g_rg_iv_sum[g_rg_cls] += iv; ++g_rg_iv_n[g_rg_cls];
+                if (iv > g_rg_iv_max[g_rg_cls]) g_rg_iv_max[g_rg_cls] = iv;
+            }
+        }
+        g_rg_cls = 0;
+        g_rg_pace_pending = 0;
+        /* how late this tick came against its due instant, made up on the next */
+        g_rg_carry = g_rg_due > 0.0 ? now_ms - g_rg_due : 0.0;
+        if (g_rg_carry > 8.0) g_rg_carry = 8.0;
+        if (g_rg_carry < 0.0) g_rg_carry = 0.0;
+        g_rg_due = now_ms + 1000.0 / 30.0 - g_rg_carry;
+        g_rg_tick_at = now_ms;
+        g_rg_after_tick = 1;
+        return 0;
+    }
+    if (!g_rg_after_tick) { g_rg_draw_at = now_ms; return 0; }    /* not the pass right after a tick */
+    g_rg_after_tick = 0;
+    g_rg_pace_at = g_rg_due - g_rg_update;        /* the next tick's update begins no earlier */
+    if (now_ms - g_rg_tick_at + g_rg_render + g_rg_update < 1000.0 / 30.0) {
+        g_rg_draw_at = now_ms; ++g_rg_drawn; g_rg_cls = 1; g_rg_pace_pending = 1; return 0;
+    }
+    g_rg_wait = g_rg_pace_at - now_ms;
+    if (g_rg_wait < 0.0) g_rg_wait = 0.0;
+    ++g_rg_skipped; g_rg_cls = 2;
+    return 1;
+}
+#ifdef ISAAC_WEB
+static double g_rg_asked, g_rg_slept, g_rg_pace_asked, g_rg_pace_slept;
+static uint32_t g_rg_sleeps, g_rg_paces, g_rg_presents_waited, g_rg_presents_yielded;
+int isaac_render_gate(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char *e = getenv("ISAAC_RENDER_GATE");
+        mode = (e && *e >= '0' && *e <= '3') ? *e - '0' : 1;
+        if (!mode) isaac_log("[isaac][frame] ISAAC_RENDER_GATE=0: every in-between frame is drawn");
+    }
+    if (!mode || !isaac_web_yield_enabled()) return 0;
+    uint32_t game = isaac_r32(0x00c71678u);
+    int have = game && isaac_is_guest_va(game + 0x264fbu);
+    uint32_t before = g_rg_ticks;
+    int skip = isaac_render_gate_decide(emscripten_get_now(), have, have ? isaac_r32(game + 0x264f8u) : 0u);
+    if (mode == 3) { skip = 0; g_rg_pace_pending = 0; }   /* measure only: every frame drawn, nothing paced */
+    if (skip && (g_rg_skipped == 1u || g_rg_skipped % 1800u == 0u))
+        isaac_log("[isaac][frame] render gate: %u in-between frame(s) skipped, %u drawn (update %.1f ms, render %.1f ms)",
+                  g_rg_skipped, g_rg_drawn, g_rg_update, g_rg_render);
+    /* ISAAC_RENDER_GATE=2: the tick intervals and the waits, every 150 ticks
+     * (=3: the same, measured with every frame drawn and nothing paced) */
+    if (mode >= 2 && have && g_rg_ticks != before && g_rg_ticks % 150u == 0u) {
+        double m[3], x[3];
+        uint32_t n[3];
+        for (int i = 0; i < 3; ++i) n[i] = isaac_render_gate_intervals(i, &m[i], &x[i]);
+        isaac_log("[isaac][frame] render gate ticks: drawn %u x %.2f ms (max %.1f), skipped %u x %.2f ms (max %.1f), "
+                  "other %u x %.2f ms; waits asked %.1f ms, slept %.1f ms (%u); paces asked %.1f ms, slept %.1f ms (%u); "
+                  "presents waited %u, yielded %u; update %.1f render %.1f carry %.1f",
+                  n[1], m[1], x[1], n[2], m[2], x[2], n[0], m[0], g_rg_asked, g_rg_slept, g_rg_sleeps,
+                  g_rg_pace_asked, g_rg_pace_slept, g_rg_paces, g_rg_presents_waited, g_rg_presents_yielded,
+                  g_rg_update, g_rg_render, g_rg_carry);
+        g_rg_asked = g_rg_slept = g_rg_pace_asked = g_rg_pace_slept = 0.0;
+        g_rg_sleeps = g_rg_paces = g_rg_presents_waited = g_rg_presents_yielded = 0u;
+    }
+    return skip;
+}
+/* the frame's other duties when its render is skipped: what SwapBuffers does
+ * besides presenting -- one audio-thread iteration, one slice per thread job */
+void isaac_render_skipped(CpuState *restrict cpu) {
+    { extern void isaac_audio_pump(const CpuState *cpu); isaac_audio_pump(cpu); }
+    { extern void isaac_threads_slice(CpuState *restrict cpu); isaac_threads_slice(cpu); }
+    /* the next tick may not come early: wait out the rest (a JSPI suspension,
+     * like the present's own yield; the browser composites meanwhile) */
+    if (g_rg_wait >= 1.0) {
+        double t0 = emscripten_get_now();
+        emscripten_sleep((unsigned)(g_rg_wait + 0.5));
+        g_rg_asked += g_rg_wait; g_rg_slept += emscripten_get_now() - t0; ++g_rg_sleeps;
+    }
+    isaac_render_gate_resumed(emscripten_get_now());
+}
+#else
+int isaac_render_gate(void) { return 0; }
+void isaac_render_skipped(CpuState *restrict cpu) { (void)cpu; }
+#endif
 /* BOOL SwapBuffers(HDC) -- gdi32, 4 bytes. One call per presented frame. */
 void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
 #ifdef ISAAC_WEB
@@ -726,6 +906,7 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
     (void)isaac_arg(cpu, 0);
     static double last_ms;
     double now = emscripten_get_now();
+    isaac_render_gate_presenting(now);           /* round 93: the render that ends here, timed */
     ++g_frames_presented;
     /* The engine mixes on a thread this port does not have; one iteration
      * of it per presented frame is what feeds OpenAL (round 16b). */
@@ -773,7 +954,21 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
      * runs (input events are delivered, the canvas is composited), and the
      * stack resumes on the next macrotask. Off unless ISAAC_YIELD=1, so the
      * headless runner keeps its as-fast-as-possible behaviour. */
-    if (isaac_web_yield_enabled()) isaac_yield_js();
+    if (isaac_web_yield_enabled()) {
+        int waited = isaac_yield_js();
+        double t = emscripten_get_now();
+        if (waited) ++g_rg_presents_waited; else ++g_rg_presents_yielded;
+        /* round 93: a drawn in-between frame that did not wait for the
+         * browser's frame may not bring the next tick early */
+        double pace = isaac_render_gate_pace_ms(t);
+        if (!waited && pace >= 1.0) {
+            emscripten_sleep((unsigned)(pace + 0.5));
+            double t1 = emscripten_get_now();
+            g_rg_pace_asked += pace; g_rg_pace_slept += t1 - t; ++g_rg_paces;
+            t = t1;
+        }
+        isaac_render_gate_resumed(t);
+    }
 #endif
 }
 /* ---- message queue (round 14a) ------------------------------------------ */

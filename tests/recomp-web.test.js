@@ -118,8 +118,12 @@ test('round 37: the web GL wrappers answer from the host cache, the present drai
   assert.ok(gl.includes('if (gl_check_mode() || (g_present_count & 63u) == 1u) {'),
     'the present drains glGetError every 64th frame unless ISAAC_GL_CHECK=1');
   const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
-  assert.ok(win.includes('if (isaac_web_yield_enabled()) isaac_yield_js();'), 'SwapBuffers yields through isaac_yield_js');
-  const yieldBody = win.slice(win.indexOf('EM_ASYNC_JS(void, isaac_yield_js, (void), {'), win.indexOf('/* ISAAC_YIELD=1:'));
+  assert.ok(/if \(isaac_web_yield_enabled\(\)\) \{\s*int waited = isaac_yield_js\(\);/.test(win), 'SwapBuffers yields through isaac_yield_js');
+  const yieldStart = win.indexOf('EM_ASYNC_JS(int, isaac_yield_js, (void), {');
+  assert.ok(yieldStart > 0, 'the yield answers whether it waited (round 93)');
+  const yieldBody = win.slice(yieldStart, win.indexOf('/* ISAAC_YIELD=1:'));
+  assert.ok(yieldBody.includes('var waited = 1;') && /waited = 0;\s*if \(!Module\.isaacYieldChannel\) \{/.test(yieldBody)
+    && yieldBody.includes('return waited;'), 'only the MessageChannel yield reports that it did not wait');
   assert.ok(yieldBody.includes('new MessageChannel()') && yieldBody.includes('port2.postMessage(0)'),
     'the yield is a MessageChannel message');
   assert.ok(yieldBody.includes('if (work < 15 && typeof requestAnimationFrame === "function") {'),
@@ -133,6 +137,31 @@ test('round 37: the web GL wrappers answer from the host cache, the present drai
   assert.ok(yieldBody.includes('Module.isaacYieldNoRaf = (Module.isaacYieldNoRaf | 0) + 1;'), 'the fallback ticks are counted');
   const bb = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'build_boot.py'), 'utf8');
   assert.ok(bb.includes('"-sJSPI_IMPORTS=emscripten_sleep,__asyncjs__isaac_yield_js,isaac_fs_lazy_pread_js"'), 'the yield import suspends the wasm stack, and so does the window read (round 56)');
+});
+
+test('round 93: main\'s in-between render asks the render gate, and a skipped frame keeps its other duties', () => {
+  const lp = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'lift_patches.py'), 'utf8');
+  const at = lp.indexOf('("0x009312f1",');
+  assert.ok(at > 0, 'a block patch at main\'s render call');
+  const entry = lp.slice(at, lp.indexOf('MEMW32(ESP, ((uint32_t)0x9312f6u));', lp.indexOf('goto L_009312f6;', at)) + 40);
+  assert.ok(entry.includes('MEMW32(ESP, ((uint32_t)0x9312f6u));\\n",'), 'it replaces the push of the return address, before the call');
+  assert.ok(/if \(isaac_render_gate\(\)\) \{[^]*?isaac_render_skipped\(s\);[^]*?goto L_009312f6;\r?\n  \}\r?\n  ESP = \(uint32_t\)\(ESP - \(\(uint32_t\)0x4u\)\);\r?\n  MEMW32\(ESP, \(\(uint32_t\)0x9312f6u\)\);/.test(entry),
+    'a skip jumps past the call; otherwise the call is pushed as lifted');
+  for (const r of ['EBP', 'ESP', 'FS_OFFSET', 'EAX', 'EBX', 'ESI', 'EDI', 'ECX', 'EDX', 'FPUInstructionPointer', 'EIP'])
+    assert.ok(entry.includes(`s->${r} = ${r};`) && entry.includes(`${r} = s->${r};`), `${r} is synced around the skipped frame`);
+  const rt = readFileSync(join(root, 'scripts', 'recomp', 'lift', 'recomp_rt.h'), 'utf8');
+  assert.ok(rt.includes('int  isaac_render_gate(void);') && rt.includes('void isaac_render_skipped(struct CpuState *s);'), 'the lifted C sees both');
+  const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
+  const skipped = win.slice(win.indexOf('void isaac_render_skipped(CpuState *restrict cpu) {'));
+  assert.ok(skipped.indexOf('isaac_audio_pump(cpu)') > 0 && skipped.indexOf('isaac_threads_slice(cpu)') > 0
+    && skipped.indexOf('isaac_render_gate_resumed(emscripten_get_now());') > skipped.indexOf('emscripten_sleep((unsigned)(g_rg_wait + 0.5))'),
+    'a skipped frame pumps the audio thread and the thread jobs, waits, then marks the resume');
+  const swap = win.slice(win.indexOf('void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {'));
+  assert.ok(swap.indexOf('isaac_render_gate_presenting(now);') > 0 && swap.indexOf('isaac_render_gate_presenting(now);') < swap.indexOf('int waited = isaac_yield_js();'),
+    'the present times the render before it yields');
+  assert.ok(swap.includes('if (!waited && pace >= 1.0) {'), 'a drawn in-between frame is paced only when its present did not wait for the browser');
+  const st = readFileSync(join(root, 'scripts', 'recomp', 'host', 'selftest.c'), 'utf8');
+  assert.ok(/int main\(int argc, char \*\*argv\) \{\s*test_render_gate\(\);/.test(st), 'the selftest drives the decision');
 });
 
 test('round 40: the module is served cacheably and instantiated from the fetch itself, so V8 keeps its optimised code across visits', () => {

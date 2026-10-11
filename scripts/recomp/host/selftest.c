@@ -119,6 +119,117 @@ static void check(int cond, const char *what) {
     }
 }
 
+/* Round 93: the render gate (host_shims_win.c), driven with exact instants. */
+void isaac_render_gate_reset(void);
+void isaac_render_gate_resumed(double now_ms);
+void isaac_render_gate_presenting(double now_ms);
+int isaac_render_gate_decide(double now_ms, int have_game, uint32_t game_ticks);
+uint32_t isaac_render_gate_skipped(void);
+double isaac_render_gate_wait_ms(void);
+double isaac_render_gate_carry_ms(void);
+double isaac_render_gate_pace_ms(double now_ms);
+uint32_t isaac_render_gate_intervals(int cls, double *mean_ms, double *max_ms);
+static void test_render_gate(void) {
+    isaac_render_gate_reset();
+    check(isaac_render_gate_decide(0.0, 0, 0u) == 0, "render gate: no Game, the frame is drawn");
+    isaac_render_gate_resumed(0.0);
+    check(isaac_render_gate_decide(10.0, 1, 100u) == 0, "render gate: a frame counter seen first is not a tick");
+    isaac_render_gate_presenting(20.0);                  /* render 10 ms */
+    isaac_render_gate_resumed(30.0);                     /* 10 ms waiting for the browser's frame: not cost */
+    check(isaac_render_gate_decide(40.0, 1, 101u) == 0, "render gate: a tick's own frame is drawn (update 10 ms)");
+    isaac_render_gate_presenting(50.0);
+    isaac_render_gate_resumed(52.0);
+    check(isaac_render_gate_decide(53.0, 1, 101u) == 0,
+          "render gate: the in-between frame is drawn when the next tick stays on time (53 - 40 + render 10 + update 10 = 33)");
+    isaac_render_gate_presenting(63.0);
+    isaac_render_gate_resumed(65.0);
+    check(isaac_render_gate_decide(75.0, 1, 102u) == 0, "render gate: the next tick is drawn");
+    isaac_render_gate_presenting(95.0);                  /* a 20 ms render: the estimate rises to 12.5 */
+    isaac_render_gate_resumed(96.0);
+    check(isaac_render_gate_decide(97.0, 1, 102u) == 1,
+          "render gate: an in-between frame that would make the next tick late is skipped (97 - 75 + 12.5 + 10 >= 33.3)");
+    check(isaac_render_gate_wait_ms() == 0.0,
+          "render gate: the skip's wait, 33.33 - (97 - 75 + 10) = 1.33 ms, is less than the 1.67 ms the tick at 75 came late (due 73.33): none");
+    check(isaac_render_gate_decide(98.0, 1, 102u) == 0, "render gate: one skip per tick at most");
+    check(isaac_render_gate_decide(130.0, 1, 102u) == 0 && isaac_render_gate_decide(200.0, 1, 102u) == 0,
+          "render gate: a paused game (no tick) is always drawn");
+    check(isaac_render_gate_decide(210.0, 0, 0u) == 0 && isaac_render_gate_decide(220.0, 1, 103u) == 0,
+          "render gate: leaving and re-entering a Game forgets the last tick");
+    isaac_render_gate_presenting(230.0);
+    isaac_render_gate_resumed(231.0);
+    check(isaac_render_gate_decide(241.0, 1, 104u) == 0, "render gate: a tick after a long frame");
+    isaac_render_gate_presenting(281.0);                 /* a 40 ms render */
+    isaac_render_gate_resumed(282.0);
+    check(isaac_render_gate_decide(283.0, 1, 104u) == 1 && isaac_render_gate_wait_ms() == 0.0,
+          "render gate: a tick already late is not waited for (283 - 241 + update > 33.3)");
+    check(isaac_render_gate_skipped() == 2u, "render gate: exactly two frames skipped");
+
+    /* the waits on a schedule: update 5 ms, render 15 ms, every in-between skipped */
+    isaac_render_gate_reset();
+    check(isaac_render_gate_decide(100.0, 1, 1u) == 0, "render gate (schedule): first sighting");
+    isaac_render_gate_resumed(100.0);
+    check(isaac_render_gate_decide(105.0, 1, 2u) == 0, "render gate (schedule): a tick, due again at 138.33");
+    isaac_render_gate_presenting(120.0);
+    isaac_render_gate_resumed(121.0);
+    check(isaac_render_gate_decide(122.0, 1, 2u) == 1 && isaac_render_gate_wait_ms() > 11.33 && isaac_render_gate_wait_ms() < 11.34,
+          "render gate (schedule): skipped (122 - 105 + 15 + 5 = 37), waiting 138.33 - 122 - 5 = 11.33 ms");
+    isaac_render_gate_resumed(137.0);                    /* the timer fired 3.67 ms late */
+    check(isaac_render_gate_decide(142.0, 1, 3u) == 0 && isaac_render_gate_carry_ms() > 3.66 && isaac_render_gate_carry_ms() < 3.68,
+          "render gate (schedule): the tick at 142 came 3.67 ms after its due 138.33");
+    isaac_render_gate_presenting(157.0);
+    isaac_render_gate_resumed(158.0);
+    check(isaac_render_gate_decide(159.0, 1, 3u) == 1 && isaac_render_gate_wait_ms() > 7.66 && isaac_render_gate_wait_ms() < 7.68,
+          "render gate (schedule): so the next wait is 3.67 ms shorter (171.67 - 159 - 5 = 7.67, not 11.33)");
+    isaac_render_gate_resumed(200.0);                    /* a long stall */
+    check(isaac_render_gate_decide(205.0, 1, 4u) == 0 && isaac_render_gate_carry_ms() == 8.0,
+          "render gate (schedule): a tick 33 ms late is made up by 8 ms at most");
+    isaac_render_gate_presenting(220.0);
+    isaac_render_gate_resumed(221.0);
+    check(isaac_render_gate_decide(222.0, 1, 4u) == 1 && isaac_render_gate_wait_ms() > 3.33 && isaac_render_gate_wait_ms() < 3.34,
+          "render gate (schedule): the capped catch-up still waits 230.33 - 222 - 5 = 3.33 ms");
+    isaac_render_gate_resumed(223.0);                    /* the timer fired 2.33 ms early */
+    check(isaac_render_gate_decide(228.0, 1, 5u) == 0 && isaac_render_gate_carry_ms() == 0.0,
+          "render gate (schedule): the tick at 228 came 2.33 ms before its due 230.33, which is not made up");
+    isaac_render_gate_presenting(243.0);
+    isaac_render_gate_resumed(244.0);
+    check(isaac_render_gate_decide(245.0, 1, 5u) == 1 && isaac_render_gate_wait_ms() > 11.33 && isaac_render_gate_wait_ms() < 11.34,
+          "render gate (schedule): so the next wait is the plain 261.33 - 245 - 5 = 11.33 ms");
+    {
+        double mean, mx;
+        uint32_t n = isaac_render_gate_intervals(2, &mean, &mx);
+        check(n == 3u && mean > 40.99 && mean < 41.01 && mx == 63.0,
+              "render gate (schedule): three tick intervals after a skip, 37, 63 and 23 ms (mean 41, max 63)");
+        check(isaac_render_gate_intervals(2, &mean, &mx) == 0u, "render gate (schedule): and the intervals are forgotten once read");
+    }
+
+    /* a drawn in-between frame paces the next tick: update 5 ms, render 5 ms */
+    isaac_render_gate_reset();
+    check(isaac_render_gate_decide(300.0, 1, 1u) == 0, "render gate (pace): first sighting");
+    isaac_render_gate_resumed(300.0);
+    check(isaac_render_gate_decide(305.0, 1, 2u) == 0, "render gate (pace): a tick, due again at 338.33");
+    check(isaac_render_gate_pace_ms(306.0) == 0.0, "render gate (pace): a tick's own present does not pace");
+    isaac_render_gate_presenting(310.0);
+    isaac_render_gate_resumed(311.0);
+    check(isaac_render_gate_decide(312.0, 1, 2u) == 0, "render gate (pace): the in-between frame is drawn (312 - 305 + 5 + 5 = 17)");
+    isaac_render_gate_presenting(317.0);
+    check(isaac_render_gate_pace_ms(318.0) > 15.33 && isaac_render_gate_pace_ms(318.0) == 0.0,
+          "render gate (pace): its present waits 338.33 - 5 - 318 = 15.33 ms for the next tick, asked once");
+    isaac_render_gate_resumed(334.0);
+    check(isaac_render_gate_decide(339.0, 1, 3u) == 0 && isaac_render_gate_carry_ms() > 0.66 && isaac_render_gate_carry_ms() < 0.68,
+          "render gate (pace): the tick at 339 came 0.67 ms late");
+    isaac_render_gate_presenting(344.0);
+    isaac_render_gate_resumed(345.0);
+    check(isaac_render_gate_decide(346.0, 1, 3u) == 0, "render gate (pace): drawn again");
+    isaac_render_gate_resumed(355.0);
+    check(isaac_render_gate_decide(360.0, 1, 4u) == 0 && isaac_render_gate_pace_ms(361.0) == 0.0,
+          "render gate (pace): a tick drops the pace of an in-between frame that never presented");
+    isaac_render_gate_presenting(365.0);
+    isaac_render_gate_resumed(366.0);
+    check(isaac_render_gate_decide(367.0, 1, 4u) == 0, "render gate (pace): drawn once more");
+    check(isaac_render_gate_decide(370.0, 0, 0u) == 0 && isaac_render_gate_pace_ms(371.0) == 0.0,
+          "render gate (pace): leaving the Game drops a pending pace");
+}
+
 /* Round 36: the OpenAL model (host_audio.c) advances on THIS clock in the
  * selftest -- its isaac_audio_clock_ms is weak -- so the retire rules are
  * checked at exact instants; and its backend hooks (weak no-ops in the node
@@ -221,6 +332,7 @@ static int selftest_fs_read_is(uint32_t scratch, const char *path,
 
 
 int main(int argc, char **argv) {
+    test_render_gate();
     printf("--- isaac host layer selftest ---\n");
     if (argc > 1) load_image(argv[1]);
 

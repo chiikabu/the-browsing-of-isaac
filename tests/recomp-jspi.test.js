@@ -70,8 +70,8 @@ test('SwapBuffers hands the frame to the browser: one JSPI suspension per presen
   const win = readFileSync(join(hostSrc, 'host_shims_win.c'), 'utf8');
   const fn = win.slice(win.indexOf('void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {'));
   const body = fn.slice(0, fn.indexOf('\n}') + 2);
-  assert.ok(/#ifdef ISAAC_WEB\s*\/\*[^]*?\*\/\s*if \(isaac_web_yield_enabled\(\)\) isaac_yield_js\(\);\s*#endif\s*\}$/.test(body),
-    'the yield is the last thing SwapBuffers does, under ISAAC_WEB, gated on the runtime switch');
+  assert.ok(/#ifdef ISAAC_WEB\s*\/\*[^]*?\*\/\s*if \(isaac_web_yield_enabled\(\)\) \{\s*int waited = isaac_yield_js\(\);[^]*?isaac_render_gate_resumed\(t\);\s*\}\s*#endif\s*\}$/.test(body),
+    'the yield is the last thing SwapBuffers does (then round 93\'s pace), under ISAAC_WEB, gated on the runtime switch');
   assert.ok(body.indexOf('isaac_threads_slice(cpu); }') < body.indexOf('emscripten_sleep(0)'),
     'the thread slices run before the frame is handed over');
   assert.ok(body.indexOf('cpu->EAX = 1;') < body.indexOf('emscripten_sleep(0)'), 'the return value is set before suspending');

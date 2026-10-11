@@ -96,6 +96,9 @@ int  isaac_fast_entity_quad_pack(uint32_t frame, uint32_t quad, uint32_t uv,
 int64_t isaac_fast_x87_trunc_i64(double d);
 int32_t isaac_fast_x87_trunc_i32(double d);
 int  isaac_editfile_gate(uint32_t menu_va);   /* round 52: the page's EDIT FILE menu (host_shims_win.c) */
+/* round 93 (host_shims_win.c): skip the in-between render when the next tick is due */
+int  isaac_render_gate(void);
+void isaac_render_skipped(struct CpuState *s);
 /* round 27 (host_fastpath.c): the archive keystream, ArchivedFile::read, the engine Mutex */
 int  isaac_fast_guest_range(uint32_t va, uint32_t len);
 int  isaac_fast_isaac(uint32_t ctx_va, uint32_t *edx_out);
