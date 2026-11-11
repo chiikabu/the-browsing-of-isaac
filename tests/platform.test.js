@@ -85,6 +85,8 @@ test('validateGameMount fails without exe', () => {
 test('input mapping WASD and arrows', () => {
   assert.equal(eventToAction({ code: 'KeyW' }), Actions.UP);
   assert.equal(eventToAction({ code: 'ArrowLeft' }), Actions.SHOOT_LEFT);
+  assert.equal(eventToAction({ code: 'F2' }), Actions.CONSOLE);
+  assert.equal(eventToAction({ code: 'Backquote' }), null);
   assert.equal(codeToVk('KeyE'), VK.E);
   assert.equal(codeToVk('Escape'), VK.ESCAPE);
   const st = createInputState();

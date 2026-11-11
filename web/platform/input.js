@@ -96,7 +96,7 @@ export const DEFAULT_KEYMAP = Object.freeze({
   KeyP: Actions.PAUSE,
   KeyR: Actions.RESTART,
   KeyM: Actions.MUTE,
-  Backquote: Actions.CONSOLE,
+  F2: Actions.CONSOLE,
   F11: Actions.FULLSCREEN,
 });
 

@@ -906,13 +906,12 @@ function nativeKey(name, down, source) {
 }
 const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'tab', Backspace: 'backspace',
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', ShiftLeft: 'shift', ShiftRight: 'shift',
-  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', Backquote: 'grave',
+  ControlLeft: 'ctrl', ControlRight: 'ctrl', AltLeft: 'alt', AltRight: 'alt', F2: 'grave',
   Minus: 'minus', Equal: 'equals', BracketLeft: 'lbracket', BracketRight: 'rbracket', Backslash: 'backslash',
   Semicolon: 'semicolon', Quote: 'quote', Comma: 'comma', Period: 'period', Slash: 'slash' };
 function keyName(ev) {
   const c = ev.code || '';
   if (CODE_TO_KEY[c]) return CODE_TO_KEY[c];
-  if (ev.key === '`' || ev.key === '~') return 'grave';
   if (/^Key[A-Z]$/.test(c)) return c[3].toLowerCase();
   if (/^Digit[0-9]$/.test(c)) return c[5];
   if (/^F([1-4])$/.test(c)) return c.toLowerCase();
