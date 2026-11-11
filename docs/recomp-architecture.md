@@ -4827,7 +4827,7 @@ timeline.
 commands need, unique scancodes and vks, the grave key pinned to VK_OEM_3 /
 0x29); `planTyping` (one key per character, Shift where needed); the two
 seed files (fresh, and merged on a temp dir with an options.ini whose
-`EnableDebugConsole=0`, `VSync=1` and `SaveCommandHistory=0` are the only
+`EnableDebugConsole=1`, `VSync=1` and `SaveCommandHistory=0` are the only
 lines that change, the disk file untouched); the sequencer against a fake
 console that behaves like Console::Update (grave -> state 1 -> 2, UP walks
 the seeded ring, Enter runs and push-fronts, Enter on the empty line
