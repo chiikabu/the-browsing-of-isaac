@@ -912,6 +912,7 @@ const CODE_TO_KEY = { Enter: 'enter', Escape: 'escape', Space: 'space', Tab: 'ta
 function keyName(ev) {
   const c = ev.code || '';
   if (CODE_TO_KEY[c]) return CODE_TO_KEY[c];
+  if (ev.key === '`' || ev.key === '~') return 'grave';
   if (/^Key[A-Z]$/.test(c)) return c[3].toLowerCase();
   if (/^Digit[0-9]$/.test(c)) return c[5];
   if (/^F([1-4])$/.test(c)) return c.toLowerCase();

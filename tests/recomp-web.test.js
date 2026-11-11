@@ -279,9 +279,9 @@ function liveInputPage() {
   return {
     window, document, saves,
     inject: window.isaacInjectKey,
-    key(code, down, target = canvas) {
+    key(code, down, target = canvas, key = code) {
       const event = {
-        code, target, repeat: false, defaultPrevented: false, stopped: false,
+        code, key, target, repeat: false, defaultPrevented: false, stopped: false,
         preventDefault() { this.defaultPrevented = true; },
         stopPropagation() { this.stopped = true; },
       };
@@ -345,6 +345,13 @@ test('live input: Backquote reaches the game as the grave key', () => {
   const page = liveInputPage();
   page.key('Backquote', true);
   page.key('Backquote', false);
+  assert.deepEqual(page.drain(), [[1, 0xC0, 0x29, 1], [1, 0xC0, 0x29, 0]]);
+});
+
+test('live input: backtick character falls back to the grave key when code is unavailable', () => {
+  const page = liveInputPage();
+  page.key('Unidentified', true, undefined, '`');
+  page.key('Unidentified', false, undefined, '`');
   assert.deepEqual(page.drain(), [[1, 0xC0, 0x29, 1], [1, 0xC0, 0x29, 0]]);
 });
 
