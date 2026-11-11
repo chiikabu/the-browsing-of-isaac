@@ -3,7 +3,7 @@
 
   build  [--bundle DIR] [--module DIR] [--segs FILE] [--web DIR] [--dist DIR] [--copy]
          [--keep-wasm-names] [--no-compress] [--no-brotli] [--brotli-quality N] [--gzip-level N] [--window-min BYTES]
-         assemble DIST (default .scratch/game-dist): play.html + play.mjs + boot_web.mjs at the root,
+         assemble DIST (default .scratch/game-dist): play.html + page modules at the root,
          boot.mjs / boot.wasm / isaac.segs.bin (copied, never linked: build_boot.py relinks the module
          in place while a dist may be in use; only the copied Wasm's name custom section is stripped
          unless --keep-wasm-names is set), the bundle's files under instance/ (hard links, or
@@ -15,9 +15,8 @@
          the index matching instance/, the totals adding up
   table  DIST             the size table from dist.json
 
-What ships and why (docs/recomp-architecture.md 21.49): the page (play.html, play.mjs) and the
-pipeline it imports (boot_web.mjs) are the three files of scripts/recomp/web the browser needs; the
-module is build_boot.py --web --fast (boot.mjs + boot.wasm); the memory image is the guest's
+What ships and why (docs/recomp-architecture.md 21.49): the page and its required modules under
+scripts/recomp/web; the game module is build_boot.py --web --fast (boot.mjs + boot.wasm); the memory image is the guest's
 .data/.rdata (isaac.segs.bin); the instance is the round-28 bundle (bundle.py), served under
 instance/ exactly as run_web.mjs serves an instance dir, with the same index (a JSON array of
 {p, s}: relative path, size) the page registers lazily.
@@ -58,7 +57,7 @@ MANIFEST_NAME = "dist.json"
 MANIFEST_FORMAT = "isaac-recomp-dist/1"
 INDEX_NAME = "instance_index.json"
 INSTANCE_DIR = "instance"
-PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "gamepad.mjs", "menu_overlay.mjs", "zip.mjs", "mod_browser.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs")
+PAGE_FILES = ("play.html", "play.mjs", "boot_web.mjs", "gamepad.mjs", "menu_overlay.mjs", "zip.mjs", "mod_browser.mjs", "mods.mjs", "touch_input.mjs", "touch_game.mjs", "touch_controls.mjs", "options.mjs")
 TRAIL_NAME = "boot-trail.json"       # round 59: the boot trail a drive_boot.mjs run left, shipped for first visits (--trail)
 MODULE_FILES = ("boot.mjs", "boot.wasm")
 SEGS_NAME = "isaac.segs.bin"

@@ -341,6 +341,13 @@ test('live input: left and right Control own separate physical holds', () => {
   assert.deepEqual(page.drain(), [[1, 0x11, 0x1D, 0]]);
 });
 
+test('live input: Backquote reaches the game as the grave key', () => {
+  const page = liveInputPage();
+  page.key('Backquote', true);
+  page.key('Backquote', false);
+  assert.deepEqual(page.drain(), [[1, 0xC0, 0x29, 1], [1, 0xC0, 0x29, 0]]);
+});
+
 test('live input: a newly opened paper menu cannot swallow touch or physical releases', () => {
   const page = liveInputPage();
   page.inject('up', true, 'touch');

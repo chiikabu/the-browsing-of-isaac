@@ -26,6 +26,7 @@ import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './m
 import { createModBrowser } from './mod_browser.mjs';
 import { createPadKeys } from './gamepad.mjs';
 import { createTouchControls } from './touch_controls.mjs';
+import { enableDebugConsoleOption } from './options.mjs';
 const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 // The pipeline's defaults: ISAAC_YIELD=1 selects the live page and, with no
@@ -991,10 +992,9 @@ setInterval(() => {
 }, 500);
 
 // ---- the options the game opens with -------------------------------------------------
-// Round 73: the public-beta notice and the data-collection disclaimer are both
-// options.ini flags, so a first visit gets a file with them already accepted rather
-// than two confirm screens. Written only when the store has none: a returning
-// player's settings, and every save beside them, are left exactly as they are.
+// The public-beta notice and data-collection disclaimer are options.ini flags, so a
+// first visit gets them accepted. Existing settings stay intact except that the
+// debug-console option is forced on for every player.
 const OPTIONS_KEY = 'c:/isaac/documents/my games/binding of isaac repentance+/options.ini';
 const DEFAULT_OPTIONS = ['[Options]', 'Language=0', 'MusicVolume=0.7000', 'MusicEnabled=1',
   'SFXVolume=0.7000', 'MapOpacity=0.3000', 'Fullscreen=0', 'Filter=0', 'Exposure=1.0000',
@@ -1012,7 +1012,7 @@ const DEFAULT_OPTIONS = ['[Options]', 'Language=0', 'MusicVolume=0.7000', 'Music
   'AcceptedPublicBeta_v1.9.7.17=1',        // the beta notice
   'AcceptedDataCollectionDisclaimer=1',    // the data-collection prompt; nothing here collects any
   // VSync=1: see the one-time flip below for why
-  'EnableDebugConsole=0', 'MaxScale=99', 'MaxRenderScale=2', 'VSync=1', 'PauseOnFocusLost=1',
+  'EnableDebugConsole=1', 'MaxScale=99', 'MaxRenderScale=2', 'VSync=1', 'PauseOnFocusLost=1',
   'SteamCloud=0', 'MouseControl=0', 'BossHpOnBottom=1', 'AnnouncerVoiceMode=0', 'ConsoleFont=0',
   'FadedConsoleDisplay=0', 'SaveCommandHistory=1', 'WindowWidth=960', 'WindowHeight=540',
   'WindowPosX=8', 'WindowPosY=32', 'UseExclusiveFullscreen=0', 'EnableEpicOverlay=0',
@@ -1021,14 +1021,29 @@ async function seedDefaultOptions() {
   let db = null;
   try { db = await openStore(); } catch { return 'no store'; }
   if (!db) return 'no store';
-  const have = await new Promise((resolve) => {
+  const stored = await new Promise((resolve) => {
     try {
-      const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).getKey(OPTIONS_KEY);
-      req.onsuccess = () => resolve(req.result !== undefined);
-      req.onerror = () => resolve(true);          // unsure: leave it alone
-    } catch { resolve(true); }
+      const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).get(OPTIONS_KEY);
+      req.onsuccess = () => resolve({ safe: true, value: req.result || null });
+      req.onerror = () => resolve({ safe: false, value: null });
+    } catch { resolve({ safe: false, value: null }); }
   });
-  if (have) return 'kept';
+  if (!stored.safe) return 'options unavailable';
+  if (stored.value) {
+    if (!stored.value.bytes) return 'options unavailable';
+    const text = new TextDecoder().decode(stored.value.bytes);
+    const enabled = enableDebugConsoleOption(text);
+    if (enabled === text) return 'kept';
+    // Keep returning players' other settings, but expose the original console to everyone.
+    try {
+      await writeSaves(db, [{
+        key: OPTIONS_KEY,
+        src: stored.value.src || null,
+        bytes: new TextEncoder().encode(enabled),
+      }], false);
+    } catch { return 'write failed'; }
+    return 'console-enabled';
+  }
   // A phone plays with the mobile item bar on the room's bottom wall, where the
   // boss's health bar would sit: as on the mobile Rebirth, the boss bar goes on top.
   const bytes = new TextEncoder().encode(coarsePointer ? DEFAULT_OPTIONS.replace('BossHpOnBottom=1', 'BossHpOnBottom=0') : DEFAULT_OPTIONS);
@@ -1262,7 +1277,11 @@ document.addEventListener('visibilitychange', () => {
 // Before the pipeline, which restores the store into the engine's file system.
 try {
   const seeded = await seedDefaultOptions();
-  if (seeded === 'written') console.log('[isaac] options.ini written with the opening prompts accepted');
+  if (seeded === 'written') console.log('[isaac] options.ini written with the opening prompts accepted and debug console enabled');
+  else if (seeded === 'console-enabled') console.log('[isaac] the debug console is enabled in this browser');
+  else if (['no store', 'options unavailable', 'write failed'].includes(seeded)) {
+    console.warn(`[isaac] could not enable the debug console: ${seeded}`);
+  }
 } catch (e) { console.warn('[isaac] default options not written:', e.message); }
 
 // Round 84: a browser that already had a mod when round 82 landed never hit the

@@ -22,6 +22,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KEYS, keyEvent, planTyping, consoleSeedFiles, makeConsole, censusFromLog, GAME_PTR, CONSOLE, SAVE_DIR } from '../scripts/recomp/lift/explore.mjs';
 import { planTyping as planTypedEvents, typingFrames, makeTypedConsole, VK_CHARS, vkToChar, consoleAccepts, NOCH } from '../scripts/recomp/lift/console_typing.mjs';
+import { enableDebugConsoleOption } from '../scripts/recomp/web/options.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -85,6 +86,20 @@ test('consoleSeedFiles: a fresh options.ini enables the console and the history;
   // a file without the section gets one; a command with a newline is refused
   assert.equal(consoleSeedFiles(['x'], 'Language=0\r\n')[0].text, '[Options]\r\nLanguage=0\r\nEnableDebugConsole=1\r\nSaveCommandHistory=1\r\nVSync=0\r\n');
   assert.throws(() => consoleSeedFiles(['stage 2\ndebug 3']), /bad command/);
+});
+
+test('browser options enable the game console without changing other settings', () => {
+  const before = '[Options]\r\nLanguage=0\r\nEnableDebugConsole=0\r\nMusicVolume=0.4\r\n';
+  assert.equal(enableDebugConsoleOption(before),
+    '[Options]\r\nLanguage=0\r\nEnableDebugConsole=1\r\nMusicVolume=0.4\r\n');
+  assert.equal(enableDebugConsoleOption('[Options]\nLanguage=0\n'),
+    '[Options]\nEnableDebugConsole=1\nLanguage=0\n');
+  assert.equal(enableDebugConsoleOption('[Options]\r\nEnableDebugConsole=1\r\n'), '[Options]\r\nEnableDebugConsole=1\r\n');
+  assert.equal(enableDebugConsoleOption('[Options]\r\nEnableDebugConsole=0\r\nEnableDebugConsole=0\r\n'),
+    '[Options]\r\nEnableDebugConsole=1\r\nEnableDebugConsole=1\r\n');
+  const page = readFileSync(join(REPO, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.match(page, /EnableDebugConsole=1/);
+  assert.match(page, /enableDebugConsoleOption\(text\)/);
 });
 
 // A fake console inside a fake heap: state at Game+0x68d78, the input line

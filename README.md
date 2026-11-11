@@ -55,6 +55,7 @@ Vibration follows the game's Rumble option.
 | <kbd>Tab</kbd> | Map |
 | <kbd>Esc</kbd> | Pause |
 | <kbd>F</kbd> | Fullscreen |
+| <kbd>&#96;</kbd> | Debug console (game commands) |
 
 ## On a controller
 
