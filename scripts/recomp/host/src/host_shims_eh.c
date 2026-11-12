@@ -28,9 +28,10 @@
  * call (g_guest_call_esp), only C++ frames on the way, only a by-reference or
  * catch(...) handler, and only a continuation the dispatcher can resume: a
  * lifted entry (Ghidra made 61 of the 72 continuations functions of their
- * own) or one of the ten epilogues translated in isaac_eh_tail below.
- * GetShaderParams (0x00865490) continues into calls and a luaL_unref and is
- * not translated. Anything else traps as before. */
+ * own) or one of the eleven tails translated in isaac_eh_tail below.
+ * GetShaderParams (0x00865490) continues into calls and a luaL_unref; round
+ * 101 translates the arm a thrown callback takes (no table referenced yet).
+ * Anything else traps as before. */
 #include "isaac_host.h"
 #include "shim_decls.h"
 
@@ -180,6 +181,20 @@ int isaac_eh_tail(uint32_t cont, CpuState *c) {
         c->EBX = isaac_r32(ebp - 0x14u); c->EAX = c->EBX; fs0_restore(c); tail_plain(c, 0xcu); return 1;
     case 0x00866033u:                                     /* PostGetCollectible */
         c->EBX = isaac_r32(ebp - 0x14u); c->EAX = c->EBX; fs0_restore(c); tail_plain(c, 0x10u); return 1;
+    case 0x00865602u: {                                   /* GetShaderParams (round 101) */
+        /* mov ebx,[ebp-0x20]; mov edi,[ebp-0x24]; mov esi,[ebp+8]; mov [esi],edi;
+         * cmp ebx,-1; je -> or eax,-1; mov [esi+4],eax; luaL_unref(L, REGISTRY, -1);
+         * mov eax,esi; epilogue; ret 8. The reference at [ebp-0x20] is written
+         * only after the callback's pcall has returned, and the throw comes out
+         * of that pcall, so it is still -1 here: the result is {L, LUA_NOREF}
+         * and the unref of -1 is a no-op (luaL_unref returns at once for a
+         * negative ref). The other arm -- a table already referenced -- runs
+         * calls and is left untranslated: it stops as before. */
+        const uint32_t ref = isaac_r32(ebp - 0x20u), L = isaac_r32(ebp - 0x24u), out = isaac_r32(ebp + 8u);
+        if (ref != 0xFFFFFFFFu || !ok_range(out, 8u)) return 0;
+        isaac_w32(out, L); isaac_w32(out + 4u, 0xFFFFFFFFu);
+        c->EAX = out; fs0_restore(c); tail_plain(c, 8u); return 1;
+    }
     default:
         return 0;
     }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <name>REPENTOGON (browser)</name>
+  <directory>repentogon</directory>
+  <description>A REPENTOGON-compatible API for the browser port. Not REPENTOGON itself: its Lua functions and callbacks, rebuilt for the game version the port runs, a part at a time. Mods see it only once what they use is covered.</description>
+  <version>1</version>
+</metadata>

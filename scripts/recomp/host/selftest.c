@@ -43,6 +43,7 @@ void isaac_gl_draw_elements(unsigned mode, int count, unsigned type, uint32_t in
 #  if __has_include("lua.h")
 #    define ISAAC_SELFTEST_HAVE_LUA 1
 #    include "lua.h"
+#    include "lauxlib.h"
 #  endif
 #endif
 
@@ -63,6 +64,52 @@ static int selftest_raise_through_shim(lua_State *L) {
     isaac_w32(c.ESP + 16, (uint32_t)lua_tointegerx(L, lua_upvalueindex(3), NULL));
     imp_lua5_3_3r__luaL_error(&c);
     return 0;
+}
+
+/* Round 100: guest C functions that re-enter Lua, reached through the
+ * trampolines. NEST fills its frame with its own marker and calls itself once
+ * through lua_getglobal + lua_callk, the way the game's include runs a file
+ * that calls include; RAISE raises through luaL_error. Both keep
+ * g_guest_call_esp the way the real isaac_guest_call does. */
+#define SELFTEST_LUA_NEST  0xDEAD0010u
+#define SELFTEST_LUA_RAISE 0xDEAD0011u
+void imp_lua5_3_3r__lua_getglobal(CpuState *restrict cpu);
+void imp_lua5_3_3r__lua_callk(CpuState *restrict cpu);
+uint32_t isaac_lua_nest_probe(unsigned *shims, unsigned *calls);
+extern uint32_t g_guest_call_esp;
+static uint32_t g_nest_name, g_nest_esp[4], g_raise_fmt, g_raise_esp[8];
+static unsigned g_nest_calls, g_raise_calls;
+static int g_nest_frame_intact = -1;
+static void selftest_lua_guest(uint32_t va, CpuState *cpu) {
+    const uint32_t L = isaac_r32(cpu->ESP + 4);
+    CpuState c;
+    memset(&c, 0, sizeof c);
+    if (va == SELFTEST_LUA_RAISE) {
+        if (g_raise_calls < 8) g_raise_esp[g_raise_calls] = cpu->ESP;
+        ++g_raise_calls;
+        c.ESP = cpu->ESP - 0x100u;
+        isaac_w32(c.ESP, 0xDEADBEEF);
+        isaac_w32(c.ESP + 4, L);
+        isaac_w32(c.ESP + 8, g_raise_fmt);
+        imp_lua5_3_3r__luaL_error(&c);             /* raises: does not return */
+        return;
+    }
+    const unsigned me = g_nest_calls++;
+    if (me < 4) g_nest_esp[me] = cpu->ESP;
+    for (uint32_t a = cpu->ESP - 0x80u; a < cpu->ESP; a += 4) isaac_w32(a, 0xC0DE0000u | me);
+    if (me == 0) {
+        c.ESP = cpu->ESP - 0xC0u;                  /* below its locals */
+        isaac_w32(c.ESP, 0xDEADBEEF);
+        isaac_w32(c.ESP + 4, L);
+        isaac_w32(c.ESP + 8, g_nest_name);
+        imp_lua5_3_3r__lua_getglobal(&c);
+        for (unsigned k = 2; k <= 5; ++k) isaac_w32(c.ESP + 4u * k, 0);   /* nargs nresults ctx k */
+        imp_lua5_3_3r__lua_callk(&c);
+        g_nest_frame_intact = 1;
+        for (uint32_t a = cpu->ESP - 0x80u; a < cpu->ESP; a += 4)
+            if (isaac_r32(a) != 0xC0DE0000u) g_nest_frame_intact = 0;
+    }
+    cpu->EAX = 0;
 }
 #endif
 
@@ -91,6 +138,15 @@ static unsigned g_vcalls;
 void isaac_guest_call(uint32_t va, CpuState *restrict cpu) {
     ++g_vcalls;
     if (!cpu) return;
+#ifdef ISAAC_SELFTEST_HAVE_LUA
+    if (va == SELFTEST_LUA_NEST || va == SELFTEST_LUA_RAISE) {
+        const uint32_t esp_saved = g_guest_call_esp;
+        g_guest_call_esp = cpu->ESP;
+        selftest_lua_guest(va, cpu);
+        g_guest_call_esp = esp_saved;
+        return;
+    }
+#endif
     if (va == SELFTEST_VCALL_EOF) { cpu->EAX = 0xFFFFFFFFu; return; }
     cpu->EAX = 0;
 }
@@ -239,7 +295,25 @@ static void test_eh(void) {
     check(isaac_eh_tail(0x008659f9u, &c) == 1 && c.EAX == 0x7777u && c.EBX == 0xEB0Bu && c.EIP == 0x00FEDCBAu
           && c.ESP == outer + 8u + 8u && c.EBP == 0x0BADBEEFu && c.ESI == 0xE5u,
           "eh: GetTrinket's aligned frame returns its local through mov esp,ebx");
-    check(isaac_eh_tail(0x00865602u, &c) == 0, "eh: GetShaderParams' continuation is not translated");
+    /* Round 101: GetShaderParams. The arm a thrown callback takes (no table
+     * referenced yet: [ebp-0x20] still -1) writes {L, LUA_NOREF} through the
+     * result pointer at [ebp+8], returns it and pops 8; the arm with a
+     * reference runs calls and stays untranslated. */
+    {
+        const uint32_t out = S + 0x2400u, L0 = 0x00123450u;
+        isaac_w32(F + 8u, out); isaac_w32(out, 0xAAAAAAAAu); isaac_w32(out + 4u, 0xBBBBBBBBu);
+        isaac_w32(F - 0x24u, L0);
+        isaac_w32(F - 0x20u, 7u);                                    /* a reference was taken */
+        c.EBP = F; c.ESP = sp; c.EAX = 0x00865602u;
+        check(isaac_eh_tail(0x00865602u, &c) == 0 && isaac_r32(out) == 0xAAAAAAAAu && c.ESP == sp,
+              "eh: GetShaderParams with a table already referenced is left alone, untouched");
+        isaac_w32(F - 0x20u, 0xFFFFFFFFu);
+        c.EBP = F; c.ESP = sp; c.EAX = 0x00865602u;
+        check(isaac_eh_tail(0x00865602u, &c) == 1 && c.EAX == out && isaac_r32(out) == L0 && isaac_r32(out + 4u) == 0xFFFFFFFFu,
+              "eh: GetShaderParams after a thrown callback answers {L, LUA_NOREF} through its result pointer");
+        check(c.EIP == 0x00ABCDEFu && c.ESP == F + 8u + 8u && c.EBX == 0xEBu && c.ESI == 0xE5u && c.EDI == 0xEDu && c.EBP == 0x0BADF00Du,
+              "eh: and returns through its own epilogue, ret 8");
+    }
 }
 
 /* Round 94: a sliced job asleep until wake_ms sits out a frame at now_ms. */
@@ -999,6 +1073,74 @@ int main(int argc, char **argv) {
         uint32_t e = isaac_guest_alloc(64);
         check(e == d, "a double free is ignored and the block is reused exactly once");
         isaac_guest_free(e);
+    }
+
+    /* Round 101: a full arena overflows into segments from the host heap instead
+     * of answering NULL (a long run, or a mod's Lua heap, ended the game there).
+     * Five 96 MiB blocks cannot all lie in a 384 MiB arena: the ones that do not
+     * fit must come from above the host base, be guest memory to every check,
+     * hold their bytes, and go back on the same lists when freed. */
+    {
+        extern uint32_t isaac_guest_alloc(uint32_t n);
+        extern void     isaac_guest_free(uint32_t p);
+        extern uint32_t isaac_guest_realloc(uint32_t p, uint32_t n);
+        extern uint32_t isaac_heap_overflow_segments(void);
+        extern uint32_t isaac_heap_largest_free(void);
+        extern uint32_t isaac_heap_free_blocks(void);
+        extern uint64_t isaac_heap_live(void);
+        enum { NBIG = 5 };
+        const uint32_t CH = 96u << 20;
+        const uint32_t arena_largest = isaac_heap_largest_free(), arena_blocks = isaac_heap_free_blocks();
+        const uint64_t live0 = isaac_heap_live();
+        uint32_t big[NBIG], above = 0, below = 0;
+        int all = 1, guest = 1, bytes_ok = 1;
+        check(isaac_heap_overflow_segments() == 0, "no overflow segment while the arena has room");
+        check(!isaac_is_guest_va(ISAAC_HOST_BASE_VA + 0x40u), "host memory is not guest memory before any overflow");
+        for (int i = 0; i < NBIG; ++i) {
+            big[i] = isaac_guest_alloc(CH);
+            if (!big[i]) { all = 0; continue; }
+            if (big[i] >= ISAAC_HOST_BASE_VA) ++above; else ++below;
+            guest &= isaac_is_guest_va(big[i]) && isaac_is_guest_va(big[i] + CH - 1u);
+            memset(isaac_g(big[i]), 0xA0 + i, 64);
+            memset(isaac_g(big[i] + CH - 64u), 0xB0 + i, 64);
+        }
+        printf("      five 96 MiB blocks: %u in the arena, %u in %u overflow segment(s)\n",
+               below, above, isaac_heap_overflow_segments());
+        check(all, "five 96 MiB blocks are all served although the arena holds 384 MiB");
+        check(above >= 2 && below >= 1 && isaac_heap_overflow_segments() == above,
+              "the blocks the arena cannot hold come from overflow segments above the host base");
+        check(guest, "an overflow block is guest memory to isaac_is_guest_va, first byte to last");
+        check(!isaac_is_guest_va(ISAAC_HOST_BASE_VA + 0x40u), "host memory outside the segments is still not guest memory");
+        for (int i = 0; i < NBIG && all; ++i) {
+            const uint8_t *q = (const uint8_t *)isaac_g(big[i]);
+            for (unsigned k = 0; k < 64u; ++k)
+                if (q[k] != (uint8_t)(0xA0 + i) || q[CH - 64u + k] != (uint8_t)(0xB0 + i)) bytes_ok = 0;
+        }
+        check(bytes_ok, "every block still holds its own bytes at both ends (no overlap across regions)");
+        {   /* small blocks while the arena is full: coalescing inside a segment, and the guards */
+            const uint32_t segs = isaac_heap_overflow_segments();
+            uint32_t a = isaac_guest_alloc(1000), b = isaac_guest_alloc(2000), c = isaac_guest_alloc(3000);
+            check(a && b && c, "small blocks are served while the arena is full");
+            uint32_t r = isaac_guest_alloc(48);
+            memset(isaac_g(r), 0x5a, 48);
+            r = isaac_guest_realloc(r, 70000);
+            check(r && ((const uint8_t *)isaac_g(r))[47] == 0x5a, "realloc keeps the old bytes with overflow in play");
+            isaac_guest_free(r);
+            isaac_guest_free(a); isaac_guest_free(c); isaac_guest_free(b);
+            isaac_guest_free(b);                                   /* a double free in whichever region */
+            check(isaac_heap_overflow_segments() <= segs + 1u, "small blocks do not take a segment each");
+        }
+        for (int i = 0; i < NBIG; ++i) if (big[i]) isaac_guest_free(big[i]);
+        isaac_guest_free(big[NBIG - 1]);                           /* double free of an overflow block: refused */
+        check(isaac_heap_live() == live0, "freeing everything returns the live count to where it was");
+        check(isaac_heap_largest_free() >= arena_largest && isaac_heap_free_blocks() <= arena_blocks + isaac_heap_overflow_segments(),
+              "the arena is one block again and each segment is one block (no coalescing across a region's end)");
+        {   /* the segments are reused, not multiplied */
+            const uint32_t segs = isaac_heap_overflow_segments();
+            for (int i = 0; i < NBIG; ++i) big[i] = isaac_guest_alloc(CH);
+            check(big[NBIG - 1] && isaac_heap_overflow_segments() == segs, "a second fill reuses the segments it already has");
+            for (int i = 0; i < NBIG; ++i) if (big[i]) isaac_guest_free(big[i]);
+        }
     }
 
     /* VirtualAlloc must also stay inside the guest range and zero its memory */
@@ -2951,10 +3093,141 @@ int main(int argc, char **argv) {
         isaac_guest_free(g);
     }
 
+    /* Round 100: a guest C function that re-enters itself through Lua must not
+     * start on its own live frame (StageAPI's nested include freed the outer
+     * include's strings twice), and a Lua error raised out of a guest function
+     * must leave the guest-call state, and the next call's frame, where they
+     * were when Lua was entered. */
+    {
+        uint32_t g = isaac_guest_alloc(64);
+        const uint32_t call_esp0 = g_guest_call_esp;
+        const uint32_t top = ISAAC_STACK_TOP_VA - 0x1000;   /* LFRAME's guest ESP */
+        unsigned shims = 99, calls = 99, k;
+        int same = 1;
+        strcpy((char *)isaac_g(g), "nest");
+        strcpy((char *)isaac_g(g + 16), "boom");
+        g_nest_name = g;
+        g_raise_fmt = g + 16;
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, SELFTEST_LUA_NEST);
+        LARG(2, 0);
+        imp_lua5_3_3r__lua_pushcclosure(&lc);
+        lua_setglobal(L, "nest");
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, SELFTEST_LUA_RAISE);
+        LARG(2, 0);
+        imp_lua5_3_3r__lua_pushcclosure(&lc);
+        lua_setglobal(L, "raise");
+
+        lua_getglobal(L, "nest");
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, 0);
+        LARG(2, 0);
+        LARG(3, 0);
+        imp_lua5_3_3r__lua_pcallk(&lc);
+        printf("      nested guest call: outer ESP 0x%08x, inner ESP 0x%08x\n", g_nest_esp[0], g_nest_esp[1]);
+        check(lc.EAX == LUA_OK && g_nest_calls == 2,
+              "a guest C function re-enters itself through Lua (the nested include)");
+        check(g_nest_esp[0] < top && g_nest_esp[1] < g_nest_esp[0] - 0xC0u,
+              "each guest call starts below the guest code that entered Lua");
+        check(g_nest_frame_intact == 1, "the outer call's frame survives the nested call");
+
+        luaL_loadstring(L, "for i = 1, 6 do pcall(raise) end");
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, 0);
+        LARG(2, 0);
+        LARG(3, 0);
+        imp_lua5_3_3r__lua_pcallk(&lc);
+        for (k = 1; k < 6; ++k) same &= g_raise_esp[k] == g_raise_esp[0];
+        printf("      six caught errors: first ESP 0x%08x, last 0x%08x\n", g_raise_esp[0], g_raise_esp[5]);
+        check(lc.EAX == LUA_OK && g_raise_calls == 6,
+              "six Lua errors raised out of a guest C function, each caught in Lua");
+        check(same && g_raise_esp[0] < top,
+              "a caught error leaves the next call's frame where the first one was");
+        check(g_guest_call_esp == call_esp0,
+              "the guest-call state is back to what it was when Lua was entered");
+        (void)isaac_lua_nest_probe(&shims, &calls);
+        check(shims == 0 && calls == 0, "no shim or call record outlives the calls");
+        isaac_guest_free(g);
+    }
+
+    /* Round 102: the bridge of the REPENTOGON-compatible layer (host_rgon.c),
+     * on this state: guest memory both ways, a std::string, a Lua function
+     * that passes for a C one, a userdata for a game object, a guest call with
+     * a `this`, and the gate that shows REPENTOGON to the mods named and to
+     * nobody else. */
+    {
+        extern void isaac_rgon_push_bridge(lua_State *L);
+        uint32_t g = isaac_guest_alloc(128);
+        memset(isaac_g(g), 0, 128);
+        isaac_w32(g, 0x11223344u);
+        strcpy((char *)isaac_g(g + 8), "short");             /* an inline std::string */
+        isaac_w32(g + 8 + 16, 5u); isaac_w32(g + 8 + 20, 15u);
+        isaac_rgon_push_bridge(L);
+        lua_setglobal(L, "B");
+        lua_pushinteger(L, (lua_Integer)g);
+        lua_setglobal(L, "G");
+        lua_pushinteger(L, (lua_Integer)SELFTEST_LUA_NEST);
+        lua_setglobal(L, "NESTVA");
+        static const char *script =
+            "local r = {}\n"
+            "r[1] = B.r32(G) == 0x11223344 and B.r8(G) == 0x44 and B.r16(G + 2) == 0x1122\n"
+            "B.w32(G + 4, 0xCAFEF00D) B.wf32(G + 40, 1.5) B.w8(G + 44, true)\n"
+            "r[2] = B.r32(G + 4) == 0xCAFEF00D and B.rf32(G + 40) == 1.5 and B.r8(G + 44) == 1 and B.i2f(B.f2i(0.25)) == 0.25\n"
+            "r[3] = B.stdstr(G + 8) == 'short' and B.str(G + 8) == 'short' and B.str(G + 8, 3) == 'sho'\n"
+            "r[4] = not pcall(B.r32, 0x10) and not pcall(B.r32, 0x1c000040) and not pcall(B.w32, 0xFFFFFFF0, 1)\n"
+            "local f = B.cfn(function(a, b) return a + b, 'x' end)\n"
+            "local a, b = f(2, 3)\n"
+            "r[5] = a == 5 and b == 'x'\n"
+            "local mt = { __index = { hello = function() return 'hi' end } }\n"
+            "local o = B.obj(mt, G, 0x00401000)\n"
+            "r[6] = type(o) == 'userdata' and B.ptr(o) == G and B.r32(B.ud(o)) == 0x00401000 and o.hello() == 'hi' and B.obj(mt, 0, 0x00401000) == nil\n"
+            "r[7] = B.ptr(nil) == 0 and B.ptr(true) == 1 and B.ptr(7) == 7\n"
+            "r[8] = not pcall(B.call, 0x10, nil)\n"
+            "local p = B.alloc(64) r[9] = p ~= 0 and B.r32(p) == 0 B.free(p)\n"
+            "return r[1] and r[2] and r[3] and r[4] and r[5] and r[6] and r[7] and r[8] and r[9],\n"
+            "  (r[1] and '' or '1')..(r[2] and '' or '2')..(r[3] and '' or '3')..(r[4] and '' or '4')..(r[5] and '' or '5')..(r[6] and '' or '6')..(r[7] and '' or '7')..(r[8] and '' or '8')..(r[9] and '' or '9')\n";
+        int ok = luaL_loadstring(L, script) == LUA_OK && lua_pcall(L, 0, 2, 0) == LUA_OK;
+        if (!ok) printf("      rgon bridge script: %s\n", lua_tostring(L, -1));
+        else if (!lua_toboolean(L, -2)) printf("      rgon bridge: failed part(s) %s\n", lua_tostring(L, -1));
+        check(ok && lua_toboolean(L, -2), "rgon bridge: memory, strings, cfn, obj and the refusals");
+        lua_settop(L, 0);
+        check(isaac_r32(g + 4) == 0xCAFEF00Du, "rgon bridge: a write lands in guest memory");
+
+        /* the gate: REPENTOGON is a global only for chunks under mods/<a named folder>/ */
+        static const char *gate = "B.gate({ id = 'layer' }, { ['allowed-mod'] = true })";
+        static const char *probe = "return REPENTOGON and REPENTOGON.id";
+        ok = luaL_loadstring(L, gate) == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK;
+        check(ok, "rgon gate: installs");
+        ok = luaL_loadbufferx(L, probe, strlen(probe), "@//mods/allowed-mod/main.lua", "t") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
+        check(ok && lua_isstring(L, -1) && strcmp(lua_tostring(L, -1), "layer") == 0, "rgon gate: a named mod reads the table");
+        lua_settop(L, 0);
+        ok = luaL_loadbufferx(L, probe, strlen(probe), "@//mods/Allowed-Mod/lib/x.lua", "t") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
+        check(ok && lua_isstring(L, -1), "rgon gate: by folder, whatever the case or the file");
+        lua_settop(L, 0);
+        ok = luaL_loadbufferx(L, probe, strlen(probe), "@//mods/other-mod/main.lua", "t") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
+        check(ok && lua_isnil(L, -1), "rgon gate: any other mod reads nil");
+        lua_settop(L, 0);
+        ok = luaL_loadbufferx(L, probe, strlen(probe), "@resources/scripts/main.lua", "t") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
+        check(ok && lua_isnil(L, -1), "rgon gate: and so does the game's own script");
+        lua_settop(L, 0);
+        ok = luaL_loadstring(L, "B.gate({ id = 'all' }, true) return REPENTOGON.id") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
+        check(ok && lua_isstring(L, -1), "rgon gate: true lets every chunk in");
+        lua_settop(L, 0);
+        luaL_dostring(L, "B = nil G = nil NESTVA = nil B = nil setmetatable(_G, nil)");
+        lua_settop(L, 0);
+        isaac_guest_free(g);
+    }
+
+    tl = isaac_lua_trampolines_used();
     LFRAME();
     LARG(0, isaac_va(L));
     imp_lua5_3_3r__lua_close(&lc);
-    check(isaac_lua_trampolines_used() == 2,
+    check(tl == 4 && isaac_lua_trampolines_used() == tl,
           "trampoline pool survives lua_close");
     isaac_guest_free(scratch);
     isaac_lua_report();

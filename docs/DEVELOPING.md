@@ -29,6 +29,7 @@ a room is ready to show. URL options:
 | `?stats=1` | Loading and runtime diagnostics |
 | `?saves=1` | A dialog for the whole save store |
 | `?persist=0` | Don't keep saves (for testing) |
+| `?mods=0` | Start with every mod switched off (they stay installed) |
 | `?decoders=<n>` | Decode helpers for the archive reader during the boot (default: cores − 2, at most 4; `0` decodes on the reader alone) |
 
 A build that ships its boot trail (the archive windows a boot reads) shows the
@@ -90,6 +91,43 @@ sees a resting pad meanwhile.
 - Lua mods run on Lua 5.3.3 built into the host (`scripts/recomp/host/lua_build.py`);
   the game's calls into it go through `host_lua.c`, which formats `luaL_error`
   and `lua_pushfstring` arguments off the guest stack.
+- A mod that stops the game on the way in can be left behind without losing
+  anything: `?mods=0`, the error panel's "Reload without mods", or the question
+  the page asks before a boot when the last boot with mods on never reached the
+  game. Each switches the mods off in the store; none deletes one.
+
+### A REPENTOGON-compatible layer
+
+REPENTOGON itself cannot run on the port: it is built for game v1.9.7.12, the
+port is v1.9.7.17, and it patches machine code while the game runs. Its Lua
+functions and callbacks are being rebuilt for this executable instead, as a
+mod named `repentogon` ([`scripts/recomp/rgon`](../scripts/recomp/rgon/README.md)).
+The engine's part is `host_rgon.c` (a bridge handed to that mod's `rgon.lua`,
+hook slots, and a gate that shows `REPENTOGON` only to the mods the layer
+names); everything else is Lua and ships with the mod.
+
+```sh
+node scripts/recomp/rgon/pack.mjs .scratch/rgon/repentogon.zip
+node scripts/recomp/web/drive_stress.mjs "http://127.0.0.1:8200/play.html?ISAAC_RGON_ALLOW=zz-port-stress" output/recomp/rgon      phases=custom lua=scripts/recomp/rgon/test_layer.lua zips=.scratch/rgon/repentogon.zip
+node --test tests/recomp-rgon.test.js
+```
+
+`?ISAAC_RGON=0` keeps the layer from loading; `?ISAAC_RGON_ALLOW=<folder>,...`
+(or `*`) lets more mods see `REPENTOGON` for a test.
+
+A mod too large for the page's import (Fiend Folio: 22,858 files, 640 MB) is
+worked on from a dist's own instance tree, where files are read on demand:
+
+```sh
+python scripts/recomp/rgon/tools/dev_dist.py <dist> --layer --mod <StageAPI folder> --mod <Fiend Folio folder>
+node scripts/recomp/rgon/tools/load_probe.mjs "http://127.0.0.1:<port>/play.html?ISAAC_RGON_ALLOW=fiendfolio-reloaded" out          # until the mods have loaded
+node scripts/recomp/rgon/tools/load_probe.mjs "http://127.0.0.1:<port>/play.html?ISAAC_RGON_ALLOW=fiendfolio-reloaded" out run=1    # and into a run
+python scripts/recomp/rgon/tools/hook_table.py --write      # the hooked functions, each re-checked against the executable
+```
+
+Mods load in the order of their metadata `<name>`, as on a PC (round 103; before
+that the port loaded them in folder order, see
+[`recomp-architecture.md`](recomp-architecture.md) 21.133).
 
 ## Requirements
 
@@ -176,6 +214,18 @@ The wasm memory starts at 640 MiB: the guest map below `0x1c000000`, then
 192 MiB for the host, whose measured peak is 128 MiB. A larger need, such as
 many mods, grows it.
 
+The guest heap is a 384 MiB arena, and the boot takes about 343 MiB of it
+(the sound catalogue's buffers are allocated up front). When it fills up, the
+allocator takes 64 MiB overflow segments from the host heap instead of
+answering NULL (`host_shims_heap.c`; `ISAAC_HEAP_OVERFLOW=0` turns that off).
+A mod's Lua heap lives in the same arena. `drive_stress.mjs ... heap=20`
+prints the heap report every 20 s of a walk.
+
+A `ret` in lifted code leaves its return address in `CpuState` (`s->EIP`):
+the replay loop that resumes the guest after a `longjmp` or a C++ catch
+(`isaac_guest_call_inner`) reads it after every frame. `apply_ret_eip` in
+`lift_patches.py` puts that store on the ret's own line, after call-slim.
+
 The unchanged-value path of `0x00a14c00` compares the first active matching
 uniform's latest payload using the incoming type's width. It performs no
 guest allocation or write. Changed values, missing entries, unsafe aliases,
@@ -257,6 +307,14 @@ node --test tests/recomp-touch.test.js tests/recomp-touch-game.test.js tests/rec
 # Boot the real page and play a few frames
 node scripts/recomp/web/drive_interactive.mjs "http://127.0.0.1:8200/?frames=1500&persist=0" output/recomp/local-smoke
 node scripts/recomp/web/drive_boot.mjs "http://127.0.0.1:8200/play.html?ISAAC_EPOCH=1700000000" output/recomp/boot-check visits=2 cpu=4 gl=hw profile=0 timeout=600
+
+# Everything a player or a mod can make the game do, one thing at a time; the
+# engine's own log names the operation that stopped it (see the file's header)
+node scripts/recomp/web/drive_stress.mjs http://127.0.0.1:8200/play.html output/recomp/stress phases=qcards,qpills,luaerrs
+node scripts/recomp/web/drive_stress.mjs http://127.0.0.1:8200/play.html output/recomp/stress phases=tour catalogue=<catalogue-dir> mods=<id>
+
+# The ways out of a mod that breaks the boot
+node scripts/recomp/web/drive_nomods.mjs http://127.0.0.1:8200/play.html output/recomp/nomods
 
 # CPU profile of a live session
 node scripts/recomp/web/profile_play.mjs "http://127.0.0.1:8200/?persist=0" output/recomp/local-profile cpu=1 gl=hw seconds=10

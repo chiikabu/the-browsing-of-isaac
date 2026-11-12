@@ -32,6 +32,31 @@ function log(line) {
   }
 }
 
+// Round 101: the cause of a stop, into the log a player can copy. The host's
+// isaac_log (host_trap.c) prints through console.warn so a line is not held
+// back until a newline, which means its lines were never in isaacLog: the
+// error panel and "Copy log" showed the game's last lines and the closing
+// report, and not the one line that said why -- `[isaac][TRAP] ...`,
+// `[isaac] reason: ...`, a throw nothing caught, an allocation that failed.
+// Two bug reports arrived that way with nothing to go on. Only the lines that
+// name a stop are taken (the routine ones would bury the game's own log), and
+// the out-of-memory line only its first few times.
+const STOP_LINE = /\[isaac\]\[TRAP\]|\[isaac\] =+ STOPPING|\[isaac\] reason:|\[isaac\]\[c\+\+\] (?:throw of \S+ from \S+: no catch|_CxxThrowException|the catch at|__RTDynamicCast)|\[isaac\]\[crt\] (?:_?exit\(|abort\(|std::terminate|ASSERTION|_invalid_parameter)|\[isaac\]\[k32\] (?:UnhandledExceptionFilter|TerminateProcess|WaitForSingleObject| +code 0x| +EXCEPTION_POINTERS)|\[isaac\]\[heap\] (?:OUT OF MEMORY|double free)|\[isaac\]\[lua\] .*(?:exhausted|deeper)/;
+let oomLines = 0;
+if (typeof console !== 'undefined' && !console.__isaacWarn) {
+  const warn0 = console.warn.bind(console);
+  console.warn = (...args) => {
+    warn0(...args);
+    try {
+      const s = typeof args[0] === 'string' ? args[0] : '';
+      if (!s || !STOP_LINE.test(s)) return;
+      if (/OUT OF MEMORY/.test(s) && ++oomLines > 4) return;
+      for (const l of s.split('\n')) log(l);
+    } catch (e) { /* the log never stops the game */ }
+  };
+  console.__isaacWarn = true;
+}
+
 // Synchronous binary fetch: the RAM-FS asks for lazy bytes from inside a
 // blocking call into wasm, so the answer cannot be awaited. A synchronous
 // XHR in the window context may only read text, and Chromium strips a
@@ -1246,14 +1271,22 @@ try {
   });
   // --- the host Lua's libc reads scripts through MEMFS: put them there
   await stageOk('lua scripts into MEMFS', async () => {
-    let n = 0;
-    for (const { p: rel } of index) {
-      if (!rel.startsWith('resources/scripts/')) continue;
-      const dir = rel.slice(0, rel.lastIndexOf('/'));
-      m.FS.mkdirTree('/' + dir);
-      m.FS.writeFile('/' + rel, await fetchBytes(`/instance/${rel}`));
-      n += 1;
-    }
+    // Round 102: and a mod that is part of the instance tree itself (a dist made
+    // for working on a large mod, scripts/recomp/rgon/tools/dev_dist.py) has its
+    // Lua there for the same reason. Fiend Folio has 1,855 files of it, so these
+    // are fetched a few at a time rather than one after another.
+    const wanted = index.filter(({ p: rel }) => rel.startsWith('resources/scripts/') || (rel.startsWith('mods/') && /\.lua$/i.test(rel)));
+    let n = 0, next = 0;
+    const worker = async () => {
+      while (next < wanted.length) {
+        const rel = wanted[next++].p;
+        const bytes = await fetchBytes(`/instance/${rel.split('/').map(encodeURIComponent).join('/')}`);
+        m.FS.mkdirTree('/' + rel.slice(0, rel.lastIndexOf('/')));
+        m.FS.writeFile('/' + rel, bytes);
+        n += 1;
+      }
+    };
+    await Promise.all(Array.from({ length: wanted.length > 64 ? 12 : 1 }, worker));
     log(`  ${n} lua scripts written`);
     return n;
   });

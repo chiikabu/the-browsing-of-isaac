@@ -9533,3 +9533,449 @@ resident.
 
 **Not yet.** The headers' reads still fetch and decode the whole 1 MiB
 windows around them, so the boot still decodes the sound windows.
+
+### 21.130 Round 100: a guest C function that calls itself through Lua
+
+StageAPI, Encyclopedia and More Special Rooms in Greed hung the boot (21.121).
+The engine's log before the hang said `[heap] double free`, several times.
+
+Each Lua trampoline ran its guest function on a stack window fixed by its slot:
+`TOP - 0x8000 - slot * 0x400`, whatever the guest stack already held. A guest C
+function that re-enters itself through Lua therefore started on its own live
+frame. The game's `include` (0x00860000) runs a mod file, and a file that calls
+`include` again -- StageAPI's `library.lua`, `room.lua` and `reimpl.lua` do --
+overwrote the outer include's locals, return address and saved registers. Its
+`std::string`s were then freed twice, the guest heap was corrupt and the boot
+went round in it.
+
+Every other host-to-guest call goes just below the caller's live ESP, and this
+does now: each Lua shim records the guest ESP it was called with (`LUA_SHIM`
+wraps all 59), and a trampoline starts `LUA_GUEST_GAP` (0x400) below the
+innermost record. A Lua error longjmps past those records and past the
+epilogue of the trampoline's `isaac_guest_call`, which would have put
+`g_guest_call_esp` and the guest `jmp_buf` back; so a record is dropped once
+the host stack is back at or above it, and the oldest dropped trampoline's
+entry state is restored (`lua_nest_prune`). The selftest drives both through
+the real shims: a guest function that calls itself through `lua_getglobal` +
+`lua_callk` keeps its frame, and six errors raised through `luaL_error` out of
+a guest function, each caught in Lua, leave the next call's frame and the
+guest-call state where they were.
+
+The round was written on 2026-10-16 and never built into a release; it ships
+with round 101.
+
+### 21.131 Round 101: what stopped the game under a mod, found by using everything once
+
+Players reported `TRAP in main @ 0x00931050: Program terminated with exit(1)`
+right after `Action PillCard Triggered`, mods that stop the game, a stop when
+entering the alternate path's room, and one in the fight with Mother. Three of
+the reports carried the page's log, and none of them had the cause in it.
+
+**The cause was never in the log.** `isaac_log` prints through `console.warn`
+(so a line is not held back until a newline), and the page's log is what the
+module writes to stderr. So `[isaac][TRAP] ...`, `[isaac] reason: ...`, a
+throw nothing caught and a failed allocation went to the browser's console
+and nowhere else: the error panel and "Copy log" showed the game's last lines
+and the closing report. `boot_web.mjs` now takes the lines that name a stop
+(and only those: the routine ones would bury the game's log) into `isaacLog`,
+the out-of-memory line its first four times.
+
+**A walk that uses everything.** `drive_modpack.mjs` boots a mod and walks in
+the first room, which reaches none of the code behind a card, a pill, an item,
+an entity or a floor. `scripts/recomp/web/drive_stress.mjs` installs a mod of
+its own after the mods under test. It walks a list through the Lua API and
+through the game's own input actions (`MC_INPUT_ACTION` answers "the button is
+down", so the real use path runs and the engine logs `Action PillCard
+Triggered`), says what it is about to do (`STRESS OP <phase> <n>`), and the
+driver starts again past whatever stopped the module. The phases: every card
+and pill by the button and by `UseCard`/`UsePill`, every active item both
+ways, every passive, every trinket, every entity type, every floor that
+exists, every character, every special room, a list of odds and ends, a fight
+with every enemy (`fights`), a short run for one mod of a catalogue (`tour`),
+a Lua error raised in every callback (`luaerrs`) and a value of the wrong kind
+returned from every callback (`badrets`). The game's Lua has no `load`, so a
+one-off operation (`lua=<file>`) is pasted into the mod as a function body.
+
+With no mod installed, the cards, pills, actives, trinkets, rooms and the odds
+and ends all pass on the shipped engine. Three things did not.
+
+**1. A caught Lua error ran garbage (releases 14 to 18).** Round 95 carries
+out the C++ catch a mod's Lua error lands in, and resumes the guest through
+the longjmp replay in `isaac_guest_call_inner`: it dispatches `cpu->EIP`, and
+when that frame returns it dispatches `cpu->EIP` again, expecting the `ret` to
+have left the return address there. Round 96's call-slim (21.122) deleted
+every standalone `s->EIP = EIP;`, on the reasoning that the host reads
+`s->EIP` only after setting it itself. The replay is the exception, and the
+exit spill after a `ret` went with the call-site spills: 18,372 rets (the
+other 18,515 are the direct form `s->EIP = MEMR32(s->ESP);`, left alone). So
+the catch ran, the game logged `Error in "PostNPCUpdate" call: ...`, the
+continuation returned once, and the loop dispatched the same address again on
+a stack that had already been popped. `luaerrs` on the shipped engine: every
+callback that fired stopped the module, 39 of 39 in the 40 boots the driver
+allows itself, as "memory access out of bounds" (38) or as a quiet `exit(1)`
+(1) -- the reported message. The log of the
+alternate-path report shows the same thing from a player's side: the stack
+walk ends in 0x00872819 (the throw of `luabridge::LuaException`) under the
+`PreEntitySpawn` dispatcher, with External Item Descriptions and 16 other
+mods installed.
+
+`lift_patches.apply_ret_eip` puts the store back on the ret's own line
+(`EIP = MEMR32(ESP); s->EIP = EIP;`), where call-slim, which only takes
+standalone lines, leaves it. It runs after call-slim in `build_boot.py` and
+in `lift_patches.py`'s own `main`, and works on a fresh tree and on one
+already slimmed in place. `tests/recomp-call-slim.test.js` pins it (LF and
+CRLF, once, call-slim does not take it back, `--check` reports and leaves the
+tree alone).
+
+**2. The guest heap had 40 MiB left for a run.** The arena is 384 MiB (round
+69, against a measured peak of 350). `drive_stress.mjs phases=stages,rooms
+heap=20` prints the heap report as it walks the floors:
+
+| at | live |
+|---|---|
+| the first room | 359.2 MB |
+| floor 10 | 365.9 MB |
+| floor 19 | 377.6 MB |
+| floor 28 | 385.7 MB |
+| floor 37 | 393.1 MB |
+| the special rooms after | 395.4 - 396.7 MB, 6 MB free in 759 pieces |
+
+The boot takes about 343 MiB: the sound catalogue's 1,538 PCM buffers are
+allocated up front (262 MB; round 98 leaves most of them unwritten, which
+saves the RAM and not the address space), then the menus' textures and
+animations. What is left is 40 MiB, and a mod's Lua heap comes out of it too
+(`isaac_lua_alloc`): the alternate-path report had 12 MB of Lua. Past the end
+`malloc` answers NULL, and the game does not check. Holding every passive at
+once reached it in 250 items; a long run reaches it by loading.
+
+Making the arena larger moves the host base and the initial memory with it,
+which rounds 66, 69 and 97d took down on purpose. So the arena stays, and when
+it is full the allocator takes a 64 MiB segment from the host heap -- which
+grows the wasm memory only then, on the machines whose run needs it
+(`heap_grow`, `host_shims_heap.c`). A segment's blocks are on the same free
+lists as the arena's, a block never coalesces across the end of the region it
+lies in, and `isaac_is_guest_va` knows the segments (they are above the guard,
+which the address-space rule forbade; a pointer the host refuses would be a
+worse answer than the rule's exception). At most 16 segments;
+`ISAAC_HEAP_OVERFLOW=0` turns it off.
+
+The selftest fills the arena with five 96 MiB blocks (three fit, two come from
+segments), checks the bytes at both ends of each, the guards, and that a
+second fill reuses the segments. Writing it found a hole in the double-free
+guard that was there before: a block that merges backward keeps its old
+header inside the merged block, still saying "in use", so a second free of
+the same pointer passed the check and took the merged block apart. The header
+is cleared at the merge now.
+
+**3. No way back in.** A mod that stops the game on the way in left the
+player outside: the only switch for a mod was the game's own MODS screen,
+behind the boot (one report ends with a player clearing the site's data,
+saves included). The page now has three ways out, all the same move -- the
+mods are switched off in the store, where a mod that is off is simply not
+seeded, and nothing is deleted: `?mods=0`; a "Reload without mods" button on
+the error panel when a mod is on; and, because a hang shows no panel at all, a
+question before the boot when the last boot with mods on never reached the
+game (a mark in localStorage, set before the pipeline and cleared at
+readiness). `drive_nomods.mjs` checks all three against the engine's own log,
+13 checks.
+
+**`GetShaderParams`.** Round 95 left one of the 72 dispatchers' catches
+untranslated: its continuation (0x00865602) runs on into calls. The arm a
+thrown callback takes is short, though: the reference at `[ebp-0x20]` is only
+written after the callback's pcall has returned, so it is still -1, the result
+is `{L, LUA_NOREF}` and the `luaL_unref` of -1 is a no-op. `isaac_eh_tail`
+translates that arm (the eleventh tail) and leaves the other to stop as
+before. The walk's mod can carry a shader of its own (`shader=1`), which also
+shows a mod's GLSL compiling: an error raised in `MC_GET_SHADER_PARAMS` is
+caught and the game goes on.
+
+**Checked**, on the engine built from this tree (`boot.wasm` 91c56886...,
+54,568,440 bytes; the lift tree is release 18's with `apply_ret_eip`):
+
+- **Host selftest**: 752 checks, 0 failures (the nested guest call and the
+  six caught errors of round 100, the overflow segments, the cleared header,
+  the eleventh tail).
+- **A Lua error in every callback** (`luaerrs`): 0 stops. 64 of the 72
+  callbacks fired (`MC_GET_SHADER_PARAMS` in the run with a shader);
+  `MC_LEVEL_GENERATOR`, `MC_POST_GAME_END`, `MC_EXECUTE_CMD`, three projectile
+  callbacks, `MC_PRE_KNIFE_COLLISION` and `MC_PRE_MOD_UNLOAD` were not reached
+  by the walk. The shipped engine stopped on every one that fired.
+- **The alternate-path report, with its 17 mods** (`lua=` walking the secret
+  exit rooms and the Repentance floors): the shipped engine stops with
+  `Program terminated with exit(1)` -- there the throw found "no catch this
+  host can carry out", which is round 100's stack placement, not the replay.
+  The new one logs `Error in "PreEntitySpawn" call:
+  //mods/angels-drop-items/main.lua:325: attempt to compare number with nil`
+  222 times and plays on. The mod's `roomState` is nil in a room its table
+  does not know; the PC game logs the same line and carries on.
+- **A long run, compressed** (44 floors with a boss room each, then Mother in
+  both phases): the shipped engine fails `malloc(4194308)` with 395.5 MB live
+  as Mother spawns and stops in `UnhandledExceptionFilter`; the new one takes
+  one 64 MiB segment at the same moment (`the 384 MiB arena is full ...:
+  overflow segment 1`) and finishes the fight.
+- **Everything once, no mods**: every card and pill by the button and by the
+  API (273 operations), every active item both ways, every trinket, every
+  special room, every floor, the odds and ends: 0 stops. Every passive, one
+  at a time: 0 stops. Two things stop it that stop the PC game as well and
+  were left: `stage 7d` (Mortis is not in the game) and entities that are
+  parts of others spawned on their own (903.1, the Visage's).
+- **The catalogue**: all 203 mods through `tour` (a mod's own callbacks with a
+  bit of everything a player does in a few floors): 203 clean, 200 of them on
+  the build before the eleventh tail. Three were first reported by the driver
+  for reasons of its own (a 50 MB mod's boot is silent for longer than its
+  first limit, a menu that needed more Enters on a loaded machine, a socket
+  error) and passed on the final build when run again.
+- **StageAPI**, which hung the boot: loads, and the tour passes.
+- **The ways out of a mod**: `drive_nomods.mjs`, 13 of 13, on the dev page and
+  on a page packaged the way a release is (whose markup has no such button;
+  `play.mjs` makes it).
+- **The suites**: `tests/recomp-*.test.js`, 482 tests (five browser tests of
+  `recomp-portable` timed out while nine game instances were running beside
+  them, and pass alone, 65 of 65); `check-repo-safety`.
+
+**Not done.** Nothing is deployed: the live pages still run release 18's
+engine. The controller report from Android Chrome (a pad the page sees and the
+game ignores at SELECT A CONTROLLER) needs the device. The out-of-memory path
+is covered by overflow, not by a smaller boot: the sound catalogue's buffers
+still take 262 MB of the arena's address space.
+
+### 21.132 Round 102: a REPENTOGON-compatible layer, because REPENTOGON itself cannot run here
+
+The request was to recompile REPENTOGON so it works in the browser as a mod.
+It cannot be done as asked, and the reasons are measurable:
+
+- **It is for another game.** The port is v1.9.7.17 (J460). REPENTOGON, at
+  the submodule's commit and at upstream's head of 2026-11-09 alike, is for
+  v1.9.7.12 (J273); its installer downgrades the game.
+- **Its hooks do not land.** Of its 1,167 function signatures, 669 match this
+  executable exactly once, 74 more than once and 424 not at all
+  (`tools/zhl-resolve.mjs`). It also applies 286 patches in the middle of game
+  functions.
+- **It writes code while the game runs.** Its hooks and patches are assembled
+  at start-up into the process. A statically recompiled image does not execute
+  bytes written into `.text`.
+- **Its structures have moved.** `Game` is laid out as in .12 up to the item
+  overlay (0x1c034) and not after: the HUD is at 0x1da04 here and at 0x1d9ac
+  there, the frame counter at 0x264f8 against 0x25a70.
+
+What mods need of REPENTOGON is its Lua surface: 1,132 functions the game does
+not have, and 365 callbacks. Of the 210 mods in the workshop folder the
+catalogue was built from, 28 mention it; Fiend Folio needs it (357 functions,
+204 callbacks), and the rest read it as optional.
+
+So the surface is being rebuilt against this executable, as a layer of its own
+(`scripts/recomp/rgon/`, and its README). None of it is REPENTOGON's code.
+Its enum table, `enums_ex.lua`, is the one file used as it is: it is copied
+into the mod's archive at packaging time and ships under REPENTOGON's licence
+(GPL-2.0) beside the layer's own files.
+
+**The engine's part is small and general** (`host_rgon.c`): a bridge handed to
+one Lua file and to nothing else (guest memory both ways, a guest call with
+registers and stack words on a frame of its own, a luabridge userdata for a
+game object, a Lua function wrapped as a C one), hook slots, and a gate. The
+layer itself is Lua, `rgon.lua`, inside a mod named `repentogon`: the engine
+runs it once per Lua state before the first mod's own file, when that mod is
+installed and on. A function added to the layer is a new mod archive; only a
+new hook needs an engine build.
+
+Three things the work turned up:
+
+- **luabridge throws on a Lua method.** Its `__index` (0x0085cd40) returns
+  what it finds in a class table only when `lua_iscfunction` says so, and
+  throws `std::logic_error` otherwise, which stops the game here and on a PC.
+  So a method written in Lua goes in through `bridge.cfn`, a C closure around
+  it. (The game's own main.lua sidesteps the same thing by replacing
+  `__index`.)
+- **Mods are loaded with `luaL_loadfilex`**, three call sites; the buffer
+  loader has one, the console's. The layer boots before the first of either
+  that names a file under `mods/`.
+- **The game's own Lua registration gives this build's addresses.**
+  `addFunction("Name", &Class::Method)` compiles to `push <method>; push
+  <"Name">`, so 0x00866960 lists every exposed method with its address in
+  v1.9.7.17 and every data member with its offset: 62 classes, 923 functions,
+  149 properties, 284 data members (`tools/parse_register.py`). The hooks'
+  functions were found this way, not by signature: `AddCollectible`,
+  `HUD::Render`, `Entity_Pickup::Morph` and `MusicManager::Play` are among
+  the 424 that no longer match.
+
+**A callback is a hook.** `RGON_HOOKS` in `lift_patches.py` wraps 11 game
+functions the way the fast paths are wrapped; a wrapper tests one byte, runs a
+Lua handler before the function (which may rewrite its arguments on the stack,
+or answer for it with an EAX and a `ret n`), the lifted body, any parked tail
+jump, and a handler after. A hook is armed only while a mod listens on one of
+its callbacks. A hook enters Lua from inside lifted code without a Lua shim,
+so it records its own guest ESP for the duration (`isaac_lua_host_enter`): a
+trampoline placed from the shims' records alone would have landed on the live
+frames between the last shim and the hook.
+
+**The gate.** A mod that sees `REPENTOGON` takes its REPENTOGON-only paths and
+drops its fallback code, so a gap in the layer is a Lua error, or a feature
+that silently never runs. `REPENTOGON` is therefore not a global: the globals'
+`__index` answers it by the mod folder in the reading function's chunk name,
+for the mods the layer names, and nil for every other. Three checks go into
+naming a mod: `tools/coverage.mjs` (the REPENTOGON-only names its Lua uses
+against what the layer has), a run with `ISAAC_RGON_ALLOW=*` (its Lua errors,
+and the callbacks it listens on that the layer does not fire, which the layer
+writes to the game's log), and reading every use it makes of REPENTOGON. The
+third is not optional: two mods with no gap by the first two checks
+(mantle-rework, moderrorcontainer) switch themselves off under REPENTOGON
+because it does their job natively, and this layer does not.
+
+**What is in it now**: 58 names. Twelve callbacks over nine hooks
+(`MC_PRE/POST_ADD_COLLECTIBLE`, `MC_PRE_ADD_TRINKET`,
+`MC_PRE/POST_PICKUP_MORPH`, `MC_HUD_RENDER`, `MC_POST_HUD_RENDER`,
+`MC_HUD_UPDATE`, `MC_POST_HUD_UPDATE`, `MC_PRE/POST_SFX_PLAY`,
+`MC_PRE_MUSIC_PLAY`), `Level:GetDimension`, `EntityPlayer:GetHealthType`,
+`Isaac.CanStartTrueCoop`, `EntityPickup:IsBlind` and `:GetCollectibleCycle`,
+`Sprite:GetLayer` and `:GetAllLayers` with the 28 methods of a layer state,
+and `PlayerManager`. Four mods are let in: aarons-door-overhaul,
+enhanced-boss-bars, fireworks-for-good-items, reactionapi.
+
+**Checked.**
+
+- Host selftest: the bridge's primitives and its refusals, and the gate by
+  folder (760 checks in all).
+- `test_layer.lua`, inside a running game: 49 checks -- every function and
+  callback above, including a callback that rewrites the arguments, one that
+  cancels the call, floats read off the stack as floats, a pickup's item cycle
+  against a Glitched Crown pedestal, and a Lua error in a layer callback
+  logged and survived.
+- `test_gate.lua`: a mod the layer does not name reads nil by every route (7).
+- `tests/recomp-rgon.test.js`: the slots the layer names are the functions the
+  lift wraps, the wrapper's four steps in order, the archive's contents (6).
+- The wrapped functions with nobody listening: cards, pills, the odds and
+  ends, every trinket, every passive and every floor walked on the new engine,
+  0 stops; a Lua error in 30 of the game's own callbacks with the layer
+  installed, 0 stops.
+
+**Not yet.** Fiend Folio is 540 names away (`tools/coverage.mjs`), External
+Item Descriptions 28, StageAPI 48. The layer's mod is not in the published
+catalogue, and no engine with the bridge is deployed. ImGui has no equivalent
+planned: a menu drawn by REPENTOGON's ImGui will need the page's own.
+
+### 21.133 Round 103: Fiend Folio as the target, and three port bugs it walked into
+
+The layer of round 102 had 58 names. Fiend Folio, the mod it was started for,
+needs REPENTOGON outright (it shows a message and loads nothing without it),
+uses 357 of its functions and listens on 204 of its callbacks, and is 22,858
+files and 640 MB. This round is the work of getting it to load and into a
+run, and what turned up on the way. It is not finished: see "Where it stands".
+
+**Three bugs of the port itself**, none of them about REPENTOGON, each found
+because Fiend Folio would not load:
+
+- **Mods were loaded in folder order, not by name as on a PC.** The game sorts
+  its mod list by the `<name>` of each mod's metadata.xml (0x008f6190 is the
+  comparator, 0x008fcc90 the sort; a library names itself " Custom Stage API",
+  with the space, to be first). It builds each mod's paths on its current
+  directory, which is "/" here, so the metadata path came out as
+  "//mods/<dir>//metadata.xml". Its file layer (0x00a17180) takes a path as
+  absolute only if it starts with a drive ("X:/"), and its index of the mounted
+  tree holds "mods/<dir>/metadata.xml". So the open failed for every mod, every
+  name fell back to the folder, the sort became a sort by folder, and the game
+  then wrote a 139-byte stub metadata.xml over the mod's own. Fixed where the
+  path is resolved (`isaac_fs_plain_path_arg`, called from that function's
+  wrapper): a path that starts "//" is handed on relative, its doubled
+  separators folded. Three test mods whose folder, name and ASCII orders all
+  differ now load ` space`, `Zed`, `apple`; before, `d1`, `d2`, `d3`.
+- **A script asked for under another letter case was not found.** Fiend Folio
+  asks for `resources.luarooms.thelab`; the file is `TheLab.lua`. Windows does
+  not mind. The loader shim (`luaL_loadfilex`) now tries the name as given and
+  then each part of it without regard to case.
+- **There was no `os`.** The game opens seven of Lua's libraries and `os` is
+  not one; REPENTOGON gives mods `os.date`, `os.time`, `os.clock` and
+  `os.difftime`, and so does the layer now (the bridge hands it the library).
+
+**How addresses are found, widened.** Round 102 had the game's Lua
+registration and REPENTOGON's signatures. Added:
+
+- `tools/vtables.py`: a class's virtual table through its RTTI (the classes are
+  in the namespace `IsaacRepentancePlus`). The entity classes' slot order is
+  REPENTOGON's: Init 1, Update 3, Render 5, TakeDamage 8, HandleCollision 23.
+  It is checked against the game's own Lua thunks (`jmp [vtable+0xc]` is
+  Update, `+0x14` Render, `+0x20` TakeDamage) and against four Render
+  functions known by signature. That gave Update, Render, TakeDamage, Init
+  and HandleCollision for all twelve entity classes at once.
+- `tools/prop_offsets.py`: every plain property getter the game registers
+  (`mov eax, [ecx+disp]; ret`) is a measured field offset: 98 of them.
+- `tools/struct_deltas.py`: those offsets beside REPENTOGON's fields of the
+  same name. Entity, tears, lasers, familiars, NPCs, effects, pickups and
+  sprites agree everywhere they can be compared. The player does not.
+- `lab_player.lua`: for the player, a value is set through the game's own API
+  and then looked for in the object. The player's fields have moved by +0 (to
+  0x1368), +4 (0x145c..), +8 (0x14bc..), +12 (0x155c..), +16 (0x16b0..) and
+  +20 (0x1811..0x1dc0); `api_player.lua` offers a field only inside one of
+  those stretches.
+- A signature that matches once is still checked: its `ret` must pop what its
+  declaration says (43 of 45 functions called so far could be checked so, and
+  all did), and where the game's registration names the same function the two
+  agree (ten of ten). One unique match was wrong (a prologue with no
+  distinguishing byte); its callers showed it.
+- `tools/hook_table.py` holds the hook list and re-checks every entry against
+  the executable before it writes `RGON_HOOKS` and `hook_slots.lua`.
+
+**What "between two checked fields" is worth: nothing.** The first version of
+the entity fields took a REPENTOGON offset as good when the fields on both
+sides of it were confirmed. The in-game test then read a poison's damage and
+got 0: REPENTOGON's table has it at 0x278, and this build's `Entity::AddPoison`
+stores it at 0x320. A field is in the layer now because this build's code or a
+test says so, and for no other reason.
+
+**Hooks.** 132 game functions are wrapped (11 before). Two traps:
+
+- A function the lifter split into parts (the largest: the player's, tears',
+  familiars', effects' and projectiles' Update among them) has a comment on
+  its opening line, which the wrapper installer's pattern did not match. Seven
+  hooks were silently not installed; the in-game test for those callbacks is
+  what said so. The installer takes that line now and says when it cannot
+  place a wrapper.
+- The file layer's path function already had an observe-only wrapper, and a
+  second wrapper for the same address replaced it without a word, or was
+  replaced by it. Two wrappers on one function are a build error now.
+
+**The engine's callback runner.** `LuaEngine::Init` takes a registry reference
+to main.lua's `_RunCallback` and then clears the global, so nothing in Lua can
+stand between the engine and a callback list. The bridge can swap what a
+registry key holds (`registry`), and the layer reads the key out of the engine
+object. It is used so far for one thing: to know that one of the game's own
+PRE_x_COLLISION callbacks answered, in which case POST_x_COLLISION must not
+run.
+
+**An abort with no message.** A Lua error raised with no protected call
+around it ends in `abort()`, and the game sets no panic function, so nothing
+is printed. The layer's EntitySlot class (slot machines, which the game never
+gave to Lua) had borrowed Entity's finaliser, which raises an error on any
+object not exactly an Entity; the collector ran it inside a host API call. The
+class has no finaliser now, and the layer sets a panic function that logs the
+error first.
+
+**Accepted, not supported.** Some of what Fiend Folio calls while it loads is
+a change inside the game that the layer does not make: `Isaac.ReworkCollectible`
+(stop the game's own logic for an item), a backdrop or a boss colour a mod
+defines, REPENTOGON's renderer (a mod's own images and shaders), beams. Those
+names exist, do nothing, and say so once in the game's log (`[REPENTOGON]
+accepted, not supported in the browser: ...`); `REPENTOGON.Unsupported` lists
+them. They are gaps and are counted as gaps. Without them a mod of this size
+would stop at its first line that mentions one.
+
+**A signature that matched once and was wrong.** Hook slot 12 was put on
+0x00832850 as `Entity_Player::TriggerRoomExit` (for MC_PRE_ROOM_EXIT). The
+function pops nothing although the declaration takes a bool, it is outside the
+player's code, and its `this` begins with a state number (`mov eax, [ecx]; cmp
+eax, 2`), not a virtual table. With Fiend Folio listening, the handler wrapped
+ECX as a player and the module stopped ("memory access out of bounds", under
+`luaL_ref`). Found by arming the hooks a range of slots at a time
+(`?ISAAC_RGON_HOOKS=12-14`). The handler is gone and the callback is not
+fired; the wrapper stays in the engine with nothing listening on it. The
+`ret N` check that would have refused it reported "unknown" for this one and
+let it pass: unknown is now a reason to read the function before using it.
+
+**Where it stands.** In-game checks on the engine of this round: 49 + 95 + 7
+(`test_layer.lua`, `test_layer2.lua`, `test_gate.lua`), 0 stops. Fiend Folio's
+`main.lua` loads to its end with no callback error at the menu. In a run with
+the hooks off it plays (13 distinct Lua errors, each a name the layer does not
+have yet: `BlockCollectible`, `EntitySaveStateManager`, innate items,
+`GetEventCounter`, custom shaders); 134 of the callbacks it listens on are not
+fired. It is not in `ALLOW`, and the layer's mod is not in the catalogue.
+What a player without the layer gets from this round is the three port fixes
+above.

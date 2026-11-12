@@ -243,7 +243,15 @@ def split_text(text, min_lines, part_lines, log=None):
         if mp:
             name = mp.group(1)
             j = i + 1
-            while j < len(lines) and not lines[j].startswith("void %s(CpuState *restrict s) {" % name):
+            # The trampoline is `void sub_X(` -- or `void sub_X__lifted(` once a
+            # wrapper has been put around it (lift_patches.apply_wrap_patches
+            # renames the trampoline and adds its own `void sub_X(` after it).
+            # Round 103: taking only the first form, this pass found the
+            # WRAPPER, saw no split mark on it, took the function for an old
+            # split, rebuilt it and split it again -- without the wrapper. Seven
+            # REPENTOGON-layer hooks were installed and removed in every build.
+            heads = ("void %s(CpuState *restrict s) {" % name, "void %s__lifted(CpuState *restrict s) {" % name)
+            while j < len(lines) and not lines[j].startswith(heads):
                 j += 1
             k = j
             while k < len(lines) and lines[k] != "}":

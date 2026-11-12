@@ -78,6 +78,32 @@ static struct {
     uint32_t corrupt;            /* frees refused because the header was bad */
 } g_stat;
 
+/* ---- overflow segments (round 101) ----------------------------------------
+ *
+ * The arena is 384 MiB and the boot alone takes about 343 of it: the sound
+ * catalogue's PCM buffers are allocated up front (1,538 of them, 262 MB, most
+ * never written -- but address space in the arena all the same), then the
+ * textures and animations of the menus. That left some 40 MiB for a run.
+ * Measured by walking the floors (drive_stress.mjs phases=stages, heap=20):
+ * 359 MB live in the first room, 393 MB by the 37th floor, 6 MB free in 788
+ * pieces after it. Past that, malloc returned NULL, and the game does not
+ * check: the next write went to a null pointer plus an offset, which is the
+ * "memory access out of bounds" of a late run, or to nothing much and a wrong
+ * frame. A mod's Lua heap comes out of the same arena (isaac_lua_alloc), so a
+ * mod with a few tens of megabytes of tables got there in the first room.
+ *
+ * Making the arena larger moves the host base and the initial memory with it,
+ * which is resident bytes on every phone that opens the page (rounds 66-69
+ * and release 17 went the other way on purpose). So the arena stays, and when
+ * it is full the allocator takes a segment from the host heap -- which grows
+ * the wasm memory only then, on the machines whose run needs it. The blocks of
+ * a segment are on the same free lists as the arena's; a block never coalesces
+ * across the end of the region it lies in, and isaac_is_guest_va knows the
+ * segments (isaac_host.h). A segment is never given back. */
+#define OVF_SEG_BYTES   (64u << 20)
+#define OVF_REQUEST_MAX 0x40000000u          /* one request: 1 GiB, far past anything the game asks for */
+static uint64_t g_ovf_bytes;
+
 static uint32_t blk_size(uint32_t b) { return isaac_r32(b) & ~(ALIGN - 1u); }
 static int      blk_used(uint32_t b) { return isaac_r32(b + 4) & FLAG_USED; }
 static void     blk_set(uint32_t b, uint32_t size, int used) {
@@ -109,6 +135,45 @@ static void bin_unlink(uint32_t b, uint32_t size) {
     if (next) isaac_w32(next + 8, prev);
 }
 
+/* The region a block lies in: the arena, or one overflow segment. */
+static int heap_region(uint32_t b, uint32_t *lo, uint32_t *hi) {
+    if (b >= g_arena_lo && b < g_arena_hi) { *lo = g_arena_lo; *hi = g_arena_hi; return 1; }
+    for (uint32_t i = 0; i < g_isaac_ovf_n; ++i) {
+        const uint32_t s = g_isaac_ovf[i][0], n = g_isaac_ovf[i][1];
+        if (b - s < n) { *lo = s; *hi = s + n; return 1; }
+    }
+    return 0;
+}
+
+/* One more segment, big enough for a block of `need` bytes. ISAAC_HEAP_OVERFLOW=0
+ * turns this off (the arena alone, as before round 101). */
+static int heap_grow(uint32_t need) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("ISAAC_HEAP_OVERFLOW"); on = !(e && *e == '0'); }
+    if (!on || g_isaac_ovf_n >= ISAAC_OVF_MAX) return 0;
+    uint32_t size = OVF_SEG_BYTES;
+    if (need > size) size = (need + 0xFFFFFu) & ~0xFFFFFu;
+    void *m = malloc((size_t)size + ALIGN);
+    if (!m && size > need) {                  /* the host cannot spare a whole segment: just this block */
+        size = (need + 0xFFFFu) & ~0xFFFFu;
+        m = malloc((size_t)size + ALIGN);
+    }
+    if (!m) return 0;
+    const uint32_t lo = (isaac_va(m) + (ALIGN - 1u)) & ~(ALIGN - 1u);
+    if (lo < ISAAC_HOST_BASE_VA || (uint64_t)lo + size > 0xFFFF0000ull) { free(m); return 0; }
+    g_isaac_ovf[g_isaac_ovf_n][0] = lo;
+    g_isaac_ovf[g_isaac_ovf_n][1] = size;
+    ++g_isaac_ovf_n;
+    g_ovf_bytes += size;
+    blk_set(lo, size, 0);
+    bin_insert(lo, size);
+    isaac_log("[isaac][heap] the %u MiB arena is full (%llu bytes live): overflow segment %u, "
+              "%u MiB at 0x%08x from the host heap (%llu MiB of overflow in all)",
+              ISAAC_HEAP_SIZE >> 20, (unsigned long long)g_stat.live, g_isaac_ovf_n,
+              size >> 20, lo, (unsigned long long)(g_ovf_bytes >> 20));
+    return 1;
+}
+
 static void heap_init(void) {
     if (g_inited) return;
     g_arena_lo = ISAAC_HEAP_VA;
@@ -129,27 +194,32 @@ static uint32_t guest_malloc(uint32_t n) {
     uint64_t need64 = (uint64_t)n + HDR_BYTES + FTR_BYTES;
     need64 = (need64 + (ALIGN - 1)) & ~(uint64_t)(ALIGN - 1);
     if (need64 < MIN_BLOCK) need64 = MIN_BLOCK;
-    if (need64 > ISAAC_HEAP_SIZE) {
+    if (need64 > OVF_REQUEST_MAX) {
         ++g_stat.failures;
-        isaac_log("[isaac][heap] malloc(%u) exceeds the whole arena (%u MiB)",
-                  n, ISAAC_HEAP_SIZE >> 20);
+        isaac_log("[isaac][heap] malloc(%u) is past anything this heap serves (%u MiB)",
+                  n, OVF_REQUEST_MAX >> 20);
         return 0;
     }
     uint32_t need = (uint32_t)need64;
 
-    /* the request's own class may hold smaller blocks: first fit inside it */
     unsigned i0 = bin_index(need);
     uint32_t b = 0;
-    for (uint32_t c = g_bin[i0]; c; c = isaac_r32(c + 12))
-        if (blk_size(c) >= need) { b = c; break; }
-    /* every block of a larger class fits: take the first non-empty one */
-    for (unsigned i = i0 + 1; !b && i < NBINS; ++i) b = g_bin[i];
+    for (int grown = 0; ; grown = 1) {
+        /* the request's own class may hold smaller blocks: first fit inside it */
+        for (uint32_t c = g_bin[i0]; c; c = isaac_r32(c + 12))
+            if (blk_size(c) >= need) { b = c; break; }
+        /* every block of a larger class fits: take the first non-empty one */
+        for (unsigned i = i0 + 1; !b && i < NBINS; ++i) b = g_bin[i];
+        /* nothing fits: one more segment, once, and look again */
+        if (b || grown || !heap_grow(need)) break;
+    }
     if (!b) {
         ++g_stat.failures;
         isaac_log("[isaac][heap] OUT OF MEMORY: malloc(%u) failed with %llu bytes "
-                  "live and a %u MiB arena. Peak was %llu. Raise ISAAC_HEAP_SIZE "
-                  "or move the guard.",
+                  "live, a %u MiB arena and %llu MiB of overflow in %u segment(s). "
+                  "Peak was %llu.",
                   n, (unsigned long long)g_stat.live, ISAAC_HEAP_SIZE >> 20,
+                  (unsigned long long)(g_ovf_bytes >> 20), g_isaac_ovf_n,
                   (unsigned long long)g_stat.peak);
         return 0;
     }
@@ -166,7 +236,7 @@ static uint32_t guest_malloc(uint32_t n) {
     g_stat.live += need;
     g_stat.total_alloced += need;
     ++g_stat.allocs;
-    if (b + need > g_heap_top) g_heap_top = b + need;
+    if (b < g_arena_hi && b + need > g_heap_top) g_heap_top = b + need;   /* the arena's span only */
     if (n > g_stat.largest_single) g_stat.largest_single = n;
     if (g_stat.live > g_stat.peak) {
         g_stat.peak = g_stat.live;
@@ -177,10 +247,11 @@ static uint32_t guest_malloc(uint32_t n) {
 
 static void guest_free(uint32_t p) {
     if (!p) return;
-    if (p < g_arena_lo + HDR_BYTES || p >= g_arena_hi) {
+    uint32_t r_lo = 0, r_hi = 0;
+    if (p < HDR_BYTES || !heap_region(p - HDR_BYTES, &r_lo, &r_hi)) {
         isaac_log("[isaac][heap] free(0x%08x): pointer is outside the guest "
-                  "arena 0x%08x..0x%08x -- ignoring rather than corrupting.",
-                  p, g_arena_lo, g_arena_hi);
+                  "arena 0x%08x..0x%08x and its %u overflow segment(s) -- ignoring "
+                  "rather than corrupting.", p, g_arena_lo, g_arena_hi, g_isaac_ovf_n);
         return;
     }
     uint32_t b = p - HDR_BYTES;
@@ -189,7 +260,7 @@ static void guest_free(uint32_t p) {
         return;
     }
     uint32_t sz = blk_size(b);
-    if (sz < MIN_BLOCK || b + sz > g_arena_hi ||
+    if (sz < MIN_BLOCK || b + sz > r_hi || b + sz < b ||
         (isaac_r32(b + sz - FTR_BYTES) & ~(ALIGN - 1u)) != sz) {
         ++g_stat.corrupt;
         isaac_log("[isaac][heap] free(0x%08x): header/footer disagree (size %u) "
@@ -203,14 +274,20 @@ static void guest_free(uint32_t p) {
 
     /* Coalesce forward, then backward (the footer names the block before). */
     uint32_t nxt = b + sz;
-    if (nxt < g_arena_hi && !blk_used(nxt)) {
+    if (nxt < r_hi && !blk_used(nxt)) {
         uint32_t ns = blk_size(nxt);
         bin_unlink(nxt, ns);
         sz += ns;
     }
-    if (b > g_arena_lo && !(isaac_r32(b - FTR_BYTES) & FLAG_USED)) {
+    if (b > r_lo && !(isaac_r32(b - FTR_BYTES) & FLAG_USED)) {
         uint32_t ps = isaac_r32(b - FTR_BYTES) & ~(ALIGN - 1u);
-        if (ps >= MIN_BLOCK && b - ps >= g_arena_lo) {
+        if (ps >= MIN_BLOCK && ps <= b - r_lo) {
+            /* Round 101: this block's header is about to lie inside the merged
+             * block, where nothing rewrites it. Left saying "in use", a second
+             * free of the same pointer passed the double-free check above and
+             * took the merged block apart (the selftest's overflow case found
+             * it; the guard only ever caught a block that had not merged back). */
+            isaac_w32(b + 4, 0u);
             bin_unlink(b - ps, ps);
             b -= ps;
             sz += ps;
@@ -221,7 +298,8 @@ static void guest_free(uint32_t p) {
 }
 
 static uint32_t guest_size(uint32_t p) {
-    if (!p || p < g_arena_lo + HDR_BYTES || p >= g_arena_hi) return 0;
+    uint32_t r_lo, r_hi;
+    if (p < HDR_BYTES || !heap_region(p - HDR_BYTES, &r_lo, &r_hi)) return 0;
     uint32_t s = blk_size(p - HDR_BYTES);
     return s > HDR_BYTES + FTR_BYTES ? s - HDR_BYTES - FTR_BYTES : 0;
 }
@@ -400,6 +478,11 @@ void isaac_heap_report(void) {
     isaac_log("[isaac][heap] ---- guest heap high-water report ----");
     isaac_log("[isaac][heap]   arena          : %u MiB at 0x%08x",
               ISAAC_HEAP_SIZE >> 20, ISAAC_HEAP_VA);
+    if (g_isaac_ovf_n)
+        isaac_log("[isaac][heap]   overflow       : %llu MiB in %u segment(s) from the host heap (the arena filled up)",
+                  (unsigned long long)(g_ovf_bytes >> 20), g_isaac_ovf_n);
+    else
+        isaac_log("[isaac][heap]   overflow       : none (the arena was enough)");
     isaac_log("[isaac][heap]   PEAK live      : %llu bytes (%.1f MiB) at alloc #%u",
               (unsigned long long)g_stat.peak, g_stat.peak / 1048576.0,
               g_stat.peak_at_alloc);
@@ -438,3 +521,5 @@ void isaac_heap_report(void) {
 
 uint64_t isaac_heap_peak(void) { return g_stat.peak; }
 uint32_t isaac_heap_arena_size(void) { return ISAAC_HEAP_SIZE; }
+uint32_t isaac_heap_overflow_segments(void) { return g_isaac_ovf_n; }
+uint64_t isaac_heap_live(void) { return g_stat.live; }

@@ -137,10 +137,27 @@ extern "C" {
 #define ISAAC_GUARD_SIZE      0x00100000u
 #define ISAAC_HOST_BASE_VA    0x1c000000u       /* -sGLOBAL_BASE=469762048     */
 
+/* Round 101: the guest heap's overflow segments (host_shims_heap.c). When the
+ * arena below the limit is full, the allocator takes a segment from the host's
+ * own, growable heap and hands the guest blocks out of it -- above the guard,
+ * which THE RULE above forbade for good reason and which is still better than
+ * the alternative: the arena is committed with the wasm memory and was sized
+ * to the boot's peak (round 69: 384 MiB against 350 measured), so a long run
+ * or a mod with a large Lua heap got NULL from malloc and the game died on it.
+ * A segment is guest memory in every sense but its address, so a pointer into
+ * one has to pass the check below. Weak, so every build links whether or not
+ * it carries the allocator; {lo, size} per segment. */
+#define ISAAC_OVF_MAX 16u
+__attribute__((weak)) uint32_t g_isaac_ovf_n;
+__attribute__((weak)) uint32_t g_isaac_ovf[ISAAC_OVF_MAX][2];
+
 /* True if `va` is somewhere the guest is allowed to touch. Host code uses this
  * to reject a guest-supplied pointer before dereferencing it. */
 static inline int isaac_is_guest_va(uint32_t va) {
-    return va < ISAAC_GUEST_LIMIT_VA;
+    if (va < ISAAC_GUEST_LIMIT_VA) return 1;
+    for (uint32_t i = 0; i < g_isaac_ovf_n; ++i)
+        if (va - g_isaac_ovf[i][0] < g_isaac_ovf[i][1]) return 1;
+    return 0;
 }
 
 /* ------------------------------------------------------- guest accessors -- */

@@ -76,6 +76,25 @@ with tempfile.TemporaryDirectory() as d:
     except SystemExit as e:
         out["refused"] = "FS_OFFSET = EAX" in str(e)
     out["refusedUnchanged"] = tu.read_bytes() == unit + b"  FS_OFFSET = EAX;\n"
+# round 101: the ret's own store, which the replay after a longjmp or a catch reads
+ret = {}
+for tag, text in (("lf", unit), ("crlf", unit.replace(b"\n", b"\r\n"))):
+    slim, _ = L.slim_call_text(text)
+    fixed, n = L.ret_eip_text(slim)
+    again, n2 = L.ret_eip_text(fixed)
+    reslim, n3 = L.slim_call_text(fixed)
+    ret[tag] = {"missingBefore": L.ret_eip_missing(slim), "n": n, "again": n2, "missingAfter": L.ret_eip_missing(fixed),
+                "text": fixed.decode(), "slimTakes": n3, "violations": [v.decode() for v in L.slim_violations(fixed)]}
+with tempfile.TemporaryDirectory() as d:
+    tu = Path(d) / "lifted_000.c"
+    tu.write_bytes(unit)
+    L.apply_call_slim(Path(d))
+    first = len(L.apply_ret_eip(Path(d)))
+    ret["applied"] = {"first": first, "text": tu.read_bytes().decode(), "twice": len(L.apply_ret_eip(Path(d))),
+                      "check": len(L.apply_ret_eip(Path(d), check_only=True))}
+    tu.write_bytes(L.slim_call_text(unit)[0])
+    ret["checkOnly"] = {"reported": len(L.apply_ret_eip(Path(d), check_only=True)), "unchanged": tu.read_bytes() == L.slim_call_text(unit)[0]}
+out["ret"] = ret
 print(json.dumps(out))
 `;
 
@@ -136,4 +155,35 @@ test('apply_call_slim rewrites in place once, and refuses a violating tree untou
   assert.equal(r.applied.twice, 0);
   assert.equal(r.refused, true);
   assert.equal(r.refusedUnchanged, true);
+});
+
+// Round 101. The replay loop in isaac_guest_call_inner dispatches cpu->EIP after
+// every frame it re-enters, so a ret has to leave its return address in CpuState.
+// Call-slim took that store away with the call-site spills, and a caught Lua
+// error then resumed once and ran garbage (releases 14 to 18).
+test('a ret stores its return address into CpuState again, on its own line, once', (t) => {
+  const r = run(t); if (!r) return;
+  for (const tag of ['lf', 'crlf']) {
+    const x = r.ret[tag];
+    assert.equal(x.missingBefore, 1, `${tag}: call-slim leaves the ret without its store`);
+    assert.equal(x.n, 1, tag);
+    assert.equal(x.again, 0, `${tag}: a second pass finds nothing`);
+    assert.equal(x.missingAfter, 0, tag);
+    assert.ok(x.text.includes('  EIP = MEMR32(ESP); s->EIP = EIP;'), `${tag}: the store is on the ret's line`);
+    assert.equal(x.slimTakes, 0, `${tag}: call-slim does not take it back`);
+    assert.deepEqual(x.violations, [], tag);
+    // the direct form already stores it and stays as it is
+    assert.equal(lines(x.text).filter((l) => l.trim() === 's->EIP = MEMR32(s->ESP);').length, 1, tag);
+  }
+  assert.ok(r.ret.crlf.text.includes('s->EIP = EIP;\r\n'), 'CRLF kept');
+});
+
+test('apply_ret_eip rewrites in place once; --check reports and leaves the tree alone', (t) => {
+  const r = run(t); if (!r) return;
+  assert.equal(r.ret.applied.first, 1);
+  assert.equal(r.ret.applied.text, r.ret.lf.text);
+  assert.equal(r.ret.applied.twice, 0);
+  assert.equal(r.ret.applied.check, 0);
+  assert.equal(r.ret.checkOnly.reported, 1);
+  assert.equal(r.ret.checkOnly.unchanged, true);
 });

@@ -130,20 +130,143 @@ static void *isaac_lua_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
 static uint32_t g_tramp_va[LUA_TRAMPOLINES];   /* guest lua_CFunction VA */
 static unsigned g_tramp_n;
 
+/* ---- 1b. where a guest C function's frame goes ---------------------------
+ *
+ * Round 100. Each trampoline used to run its guest function on a stack window
+ * fixed by its slot (TOP - 0x8000 - slot * 0x400), whatever the guest stack
+ * already held. A guest C function that re-enters itself through Lua then
+ * starts on its own live frame: the game's `include` (0x00860000) runs a mod
+ * file, and a file that calls `include` again (StageAPI's library.lua,
+ * room.lua and reimpl.lua; More Special Rooms in Greed's lib.lua) overwrote
+ * the outer include's locals, return address and saved registers. Its
+ * std::strings were then freed twice ("[heap] double free"), the guest heap
+ * corrupted and the boot hung.
+ *
+ * Every other host->guest call goes just below the caller's live ESP; this now
+ * does too. Each Lua shim records the guest ESP it was called with (the
+ * innermost guest code inside Lua), and a trampoline starts LUA_GUEST_GAP
+ * below the innermost record. Any shim can reach a trampoline -- a __gc
+ * finalizer, a metamethod, an error handler -- so every shim records.
+ *
+ * A Lua error longjmps past these records, and past the epilogue of the
+ * trampoline's isaac_guest_call, which would have put g_guest_call_esp and the
+ * guest jmp_buf back (round 95's C++ catch reads both). A record is therefore
+ * dropped once the host stack is back at or above it -- a live record encloses
+ * the current host frame, so it sits strictly above it -- and the oldest
+ * dropped trampoline's entry state is the state of the call control is back
+ * in. Missing a dead record only leaves a frame lower than needed. */
+#include <setjmp.h>
+#include <stdint.h>
+#include <stdlib.h>
+extern uint32_t g_guest_call_esp;
+extern void isaac_guest_jmp_save(void *dst);
+extern void isaac_guest_jmp_restore(const void *src);
+
+#define LUA_NEST_MAX   512u      /* Lua stops C nesting at LUAI_MAXCCALLS = 200 */
+#define LUA_GUEST_GAP  0x400u
+
+static struct { uintptr_t host; uint32_t esp; } g_shim_rec[LUA_NEST_MAX];
+static unsigned g_shim_n;
+static struct { uintptr_t host; uint32_t call_esp; jmp_buf jmp; } g_call_rec[LUA_NEST_MAX];
+static unsigned g_call_n;
+
+static void lua_nest_prune(uintptr_t here) {
+    while (g_shim_n && g_shim_rec[g_shim_n - 1].host <= here) --g_shim_n;
+    if (g_call_n && g_call_rec[g_call_n - 1].host <= here) {
+        unsigned i = g_call_n - 1;
+        while (i && g_call_rec[i - 1].host <= here) --i;
+        g_guest_call_esp = g_call_rec[i].call_esp;
+        isaac_guest_jmp_restore(g_call_rec[i].jmp);
+        g_call_n = i;
+    }
+}
+
+/* A shim's own record sits at its own frame, so the prune on its way out
+ * drops it along with whatever its Lua call abandoned. */
+static void lua_shim_enter(uintptr_t here, uint32_t esp) {
+    lua_nest_prune(here);
+    const unsigned n = g_shim_n;
+    if (n >= LUA_NEST_MAX) { isaac_shutdown("Lua shims nested deeper than LUA_NEST_MAX"); abort(); }
+    g_shim_rec[n].host = here;
+    g_shim_rec[n].esp = esp;
+    g_shim_n = n + 1;
+}
+
 static int call_guest_cfunction(lua_State *L, unsigned slot) {
+    volatile char anchor = 0;
+    const uintptr_t here = (uintptr_t)&anchor;
     uint32_t fn = g_tramp_va[slot];
     CpuState cpu;
+    lua_nest_prune(here);
     memset(&cpu, 0, sizeof cpu);
     cpu.FS_OFFSET = ISAAC_TEB_VA;
-    /* A fresh stack window per re-entry: Lua may call us from arbitrary depth
-     * and the guest's own frame chain must not be clobbered. */
-    cpu.ESP = ISAAC_STACK_TOP_VA - 0x8000 - slot * 0x400;
+    if (g_shim_n) {
+        cpu.ESP = (g_shim_rec[g_shim_n - 1].esp - LUA_GUEST_GAP) & ~0xFu;
+    } else {
+        /* Lua entered by host code, not through a shim: no guest frame to
+         * stay below (only the selftest does this) */
+        static int said;
+        if (!said++) isaac_log("[isaac][lua] a guest C function called with no guest caller: the slot window");
+        cpu.ESP = ISAAC_STACK_TOP_VA - 0x8000 - slot * 0x400;
+    }
     cpu.ESP -= 4;
     isaac_w32(cpu.ESP, isaac_va(L));      /* the sole argument, cdecl */
     cpu.ESP -= 4;
     isaac_w32(cpu.ESP, 0);                /* return address */
+    const unsigned d = g_call_n;
+    if (d >= LUA_NEST_MAX) { isaac_shutdown("guest C functions nested deeper than LUA_NEST_MAX"); abort(); }
+    g_call_rec[d].host = here;
+    g_call_rec[d].call_esp = g_guest_call_esp;
+    isaac_guest_jmp_save(g_call_rec[d].jmp);
+    g_call_n = d + 1;
     isaac_guest_call(fn, &cpu);
+    g_call_n = d;                         /* isaac_guest_call put the state back itself */
     return (int)cpu.EAX;                  /* number of results */
+}
+
+/* Round 102: the same two things for host code that is not a trampoline
+ * (host_rgon.c).
+ *
+ * A host function Lua called -- a native of the REPENTOGON-compatible layer --
+ * calls a guest function: the frame goes where a trampoline's would, the
+ * arguments are pushed right to left over a return address of 0, and the call
+ * is recorded so a Lua error raised below it puts the guest-call state back.
+ * The caller sets the registers (ECX for a thiscall) and reads the results
+ * out of the same CpuState. */
+void isaac_lua_guest_invoke(uint32_t fn, CpuState *cpu, const uint32_t *args, unsigned nargs) {
+    volatile char anchor = 0;
+    const uintptr_t here = (uintptr_t)&anchor;
+    lua_nest_prune(here);
+    cpu->FS_OFFSET = ISAAC_TEB_VA;
+    cpu->ESP = g_shim_n ? (g_shim_rec[g_shim_n - 1].esp - LUA_GUEST_GAP) & ~0xFu
+                        : ISAAC_STACK_TOP_VA - 0x8000u;
+    for (unsigned i = nargs; i > 0; --i) { cpu->ESP -= 4; isaac_w32(cpu->ESP, args[i - 1]); }
+    cpu->ESP -= 4;
+    isaac_w32(cpu->ESP, 0);               /* return address */
+    const unsigned d = g_call_n;
+    if (d >= LUA_NEST_MAX) { isaac_shutdown("guest C functions nested deeper than LUA_NEST_MAX"); abort(); }
+    g_call_rec[d].host = here;
+    g_call_rec[d].call_esp = g_guest_call_esp;
+    isaac_guest_jmp_save(g_call_rec[d].jmp);
+    g_call_n = d + 1;
+    isaac_guest_call(fn, cpu);
+    g_call_n = d;
+}
+
+/* Guest code that enters Lua WITHOUT a shim: a hook of the layer runs inside
+ * a lifted function and calls a Lua handler itself. The guest frames live at
+ * that moment are below every record the shims made, so a trampoline placed
+ * from those records would land on them; the hook records its own guest ESP
+ * for as long as its Lua call lasts, exactly as a shim does. */
+void isaac_lua_host_enter(uintptr_t here, uint32_t guest_esp) { lua_shim_enter(here, guest_esp); }
+void isaac_lua_host_leave(uintptr_t here) { lua_nest_prune(here); }
+
+/* The selftest's view of the records: the innermost shim's guest ESP (0 when
+ * none) and the two depths. */
+uint32_t isaac_lua_nest_probe(unsigned *shims, unsigned *calls) {
+    if (shims) *shims = g_shim_n;
+    if (calls) *calls = g_call_n;
+    return g_shim_n ? g_shim_rec[g_shim_n - 1].esp : 0u;
 }
 
 /* 512 DISTINCT static functions. Lua compares closure identities by the
@@ -692,7 +815,16 @@ unsigned isaac_lua_trampolines_used(void) { return g_tramp_n; }
 
 /* ---- the 59 bindings ---------------------------------------------------- */
 
-#define LUA_SHIM(name) void imp_lua5_3_3r__##name(CpuState *restrict cpu)
+/* Round 100: each shim records its guest ESP for the trampolines (1b above). */
+#define LUA_SHIM(name) \
+    static void lua_shim_##name(CpuState *restrict cpu); \
+    void imp_lua5_3_3r__##name(CpuState *restrict cpu) { \
+        volatile char anchor_ = 0; \
+        lua_shim_enter((uintptr_t)&anchor_, cpu->ESP); \
+        lua_shim_##name(cpu); \
+        lua_nest_prune((uintptr_t)&anchor_); \
+    } \
+    static void lua_shim_##name(CpuState *restrict cpu)
 
 /* state */
 LUA_SHIM(luaL_newstate) {
@@ -714,7 +846,10 @@ LUA_SHIM(lua_newstate) {
                   "guest-addressable).", guest_alloc);
     ret_ptr(cpu, lua_newstate(isaac_lua_alloc, NULL));
 }
-LUA_SHIM(lua_close)      { lua_close(L_ARG(0)); cpu->EAX = 0; }
+/* round 102: the layer's hooks hold references into a state that is going away */
+void isaac_rgon_on_close(lua_State *L);
+void isaac_rgon_before_chunk(lua_State *L, const char *chunkname);
+LUA_SHIM(lua_close)      { isaac_rgon_on_close(L_ARG(0)); lua_close(L_ARG(0)); cpu->EAX = 0; }
 LUA_SHIM(luaL_openlibs)  { luaL_openlibs(L_ARG(0)); cpu->EAX = 0; }
 LUA_SHIM(lua_atpanic)    {
     ret_ptr(cpu, (const void *)(uintptr_t)0);
@@ -884,10 +1019,58 @@ LUA_SHIM(luaL_argerror) {
     const char *m = S_ARG(2);
     cpu->EAX = (uint32_t)luaL_argerror(L_ARG(0), I_ARG(1), m ? m : "bad argument");
 }
+/* round 103: a file name as Windows would take it. A mod's script names its
+ * other files in whatever case its author typed (Fiend Folio asks for
+ * resources/luarooms/thelab.lua; the file is TheLab.lua), which a PC's file
+ * system does not mind and the one these files sit in here does. The name is
+ * tried as given; failing that, each part of it is looked for in its directory
+ * without regard to case. */
+#include <dirent.h>
+#include <strings.h>
+#include <unistd.h>
+static const char *lua_file_any_case(const char *path, char *out, size_t cap) {
+    if (!path || access(path, F_OK) == 0) return path;
+    size_t n = 0;
+    const char *p = path;
+    out[0] = 0;
+    while (*p == '/') { if (n + 1 >= cap) return path; out[n++] = '/'; out[n] = 0; ++p; }
+    if (!n) return path;                      /* a relative name: not a mod's file */
+    while (*p) {
+        const char *e = strchr(p, '/');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len == 0) { p = e + 1; continue; }
+        if (n + len + 2 >= cap) return path;
+        DIR *d = opendir(out);
+        if (!d) return path;
+        int found = 0;
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (strlen(de->d_name) == len && strncasecmp(de->d_name, p, len) == 0) {
+                if (out[n - 1] != '/') out[n++] = '/';
+                memcpy(out + n, de->d_name, len); n += len; out[n] = 0;
+                found = 1;
+                break;
+            }
+        }
+        closedir(d);
+        if (!found) return path;
+        p += len;
+        while (*p == '/') ++p;
+    }
+    return out;
+}
 LUA_SHIM(luaL_loadfilex) {
-    cpu->EAX = (uint32_t)luaL_loadfilex(L_ARG(0), S_ARG(1), S_ARG(2));
+    /* round 102: this is the loader the game runs a mod's files with (three
+     * sites; the buffer loader below has one, the console's). The layer boots
+     * before the first of them that is a mod's. */
+    isaac_rgon_before_chunk(L_ARG(0), S_ARG(1));
+    char real[512];
+    cpu->EAX = (uint32_t)luaL_loadfilex(L_ARG(0), lua_file_any_case(S_ARG(1), real, sizeof real), S_ARG(2));
 }
 LUA_SHIM(luaL_loadbufferx) {
+    /* round 102: the REPENTOGON-compatible layer, if its mod is installed and
+     * on, runs once per state before the first mod's own chunk is loaded */
+    isaac_rgon_before_chunk(L_ARG(0), S_ARG(3));
     cpu->EAX = (uint32_t)luaL_loadbufferx(L_ARG(0), S_ARG(1),
                                           (size_t)isaac_arg(cpu, 2),
                                           S_ARG(3), S_ARG(4));

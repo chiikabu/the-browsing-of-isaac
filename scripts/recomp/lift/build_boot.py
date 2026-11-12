@@ -340,8 +340,11 @@ def main():
         patched |= set(apply_split_giants(lift_dir))
         # Round 96: the EIP/FS_OFFSET spill and reload lines go last, after the
         # passes whose old text may contain them (lift_patches.apply_call_slim).
-        from lift_patches import apply_call_slim  # noqa: E402
+        from lift_patches import apply_call_slim, apply_ret_eip  # noqa: E402
         patched |= set(apply_call_slim(lift_dir))
+        # Round 101: and the one EIP store the host does read goes back, on the
+        # ret's own line (the replay after a guest longjmp or a C++ catch).
+        patched |= set(apply_ret_eip(lift_dir))
         print("lift-patches: %d TU(s) rewritten" % len(patched))
 
     BOOT_OUT.mkdir(parents=True, exist_ok=True)

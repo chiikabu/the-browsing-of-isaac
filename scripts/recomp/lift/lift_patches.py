@@ -1265,6 +1265,176 @@ WRAP_PATCHES: dict[int, str] = {
 # the guest cannot tell a probed function from an unprobed one. Logging is off
 # unless ISAAC_PROBE=1.
 #
+# --- hooks of the REPENTOGON-compatible layer (round 102) -------------------
+# A callback of that layer is a handler before and after a game function
+# (host_rgon.c): each function below is wrapped the way the fast paths are,
+# and its wrapper tests one byte -- is a handler installed in this slot --
+# before it does anything else, so a function nobody hooked costs that test.
+# The slot numbers are the layer's (scripts/recomp/rgon/rgon.lua names them);
+# a slot is never reused for another function. Addresses are this
+# executable's (v1.9.7.17), read off the game's own Lua registration
+# (0x00866960: `push <method>; push <"Name">; call addFunction`), not found by
+# REPENTOGON's signatures, most of which do not match this build.
+# Round 103: the list is generated and checked by
+# scripts/recomp/rgon/tools/hook_table.py (each address against the Lua
+# registration, the signatures that still match, or the class's virtual table
+# found through RTTI); edit it there.
+RGON_HOOKS: list[tuple[int, int, str]] = [
+    (0, 0x0075f0e0, "Entity_Player::AddCollectible"),    # ret 0x18; reg EntityPlayer.AddCollectible
+    (1, 0x00771d30, "Entity_Player::AddTrinket"),    # ret 0x8; reg EntityPlayer.AddTrinket
+    (2, 0x006e30a0, "Entity_Pickup::Morph"),    # ret 0x18; reg EntityPickup.Morph
+    (3, 0x009a3eb0, "HUD::Render"),    # ret 0x0; reg HUD.Render
+    (4, 0x009a2990, "HUD::Update"),    # ret 0x0; reg HUD.Update
+    (5, 0x009a2b30, "HUD::PostUpdate"),    # ret 0x0; reg HUD.PostUpdate; sig HUD::PostUpdate
+    (6, 0x007466d0, "Level::SetStage"),    # ret 0x8; reg Level.SetStage; sig Level::SetStage
+    (7, 0x007e1d50, "MusicManager::Play"),    # ret 0x8; reg MusicManager.Play; sig Music::Play
+    (8, 0x007e1e70, "MusicManager::Crossfade"),    # ret 0x8; reg MusicManager.Crossfade
+    (9, 0x0092dc30, "SFXManager::Play"),    # ret 0x18; reg SFXManager.Play; sig SoundEffects::Play
+    (10, 0x006f9770, "Game::End"),    # ret 0x4; reg Game.End; sig Game::End
+    (11, 0x008f30d0, "ModManager::LoadConfigs"),    # ret 0x0; asm
+    (12, 0x00832850, "Entity_Player::TriggerRoomExit"),    # ret 0x0; sig Entity_Player::TriggerRoomExit
+    (13, 0x007ad860, "Entity_Player::TriggerTrinketAdded"),    # ret 0x8; sig Entity_Player::TriggerTrinketAdded
+    (14, 0x007adb30, "Entity_Player::TriggerTrinketRemoved"),    # ret 0x4; sig Entity_Player::TriggerTrinketRemoved
+    (15, 0x0099b520, "Entity_Player::InitPreLevelInitStats"),    # ret ?; sig Entity_Player::InitPreLevelInitStats
+    (16, 0x00612970, "Entity_Familiar::GetFollowerPriority"),    # ret 0x0; sig Entity_Familiar::GetFollowerPriority
+    (17, 0x0073fc80, "Level::ChangeRoom"),    # ret 0x8; reg Level.ChangeRoom; sig Level::ChangeRoom
+    (18, 0x00959e70, "Manager::SetSaveSlot"),    # ret 0x4; sig Manager::SetSaveSlot
+    (19, 0x0075d1d0, "Entity_Player::AddCostume"),    # ret 0x8; reg EntityPlayer.AddCostume; sig Entity_Player::AddCostume
+    (20, 0x0075d850, "Entity_Player::RemoveCostume"),    # ret 0x4; reg EntityPlayer.RemoveCostume; sig Entity_Player::RemoveCostume
+    (21, 0x006bb790, "Game::RestoreState"),    # ret 0x0; sig Game::RestoreState
+    (22, 0x007ebca0, "Room::SpawnGridEntity"),    # ret 0x14; reg Room.SpawnGridEntity; sig Room::SpawnGridEntity
+    (23, 0x00709db0, "GridEntity::Init"),    # ret 0x4; sig GridEntity::Init
+    (24, 0x0082f1c0, "RoomTransition::StartBossIntro"),    # ret 0x8; sig RoomTransition::StartBossIntro
+    (25, 0x0078dff0, "Entity_Player::RenderHead"),    # ret 0x4; reg EntityPlayer.RenderHead; sig Entity_Player::RenderHead
+    (26, 0x0078dde0, "Entity_Player::RenderBody"),    # ret 0x4; reg EntityPlayer.RenderBody; sig Entity_Player::RenderBody
+    (27, 0x007a2220, "Entity_Player::Revive"),    # ret 0x0; reg EntityPlayer.Revive; sig Entity_Player::Revive
+    (28, 0x009ad210, "ItemOverlay::Show"),    # ret 0xc; sig ItemOverlay::Show
+    (29, 0x007cafe0, "Entity_Player::GetHealthType"),    # ret 0x0; sig Entity_Player::GetHealthType
+    (30, 0x007cae60, "Entity_Player::GetHeartLimit"),    # ret 0x4; reg EntityPlayer.GetHeartLimit
+    (31, 0x00929a20, "PersistentGameData::TryUnlock"),    # ret 0x4; sig PersistentGameData::TryUnlock
+    (32, 0x007b2230, "Entity_Player::UseCard"),    # ret 0x8; reg EntityPlayer.UseCard
+    (33, 0x007c4180, "Entity_Player::UsePill"),    # ret ?; reg EntityPlayer.UsePill
+    (34, 0x00758a70, "Entity_Player::AddHearts"),    # ret 0xc; reg EntityPlayer.AddHearts; sig Entity_Player::AddHearts
+    (35, 0x007588a0, "Entity_Player::AddMaxHearts"),    # ret 0x8; reg EntityPlayer.AddMaxHearts; sig Entity_Player::AddMaxHearts
+    (36, 0x00758d00, "Entity_Player::AddSoulHearts"),    # ret 0x8; reg EntityPlayer.AddSoulHearts
+    (37, 0x00758f90, "Entity_Player::AddBlackHearts"),    # ret 0x4; reg EntityPlayer.AddBlackHearts; sig Entity_Player::AddBlackHearts
+    (38, 0x007ca840, "Entity_Player::AddBoneHearts"),    # ret 0x4; reg EntityPlayer.AddBoneHearts; sig Entity_Player::AddBoneHearts
+    (39, 0x007d2fc0, "Entity_Player::AddRottenHearts"),    # ret 0x8; reg EntityPlayer.AddRottenHearts; sig Entity_Player::AddRottenHearts
+    (40, 0x00758c20, "Entity_Player::AddEternalHearts"),    # ret 0x4; reg EntityPlayer.AddEternalHearts; sig Entity_Player::AddEternalHearts
+    (41, 0x007c9d10, "Entity_Player::AddGoldenHearts"),    # ret 0x8; reg EntityPlayer.AddGoldenHearts; sig Entity_Player::AddGoldenHearts
+    (42, 0x007d2a40, "Entity_Player::AddBrokenHearts"),    # ret 0x4; reg EntityPlayer.AddBrokenHearts; sig Entity_Player::AddBrokenHearts
+    (43, 0x006ad500, "Entity::AddPoison"),    # ret 0x10; reg Entity.AddPoison; sig Entity::AddPoison
+    (44, 0x006ad3c0, "Entity::AddFreeze"),    # ret 0xc; reg Entity.AddFreeze; sig Entity::AddFreeze
+    (45, 0x006ae280, "Entity::AddBurn"),    # ret 0x10; reg Entity.AddBurn; sig Entity::AddBurn
+    (46, 0x006ad870, "Entity::AddCharmed"),    # ret 0x10; reg Entity.AddCharmed; sig Entity::AddCharmed
+    (47, 0x006add70, "Entity::AddConfusion"),    # ret 0xc; reg Entity.AddConfusion; sig Entity::AddConfusion
+    (48, 0x006ae0a0, "Entity::AddFear"),    # ret 0xc; reg Entity.AddFear
+    (49, 0x006adf40, "Entity::AddMidasFreeze"),    # ret 0xc; reg Entity.AddMidasFreeze; sig Entity::AddMidasFreeze
+    (50, 0x006b5c10, "Entity::AddShrink"),    # ret 0x10; reg Entity.AddShrink; sig Entity::AddShrink
+    (51, 0x006ad750, "Entity::AddSlowing"),    # ret 0x3c; reg Entity.AddSlowing; sig Entity::AddSlowing
+    (52, 0x006b7a80, "Entity::AddKnockback"),    # ret 0x10; sig Entity::AddKnockback
+    (53, 0x007ac7e0, "Entity_Player::DischargeActiveItem"),    # ret ?; reg EntityPlayer.DischargeActiveItem
+    (54, 0x00771800, "Entity_Player::DropTrinket"),    # ret 0x8; reg EntityPlayer.DropTrinket
+    (55, 0x006e6e40, "Entity_Pickup::TryOpenChest"),    # ret ?; reg EntityPickup.TryOpenChest
+    (56, 0x006ff2a0, "Game::BombDamage"),    # ret 0x30; reg Game.BombDamage
+    (57, 0x007009a0, "Game::BombTearflagEffects"),    # ret ?; reg Game.BombTearflagEffects
+    (58, 0x006c0f30, "Entity_NPC::Morph"),    # ret 0x10; reg EntityNPC.Morph; sig Entity_NPC::Morph
+    (59, 0x008068f0, "Room::TriggerClear"),    # ret 0x4; reg Room.TriggerClear; sig Room::TriggerClear
+    (60, 0x0078f840, "Entity_Player::RemoveCollectible"),    # ret 0x10; reg EntityPlayer.RemoveCollectible
+    (61, 0x007bf6c0, "Entity_Player::GetTearHitParams"),    # ret ?; reg EntityPlayer.GetTearHitParams
+    (62, 0x006fadc0, "Game::Update"),    # ret 0x0; reg Game.Update
+    (63, 0x00790af0, "Entity_Player::FireTear"),    # ret 0x18; reg EntityPlayer.FireTear
+    (64, 0x007a0970, "Entity_Player::FireBomb"),    # ret 0xc; reg EntityPlayer.FireBomb
+    (65, 0x007a0f50, "Entity_Player::FireBrimstone"),    # ret 0xc; reg EntityPlayer.FireBrimstone
+    (66, 0x007aab70, "Entity_Player::FireTechLaser"),    # ret 0x1c; reg EntityPlayer.FireTechLaser; sig Entity_Player::FireTechLaser
+    (67, 0x007cb230, "Entity_Player::FireTechXLaser"),    # ret 0x14; reg EntityPlayer.FireTechXLaser; sig Entity_Player::FireTechXLaser
+    (68, 0x007aded0, "Entity_Player::FireKnife"),    # ret 0x14; reg EntityPlayer.FireKnife; sig Entity_Player::FireKnife
+    (69, 0x007ae1d0, "Entity_Player::FireBrimstoneBall"),    # ret 0x18; sig Entity_Player::FireBrimstoneBall
+    (70, 0x005b39d0, "Entity_Player::UseActiveItem"),    # ret 0x14; reg EntityPlayer.UseActiveItem
+    (71, 0x00781b90, "Entity_Player::GetMultiShotParams"),    # ret 0x8; reg EntityPlayer.GetMultiShotParams; sig Entity_Player::GetMultiShotParams
+    (72, 0x00802980, "Room::Update"),    # ret ?; reg Room.Update
+    (73, 0x0080f200, "Room::Render"),    # ret 0x0; reg Room.Render
+    (74, 0x00763570, "Entity_Player::EvaluateItems"),    # ret 0x0; reg EntityPlayer.EvaluateItems
+    (75, 0x00771f60, "Entity_Player::TryRemoveTrinket"),    # ret 0x4; reg EntityPlayer.TryRemoveTrinket
+    (76, 0x006fd7c0, "Game::StartRoomTransition"),    # ret 0x14; reg Game.StartRoomTransition
+    (77, 0x00639750, "Entity_Familiar::FireProjectile"),    # ret 0x8; reg EntityFamiliar.FireProjectile
+    (78, 0x006cb2e0, "Entity_NPC::FireProjectiles"),    # ret 0x10; reg EntityNPC.FireProjectiles; sig Entity_NPC::FireProjectiles
+    (79, 0x006fbc10, "Game::Render"),    # ret ?; reg Game.Render
+    (100, 0x006a93a0, "Entity::Init"),    # ret 0x10; sig Init; vtable 0x00b6730c slot 1
+    (101, 0x00755470, "Entity_Player::Init"),    # ret 0x10; vtable 0x00b6bdd0 slot 1
+    (102, 0x006b8b20, "Entity_NPC::Init"),    # ret 0x10; vtable 0x00b67468 slot 1
+    (103, 0x006e02f0, "Entity_Pickup::Init"),    # ret 0x10; vtable 0x00b67f24 slot 1
+    (104, 0x006660a0, "Entity_Tear::Init"),    # ret 0x10; vtable 0x00b64eac slot 1
+    (105, 0x0060de70, "Entity_Familiar::Init"),    # ret 0x10; sig Init#EntityFamiliar.zhl#173; vtable 0x00b6491c slot 1
+    (106, 0x005cdb20, "Entity_Effect::Init"),    # ret 0x10; vtable 0x00b63bdc slot 1
+    (107, 0x006a2050, "Entity_Bomb::Init"),    # ret 0x10; vtable 0x00b670f4 slot 1
+    (108, 0x0096f590, "Entity_Laser::Init"),    # ret 0x10; sig Init#EntityLaser.zhl#189; vtable 0x00b7cd40 slot 1
+    (109, 0x00960c10, "Entity_Knife::Init"),    # ret 0x10; vtable 0x00b7cb4c slot 1
+    (110, 0x00652b90, "Entity_Projectile::Init"),    # ret 0x10; vtable 0x00b64990 slot 1
+    (111, 0x0065d200, "Entity_Slot::Init"),    # ret 0x10; vtable 0x00b64c50 slot 1
+    (112, 0x006ae820, "Entity::Update"),    # ret 0x0; vtable 0x00b6730c slot 3
+    (113, 0x00782af0, "Entity_Player::Update"),    # ret 0x0; vtable 0x00b6bdd0 slot 3
+    (114, 0x006c4b30, "Entity_NPC::Update"),    # ret 0x0; vtable 0x00b67468 slot 3
+    (115, 0x006e3940, "Entity_Pickup::Update"),    # ret 0x0; vtable 0x00b67f24 slot 3
+    (116, 0x006670f0, "Entity_Tear::Update"),    # ret 0x0; vtable 0x00b64eac slot 3
+    (117, 0x0061da10, "Entity_Familiar::Update"),    # ret 0x0; vtable 0x00b6491c slot 3
+    (118, 0x005d4380, "Entity_Effect::Update"),    # ret 0x0; vtable 0x00b63bdc slot 3
+    (119, 0x006a24d0, "Entity_Bomb::Update"),    # ret 0x0; vtable 0x00b670f4 slot 3
+    (120, 0x00977cc0, "Entity_Laser::Update"),    # ret 0x0; vtable 0x00b7cd40 slot 3
+    (121, 0x00961b00, "Entity_Knife::Update"),    # ret 0x0; vtable 0x00b7cb4c slot 3
+    (122, 0x00653070, "Entity_Projectile::Update"),    # ret 0x0; vtable 0x00b64990 slot 3
+    (123, 0x0065d950, "Entity_Slot::Update"),    # ret 0x0; vtable 0x00b64c50 slot 3
+    (124, 0x006b10f0, "Entity::Render"),    # ret 0x4; vtable 0x00b6730c slot 5
+    (125, 0x0078ca00, "Entity_Player::Render"),    # ret 0x4; vtable 0x00b6bdd0 slot 5
+    (126, 0x006d2e50, "Entity_NPC::Render"),    # ret 0x4; vtable 0x00b67468 slot 5
+    (127, 0x006e69b0, "Entity_Pickup::Render"),    # ret 0x4; vtable 0x00b67f24 slot 5
+    (128, 0x006790c0, "Entity_Tear::Render"),    # ret 0x4; sig Entity_Tear::Render; vtable 0x00b64eac slot 5
+    (129, 0x00624e10, "Entity_Familiar::Render"),    # ret 0x4; vtable 0x00b6491c slot 5
+    (130, 0x00607620, "Entity_Effect::Render"),    # ret 0x4; vtable 0x00b63bdc slot 5
+    (131, 0x006a5a60, "Entity_Bomb::Render"),    # ret 0x4; sig Entity_Bomb::Render; vtable 0x00b670f4 slot 5
+    (132, 0x009785d0, "Entity_Laser::Render"),    # ret 0x4; vtable 0x00b7cd40 slot 5
+    (133, 0x00965d30, "Entity_Knife::Render"),    # ret 0x4; vtable 0x00b7cb4c slot 5
+    (134, 0x0065cb60, "Entity_Projectile::Render"),    # ret 0x4; sig Entity_Projectile::Render; vtable 0x00b64990 slot 5
+    (135, 0x00665370, "Entity_Slot::Render"),    # ret 0x4; sig Entity_Slot::Render; vtable 0x00b64c50 slot 5
+    (136, 0x006ace60, "Entity::TakeDamage"),    # ret 0x14; sig TakeDamage; vtable 0x00b6730c slot 8
+    (137, 0x007729d0, "Entity_Player::TakeDamage"),    # ret 0x14; vtable 0x00b6bdd0 slot 8
+    (138, 0x006d60a0, "Entity_NPC::TakeDamage"),    # ret 0x14; vtable 0x00b67468 slot 8
+    (139, 0x006edda0, "Entity_Pickup::TakeDamage"),    # ret 0x14; vtable 0x00b67f24 slot 8
+    (141, 0x0062cdc0, "Entity_Familiar::TakeDamage"),    # ret 0x14; vtable 0x00b6491c slot 8
+    (147, 0x00664560, "Entity_Slot::TakeDamage"),    # ret 0x14; vtable 0x00b64c50 slot 8
+    (149, 0x0078e1f0, "Entity_Player::HandleCollision"),    # ret 0x8; vtable 0x00b6bdd0 slot 23
+    (150, 0x006cd410, "Entity_NPC::HandleCollision"),    # ret 0x8; vtable 0x00b67468 slot 23
+    (151, 0x006e8ae0, "Entity_Pickup::HandleCollision"),    # ret 0x8; vtable 0x00b67f24 slot 23
+    (152, 0x00673660, "Entity_Tear::HandleCollision"),    # ret 0x8; vtable 0x00b64eac slot 23
+    (153, 0x006261f0, "Entity_Familiar::HandleCollision"),    # ret 0x8; vtable 0x00b6491c slot 23
+    (154, 0x005ccc20, "Entity_Effect::HandleCollision"),    # ret 0x8; vtable 0x00b63bdc slot 23
+    (155, 0x006a5f00, "Entity_Bomb::HandleCollision"),    # ret 0x8; sig Entity_Bomb::HandleCollision; vtable 0x00b670f4 slot 23
+    (157, 0x009666f0, "Entity_Knife::HandleCollision"),    # ret 0x8; sig Entity_Knife::HandleCollision; vtable 0x00b7cb4c slot 23
+    (158, 0x0065b670, "Entity_Projectile::HandleCollision"),    # ret 0x8; vtable 0x00b64990 slot 23
+    (159, 0x006627e0, "Entity_Slot::HandleCollision"),    # ret 0x8; vtable 0x00b64c50 slot 23
+]
+RGON_WRAP = """void sub_%(va)08x(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x%(va)08x: REPENTOGON-layer hook %(slot)d, %(what)s (host_rgon.c) */
+  extern uint8_t g_rgon_hook_on[];
+  extern int isaac_rgon_hook_pre(int, CpuState *restrict, void *);
+  extern void isaac_rgon_hook_post(int, CpuState *restrict, void *);
+  RECOMP_VA(0x%(va)xu);
+  if (!g_rgon_hook_on[%(slot)d] || g_reentry_eip) { sub_%(va)08x__lifted(s); return; }
+  uint32_t frame[4];
+  if (isaac_rgon_hook_pre(%(slot)d, s, frame)) return;   /* the handler answered for it */
+  sub_%(va)08x__lifted(s);
+  if (recomp_jmp_pending) recomp_run_pending(s);
+  isaac_rgon_hook_post(%(slot)d, s, frame);
+}
+"""
+for _slot, _va, _what in RGON_HOOKS:
+    if _va in WRAP_PATCHES:
+        raise SystemExit("rgon hook %d: 0x%08x already has a wrapper" % (_slot, _va))
+    WRAP_PATCHES[_va] = RGON_WRAP % {"va": _va, "slot": _slot, "what": _what}
+if len({_s for _s, _, _ in RGON_HOOKS}) != len(RGON_HOOKS) or len({_v for _, _v, _ in RGON_HOOKS}) != len(RGON_HOOKS):
+    raise SystemExit("rgon hooks: a slot or an address is listed twice")
+
+
 # These two answer the standing audio question. The dispatch watch says the WAV
 # loader is never dispatched, but its callers reach it directly, so "never
 # dispatched" and "never called" are not the same claim -- and the same is true
@@ -1300,8 +1470,17 @@ PROBE_PATCHES: dict[int, str] = {
 }
 """,
     # the path resolver the stream asks first (this = the global at 0xc379e0)
+    # Round 103: not only observed any more. A path the game built on its
+    # current directory starts "//" here ("/" + "/mods/..."), which is neither
+    # absolute by this function's own test nor a name its index holds, so no
+    # mod's metadata.xml could be opened (host_shims_fs.c
+    # isaac_fs_plain_path_arg has the whole story). The path argument is
+    # rewritten before the body runs; ESP and EIP are not touched.
     0x00a17180: """void sub_00a17180(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a17180: "//mods/..." as the file layer can find it (host_shims_fs.c), and the resolver's probe */
+  extern void isaac_fs_plain_path_arg(CpuState *restrict);
   RECOMP_VA(0xa17180u);
+  if (!g_reentry_eip) isaac_fs_plain_path_arg(s);
   int on = isaac_probe_on();
   if (on) isaac_probe_str(0xa17180u, "resolve in", MEMR32(s->ESP + 4u));
   sub_00a17180__lifted(s);
@@ -1372,6 +1551,11 @@ PROBE_PATCHES: dict[int, str] = {
 }
 
 
+_both = sorted(set(WRAP_PATCHES) & set(PROBE_PATCHES))
+if _both:
+    # the second table would silently replace the first one's wrapper (round 103 lost a build to it)
+    raise SystemExit("lift patches: wrapped twice: " + ", ".join("0x%08x" % v for v in _both))
+
 def _drop_objects(tu: Path) -> None:
     """A TU whose text changed must be recompiled in every profile."""
     obj = tu.with_suffix(".o")
@@ -1405,7 +1589,7 @@ def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
                         print("wrap-patch %s: wrapper text changed, replaced in %s" % (name, tu.name))
                     touched.append(tu)
                 break
-            span = find_function(text, name)
+            span = find_function(text, name, split_too=True)
             if span is None:
                 continue
             if check_only:
@@ -1426,6 +1610,13 @@ def apply_wrap_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
             print("wrap-patch %s: lifted body kept as %s__lifted, host wrapper installed in %s"
                   % (name, name, tu.name))
             break
+        else:
+            # No TU has the function. A lift of part of the image has only some
+            # of them, so this is not an error by itself -- but it is said, and
+            # the REPENTOGON layer's hooks are checked against the lift
+            # afterwards (scripts/recomp/rgon/tools/hook_table.py --lift).
+            if tus:
+                print("wrap-patch %s: NOT INSTALLED, no such function in %s" % (name, lift_dir))
     # a retired wrapper (round 51): a TU still holding sub_X__lifted for an X
     # no longer in WRAP_PATCHES / PROBE_PATCHES gets its lifted body back under
     # its own name; the wrapper and its forward declaration go (the retired
@@ -1577,8 +1768,8 @@ def apply_entry_first(lift_dir: Path, check_only: bool = False) -> list[Path]:
 #
 #   EIP        the local is only ever stored: `EIP = MEMR32(ESP)` at a ret and
 #              `s->EIP = EIP` / `EIP = s->EIP` in spills. Nothing in the lifted
-#              code reads it, and the host reads s->EIP only after setting it
-#              itself (the longjmp resume) or to print a trap.
+#              code reads it. The host does read s->EIP after a ret, though:
+#              see apply_ret_eip below, which must run after this pass.
 #   FS_OFFSET  read-only in lifted code (the TEB base for fs: addressing). The
 #              host sets it when it creates a CpuState and nothing writes it
 #              after, so a reload returns the value the local already holds.
@@ -1642,10 +1833,69 @@ def apply_call_slim(lift_dir: Path, check_only: bool = False) -> list[Path]:
     return touched
 
 
-def find_function(text: str, name: str) -> tuple[int, int] | None:
+# --- the return address a ret leaves in CpuState (round 101) ----------------
+# Call-slim's claim about EIP was wrong in one place, and it cost every mod
+# that ever raises a Lua error. The replay loop in isaac_guest_call_inner
+# (mkdispatch.py) -- where a guest longjmp and a C++ catch carried out by
+# host_shims_eh.c resume -- re-enters the abandoned guest frames one at a time:
+# it dispatches cpu->EIP, and when that frame returns it dispatches cpu->EIP
+# again, expecting the ret to have left the return address there. A function
+# that keeps its registers in locals wrote it with the exit spill
+# `s->EIP = EIP;`, and call-slim deleted that line along with the call-site
+# spills: 18,372 rets (the other 18,515 are the direct form
+# `s->EIP = MEMR32(s->ESP);`, which it left alone). After the first resumed
+# frame the loop therefore dispatched the same address again, on a stack that
+# had already been popped: the caught Lua error of a mod's callback ran the
+# catch, logged `Error in "PostNPCUpdate" call`, returned once, and then
+# executed garbage -- "memory access out of bounds", or a quiet exit(1).
+# Releases 14 to 18 shipped that way.
+#
+# This pass puts the store back on the ret's own line, where call-slim (which
+# only takes standalone lines) leaves it, on a fresh tree and on one that was
+# already slimmed in place alike. One store per return of those functions; the
+# 357,000 call-site lines stay gone.
+RET_EIP_LINE = re.compile(rb"^([ \t]*)EIP = MEMR32\(ESP\);([ \t]*\r?\n)", re.M)
+
+
+def ret_eip_text(text: bytes) -> tuple[bytes, int]:
+    return RET_EIP_LINE.subn(rb"\1EIP = MEMR32(ESP); s->EIP = EIP;\2", text)
+
+
+def ret_eip_missing(text: bytes) -> int:
+    """Rets whose return address would not reach CpuState."""
+    return len(RET_EIP_LINE.findall(text))
+
+
+def apply_ret_eip(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Every local-register ret stores its return address into CpuState.
+    Returns the TUs modified (their objects recompile by source hash)."""
+    touched: list[Path] = []
+    total = 0
+    for tu in sorted(lift_dir.glob("lifted_*.c")):
+        raw = tu.read_bytes()
+        new, n = ret_eip_text(raw)
+        if not n:
+            continue
+        total += n
+        touched.append(tu)
+        if not check_only:
+            tu.write_bytes(new)
+    print("ret-eip: %d ret(s) %s the return address into CpuState in %d TU(s)"
+          % (total, "do not store" if check_only else "now store", len(touched)))
+    return touched
+
+
+def find_function(text: str, name: str, split_too: bool = False) -> tuple[int, int] | None:
     """Return (start, end) of `void <name>(CpuState *restrict s) { ... }` at
-    column 0, matching the closing brace at column 0 (the lifter's layout)."""
-    m = re.search(r"^void %s\(CpuState \*restrict s\) \{\n" % re.escape(name), text, re.M)
+    column 0, matching the closing brace at column 0 (the lifter's layout).
+
+    split_too: also a function the lifter split into parts. Its opening line
+    carries a comment (`{   /* LIFT-SPLIT v2 ... */`) and its body is the
+    dispatcher over the parts; a wrapper goes around that dispatcher like around
+    any other body. Round 103's hooks were silently not installed on seven of
+    the largest functions because the plain pattern does not match that line."""
+    tail = r"[^\n]*\n" if split_too else r"\n"
+    m = re.search(r"^void %s\(CpuState \*restrict s\) \{%s" % (re.escape(name), tail), text, re.M)
     if not m:
         return None
     end = text.find("\n}\n", m.start())
@@ -1708,6 +1958,7 @@ def main() -> int:
     touched = apply_lift_patches(args.dir, check_only=args.check)
     touched += apply_purge_patches(args.dir, check_only=args.check)
     touched += apply_call_slim(args.dir, check_only=args.check)
+    touched += apply_ret_eip(args.dir, check_only=args.check)
     if args.check:
         return 1 if touched else 0
     return 0

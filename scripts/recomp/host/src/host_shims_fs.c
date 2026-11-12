@@ -682,6 +682,73 @@ int isaac_fs_seed_lazy(const char *path, uint32_t len) {
     return 1;
 }
 
+/* Round 102: a file's bytes for host code -- the REPENTOGON-compatible layer's
+ * script (host_rgon.c) is a file of an installed mod, read here rather than
+ * through the guest's own fopen. NULL when there is no such file (a mod that
+ * is off is not seeded) or it cannot be loaded whole. */
+const uint8_t *isaac_fs_peek(const char *path, uint32_t *len) {
+    char key[256];
+    if (!path || !fs_key(path, key, sizeof key)) return NULL;
+    fs_entry *e = fs_find(key);
+    if (!e || e->is_dir || e->windowed) return NULL;
+    if (e->lazy && !fs_materialise(e)) return NULL;
+    if (len) *len = e->size;
+    return e->data ? e->data : (const uint8_t *)"";
+}
+
+/* Round 103: the game's own directory, as its file layer can find it.
+ *
+ * The game asks Windows for its current directory and builds its mod paths on
+ * it ("<cwd>/mods/<dir>//metadata.xml"). On a PC that is "C:\...": absolute,
+ * and its file layer (0x00a17180) opens an absolute path as it stands. Here
+ * the current directory is "/", so the path comes out as "//mods/<dir>//
+ * metadata.xml": not absolute by that test (no drive), and not a name its
+ * index of the mounted tree knows either (the index holds "mods/<dir>/
+ * metadata.xml"). So ModManager::ListMods could not open any mod's
+ * metadata.xml: every mod was named after its folder, the list was sorted by
+ * folder and not by name as on a PC (a library that names itself " Custom
+ * Stage API" to load first did not), and the game then wrote a stub
+ * metadata.xml over the mod's own.
+ *
+ * The wrapper around 0x00a17180 (lift_patches.py) calls this with the path
+ * argument still on the stack: a path that starts "//" is replaced by the
+ * same path relative to the game's directory, with its doubled separators
+ * folded. Nothing else is touched. ISAAC_FS_PLAIN_PATH=0 leaves it out. */
+void isaac_fs_plain_path_arg(CpuState *restrict cpu) {
+    static int on = -1;
+    static uint32_t ring[4];
+    static unsigned next;
+    if (on < 0) { const char *e = getenv("ISAAC_FS_PLAIN_PATH"); on = !(e && *e == '0'); }
+    if (!on) return;
+    uint32_t slot = cpu->ESP + 4u;
+    uint32_t va = isaac_r32(slot);
+    if (!va || !isaac_is_guest_va(va) || !isaac_is_guest_va(va + 1)) return;
+    if (isaac_r8(va) != '/' || isaac_r8(va + 1) != '/') return;
+    char out[512];
+    size_t n = 0;
+    uint32_t at = va;
+    while (isaac_is_guest_va(at) && (isaac_r8(at) == '/' || isaac_r8(at) == '\\')) ++at;
+    int sep = 0;
+    for (;; ++at) {
+        if (!isaac_is_guest_va(at)) return;
+        char c = (char)isaac_r8(at);
+        if (!c) break;
+        if (c == '/' || c == '\\') { sep = 1; continue; }
+        if (sep) { if (n + 1 >= sizeof out) return; out[n++] = '/'; sep = 0; }
+        if (n + 1 >= sizeof out) return;
+        out[n++] = c;
+    }
+    if (sep && n + 1 < sizeof out) out[n++] = '/';     /* a directory keeps its trailing separator */
+    if (!n) return;
+    out[n] = 0;
+    unsigned k = next++ & 3u;
+    if (!ring[k]) ring[k] = isaac_guest_alloc(sizeof out);
+    if (!ring[k]) return;
+    memcpy(isaac_g(ring[k]), out, n + 1);
+    isaac_w32(slot, ring[k]);
+    if (fs_trace()) isaac_log("[isaac][fs] plain path: '%s'", out);
+}
+
 /* Round 14f: _access() and friends ask whether a guest path exists. */
 int isaac_fs_exists_guest_path(uint32_t path_va) {
     char p[512], key[256];

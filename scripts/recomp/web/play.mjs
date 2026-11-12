@@ -510,6 +510,77 @@ function showError(title, text, ended = false) {
   $('error-text').textContent = text || '';
   $('errlog').textContent = crashExcerpt(window.isaacLog || []).join('\n');
   panel.hidden = false;
+  // a stop with mods on: the way out is on the panel, not behind the game's own menu
+  if (!ended) offerNoMods();
+}
+
+// ---- starting without mods (round 101) -------------------------------------------
+// A mod that stops the game during the boot left no way back in: the only place
+// to turn a mod off was the game's own MODS screen, behind the boot that the mod
+// had just broken (a player cleared the whole site, saves included, to get out).
+// Three ways out now, all the same move -- every mod is switched off in the
+// store, where a mod that is off is simply not seeded, and nothing is deleted:
+//   ?mods=0 in the address; the "Reload without mods" button on the error panel;
+//   and the question asked before the boot when the last boot with mods on never
+//   reached the game (a hang shows no panel at all, so the page has to notice).
+const BOOT_MARK = 'isaac-boot-with-mods';
+async function modsThatAreOn() {
+  if (typeof indexedDB === 'undefined') return [];
+  const dbs = (indexedDB.databases ? await indexedDB.databases().catch(() => null) : null);
+  if (dbs && !dbs.some((d) => d.name === MODS_DB)) return [];
+  let db = null;
+  try { db = await openModDb(); } catch { return []; }
+  if (!db) return [];
+  try { return (await listMods(db)).filter((m) => m.enabled !== false); } catch { return []; } finally { try { db.close(); } catch { /* gone */ } }
+}
+async function turnModsOff() {
+  let db = null, n = 0;
+  try { db = await openModDb(); } catch { return 0; }
+  if (!db) return 0;
+  try {
+    for (const mod of await listMods(db)) {
+      if (mod.enabled === false) continue;
+      await setModEnabled(db, mod.id, false);
+      n += 1;
+    }
+  } finally { try { db.close(); } catch { /* gone */ } }
+  try { localStorage.removeItem(BOOT_MARK); } catch { /* no storage */ }
+  console.log(`[mods] ${n} mod(s) turned off`);
+  return n;
+}
+window.isaacTurnModsOff = turnModsOff;
+function offerNoMods() {
+  const btn = $('nomods-btn');
+  if (!btn || !btn.hidden) return;
+  modsThatAreOn().then((on) => {
+    if (!on.length) return;
+    btn.textContent = on.length === 1 ? 'Reload without the mod' : `Reload without the ${on.length} mods`;
+    btn.hidden = false;
+  }, () => {});
+}
+// The question before the boot. Resolves when the player has chosen to try again;
+// choosing to start without mods reloads and never comes back here.
+function askAboutLastBoot(on) {
+  return new Promise((resolve) => {
+    const panel = $('error');
+    panel.className = '';
+    $('error-title').textContent = 'The game did not finish starting last time';
+    $('error-text').textContent = on.length === 1
+      ? `One mod is on (${on[0].name || on[0].id}). If the game stops or hangs again, start without it; it stays installed and can be turned back on.`
+      : `${on.length} mods are on. If the game stops or hangs again, start without them; they stay installed and can be turned back on.`;
+    $('errlog').textContent = on.map((m) => m.name || m.id).join('\n');
+    const btn = $('nomods-btn'), again = $('dismiss-btn'), was = again.textContent;
+    btn.textContent = on.length === 1 ? 'Start without the mod' : 'Start without mods';
+    btn.hidden = false;
+    again.textContent = 'Try again';
+    $('reload-btn').hidden = true; $('copylog-btn').hidden = true;
+    panel.hidden = false;
+    again.addEventListener('click', () => {
+      again.textContent = was; btn.hidden = true;
+      $('reload-btn').hidden = false; $('copylog-btn').hidden = false;
+      resolve();
+    }, { once: true });
+  });
 }
 // What the panel shows: the lines that led up to the stop, not the end of the
 // engine's report. A stop prints a long report (dispatch, fast paths, audio,
@@ -517,7 +588,7 @@ function showError(title, text, ended = false) {
 // the cause had scrolled out of the panel. The excerpt is the 18 lines before
 // the first line of a stop, and the stop's own lines; Copy log has the rest.
 function crashExcerpt(lines) {
-  const stop = /\[isaac\]\[(?:crt|TRAP|c\+\+|k32)\]|\[isaac\] =+ STOPPING|\[isaac\] reason:|\bnot found in\b|Unable to interpret GL_VERSION|No provider of|^\s*TRAP in |RESULT: |Aborted\(/;
+  const stop = /\[isaac\]\[(?:crt|TRAP|c\+\+|k32)\]|\[isaac\]\[heap\] (?:OUT OF MEMORY|double free)|\[isaac\] =+ STOPPING|\[isaac\] reason:|\bnot found in\b|Unable to interpret GL_VERSION|No provider of|^\s*TRAP in |RESULT: |Aborted\(/;
   const report = /^\[isaac\]\[(?:dispatch|fastpath|audio|audio-web|threads|input|web-gl|gl|profile|heap|stub|mod)\]|^\[isaac\]\s+\d+ x |stub report|^\s+\d+ x sub_/;
   const first = lines.findIndex((l) => stop.test(l));
   if (first < 0) return lines.slice(-24);
@@ -556,6 +627,19 @@ $('copylog-btn').addEventListener('click', () => {
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => {});
 });
 $('reload-btn').addEventListener('click', () => location.reload());
+// a page whose markup was built before round 101 has no such button: made here
+if (!$('nomods-btn')) {
+  const b = document.createElement('button');
+  b.id = 'nomods-btn'; b.type = 'button'; b.hidden = true; b.textContent = 'Reload without mods';
+  $('reload-btn').insertAdjacentElement('afterend', b);
+}
+$('nomods-btn').addEventListener('click', async () => {
+  $('nomods-btn').disabled = true;
+  try { await turnModsOff(); } catch (e) { console.warn('[mods] could not turn the mods off:', e.message); }
+  const u = new URL(location.href);
+  u.searchParams.delete('mods');
+  location.replace(u.href);
+});
 $('dismiss-btn').addEventListener('click', () => { $('error').hidden = true; });
 window.addEventListener('error', (ev) => showError('A script error', ev.message));
 window.addEventListener('unhandledrejection', (ev) => showError('The pipeline failed', String(ev.reason && ev.reason.message || ev.reason)));
@@ -766,6 +850,7 @@ function checkReady() {
   readyCandidate.gameFrame = state.gameFrame;
   if (f < readyCandidate.frame + 2) return;
   gameReady = true;
+  try { localStorage.removeItem(BOOT_MARK); } catch { /* no storage */ }
   readyCandidate = null;
   renderProgress();
   overlay.hidden = true;
@@ -1322,6 +1407,21 @@ try {
     try { localStorage.setItem('isaac-vsync-once', '1'); } catch { /* no storage */ }
   }
 } catch (e) { console.warn('[isaac] could not turn VSync on:', e.message); }
+
+// ---- mods: off on request, and a question after a boot that never arrived (round 101)
+try {
+  if (params.get('mods') === '0') {
+    const n = await turnModsOff();
+    console.log(`[isaac] ?mods=0: starting without mods (${n} turned off; they stay installed)`);
+  } else {
+    const on = await modsThatAreOn();
+    let unfinished = false;
+    try { unfinished = !!localStorage.getItem(BOOT_MARK); } catch { /* no storage */ }
+    if (on.length && unfinished && params.get('modsask') !== '0') await askAboutLastBoot(on);
+    // set for this boot; readiness (the first real picture) clears it
+    try { if (on.length) localStorage.setItem(BOOT_MARK, String(Date.now())); else localStorage.removeItem(BOOT_MARK); } catch { /* no storage */ }
+  }
+} catch (e) { console.warn('[isaac] could not check the last boot:', e.message); }
 
 // ---- go: the pipeline runs to the end of main; this import resolves when it does
 setStatus('loading');

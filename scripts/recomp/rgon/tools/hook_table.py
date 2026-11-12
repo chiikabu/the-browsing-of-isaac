@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""The layer's hook table, checked against the executable.
+
+  python scripts/recomp/rgon/tools/hook_table.py [--write]
+
+HOOKS below names every game function the REPENTOGON layer wraps: its slot
+(never reused), its address in v1.9.7.17, where that address comes from, and
+how many bytes of arguments it removes from the stack when it returns (what a
+handler that answers for the function has to pop). For each entry this tool
+
+  - reads the function's body from the prebuilt index and collects every
+    `ret`: they must all pop the number of bytes the entry says;
+  - for a virtual function, checks the address against the class's vtable
+    slot found through RTTI (vtables.py);
+  - for "reg", checks the address against the game's own Lua registration
+    (tools/parse_register.py output), and for "sig" against the signature
+    resolution (tools/zhl-resolve.mjs output), when those files are present.
+
+--write prints the RGON_HOOKS list for lift_patches.py and the SLOT table for
+the layer; nothing is written unless every entry passes.
+
+Sources: reg  the game's Lua registration at 0x00866960 (push <method>; push <"Name">)
+         sig  a REPENTOGON signature matching this executable exactly once
+         vt   a slot of the class's virtual table (RTTI), slot order as in Entity:
+              Free Init PreUpdate Update Interpolate Render RenderShadowLayer PostRender
+              TakeDamage Kill Remove ... HandleCollision(23) ResetColor LoadEntityConfig
+         asm  read off the disassembly (the note says where)
+"""
+import argparse
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[3]
+
+ENTITY_CLASSES = ["Entity", "Entity_Player", "Entity_NPC", "Entity_Pickup", "Entity_Tear", "Entity_Familiar",
+                  "Entity_Effect", "Entity_Bomb", "Entity_Laser", "Entity_Knife", "Entity_Projectile", "Entity_Slot"]
+VSLOT = {"Init": 1, "Update": 3, "Render": 5, "TakeDamage": 8, "HandleCollision": 23}
+# what each virtual pops: one signature per slot, so one answer for every class
+VPOPS = {"Init": 0x10, "Update": 0, "Render": 4, "TakeDamage": 0x14, "HandleCollision": 8}
+
+# (slot, "Class::Function", address or None for a virtual, source, bytes popped, note)
+HOOKS = [
+    (0, "Entity_Player::AddCollectible", 0x0075f0e0, "reg", 0x18, ""),
+    (1, "Entity_Player::AddTrinket", 0x00771d30, "reg", 8, ""),
+    (2, "Entity_Pickup::Morph", 0x006e30a0, "reg", 0x18, ""),
+    (3, "HUD::Render", 0x009a3eb0, "reg", 0, ""),
+    (4, "HUD::Update", 0x009a2990, "reg", 0, ""),
+    (5, "HUD::PostUpdate", 0x009a2b30, "reg", 0, ""),
+    (6, "Level::SetStage", 0x007466d0, "reg", 8, ""),
+    (7, "MusicManager::Play", 0x007e1d50, "reg", 8, ""),
+    (8, "MusicManager::Crossfade", 0x007e1e70, "reg", 8, ""),
+    (9, "SFXManager::Play", 0x0092dc30, "reg", 0x18, ""),
+    (10, "Game::End", 0x006f9770, "reg", 4, ""),
+    # round 103
+    (11, "ModManager::LoadConfigs", 0x008f30d0, "asm", 0, "runs each mod's main.lua (call 0x86e6c0 at 0x008f4654); called by ModManager::Reset 0x008f8c5c"),
+    # slot 12 is a FALSE signature match (see api_hooks.lua): no handler listens on it. The row stays
+    # as built into the engine; replace it with the real function at the next engine build.
+    (12, "Entity_Player::TriggerRoomExit", 0x00832850, "sig", None, ""),
+    (13, "Entity_Player::TriggerTrinketAdded", 0x007ad860, "sig", None, ""),
+    (14, "Entity_Player::TriggerTrinketRemoved", 0x007adb30, "sig", None, ""),
+    (15, "Entity_Player::InitPreLevelInitStats", 0x0099b520, "sig", None, ""),
+    (16, "Entity_Familiar::GetFollowerPriority", 0x00612970, "sig", None, ""),
+    (17, "Level::ChangeRoom", 0x0073fc80, "reg", None, ""),
+    (18, "Manager::SetSaveSlot", 0x00959e70, "sig", None, ""),
+    (19, "Entity_Player::AddCostume", 0x0075d1d0, "reg", None, ""),
+    (20, "Entity_Player::RemoveCostume", 0x0075d850, "reg", None, ""),
+    (21, "Game::RestoreState", 0x006bb790, "sig", None, ""),
+    (22, "Room::SpawnGridEntity", 0x007ebca0, "reg", None, ""),
+    (23, "GridEntity::Init", 0x00709db0, "sig", None, ""),
+    (24, "RoomTransition::StartBossIntro", 0x0082f1c0, "sig", None, ""),
+    (25, "Entity_Player::RenderHead", 0x0078dff0, "reg", None, ""),
+    (26, "Entity_Player::RenderBody", 0x0078dde0, "reg", None, ""),
+    (27, "Entity_Player::Revive", 0x007a2220, "reg", None, ""),
+    (28, "ItemOverlay::Show", 0x009ad210, "sig", None, ""),
+    (29, "Entity_Player::GetHealthType", 0x007cafe0, "sig", None, ""),
+    (30, "Entity_Player::GetHeartLimit", 0x007cae60, "reg", None, ""),
+    (31, "PersistentGameData::TryUnlock", 0x00929a20, "sig", None, ""),
+    (32, "Entity_Player::UseCard", 0x007b2230, "reg", None, ""),
+    (33, "Entity_Player::UsePill", 0x007c4180, "reg", None, ""),
+    (34, "Entity_Player::AddHearts", 0x00758a70, "reg", None, ""),
+    (35, "Entity_Player::AddMaxHearts", 0x007588a0, "reg", None, ""),
+    (36, "Entity_Player::AddSoulHearts", 0x00758d00, "reg", None, ""),
+    (37, "Entity_Player::AddBlackHearts", 0x00758f90, "reg", None, ""),
+    (38, "Entity_Player::AddBoneHearts", 0x007ca840, "reg", None, ""),
+    (39, "Entity_Player::AddRottenHearts", 0x007d2fc0, "reg", None, ""),
+    (40, "Entity_Player::AddEternalHearts", 0x00758c20, "reg", None, ""),
+    (41, "Entity_Player::AddGoldenHearts", 0x007c9d10, "reg", None, ""),
+    (42, "Entity_Player::AddBrokenHearts", 0x007d2a40, "reg", None, ""),
+    (43, "Entity::AddPoison", 0x006ad500, "reg", None, ""),
+    (44, "Entity::AddFreeze", 0x006ad3c0, "reg", None, ""),
+    (45, "Entity::AddBurn", 0x006ae280, "reg", None, ""),
+    (46, "Entity::AddCharmed", 0x006ad870, "reg", None, ""),
+    (47, "Entity::AddConfusion", 0x006add70, "reg", None, ""),
+    (48, "Entity::AddFear", 0x006ae0a0, "reg", None, ""),
+    (49, "Entity::AddMidasFreeze", 0x006adf40, "reg", None, ""),
+    (50, "Entity::AddShrink", 0x006b5c10, "reg", None, ""),
+    (51, "Entity::AddSlowing", 0x006ad750, "reg", None, ""),
+    (52, "Entity::AddKnockback", 0x006b7a80, "sig", None, ""),
+    (53, "Entity_Player::DischargeActiveItem", 0x007ac7e0, "reg", None, ""),
+    (54, "Entity_Player::DropTrinket", 0x00771800, "reg", None, ""),
+    (55, "Entity_Pickup::TryOpenChest", 0x006e6e40, "reg", None, ""),
+    (56, "Game::BombDamage", 0x006ff2a0, "reg", None, ""),
+    (57, "Game::BombTearflagEffects", 0x007009a0, "reg", None, ""),
+    (58, "Entity_NPC::Morph", 0x006c0f30, "reg", None, ""),
+    (59, "Room::TriggerClear", 0x008068f0, "reg", None, ""),
+    (60, "Entity_Player::RemoveCollectible", 0x0078f840, "reg", None, ""),
+    (61, "Entity_Player::GetTearHitParams", 0x007bf6c0, "reg", None, ""),
+    (62, "Game::Update", 0x006fadc0, "reg", None, ""),
+    (63, "Entity_Player::FireTear", 0x00790af0, "reg", None, ""),
+    (64, "Entity_Player::FireBomb", 0x007a0970, "reg", None, ""),
+    (65, "Entity_Player::FireBrimstone", 0x007a0f50, "reg", None, ""),
+    (66, "Entity_Player::FireTechLaser", 0x007aab70, "reg", None, ""),
+    (67, "Entity_Player::FireTechXLaser", 0x007cb230, "reg", None, ""),
+    (68, "Entity_Player::FireKnife", 0x007aded0, "reg", None, ""),
+    (69, "Entity_Player::FireBrimstoneBall", 0x007ae1d0, "sig", None, ""),
+    (70, "Entity_Player::UseActiveItem", 0x005b39d0, "reg", None, ""),
+    (71, "Entity_Player::GetMultiShotParams", 0x00781b90, "reg", None, ""),
+    (72, "Room::Update", 0x00802980, "reg", None, ""),
+    (73, "Room::Render", 0x0080f200, "reg", None, ""),
+    (74, "Entity_Player::EvaluateItems", 0x00763570, "reg", None, ""),
+    (75, "Entity_Player::TryRemoveTrinket", 0x00771f60, "reg", None, ""),
+    (76, "Game::StartRoomTransition", 0x006fd7c0, "reg", None, ""),
+    (77, "Entity_Familiar::FireProjectile", 0x00639750, "reg", None, ""),
+    (78, "Entity_NPC::FireProjectiles", 0x006cb2e0, "reg", None, ""),
+    (79, "Game::Render", 0x006fbc10, "reg", None, ""),
+]
+# the entity classes' virtual functions: slots 100 + 12 * k + class index
+_k = 0
+for _fn in ("Init", "Update", "Render", "TakeDamage", "HandleCollision"):
+    for _i, _cls in enumerate(ENTITY_CLASSES):
+        HOOKS.append((100 + 12 * _k + _i, "%s::%s" % (_cls, _fn), None, "vt", None, ""))
+    _k += 1
+MAX_SLOTS = 192
+
+
+def run_pequery(pe_root, *args):
+    r = subprocess.run([sys.executable, "scripts/decomp/tools/pequery.py", *args], cwd=pe_root, capture_output=True, text=True)
+    return r.stdout
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--write", action="store_true")
+    ap.add_argument("--index-root", default=None, help="a checkout that has the prebuilt PE index (default: this one, else ISAAC_INDEX_ROOT)")
+    args = ap.parse_args()
+    import os
+    pe_root = args.index_root or os.environ.get("ISAAC_INDEX_ROOT") or str(ROOT)
+    vt_json = subprocess.run([sys.executable, str(HERE / "vtables.py"), *ENTITY_CLASSES, "--slots", "40", "--json", str(ROOT / ".scratch" / "rgon" / "vtables.json")],
+                             cwd=ROOT, capture_output=True, text=True)
+    vt = json.load(open(ROOT / ".scratch" / "rgon" / "vtables.json"))
+    reg = {}
+    try:
+        b = json.load(open(ROOT / ".scratch" / "rgon" / "bindings-17.json"))
+        for cls, c in b.items():
+            for name, f in c["functions"].items():
+                if f.get("fn"):
+                    reg.setdefault(int(f["fn"], 16), []).append("%s.%s" % (cls, name))
+    except OSError:
+        pass
+    sig = {}
+    try:
+        z = json.load(open(ROOT / ".scratch" / "rgon" / "zhl-17.json"))
+        for k, v in z.items():
+            if v.get("va"):
+                sig[v["va"] + 0x400c00] = (k, v["decl"])
+    except OSError:
+        pass
+
+    # the functions the lift knows (its dispatch table names every one)
+    lifted = set()
+    for cand in sorted((ROOT / "output" / "recomp").glob("lift*/**/dispatch_tbl.c")):
+        lifted |= set(re.findall(r"sub_[0-9a-f]{8}", cand.read_text()))
+        if lifted:
+            break
+    rows, bad, seen_va, shared = [], 0, {}, []
+    for slot, name, va, src, pops, note in HOOKS:
+        cls, fn = name.split("::")
+        if src == "vt":
+            v = vt.get(cls) or []
+            if not v:
+                print("FAIL %3d %s: no vtable" % (slot, name)); bad += 1; continue
+            va = v[0]["slots"][VSLOT[fn]]
+            note = "vtable 0x%08x slot %d" % (v[0]["vtable"], VSLOT[fn])
+        if name == "Entity::HandleCollision":
+            continue                                   # pure virtual in the base class
+        if va in seen_va:
+            # a class that does not override: its slot holds the base's function, hooked once under the first name
+            shared.append((slot, name, seen_va[va]))
+            continue
+        # Is it a function at all? The decompiler's export has one file per function.
+        if ("sub_%08x" % va) not in lifted and not (Path(pe_root) / "output" / "recomp" / "export" / "c" / ("%04x" % (va >> 16)) / ("%08x.c" % va)).is_file():
+            print("FAIL %3d %s 0x%08x: neither the lift nor the decompiler's export has a function there" % (slot, name, va)); bad += 1; continue
+        # What it pops: every `ret` of its body, when the index has the body to itself
+        # (the index runs some neighbouring functions together; then the answer is
+        # the table's own, or for a virtual function its slot's, or unknown).
+        body = run_pequery(pe_root, "body", "0x%08x" % va)
+        m = re.search(r"func 0x([0-9a-f]+)\.\.0x([0-9a-f]+)", body)
+        rets = set()
+        if m and int(m.group(1), 16) == va:
+            for line in body.splitlines():
+                mm = re.match(r"0x[0-9a-f]+\s+ret(?:\s+(0x[0-9a-f]+|\d+))?\s*(?:;.*)?$", line.strip())
+                if mm:
+                    rets.add(int(mm.group(1), 0) if mm.group(1) else 0)
+        want = pops if pops is not None else (VPOPS.get(fn) if src == "vt" else None)
+        if len(rets) == 1:
+            got = next(iter(rets))
+            if want is not None and want != got:
+                print("FAIL %3d %s 0x%08x: pops 0x%x, expected 0x%x" % (slot, name, va, got, want)); bad += 1; continue
+        elif want is not None and (not rets or want in rets):
+            got = want
+        else:
+            got = None
+        why = []
+        if src == "reg":
+            if va not in reg:
+                print("FAIL %3d %s 0x%08x: not in the Lua registration" % (slot, name, va)); bad += 1; continue
+            why.append("reg " + reg[va][0])
+        if va in sig:
+            why.append("sig " + sig[va][0])
+            decl = sig[va][1]
+        elif src == "sig":
+            print("FAIL %3d %s 0x%08x: no signature resolves here" % (slot, name, va)); bad += 1; continue
+        else:
+            decl = ""
+        if src == "vt":
+            why.append(note)
+        if src == "asm":
+            why.append("asm")
+        seen_va[va] = name
+        rows.append((slot, name, va, got, "; ".join(why), decl))
+    for slot, name, va, got, why, decl in rows:
+        print("ok   %3d %-40s 0x%08x ret %-4s  %s%s" % (slot, name, va, "?" if got is None else "0x%02x" % got, why, ("  | " + decl[:70]) if decl else ""))
+    for slot, name, first in shared:
+        print("same %3d %-40s is %s" % (slot, name, first))
+    print("%d hook(s), %d shared with a base class, %d failed" % (len(rows), len(shared), bad))
+    if bad:
+        return 1
+    if args.write:
+        out = ["RGON_HOOKS: list[tuple[int, int, str]] = ["]
+        for slot, name, va, got, why, decl in rows:
+            out.append('    (%d, 0x%08x, "%s"),%s' % (slot, va, name, "    # %s; %s" % ("ret ?" if got is None else "ret 0x%x" % got, why)))
+        out.append("]")
+        (ROOT / ".scratch" / "rgon" / "hooks.py.txt").write_text("\n".join(out) + "\n")
+        lua = ["-- generated by tools/hook_table.py: slot, bytes popped", "return {"]
+        for slot, name, va, got, why, decl in rows:
+            lua.append('  ["%s"] = { %d, %s },' % (name, slot, "false" if got is None else "0x%x" % got))
+        for slot, name, first in shared:
+            lua.append('  ["%s"] = "%s",' % (name, first))
+        lua.append("}")
+        (ROOT / "scripts" / "recomp" / "rgon" / "hook_slots.lua").write_text("\n".join(lua) + "\n")
+        print("wrote .scratch/rgon/hooks.py.txt and scripts/recomp/rgon/hook_slots.lua")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
