@@ -64,6 +64,18 @@ test('round 95: requirements become catalogue ids; a missing one leaves the mod 
     assert.deepEqual(cat2.mods.map((m) => m.id).sort(), ['needs-user', 'plain', 'the-api', 'uses-api']);
     assert.ok(readdirSync(join(out2, 'm')).includes('the-api.0.bin'), 'a kept entry brings its parts');
     assert.deepEqual(cat2.mods.find((m) => m.id === 'uses-api').requires, ['the-api'], 'a kept mod still satisfies a requirement');
+
+    // round 109: a kept entry keeps its own requirements when this build's --requires says
+    // nothing of it (the public catalogue lost three that way when one mod was added)
+    const sel3 = join(tmp, 'select3.txt'), req3 = join(tmp, 'requires3.json'), out3 = join(tmp, 'out3');
+    writeFileSync(sel3, 'plain_777777\n');
+    writeFileSync(req3, '{}');
+    pack([src, out3, '--requires', req3, '--select', sel3, '--keep', out2]);
+    const by3 = Object.fromEntries(JSON.parse(readFileSync(join(out3, 'catalogue.json'), 'utf8')).mods.map((m) => [m.id, m]));
+    assert.deepEqual(Object.keys(by3).sort(), ['needs-user', 'plain', 'the-api', 'uses-api']);
+    assert.deepEqual(by3['uses-api'].requires, ['the-api'], 'kept, and still requiring what it did');
+    assert.deepEqual(by3['needs-user'].requires, ['uses-api'], 'and so is the one that needs it');
+    assert.equal(by3['the-api'].requires, undefined);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

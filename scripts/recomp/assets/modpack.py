@@ -500,10 +500,20 @@ def main(argv=None) -> int:
             old = json.load(f)
         have = {e["id"] for e in entries}
         have_ws = {e.get("workshop") for e in entries if e.get("workshop")}
+        old_ws = {e["id"]: e.get("workshop") for e in old.get("mods", [])}
         for e in old.get("mods", []):
             if e["id"] in have or (e.get("workshop") and e["workshop"] in have_ws):
                 continue
             kept_from.append(dict(e))
+            # round 109: a kept entry's requirements come with it. resolve_requires() reads only
+            # `needs`, so an entry this build's --requires has no line for lost its "requires"
+            # (three mods of the public catalogue did when Fiend Folio was added)
+            if e.get("requires") and e.get("workshop") and e["workshop"] not in needs:
+                back = [old_ws.get(r) for r in e["requires"]]
+                if not all(back):
+                    raise SystemExit("%s: %s requires %s, and the earlier catalogue has no workshop id for one of them"
+                                     % (args.keep, e["id"], ", ".join(e["requires"])))
+                needs[e["workshop"]] = back
         entries.extend(kept_from)
 
     entries, stranded = resolve_requires(entries, needs)
