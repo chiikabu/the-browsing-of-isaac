@@ -10057,3 +10057,122 @@ about two dozen distinct errors for names the layer does not have
 `CheckFamiliarEx`, two player fields) and about 120 of the callbacks it
 listens on are not fired. It is not in `ALLOW`, and the layer's mod is not in
 the catalogue.
+
+### 21.135 Round 105: the names Fiend Folio raised on in a run, and two measured layouts
+
+Layer only (Lua); no engine change in this part of the round.
+
+With round 104's runner a run with Fiend Folio went on, and its log listed
+what it still could not call: eleven distinct errors, about 11,000 lines a
+minute. Each is a name of REPENTOGON's; each was added with its own evidence.
+
+**Measured in a running game** (`lab_r105.lua`, `lab_hud.lua`):
+
+- `EntityPlayer:GetHallowedGroundCountdown` / `Set...`: 0x1d90. Of the 25
+  words from 0x1d60 it is the one that changes: 0 away from a holy poop, 3
+  beside one. REPENTOGON's 0x1d7c moved by 20, as the table in
+  `api_player.lua` predicts for that part of the object.
+- `EntityPlayer:GetFlippedForm`: 0x1e6c (REPENTOGON's 0x1e50 moved by 28).
+  After the player becomes Tainted Lazarus it is the one word of the object
+  that points at another player object; that object's type is 38 and its own
+  0x1e6c points back.
+- The HUD's eight player slots are 0x6dc bytes each here (0x6e0 in
+  REPENTOGON's version), from the HUD's start: each begins with its player,
+  the HUD and its own index, 0 to 7. The sprites that follow are each 0x20
+  lower than REPENTOGON has them, which is the same four bytes times eight,
+  and each was told by the file it has loaded (`ui_hearts.anm2` at 0x39a0,
+  `ui_chargebar.anm2` at 0x3778, and eight more). `HUD:GetPlayerHUD`,
+  `EntityPlayer:GetPlayerHUD`, a `PlayerHUD` object (GetPlayer, GetHUD,
+  GetIndex) and ten `HUD:Get...Sprite` come from this; a slot and a sprite
+  are checked each time they are handed out.
+
+**Read off the instructions:**
+
+- `EntityPlayer:IsCollectibleCostumeVisible`: 0x0075d9c0, the one match of
+  the signature, `ret 8`, and its body is the declaration (the layer argument
+  pushed, the collectible's entry fetched from the item config, the item form
+  0x0075d900 called).
+- `PlayerManager.GetEsauJrState`: four pointers at game+0x1bb28, 0x80 after
+  the player list as in REPENTOGON. The game's reset clears the four at once
+  (0x006f16ec), and 0x007ac7e0 allocates 0x2f00 bytes, constructs them and
+  stores the result at `[ecx+esi*4+0x1bb28]`. Using Esau Jr. from a script
+  did not take that path in the lab, so the non-empty case is checked where
+  it is read (what is there must be a player object) and is otherwise
+  untested.
+
+- `EntityPlayer:GetHistory` (the item tracker's list): 0x1dec.
+  Entity_Player::AddCollectible builds an item on its stack and calls
+  0x00721a70 with `lea ecx, [edi+0x1dec]`; 0x00721a70 is the one match of
+  History::AddHistoryItem, `ret 4`, and its body gives the layout (a vector
+  of 0x1c-byte items: time, trinket flag, id). `RemoveHistoryItemByIndex` is
+  the game's own (0x00721c00). An item handed to a mod is a copy.
+- `Game:GetDebugFlags`: 0x26544. The frame counter moved by 0xa88 between
+  the two versions (AddCollectible stamps the history item with
+  [game+0x264f8]); REPENTOGON's 0x25abc moved by the same is read or written
+  by 25 instructions, and in a run `debug 3` flips bit 2 of it and nothing
+  else.
+- `Level:GetGenerationRNG`: game+0x182d4, where REPENTOGON has it. The
+  game's reset stores the RNG default seed there (0xaa17414f, at 0x006f109f)
+  and the level code reads and writes it. The first check written for it
+  passed with the offset moved by 8: anything wrapped as an RNG behaves as
+  one. The check that replaced it regenerates the same floor twice and wants
+  the generator moved, and to the same state both times.
+
+**Over what the game offers:** `Entity:ToDelirium` (the NPC for Delirium,
+nil otherwise; Delirium's own functions are not there, and it is listed), `HasChanceRevive` (Guppy's Collar),
+`CheckFamiliarEx` (the familiars the game's CheckFamiliar spawned),
+`EntitySaveStateManager.GetEntityData` / `TryGetEntityData` (a table per mod
+and entity; a player by its object, anything else by type and InitSeed).
+
+**Two gaps, said in the log and listed in `REPENTOGON.Unsupported`:**
+
+- `EntitySaveStateManager`'s tables live for the run. REPENTOGON writes them
+  with the save and rewinds them with Glowing Hourglass.
+- `BlockCollectible` / `BlockTrinket` make scripts see the item as not held
+  (HasCollectible, GetCollectibleNum, HasTrinket, GetTrinketMultiplier); the
+  game's own code still sees it. Closing this needs the block inside the
+  game's four functions.
+
+**A mod that hooks the same function.** Fiend Folio's health library replaces
+`EntityPlayer.HasCollectible` with its own, which unblocks, asks the function
+it found, and blocks again. The first version of the block wrapped the game's
+functions when something was first blocked, and asked "does the player hold
+it" through the player's method: the mod's hook called Block, Block called the
+mod's hook, and the Lua stack overflowed 1,400 times a minute. Two rules came
+out of it: a wrapper over a game function is installed when the layer loads,
+before any mod can keep a reference to what it replaces; and the layer asks
+the game through the functions it captured then, never through a method a mod
+may have replaced.
+
+**Innate items** (`api_innate.lua`, `test_layer4.lua`): AddInnateCollectible
+and its family, the trinket forms, groups, durations, and the four
+MC_POST_ADD/REMOVE_INNATE_* callbacks. REPENTOGON does this inside the game's
+"does the player have it" functions. From Lua the game's own count of
+wisp-given items cannot be written: it is a map at player+0x1f80 that
+0x007d7740 rebuilds from the room's familiars and swaps in. So the layer uses
+what that function counts. An innate collectible is a real item wisp (familiar
+3.237 of the player), hidden: not visible (set again on every familiar update,
+the game shows it each frame), no collision, not targetable, out of orbit,
+unhurt. Removing one is `Remove()` and then the game's recount, called
+directly (0x007d7740: `ecx` the player, one stack word, `ret 4`, as its two
+callers use it). An innate trinket is a count on the smelted counters the
+layer already knew, with the game's trinket-added and trinket-removed
+functions and EvaluateItems. The books (groups, counts, what is left of a
+duration) are Lua's.
+
+Quit and continue was driven through the real pause menu. The game brings the
+wisps back without their flags and does not keep a count written on a smelted
+counter, so the layer writes its books to the save data of its own mod at
+exit, finds its wisps again on continue by a mark in their seed, hides them,
+puts the kept trinkets back and drops the unnamed group, as REPENTOGON does.
+Measured in the same page and after a reload. What differs and is listed:
+Glowing Hourglass does not rewind innate items; the wisps are real familiars
+to anything that walks the room's entities natively; a player's own item wisp
+has a 1 in 65536 chance of carrying the mark. Not tested: co-op, Tainted
+Lazarus, `AddCostume = false`. The same measurement says the layer's older
+`AddSmeltedTrinket` probably does not survive a continue either; open.
+
+**Where it stands.** `test_layer3.lua` is 53 checks (17 before) and
+`test_layer4.lua` 49; deliberate breaks of each new piece were caught by
+their own checks. In a full stress tour Fiend Folio does not stop the game;
+122 of the callbacks it listens on are still not fired.
