@@ -35,6 +35,15 @@
 //   players  the console's `restart <type>`
 //   rooms    the console's `goto s.<type>.0`
 //   misc     bombs, damage, pickups, grid entities, console commands
+//   custom   lua=<file>: one walk written for the occasion (altpath.lua: the
+//            alternate path the way a player takes it)
+//
+// For a custom walk: set=name:value,... hands it options (CFG.name); save=<file>
+// seeds a persistentgamedata1.dat (a player's unlocks) before the boot;
+// offline=1 aborts every request that would leave this machine; and the walk
+// can ask for real keys -- say("KEYS quit") exits through the pause menu and
+// continues the run from the menu, say("KEYS reload") reloads the page without
+// leaving the run and continues the run the game saved (see KEYS below).
 import { chromium } from 'playwright';
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -529,6 +538,8 @@ const STOP = /\[isaac\]\[TRAP\]|\[isaac\]\[c\+\+\] (?:throw of \S+ from \S+: no 
 // ---- one boot: install, start a run, follow the mod until it finishes or the module stops
 async function attempt(cfg, n) {
   const context = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  // offline=1: no request leaves this machine (a packaged page names a CDN for its catalogue)
+  if (opt.offline === '1') await context.route((u) => /^https?:$/.test(u.protocol) && !/^(?:127\.0\.0\.1|localhost)$/.test(u.hostname), (r) => r.abort());
   const page = await context.newPage();
   const con = [];
   const conFile = join(OUT, `${TAG}.${n}.console.log`), gameFile = join(OUT, `${TAG}.${n}.game.log`);
@@ -550,7 +561,7 @@ async function attempt(cfg, n) {
       },
     });
   });
-  const out = { ops: 0, last: null, phase: null, done: [], alldone: false, stop: null, why: null, luaerrs: [], modErrors: [], excerpt: [] };
+  const out = { ops: 0, last: null, phase: null, done: [], alldone: false, stop: null, why: null, luaerrs: [], modErrors: [], excerpt: [], keys: [] };
   let lastOp = Date.now(), started = false;
   // The walk is followed on the console, not by reading window.isaacLog back: a
   // page stuck inside wasm still delivers the lines it printed before it stuck,
@@ -565,6 +576,7 @@ async function attempt(cfg, n) {
     else if (s[1] === 'BEGIN') { out.phase = s[2]; lastOp = Date.now(); }
     else if (s[1] === 'DONE') { out.done.push(s[2]); lastOp = Date.now(); }
     else if (s[1] === 'ALLDONE') out.alldone = true;
+    else if (s[1] === 'KEYS') out.keys.push(s[2]);           // the walk asks the driver for real keys (see KEYS below)
     else if (s[1] === 'LUAERR' || s[1] === 'FATAL' || s[1] === 'HEALERR') out.luaerrs.push(t.replace(/^.*STRESS /, '').slice(0, 300));
     else if (s[1] === 'LOADED') started = false;
   });
@@ -594,10 +606,26 @@ async function attempt(cfg, n) {
     for (const m of order) await importOne(`${m.id}.zip`, zipOf(m));
     for (const z of ZIPS) await importOne(z.split(/[\\/]/).pop(), readFileSync(z));
     await importOne('zz-port-stress.zip', await stressZip(cfg));
+    // save=<persistentgamedata1.dat>: a player's progress in the page's save store
+    // before the boot (a fresh profile has no Cellar, no Burning Basement and no
+    // secret exit; the page restores the store before main)
+    if (opt.save) {
+      await page.evaluate(async (arr) => new Promise((resolve, reject) => {
+        const req = indexedDB.open('isaac-saves', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('files'); };
+        req.onerror = () => reject(new Error(`save database: ${req.error}`));
+        req.onsuccess = () => {
+          const db = req.result, tx = db.transaction('files', 'readwrite');
+          tx.objectStore('files').put({ src: null, bytes: new Uint8Array(arr) }, 'c:/isaac/documents/my games/binding of isaac repentance+/persistentgamedata1.dat');
+          tx.oncomplete = () => { db.close(); resolve(true); };
+          tx.onerror = tx.onabort = () => { db.close(); reject(new Error(`save transaction: ${tx.error}`)); };
+        };
+      }), [...readFileSync(opt.save)]);
+    }
     booted = true;
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
 
-    let seen = 0, lastAnswer = Date.now(), enters = 0, lastFrame = 0, lastFrameT = Date.now();
+    let seen = 0, lastAnswer = Date.now(), enters = 0, lastFrame = 0, lastFrameT = Date.now(), cont = null;
     lastOp = Date.now();
     const deadline = Date.now() + MAX_MS;
     const tail = [];
@@ -609,7 +637,7 @@ async function attempt(cfg, n) {
       if (!got) {
         // a boot with a large mod scans thousands of files inside one call into wasm:
         // the page is silent for that long without being stuck, so the walk has to have started
-        if (Date.now() - lastAnswer > (out.ops > 0 ? 40000 : 180000)) { out.stop = 'hang'; out.why = 'the page stopped answering'; break; }
+        if (Date.now() - lastAnswer > (out.ops > 0 && !cont ? 40000 : 180000)) { out.stop = 'hang'; out.why = 'the page stopped answering'; break; }
         continue;
       }
       lastAnswer = Date.now();
@@ -639,6 +667,59 @@ async function attempt(cfg, n) {
         break;
       }
       if (out.alldone) break;
+      // KEYS: what a walk cannot do from inside the game. say("KEYS quit"): Escape,
+      // Down, Enter (the pause menu's EXIT GAME), then Enter until the run is
+      // continued from the menu. say("KEYS reload"): the page is reloaded in the
+      // same browser context without leaving the run, as a closed tab or a stopped
+      // module leaves it (the save store keeps what the game wrote), then Enter
+      // until the run is continued; the walk's mod boots again from its top. The
+      // walk waits meanwhile: MC_POST_UPDATE does not run in the menus.
+      if (out.keys.length && !cont) {
+        const k = out.keys.shift();
+        appendFileSync(conFile, `${stamp()} KEYS ${k}\n`);
+        if (k === 'quit') {
+          // The pause menu is OPTIONS / MY STUFF! / RESUME GAME / EXIT GAME with the
+          // cursor on RESUME, and a key in its opening animation can be lost (one
+          // Down too many lands on OPTIONS, wrapping): one Down after the menu is up,
+          // Enter, and again if the game shows no sign of leaving the run.
+          const key = async (x) => { await page.keyboard.down(x); await sleep(180); await page.keyboard.up(x); await sleep(700); };
+          const left = async (from) => {
+            for (let end = Date.now() + 8000; Date.now() < end; await sleep(500)) {
+              const l = await page.evaluate((f) => (window.isaacLog || []).slice(f).map(String), from).catch(() => []);
+              if (l.some((x) => /Total entity spawn time|AnmCache memory usage/.test(x))) return true;
+            }
+            return false;
+          };
+          let gone = false;
+          for (let tries = 0; tries < 3 && !gone; tries++) {
+            const from = await page.evaluate(() => (window.isaacLog || []).length).catch(() => seen);
+            await key('Escape'); await sleep(3000); await key('ArrowDown'); await key('Enter');
+            gone = await left(from);
+            appendFileSync(conFile, `${stamp()} KEYS quit: try ${tries + 1}, ${gone ? 'left the run' : 'still in the run'}\n`);
+            if (!gone) { await key('Escape'); await sleep(1500); await key('Escape'); await sleep(1500); }
+          }
+          cont = { kind: k, t: Date.now() + 3000, until: Date.now() + 180000 };
+        } else if (k === 'reload') {
+          await sleep(3000);                                  // the save store's last writes
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          seen = 0; lastFrame = 0; lastFrameT = Date.now();
+          cont = { kind: k, t: Date.now() + 5000, until: Date.now() + 480000 };
+        }
+        lastOp = Date.now();
+        continue;
+      }
+      if (cont) {
+        if (got.lines.some((l) => /RNG Start Seed:|Starting room transition/.test(l))) {
+          appendFileSync(conFile, `${stamp()} KEYS ${cont.kind}: in a run again\n`); cont = null;
+        } else if (Date.now() > cont.until) { out.stop = 'driver'; out.why = `KEYS ${cont.kind}: no run after the menu`; break; }
+        else if (got.f > 0 && Date.now() > cont.t) {
+          // the title, the file and the menu (CONTINUE is selected when there is a run)
+          await page.keyboard.down('Enter'); await sleep(120); await page.keyboard.up('Enter'); cont.t = Date.now() + 1000;
+        }
+        lastOp = Date.now();
+        await sleep(150);
+        continue;
+      }
       // heap=<s>: the guest heap's report every <s> seconds, into the console log
       if (opt.heap && out.ops > 0 && Date.now() - (out.heapT || 0) > Number(opt.heap) * 1000) {
         out.heapT = Date.now();
@@ -674,6 +755,12 @@ const cfg = { phases: [...PHASES], skip: {}, from: {}, to: TO, gap: GAP, pile: o
 if (opt.cb) cfg.cb = opt.cb;   // cb=MC_GET_SHADER_PARAMS: only this callback (luaerrs)
 if (opt.lua) cfg.lua = readFileSync(opt.lua, 'utf8');
 if (opt.ents) cfg.ents = opt.ents.split(",").map(Number);   // ents=912,407: only these entity types (fights)
+// set=name:value,name:value: options of a lua= walk's own, read there as CFG.name
+// (a number, a string, or with '+' a list: set=stages:1b+2b,quit:boss)
+if (opt.set) for (const kv of opt.set.split(',').filter(Boolean)) {
+  const [k, v = '1'] = kv.split(':');
+  cfg[k] = v.includes('+') ? v.split('+') : (/^-?\d+$/.test(v) ? Number(v) : v);
+}
 if (FROM) for (const p of PHASES) cfg.from[p] = FROM;
 let sameSpot = 0, lastSpot = null;
 for (let n = 0; n < RETRIES; n++) {

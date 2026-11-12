@@ -330,6 +330,10 @@ node scripts/recomp/web/drive_boot.mjs "http://127.0.0.1:8200/play.html?ISAAC_EP
 # engine's own log names the operation that stopped it (see the file's header)
 node scripts/recomp/web/drive_stress.mjs http://127.0.0.1:8200/play.html output/recomp/stress phases=qcards,qpills,luaerrs
 node scripts/recomp/web/drive_stress.mjs http://127.0.0.1:8200/play.html output/recomp/stress phases=tour catalogue=<catalogue-dir> mods=<id>
+# The alternate path as a player takes it (issue 16): boss, secret exit door, the
+# Secret Exit room, its trapdoor; here with the run continued after a page reload
+# (save= is an unlocked persistentgamedata1.dat; see the walk's header for set=)
+node scripts/recomp/web/drive_stress.mjs http://127.0.0.1:8200/play.html output/recomp/altpath phases=custom lua=scripts/recomp/web/altpath.lua catalogue=<catalogue-dir> mods=angels-drop-items,anticrash save=<dat> set=stages:new1b,reload:floor retries=1
 
 # The ways out of a mod that breaks the boot
 node scripts/recomp/web/drive_nomods.mjs http://127.0.0.1:8200/play.html output/recomp/nomods
