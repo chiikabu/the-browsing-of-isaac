@@ -46,7 +46,10 @@
 #define FS_SLOTS      65536u
 #define FS_FILE_RG    64u
 #define FS_FIND_RG    8u
-#define FS_FIND_MAX   2048u
+/* Round 107: 4096 (was 2048). Fiend Folio's resources/gfx/effects/dogs holds
+ * 3,563 files, and a listing stopped at the 2,048th; a listing that still
+ * meets the cap now says so in the log instead of ending quietly. */
+#define FS_FIND_MAX   4096u
 #define FILE_TOKEN(x) ((x) + 0x100u)
 #define FIND_TOKEN(x) ((x) + 0x200u)
 
@@ -60,6 +63,8 @@ typedef struct {
     uint32_t size, cap;
     char    *src;             /* lazy entries: the seed path the loader reads */
     uint8_t  wc;              /* round 95: a windowed entry's caches, 1 + its g_wc index (0: none) */
+    uint8_t  ranged;          /* round 107: a lazy file read in place through the positional
+                               * reader at the offsets the guest asks for, never loaded whole */
 } fs_entry;
 
 /* A windowed entry's FS_WIN-byte caches of the host file, LRU (round 41).
@@ -529,6 +534,80 @@ uint32_t isaac_fs_lazy_windowed(void) { return g_lazy_windowed; }
 /* the window census: host reads (fills) and reads served from a resident window */
 void isaac_fs_window_stats(uint32_t *fills, uint32_t *hits) { *fills = g_win_fills; *hits = g_win_hits; }
 
+/* ---- ranged lazy files (round 107) ------------------------------------
+ * A large mod (Fiend Folio: 20,814 files, 667 MB) is served by the page from
+ * content-addressed packs. Loaded whole on first open, as a lazy entry is, its
+ * 1,519 WAVs cost 297 MB of host heap and a download of every sound at each
+ * boot, because the lazy samples' header pass opens every WAV (round 98) and
+ * reads only 8-16-byte pieces up to the `data` chunk header. A ranged entry is
+ * never loaded: every read goes to the positional reader (a JSPI import, as
+ * for the windowed archives) at the offset and length the guest asked for,
+ * straight into the guest's buffer, and nothing of the file stays here. The
+ * page answers from what it holds (the WAV header blob, a pack it has) at once
+ * and from a pack it has to fetch by suspending the read.
+ *
+ * Which files are ranged is the page's to say: isaac_fs_seed_lazy_ranged()
+ * marks one at registration, and Module.isaacLazyRanged(src) is asked at a
+ * lazy file's first open (so the page needs no export of its own). A ranged
+ * file opened for writing becomes an ordinary one ("w" starts it empty, "a"
+ * copies it in first); host code that wants a file's bytes whole
+ * (isaac_fs_peek) is told there are none. */
+static uint32_t g_ranged_opened, g_ranged_reads, g_ranged_failures, g_ranged_copied;
+static uint64_t g_ranged_bytes;
+#ifdef __EMSCRIPTEN__
+EM_JS(int, isaac_fs_lazy_ranged_js, (const char *src), {
+    if (typeof Module.isaacLazyRanged !== "function") return 0;
+    var s = "";
+    for (var i = src; HEAPU8[i]; i++) s += String.fromCharCode(HEAPU8[i]);
+    return Module.isaacLazyRanged(s) ? 1 : 0;
+});
+#else
+static int isaac_fs_lazy_ranged_js(const char *src) { (void)src; return 0; }
+#endif
+typedef int (*isaac_fs_ranged_test)(const char *src);
+static isaac_fs_ranged_test g_ranged_test;
+/* the selftest's stand-in for Module.isaacLazyRanged */
+void isaac_fs_set_ranged_test(isaac_fs_ranged_test fn) { g_ranged_test = fn; }
+static int fs_ranged_wanted(const char *src) {
+    return g_ranged_test ? g_ranged_test(src) : isaac_fs_lazy_ranged_js(src);
+}
+void isaac_fs_ranged_stats(uint32_t *opened, uint32_t *reads, uint64_t *bytes, uint32_t *failures, uint32_t *copied) {
+    if (opened) *opened = g_ranged_opened;
+    if (reads) *reads = g_ranged_reads;
+    if (bytes) *bytes = g_ranged_bytes;
+    if (failures) *failures = g_ranged_failures;
+    if (copied) *copied = g_ranged_copied;
+}
+/* [pos, pos + want) of a ranged entry into dst (clamped to the file); the bytes read */
+static uint32_t fs_ranged_read(fs_entry *e, uint64_t pos, uint32_t want, uint8_t *dst) {
+    if (!want || pos >= e->size) return 0;
+    if (pos + want > e->size) want = (uint32_t)(e->size - pos);
+    int n = fs_pread(e->src ? e->src : e->key, dst, (uint32_t)pos, want);
+    if (n <= 0) {
+        ++g_ranged_failures;
+        isaac_log("[isaac][fs] ranged read of '%s' at %llu (%u bytes) FAILED (%d)",
+                  e->src ? e->src : e->key, (unsigned long long)pos, want, n);
+        return 0;
+    }
+    if ((uint32_t)n > want) n = (int)want;
+    ++g_ranged_reads; g_ranged_bytes += (uint32_t)n;
+    return (uint32_t)n;
+}
+/* a ranged entry's bytes, read whole into the host heap: it becomes an ordinary file */
+static int fs_ranged_copy_in(fs_entry *e) {
+    if (!e->ranged) return 1;
+    uint8_t *buf = NULL;
+    if (e->size) {
+        buf = (uint8_t *)malloc(e->size);
+        if (!buf) return 0;
+        if (fs_ranged_read(e, 0, e->size, buf) != e->size) { free(buf); return 0; }
+    }
+    if (e->data) free(e->data);
+    e->data = buf; e->cap = e->size; e->ranged = 0;
+    ++g_ranged_copied;
+    return 1;
+}
+
 /* Round 26: the engine verifies every archive entry at mount (a checksum
  * over the whole payload, 1.5 GB with the DLC set). The archives are
  * verified offline, so the lifted mount skips that pass (lift_patches.py
@@ -551,6 +630,15 @@ static int fs_materialise(fs_entry *e) {
     while (wc < FS_WIN_FILES && g_wc[wc].used) ++wc;
     if (e->size >= fs_window_min() && fs_pread_avail() && wc == FS_WIN_FILES)
         isaac_log("[isaac][fs] no window cache left for '%s'; it is loaded whole", e->src ? e->src : e->key);
+    /* round 107: a ranged file (a large mod's, served from packs by the page) is read in
+     * place: nothing is allocated, and every read goes to the positional reader */
+    if (!e->ranged && fs_ranged_wanted(e->src ? e->src : e->key)) e->ranged = 1;
+    if (e->ranged && fs_pread_avail()) {
+        e->lazy = 0;
+        ++g_ranged_opened;
+        return 1;
+    }
+    e->ranged = 0;                            /* no positional reader: loaded whole below */
     if (e->size >= fs_window_min() && fs_pread_avail() && wc < FS_WIN_FILES) {
         memset(&g_wc[wc], 0, sizeof g_wc[wc]);
         g_wc[wc].used = 1;
@@ -637,6 +725,7 @@ static void fs_seed_replace(fs_entry *e, uint8_t *data, uint32_t len) {
     if (e->src) { free(e->src); e->src = NULL; }
     fs_window_drop(e);
     e->lazy = 0;
+    e->ranged = 0;
     e->data = data;
     e->size = len;
     e->cap = len;
@@ -678,7 +767,18 @@ int isaac_fs_seed_lazy(const char *path, uint32_t len) {
     if (e->src) free(e->src);
     e->src = strdup(path);
     if (!e->src) return 0;
-    e->size = len; e->cap = 0; e->lazy = 1;
+    e->size = len; e->cap = 0; e->lazy = 1; e->ranged = 0;
+    return 1;
+}
+
+/* Round 107: a lazy entry that is read in place, never loaded whole (see
+ * fs_ranged_read). Without a positional reader it is loaded whole after all. */
+int isaac_fs_seed_lazy_ranged(const char *path, uint32_t len) {
+    if (!isaac_fs_seed_lazy(path, len)) return 0;
+    char key[256];
+    fs_entry *e = fs_key(path, key, sizeof key) ? fs_find(key) : NULL;
+    if (!e) return 0;
+    e->ranged = 1;
     return 1;
 }
 
@@ -692,6 +792,7 @@ const uint8_t *isaac_fs_peek(const char *path, uint32_t *len) {
     fs_entry *e = fs_find(key);
     if (!e || e->is_dir || e->windowed) return NULL;
     if (e->lazy && !fs_materialise(e)) return NULL;
+    if (e->ranged) return NULL;                  /* round 107: read in place, never held whole */
     if (len) *len = e->size;
     return e->data ? e->data : (const uint8_t *)"";
 }
@@ -881,6 +982,8 @@ static int fs_find_open(const char *key) {
             g_find_ids[sid][cnt++] = i;
     }
     if (!cnt) return -2;
+    if (cnt == FS_FIND_MAX)
+        isaac_log("[isaac][fs] the listing of '%s' stopped at %u entries (FS_FIND_MAX); the rest are not listed", key, cnt);
     if (fs_trace()) {
         /* what the scan will actually hand back, which is the only way to tell a
          * file that is missing from one the caller chose to ignore */
@@ -1052,6 +1155,16 @@ void imp_api_ms_win_crt_stdio__fopen(CpuState *restrict cpu) {
         if (!e) { isaac_w32(ERRNO_CELL_VA, 13u); cpu->EAX = 0; return; }
     }
     if (!e || e->is_dir) { isaac_w32(ERRNO_CELL_VA, 2u); cpu->EAX = 0; return; }
+    /* round 107: a ranged file opened for writing becomes an ordinary one --
+     * empty for "w" (nothing to keep), copied in first for "a" */
+    if (writing) {
+        if (e->lazy && !e->ranged && fs_ranged_wanted(e->src ? e->src : e->key)) e->ranged = 1;
+        if (e->ranged && !append) { e->ranged = 0; e->lazy = 0; e->size = 0; }
+        else if (e->ranged) {
+            fs_materialise(e);
+            if (e->ranged && !fs_ranged_copy_in(e)) { isaac_w32(ERRNO_CELL_VA, 5u); cpu->EAX = 0; return; }   /* EIO */
+        }
+    }
     uint32_t fi = 0xFFFFFFFFu;
     for (unsigned i = 0; i < FS_FILE_RG; ++i) if (!g_file_used[i]) { fi = i; break; }
     if (fi == 0xFFFFFFFFu) { isaac_w32(ERRNO_CELL_VA, 24u); cpu->EAX = 0; return; } /* EMFILE */
@@ -1097,6 +1210,7 @@ void imp_api_ms_win_crt_stdio__fread(CpuState *restrict cpu) {
         got = (uint32_t)(avail < want ? avail : want);
         if (got) {
             if (e->windowed) got = fs_window_read(e, pos, got, (uint8_t *)isaac_g(dst));
+            else if (e->ranged) got = fs_ranged_read(e, pos, got, (uint8_t *)isaac_g(dst));
             else memcpy(isaac_g(dst), e->data + (size_t)pos, got);
             g_file_pos[fi] = pos + got;
         }
@@ -1159,6 +1273,9 @@ void imp_api_ms_win_crt_stdio__fgetc(CpuState *restrict cpu) {
             if (e->windowed) {
                 uint8_t b = 0;
                 c = fs_window_read(e, g_file_pos[fi], 1u, &b) == 1u ? (int)b : -1;
+            } else if (e->ranged) {
+                uint8_t b = 0;
+                c = fs_ranged_read(e, g_file_pos[fi], 1u, &b) == 1u ? (int)b : -1;
             } else {
                 c = e->data[(size_t)g_file_pos[fi]];
             }

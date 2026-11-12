@@ -239,7 +239,8 @@ test('a mod too big to be seeded is refused at the import, not at the next boot'
   const m = src('mods.mjs');
   assert.ok(m.includes('if (mod.bytes > SEED_BUDGET) {'), 'checked where the person is looking');
   assert.ok(m.includes('the game is given ${mib(SEED_BUDGET)} for mods'), 'and said in those terms');
-  assert.ok(m.includes("if (mods.reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push("), 'a total that has gone past it is said too');
+  // round 107: of the mods that are seeded -- a packed one is read in place and takes none of it
+  assert.ok(m.includes("if (mods.filter((x) => !isPacked(x)).reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push("), 'a total that has gone past it is said too');
 });
 
 test('mods and saves are separate databases, and a write under mods/ never reaches the saves', () => {
@@ -380,7 +381,8 @@ test('round 82: installing a mod turns mods on in the stored options', () => {
   const mods = readFileSync(join(root, 'scripts', 'recomp', 'web', 'mods.mjs'), 'utf8');
   const install = mods.slice(mods.indexOf('async function install('), mods.indexOf('async function install(') + 1400);
   assert.match(install, /if \(o\.onInstalled\) \{ try \{ await o\.onInstalled\(\); \}/);
-  assert.equal((mods.match(/o\.onInstalled/g) || []).length, 2, 'only the install path calls it');
+  // round 107: the zip install and the packed install (installPacked) are the two install paths
+  assert.equal((mods.match(/o\.onInstalled/g) || []).length, 4, 'only the install paths call it');
 });
 
 test('round 84: the page menu is what the game screen cannot do', () => {

@@ -764,8 +764,10 @@ test('round 39: the client-array staging buffers are rings -- appends, orphan on
   assert.match(c, /static uint32_t ring_put\(GLenum target, gl_ring \*r, uint32_t initial,/, 'one append primitive for both rings');
   assert.ok(c.includes('} else if (r->head + need > r->cap) {      /* wrap: orphan, never overwrite */'), 'a wrap orphans the storage instead of overwriting bytes a queued draw reads');
   assert.ok(c.includes('if (src) glBufferSubData(target, (GLintptr)off, (GLsizeiptr)bytes, src);'), 'the upload lands at the ring head');
-  assert.ok(c.includes('(const void *)(uintptr_t)(at + (a->client_ptr - base)))'), 'interleaved attributes point at the ring offset');
-  assert.ok(c.includes('(const void *)(uintptr_t)(at + off))'), 'separate attributes point at the ring offset');
+  assert.ok(c.includes('point_attrib(i, a, at + (a->client_ptr - base));'), 'interleaved attributes point at the ring offset');
+  assert.ok(c.includes('point_attrib(i, a, at + off);'), 'separate attributes point at the ring offset');
+  assert.ok(c.includes('glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride, (const void *)(uintptr_t)off);'),
+    'round 107: point_attrib sends the pointer (unless the attribute already points there)');
   assert.ok(c.includes('glDrawElements(mode, count, type, (const void *)(uintptr_t)iat);'), 'the draw reads its indices at the ring offset');
   assert.ok(!c.includes('glBufferSubData(target, 0,'), 'nothing writes at offset 0 any more');
   assert.match(c, /rings orphaned %u \/ %u times/, 'the report counts the orphans');

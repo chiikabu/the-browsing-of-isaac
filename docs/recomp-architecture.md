@@ -10254,3 +10254,146 @@ exit), MC_PRE/POST_PLAYER_USE_BOMB, MC_POST_ROOM_RENDER_ENTITIES and
 MC_EVALUATE_STAT (patches in the middle of a function), the weapon callbacks
 (no Weapon class in the layer), MC_POST_TRIGGER_COLLECTIBLE_ADDED, and a table
 answer to PRE_PLAYERHUD_RENDER_ACTIVE_ITEM (accepted, logged as unsupported).
+
+### 21.137 Round 107: waits that end on time, attribute state sent once, and a large mod read from packs
+
+Host (`host_shims_win.c`, `host_gl_clientarrays.c`, `host_gl_webgl.c`,
+`host_shims_fs.c`), page (`play.mjs`, `mods.mjs`, `boot_web.mjs`,
+`mod_browser.mjs`) and the packer (`assets/modpack.py`). No lifted code and no
+hook slot changed.
+
+#### Frame rate
+
+The profile of round 103's engine (a heavy room: 60 enemies, 160 to 180
+entities) said where a frame goes: 60% lifted game code, and nothing dropped at
+full speed on a desktop. With the main thread throttled four times the room ran
+at 29 fps, and two things in the host stood out.
+
+**The render gate's waits.** A skipped frame's wait and a drawn in-between
+frame's pace were plain timers, and a browser timer fires late: each wait asked
+for 5.4 ms and slept 10.9. They now go through `isaac_wait_js`: a timer set
+before the deadline, then MessageChannel hops (plain tasks, so input and
+fetches run between them) until the deadline has passed. A hidden page keeps
+the plain timer. `ISAAC_SKIPWAIT` picks the mode: 0 the old timer; 1 (default)
+the timer to 10 ms before the deadline; 2 the timer less the timers' running
+mean lateness; 3 as 2, less twice the mean deviation.
+
+Measured, heavy room at x4, four interleaved pairs against an engine built from
+the unchanged host with the same lifted objects:
+
+| | displayed/s | ticks/s | present p95 | slept / asked | busy share |
+|---|---|---|---|---|---|
+| before | 28.1 to 29.1 | 27.9 to 28.7 | | 1.98 to 2.08 | 0.88 to 0.92 |
+| mode 1 (shipped, with the GL change) | +1.92 (+0.98 to +2.37) | +1.30 (+1.05 to +1.88) | -3.4 ms | 0.98 to 1.00 | 0.98 to 0.99 |
+| mode 3 | +1.22 | +0.77 | | 1.07 to 1.12 | 0.94 to 0.97 |
+| mode 2 (round's first engine) | +0.67 | +0.93 | -1.45 ms | 1.27 to 1.31 | 0.92 to 0.94 |
+
+The price of mode 1 is the main thread: the hops fill time it would have sat
+idle (136 to 143 hops a wait). At full speed nothing is skipped, nothing hops
+and nothing changes (busy share 0.23 before and after, ticks +0.01/s). A
+throttled desktop is not a phone: timer lateness and the cost of the hops on a
+real device are not measured, and `ISAAC_SKIPWAIT=3` is the switch if heat
+matters more than frames.
+
+**Attribute state.** 61% of the WebGL calls of a frame were attribute churn:
+the engine enables its arrays before a draw and disables them after, the ring
+was bound before every upload, and every draw re-pointed its attributes.
+`ISAAC_GL_ATTR=1`: the ring's buffer is bound only when it is not the one
+bound; enables and disables are recorded and the draw sends the difference; a
+pointer WebGL already has is not sent again. `=2` (default) also keeps the
+pointers still: a draw with the layout the pointers describe is uploaded a
+whole number of 4-vertex groups past their base and drawn from that vertex
+(`glDrawArrays` first + v0, or the static quad index buffer from quad v0/4). A
+ring index block, another layout or a wrapped ring points the attributes at its
+own data, which is the new base.
+
+| calls per frame | total | enable + disable | pointer | bindBuffer |
+|---|---|---|---|---|
+| before | 1,548 | 626 | 313 | 106 |
+| mode 1 | 806 | 6 | 306 | 0.3 |
+| mode 2 | 536 | 6 | 15 | 0.3 |
+
+In the CPU profile the GL path (WebGL, the glue, the shims, the crossings) went
+from 495 to 415 microseconds a frame, 1.6% of the busy time; the estimate had
+been 4 to 6%. It does not show in the frame rate.
+
+The shift changes `gl_VertexID`. No shader can read it: the shim strips
+`#version`, so every shader is GLSL ES 1.00 (46 compiled in a run, none with a
+`#version`, none naming it). Nine screens (boot, title, menu, the first room,
+the heavy room three times, the pause menu twice) under a fake clock are
+byte-identical before and after, in both of the two timing families a boot
+falls into (an event before the first frame lands one pass early or late and
+changes the run's first seed; pairs are matched by the game log).
+
+**The game's WebGL context.** `play.mjs` asked `#canvas` for a context to read
+the renderer's name, before the engine created its own, so the game ran on the
+browser's defaults (antialias and alpha on, no stencil) and the engine's
+request was ignored. The name now comes from the start-up probe's context, and
+the game's context is what `host_shims_gl.c` asks for (no alpha, no antialias,
+stencil, preserved drawing buffer). The same nine screens are byte-identical;
+no speed change was measured at full speed.
+
+**The fifteen hooks of round 106 cost nothing measurable**: their wrappers took
+0 samples in four profiles, and the A/B against the engine without them is
+noise in both directions.
+
+Left for later, with the profile's estimates: music decode off the main thread
+(6 to 8% of the main thread at x4), the lifter's reloads of callee-saved
+registers after calls, a host fastpath for the item-ownership query.
+
+#### A large mod from packs
+
+Fiend Folio is 22,858 files and 670 MB; installed as every other mod (one
+archive, seeded whole into the heap) it needed 257 MB before the boot could
+finish and 1.39 GB of wasm memory, 297 MB of which was 1,519 WAV files the
+boot opens only to read their headers.
+
+**Ranged files.** A lazy file the page calls ranged
+(`Module.isaacLazyRanged(src)`, asked at its first open) is never loaded:
+`fread` and `fgetc` go to the positional reader that already serves the
+archives (a JSPI import) at the offset and length the guest asked for, into
+the guest's buffer. Opened to write it becomes an ordinary file (empty for
+"w", copied in for "a"); `isaac_fs_peek` has no bytes for it; with no
+positional reader it is loaded whole as before.
+
+**Packs.** `modpack.py --packed <folder>` cuts a mod into content-addressed
+packs (`pk/<hash>.bin`, each under 20,000,000 bytes, boundaries chosen by
+content so an update re-uploads only what changed) and an index
+(`pk/<hash>.idx`) with a blob of every WAV's header. Three lanes: what the
+boot reads (6 packs, 12.8 MB), sounds (71 packs, 243 MB), the rest (60 packs,
+173 MB): 137 packs, 428.7 MB stored. The output is deterministic and every
+file is read back and compared before the catalogue is written. The page
+(`mods.mjs`) installs a packed mod by fetching the index and the boot lane,
+keeps packs in the Cache API, checks each against the hash in its name, and
+answers a read from the header blob, a pack it holds, or by fetching the pack
+while the read is suspended; `play.mjs` says "Loading mod files..." when that
+takes more than 0.7 s. Packs are fetched whole, never by range. A catalogue
+entry without `packed` takes the old path unchanged.
+
+Measured on localhost (the page's own mod browser, a server refusing ranges):
+
+| | downloaded | wasm memory |
+|---|---|---|
+| after install (with StageAPI and the layer) | 18.7 MB | 640 MiB |
+| run start | 27.6 MB | 1,045 MiB |
+| after a tour | 43.0 MB | 1,179 MiB |
+
+17,282 header reads were answered from the blob, 395 reads waited for a pack,
+none failed.
+
+**A listing that stopped at 2,048.** `FS_FIND_MAX` was 2,048 and Fiend Folio's
+`resources/gfx/effects/dogs` holds 3,563 files; the engine's mount scan lost
+1,515 of them, and a sprite sheet among those was looked for in every mod
+folder and never opened, with `IsLoaded()` still true. The cap is 4,096 and a
+listing that meets it says so.
+
+**Tests.** The host selftest has 25 new checks (785, 0 failures) and
+`tests/recomp-modpacks.test.js` 7 tests; 11 and 12 deliberate breaks were each
+caught. `tests/recomp-gl-clientarrays.test.js` draws quad blocks from later
+quads of the static buffer with a ring block in between.
+
+**What a player will notice.** The first time a sound or a room's graphics of
+a packed mod is used its pack may have to be fetched (about 3.4 MB), so the
+sound can be late. Offline, what was never played is not on the device. The
+memory is still too much for most phones. Not measured: phones, a real
+network, offline play in a browser.

@@ -212,6 +212,7 @@ if (portable && typeof portable.progress === 'function' && window.__isaacPortabl
 // Check actual APIs before starting the pipeline, not browser names or versions.
 // The native engine still requires JSPI and a WebGL 2 context.
 let runtimeError = '';
+let gpuRenderer = 'gpu?';   // read off the probe context below, for the frame-rate line's machine note
 if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'function'
   || typeof WebAssembly.promising !== 'function') {
   runtimeError = 'This game requires WebAssembly JavaScript Promise Integration (JSPI). Update your browser or use a browser with JSPI support.';
@@ -220,6 +221,10 @@ if (typeof WebAssembly === 'undefined' || typeof WebAssembly.Suspending !== 'fun
   try { gl = document.createElement('canvas').getContext('webgl2'); } catch { /* unsupported or disabled */ }
   if (!gl) runtimeError = 'WebGL 2 is unavailable. Enable hardware graphics acceleration or use a browser and device that support WebGL 2.';
   else {
+    try {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      if (ext) gpuRenderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+    } catch { /* the renderer string is only a note */ }
     const lose = gl.getExtension('WEBGL_lose_context');
     if (lose) lose.loseContext();
   }
@@ -272,6 +277,21 @@ if (portable && typeof portable.recordDownload === 'function')
   hooks.onDownload = (url, from, to) => portable.recordDownload(url, from, to);
 // Called before the output is connected, including delayed audio initialization
 // and context recreation. Only the destination is muted; the mixer stays live.
+// Round 107: a packed mod's file the game has waited on for a moment (boot_web.mjs:
+// its pack is being fetched) is said in a corner, so a pause is not taken for a hang.
+let packWaitEl = null;
+hooks.onModPackWait = (waiting) => {
+  if (!packWaitEl) {
+    if (!waiting) return;
+    packWaitEl = document.createElement('div');
+    packWaitEl.id = 'modpack-wait';
+    packWaitEl.textContent = 'Loading mod files...';
+    packWaitEl.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:30;padding:4px 10px;border-radius:4px;'
+      + 'background:rgba(0,0,0,.7);color:#eee;font:13px/1.4 sans-serif;pointer-events:none';
+    document.body.appendChild(packWaitEl);
+  }
+  packWaitEl.hidden = !waiting;
+};
 hooks.onAudioReady = (A) => {
   audioOutput = A.outputGain;
   audioOutput.gain.value = gameReady && !document.hidden ? 1 : 0;
@@ -436,13 +456,11 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     const recent = [];
     // the machine, once: cores, memory (Chrome rounds it), the GPU renderer --
     // what a report from the target has to say alongside the frame rate
-    let machine = '';
-    try {
-      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
-      const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
-      const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'gpu?';
-      machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${renderer}`;
-    } catch (e) { machine = ''; }
+    // Round 107: the renderer comes from the start-up probe's own context. Asking
+    // #canvas here created the game's context before the engine did, with the
+    // browser's default attributes (antialias and alpha on, no stencil, no
+    // preserved drawing buffer), and the engine's own request was then ignored.
+    const machine = ` -- ${navigator.hardwareConcurrency || '?'} cores, ${navigator.deviceMemory || '?'} GB, ${gpuRenderer}`;
     setInterval(() => {
       const f = window.isaacFrame || 0, t = performance.now();
       if (f <= 0) return;

@@ -75,6 +75,7 @@ static void *arg_p(CpuState *restrict cpu, unsigned i) {
 
 /* client-array emulation (host_gl_clientarrays.c) */
 void isaac_gl_enable_vertex_attrib_array(GLuint index);
+int isaac_gl_attr_deferred(GLuint index);
 void isaac_gl_disable_vertex_attrib_array(GLuint index);
 void isaac_gl_vertex_attrib_pointer(GLuint index, GLint size, GLenum type,
                                     GLboolean normalized, GLsizei stride,
@@ -454,6 +455,7 @@ GLFN(glDisable)              { ENTER; glDisable(A(0)); RET0; }
 GLFN(glDisableVertexAttribArray) {
     ENTER;
     isaac_gl_disable_vertex_attrib_array(A(0));
+    if (isaac_gl_attr_deferred(A(0))) RET0;      /* round 107: the draw sends the difference */
     if (A(0) < GLS_ATTRIBS) {
         if (gls_attrib_known[A(0)] && !gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }
         gls_attrib_known[A(0)] = 1; gls_attrib_on[A(0)] = 0;
@@ -477,6 +479,7 @@ GLFN(glEnable)               { ENTER; glEnable(A(0)); RET0; }
 GLFN(glEnableVertexAttribArray) {
     ENTER;
     isaac_gl_enable_vertex_attrib_array(A(0));
+    if (isaac_gl_attr_deferred(A(0))) RET0;      /* round 107: the draw sends the difference */
     if (A(0) < GLS_ATTRIBS) {
         if (gls_attrib_known[A(0)] && gls_attrib_on[A(0)]) { ++gls_skip_attrib; RET0; }
         gls_attrib_known[A(0)] = 1; gls_attrib_on[A(0)] = 1;

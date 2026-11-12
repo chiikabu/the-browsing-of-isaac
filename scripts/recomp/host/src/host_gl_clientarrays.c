@@ -123,6 +123,8 @@ extern void glVertexAttribPointer(GLuint, GLint, GLenum, GLboolean, GLsizei,
                                   const void *);
 extern void glDrawElements(GLenum, GLsizei, GLenum, const void *);
 extern void glDrawArrays(GLenum, GLint, GLsizei);
+extern void glEnableVertexAttribArray(GLuint);
+extern void glDisableVertexAttribArray(GLuint);
 #endif
 
 #define ISAAC_MAX_ATTRIBS 16
@@ -241,6 +243,83 @@ static gl_ring g_vring, g_iring;
 #define RING_VERTEX_BYTES (4u << 20)
 #define RING_INDEX_BYTES  (1u << 20)
 
+/* Round 107: the attribute state WebGL is sent only when it changes. In the
+ * heavy room 61% of all WebGL calls per frame were attribute churn: the engine
+ * enables its arrays before each draw and disables them after (634 calls),
+ * ring_put bound the one vertex ring before every upload (107, all redundant),
+ * and every draw re-pointed its attributes at its own ring offset (317).
+ *   - glBindBuffer(ARRAY_BUFFER) is issued only when the ring's buffer is not
+ *     the one bound (g_bound_vbo; ELEMENT_ARRAY_BUFFER already had g_bound_ibo);
+ *   - enable/disable are recorded, and at the draw only the difference between
+ *     the set the engine asked for and the set WebGL has is sent -- attribute
+ *     arrays are read by draws alone, so a draw sees exactly the same state;
+ *   - glVertexAttribPointer is skipped when the attribute already points there.
+ * Mode 2 also keeps the pointers still across draws: a draw whose attributes
+ * have the layout the pointers already describe is uploaded at a ring offset a
+ * whole number of 4-vertex groups past the pointers' base, and drawn from that
+ * vertex on -- glDrawArrays' first + v0, or the static quad index buffer from
+ * quad v0/4 (its indices are the same pattern +4 per quad). Any other draw (a
+ * ring index block, another layout, a ring that wrapped) points the attributes
+ * at its own data, which becomes the new base. The same bytes are drawn the
+ * same way; only where WebGL finds them changes.
+ * ISAAC_GL_ATTR=0 is the previous behaviour, =1 the bind and enable filters
+ * and the pointer cache, =2 (default) adds the still pointers. */
+static int g_attr_mode = -1;
+static int attr_mode(void) {
+    if (g_attr_mode < 0) {
+        const char *e = getenv("ISAAC_GL_ATTR");
+        g_attr_mode = (e && *e >= '0' && *e <= '2') ? *e - '0' : 2;
+        if (g_attr_mode != 2) isaac_log("[isaac][gl] ISAAC_GL_ATTR=%d", g_attr_mode);
+    }
+    return g_attr_mode;
+}
+static GLuint g_bound_vbo;                          /* what ARRAY_BUFFER holds */
+static uint8_t g_gl_attr_on[ISAAC_MAX_ATTRIBS];     /* what WebGL has enabled (a new context: none) */
+typedef struct { GLint size; GLenum type; GLboolean normalized; GLsizei stride; uint32_t off; GLuint buf; int set; } gl_ptr;
+static gl_ptr g_gl_ptr[ISAAC_MAX_ATTRIBS];          /* what each attribute points at */
+/* the still pointers' base: the ring offset of vertex 0 and the layout it was set for */
+typedef struct { int valid; uint32_t gen, base, mask; GLsizei stride; uint32_t rel[ISAAC_MAX_ATTRIBS]; } gl_seg;
+static gl_seg g_seg;
+static uint32_t g_skip_bind, g_skip_ptr, g_sent_ptr, g_sent_enable, g_seg_draws, g_seg_moves;
+
+/* a glEnable/DisableVertexAttribArray the draw applies (1), or one the caller sends now (0) */
+int isaac_gl_attr_deferred(GLuint index) { return attr_mode() >= 1 && index < ISAAC_MAX_ATTRIBS; }
+
+static void bind_array_buffer(GLuint buf) {
+    if (attr_mode() >= 1 && g_bound_vbo == buf) { ++g_skip_bind; return; }
+    glBindBuffer(GL_ARRAY_BUFFER, buf);
+    g_bound_vbo = buf;
+}
+/* at a draw: the engine's enable set, sent as the difference */
+static void sync_enables(void) {
+    if (attr_mode() < 1) return;
+    for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
+        uint8_t want = (uint8_t)(g_attribs[i].enabled != 0);
+        if (g_gl_attr_on[i] == want) continue;
+        g_gl_attr_on[i] = want;
+        ++g_sent_enable;
+        if (want) glEnableVertexAttribArray(i); else glDisableVertexAttribArray(i);
+    }
+}
+static unsigned type_size(GLenum t);
+static void point_attrib(unsigned i, const attrib_state *a, uint32_t off) {
+    gl_ptr *p = &g_gl_ptr[i];
+    if (attr_mode() >= 1 && p->set && p->size == a->size && p->type == a->type && p->normalized == a->normalized
+        && p->stride == a->stride && p->off == off && p->buf == g_bound_vbo) { ++g_skip_ptr; return; }
+    p->size = a->size; p->type = a->type; p->normalized = a->normalized; p->stride = a->stride;
+    p->off = off; p->buf = g_bound_vbo;
+    /* a call WebGL rejects changes nothing: remember only what it accepts */
+    switch (a->type) {
+    case GL_BYTE: case GL_UNSIGNED_BYTE: case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_INT: case GL_UNSIGNED_INT:
+    case GL_FLOAT: case GL_HALF_FLOAT: case GL_INT_2_10_10_10_REV: case GL_UNSIGNED_INT_2_10_10_10_REV:
+        p->set = a->size >= 1 && a->size <= 4 && a->stride >= 0 && a->stride <= 255
+              && off % type_size(a->type) == 0 && (uint32_t)a->stride % type_size(a->type) == 0; break;
+    default: p->set = 0; break;
+    }
+    ++g_sent_ptr;
+    glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride, (const void *)(uintptr_t)off);
+}
+
 /* stats, reported by isaac_gl_report() -- this is a hot path, so it is
  * measured rather than guessed at. */
 static uint64_t g_draws, g_indices_scanned, g_vertex_bytes, g_index_bytes;
@@ -259,6 +338,10 @@ void isaac_gl_reset_state(void) {
     memset(&g_vring, 0, sizeof g_vring);
     memset(&g_iring, 0, sizeof g_iring);
     g_idx_valid = 0;
+    g_bound_vbo = 0;
+    memset(g_gl_attr_on, 0, sizeof g_gl_attr_on);
+    memset(g_gl_ptr, 0, sizeof g_gl_ptr);
+    memset(&g_seg, 0, sizeof g_seg);
 }
 
 static void ensure_buffers(void) {
@@ -272,7 +355,9 @@ static void ensure_buffers(void) {
 static uint32_t ring_put(GLenum target, gl_ring *r, uint32_t initial,
                          const void *src, uint32_t bytes) {
     uint32_t need = (bytes + 15u) & ~15u;
-    glBindBuffer(target, r->buf);
+    if (target == GL_ARRAY_BUFFER) bind_array_buffer(r->buf);          /* round 107: only when it is not bound */
+    else if (attr_mode() >= 1 && target == GL_ELEMENT_ARRAY_BUFFER && g_bound_ibo == r->buf) ++g_skip_bind;
+    else glBindBuffer(target, r->buf);
     if (r->cap < need) {                       /* a single draw bigger than the ring: grow it */
         r->cap = need + need / 2;
         if (r->cap < initial) r->cap = initial;
@@ -369,12 +454,16 @@ static uint32_t attribute_offset(uint32_t offset, const attrib_state *a) {
 }
 
 /* Stage every enabled client attribute and point GL at the staged copy.
- * vertex_count is max_index+1 for indexed draws, or first+count for arrays. */
-static void stage_attributes(uint32_t vertex_count) {
+ * vertex_count is max_index+1 for indexed draws, or first+count for arrays.
+ * Returns v0, the vertex at which the staged vertex 0 sits for the pointers:
+ * 0 unless the draw can be shifted (shift_limit > 0: v0 + vertex_count must
+ * stay within it) and the pointers already describe its layout (round 107,
+ * mode 2: the still pointers above). */
+static uint32_t stage_attributes(uint32_t vertex_count, uint32_t shift_limit) {
     /* The common case is a single interleaved array: several attributes with
      * the same stride, pointers a few bytes apart. Detect it so the memory is
      * uploaded once rather than once per attribute. */
-    uint32_t base = 0xFFFFFFFFu, top = 0;
+    uint32_t base = 0xFFFFFFFFu, top = 0, mask = 0;
     int any = 0, interleaved = 1;
     GLsizei stride0 = 0;
     for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
@@ -382,28 +471,62 @@ static void stage_attributes(uint32_t vertex_count) {
         if (!a->enabled || !a->configured || !a->client_ptr) continue;
         if (!any) { stride0 = a->stride; any = 1; }
         else if (a->stride != stride0) interleaved = 0;
+        mask |= 1u << i;
         uint32_t lo = a->client_ptr;
         uint32_t hi = lo + attribute_span(a, vertex_count);
         if (lo < base) base = lo;
         if (hi > top)  top = hi;
     }
-    if (!any) return;
+    if (!any) return 0;
     /* Keep each source pointer's low bits when rebasing mixed scalar types. */
     if (vertex_count) base &= ~3u;
 
     if (interleaved && (top - base) <= (uint32_t)stride0 * vertex_count + 256) {
         uint32_t bytes = top - base;
+        int still = attr_mode() >= 2 && shift_limit && stride0 > 0 && (stride0 & 3) == 0;
+        if (still && g_seg.valid && g_seg.gen == g_vring.gen && g_vring.buf && g_seg.stride == stride0 && g_seg.mask == mask) {
+            /* the pointers describe this layout: place the bytes a whole number of
+             * 4-vertex groups past their base (4 * stride is a multiple of 16) */
+            int same = 1;
+            for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS && same; ++i) {
+                if (!(mask & (1u << i))) continue;
+                const attrib_state *a = &g_attribs[i];
+                const gl_ptr *p = &g_gl_ptr[i];
+                same = g_seg.rel[i] == a->client_ptr - base && p->set && p->buf == g_vring.buf
+                    && p->size == a->size && p->type == a->type && p->normalized == a->normalized
+                    && p->stride == a->stride && p->off == g_seg.base + g_seg.rel[i];
+            }
+            if (same) {
+                uint64_t unit = 4u * (uint64_t)(uint32_t)stride0;
+                uint64_t k = ((uint64_t)(g_vring.head - g_seg.base) + unit - 1u) / unit;
+                uint64_t at = g_seg.base + k * unit;
+                if (at + bytes <= g_vring.cap && 4u * k + vertex_count <= shift_limit) {
+                    bind_array_buffer(g_vring.buf);
+#ifdef __EMSCRIPTEN__
+                    glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)at, (GLsizeiptr)bytes, isaac_g(base));
+#endif
+                    g_vring.head = (uint32_t)at + ((bytes + 15u) & ~15u);
+                    g_vertex_bytes += bytes;
+                    ++g_seg_draws;
+                    return (uint32_t)(4u * k);
+                }
+            }
+        }
         uint32_t at = ring_put(GL_ARRAY_BUFFER, &g_vring, RING_VERTEX_BYTES,
                                isaac_g(base), bytes);
         g_vertex_bytes += bytes;
         for (unsigned i = 0; i < ISAAC_MAX_ATTRIBS; ++i) {
             attrib_state *a = &g_attribs[i];
             if (!a->enabled || !a->configured || !a->client_ptr) continue;
-            glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride,
-                                  (const void *)(uintptr_t)(at + (a->client_ptr - base)));
+            point_attrib(i, a, at + (a->client_ptr - base));
+            g_seg.rel[i] = a->client_ptr - base;
         }
-        return;
+        /* these pointers are the base the next draws of this layout use */
+        g_seg.valid = still; g_seg.gen = g_vring.gen; g_seg.base = at; g_seg.mask = mask; g_seg.stride = stride0;
+        if (still) ++g_seg_moves;
+        return 0;
     }
+    g_seg.valid = 0;
 
     /* Fallback: separate arrays. Upload them back to back into one buffer and
      * hand each attribute its own offset. */
@@ -425,11 +548,11 @@ static void stage_attributes(uint32_t vertex_count) {
         glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)(at + off), (GLsizeiptr)bytes,
                         isaac_g(a->client_ptr));
 #endif
-        glVertexAttribPointer(i, a->size, a->type, a->normalized, a->stride,
-                              (const void *)(uintptr_t)(at + off));
+        point_attrib(i, a, at + off);
         off += bytes;
         g_vertex_bytes += bytes;
     }
+    return 0;
 }
 
 void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
@@ -440,14 +563,25 @@ void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
     int ok = 0;
     uint32_t maxi = max_index(indices_va, count, type, &ok);
     if (!ok) return;
-
-    stage_attributes(maxi + 1u);
+    sync_enables();                                  /* round 107: the enable set, as a difference */
 
     uint32_t ibytes = (uint32_t)count * type_size(type);
     uint32_t iat;
     const uint8_t *isrc = (const uint8_t *)isaac_g(indices_va);
-    if (quad_mode() && is_quad_block(isrc, count, type) && quad_ibo_ready(type, (uint32_t)count / 6u)) {
-        glDrawElements(mode, count, type, (const void *)0);   /* the static quad indices, from the start */
+    /* a quad block may be drawn from any quad of the static buffer, so its
+     * vertices may sit past the pointers' base (round 107, within the index
+     * type's reach); any other index block needs the pointers on its data */
+    int quad = quad_mode() && is_quad_block(isrc, count, type);
+    uint32_t v0 = stage_attributes(maxi + 1u, quad ? (type == GL_UNSIGNED_INT ? (1u << 26) : 65536u) : 0u);
+    int qready = quad && quad_ibo_ready(type, v0 / 4u + (uint32_t)count / 6u);
+    if (quad && !qready && v0) {
+        g_seg.valid = 0;                             /* the static buffer cannot reach that far: restage on the data */
+        v0 = stage_attributes(maxi + 1u, 0u);
+        qready = quad_ibo_ready(type, (uint32_t)count / 6u);
+    }
+    if (qready) {
+        /* the static quad indices, from quad v0/4 (from the start when v0 is 0) */
+        glDrawElements(mode, count, type, (const void *)(uintptr_t)((v0 / 4u) * 6u * type_size(type)));
         ++g_draws; ++g_quad_draws;
         return;
     }
@@ -471,9 +605,11 @@ void isaac_gl_draw_elements(GLenum mode, GLsizei count, GLenum type,
 void isaac_gl_draw_arrays(GLenum mode, GLint first, GLsizei count) {
     if (count <= 0) return;
     ensure_buffers();
-    /* Exact: no scan needed, the range is stated by the call. */
-    stage_attributes((uint32_t)first + (uint32_t)count);
-    glDrawArrays(mode, first, count);
+    sync_enables();                                  /* round 107 */
+    /* Exact: no scan needed, the range is stated by the call. The draw may
+     * start past the pointers' base (round 107): first + v0. */
+    uint32_t v0 = stage_attributes((uint32_t)first + (uint32_t)count, first >= 0 ? (1u << 30) : 0u);
+    glDrawArrays(mode, first + (GLint)v0, count);
     ++g_draws;
 }
 
@@ -481,10 +617,12 @@ void isaac_gl_draw_arrays_instanced(GLenum mode, GLint first, GLsizei count,
                                     GLsizei prims) {
     if (count <= 0 || prims <= 0) return;
     ensure_buffers();
-    stage_attributes((uint32_t)first + (uint32_t)count);
+    sync_enables();                                  /* round 107 */
+    uint32_t v0 = stage_attributes((uint32_t)first + (uint32_t)count, first >= 0 ? (1u << 30) : 0u);
 #ifdef __EMSCRIPTEN__
-    glDrawArraysInstanced(mode, first, count, prims);
+    glDrawArraysInstanced(mode, first + (GLint)v0, count, prims);
 #else
+    (void)v0;
     (void)mode;
 #endif
     ++g_draws;
@@ -501,4 +639,7 @@ void isaac_gl_report(void) {
               (unsigned long long)g_index_bytes,
               g_vring.orphans, g_iring.orphans, g_vring.cap >> 10, g_iring.cap >> 10, g_idx_reuse,
               g_quad_draws, g_quad_pat[0], g_quad_pat[1], g_quad_pat[2], g_quad_pat[3], g_quad_pat[4], g_quad_pat[5], g_quad_other);
+    isaac_log("[isaac][gl] attribute state (ISAAC_GL_ATTR=%d): %u buffer binds and %u pointers skipped, %u pointers and "
+              "%u enable/disable sent; %u draws on the still pointers, %u new bases",
+              attr_mode(), g_skip_bind, g_skip_ptr, g_sent_ptr, g_sent_enable, g_seg_draws, g_seg_moves);
 }

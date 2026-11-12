@@ -376,7 +376,7 @@ export function createModBrowser(opts) {
     const nameLines = wrapText(it.name, width, (t) => measure(F16, t), 2);
     nameLines.forEach((line, i) => text(F16, line, d.x0, y + i * 22));
     y += nameLines.length * 22 + 4;
-    const meta = [it.version ? `VERSION ${it.version}` : '', it.bytes ? mib(it.bytes) : ''].filter(Boolean).join('    ');
+    const meta = [it.version ? `VERSION ${it.version}` : '', it.sizeNote || (it.bytes ? mib(it.bytes) : '')].filter(Boolean).join('    ');
     text(F10, clip(F10, meta, width), d.x0, y, 'light');
     y += 16;
     // round 95: the mods it needs, which installing it brings along

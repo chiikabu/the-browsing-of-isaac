@@ -714,6 +714,65 @@ int isaac_web_yield_enabled(void) {
     }
     return v;
 }
+/* Round 107: the render gate's waits (a skipped frame's wait, a drawn
+ * in-between frame's pace) wake at their deadline. They were plain timers
+ * (emscripten_sleep), and a browser timer fires late: measured at CPU x4 in
+ * the heavy room, each wait asked 5.4 ms and slept 10.9 -- about 8% of the
+ * wall clock lost, the carry stuck at its 8 ms cap. Here the timer is set
+ * that much before the deadline and the rest is spent in MessageChannel hops
+ * (plain tasks: input, fetches and frames still run between them) until the
+ * deadline has passed, so a wait never ends early either.
+ *   mode 1 (the default): the timer to 10 ms before a deadline more than
+ *           12 ms away, hops for the rest (the profiling prototype);
+ *   mode 2: the timer to the deadline less the timers' running mean lateness
+ *           (learnt from each timer that fired), hops only for what is left
+ *           when it fires early -- a late timer costs no hops at all;
+ *   mode 3: as 2, less also twice the lateness's running mean deviation, so
+ *           most timers fire early and the hops make the rest exact.
+ * A hidden page keeps the plain timer (no hops in a background tab). Returns
+ * the hops taken. ISAAC_SKIPWAIT=0 restores the plain timer, =1..3 the modes. */
+EM_ASYNC_JS(int, isaac_wait_js, (double ms, int mode), {
+    var M = Module, t0 = performance.now(), end = t0 + ms, hops = 0;
+    if (mode === 0 || (typeof document !== "undefined" && document.hidden)) {
+        await new Promise(function (resolve) { setTimeout(resolve, ms); });
+        return 0;
+    }
+    if (!M.isaacWaitChannel) {
+        M.isaacWaitChannel = new MessageChannel();
+        M.isaacWaitChannel.port1.onmessage = function () {
+            var r = M.isaacWaitResolve; M.isaacWaitResolve = null; if (r) r();
+        };
+    }
+    if (!(M.isaacWaitLate >= 0)) { M.isaacWaitLate = 0; M.isaacWaitDev = 0; }
+    await new Promise(function (resolve) {
+        var hop = function () {
+            if (end - performance.now() <= 0.25) { resolve(); return; }
+            ++hops;
+            M.isaacWaitResolve = hop;
+            M.isaacWaitChannel.port2.postMessage(0);
+        };
+        var lead = mode === 1 ? (ms > 12 ? 10 : ms) : M.isaacWaitLate + (mode === 3 ? 2 * M.isaacWaitDev : 0);
+        var at = ms - lead;
+        if (at >= 1) {
+            var target = t0 + at;
+            setTimeout(function () {
+                var late = performance.now() - target;
+                if (mode >= 2) {
+                    if (late < 0) late = 0;
+                    M.isaacWaitDev = M.isaacWaitDev * 0.875 + Math.abs(late - M.isaacWaitLate) * 0.125;
+                    M.isaacWaitLate = M.isaacWaitLate * 0.875 + late * 0.125;
+                }
+                hop();
+            }, at);
+        } else {
+            /* the whole wait is shorter than the timers' lateness: hop it, and let
+             * the estimate decay so a device that got faster is measured again */
+            if (mode >= 2) { M.isaacWaitLate *= 0.9; M.isaacWaitDev *= 0.9; }
+            hop();
+        }
+    });
+    return hops;
+});
 #endif
 #ifndef ISAAC_WEB
 /* No page to hand the menu to (the node profile, the selftest): the engine's
@@ -866,7 +925,23 @@ int isaac_render_gate_decide(double now_ms, int have_game, uint32_t game_ticks) 
 }
 #ifdef ISAAC_WEB
 static double g_rg_asked, g_rg_slept, g_rg_pace_asked, g_rg_pace_slept;
-static uint32_t g_rg_sleeps, g_rg_paces, g_rg_presents_waited, g_rg_presents_yielded;
+static uint32_t g_rg_sleeps, g_rg_paces, g_rg_presents_waited, g_rg_presents_yielded, g_rg_hops;
+/* round 107: how the gate's waits sleep (isaac_wait_js; 0 = the plain timer) */
+static int gate_wait_mode(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("ISAAC_SKIPWAIT");
+        v = (e && *e >= '0' && *e <= '3') ? *e - '0' : 1;     /* mode 1: measured best at CPU x4 */
+        if (e && *e) isaac_log("[isaac][frame] ISAAC_SKIPWAIT=%d: the render gate's waits are %s", v,
+                               v ? "timers that end in hops at the deadline (isaac_wait_js)" : "plain timers");
+    }
+    return v;
+}
+static void gate_wait(double ms) {
+    int m = gate_wait_mode();
+    if (!m) emscripten_sleep((unsigned)(ms + 0.5));
+    else g_rg_hops += (uint32_t)isaac_wait_js(ms, m);
+}
 int isaac_render_gate(void) {
     static int mode = -1;
     if (mode < 0) {
@@ -891,12 +966,12 @@ int isaac_render_gate(void) {
         for (int i = 0; i < 3; ++i) n[i] = isaac_render_gate_intervals(i, &m[i], &x[i]);
         isaac_log("[isaac][frame] render gate ticks: drawn %u x %.2f ms (max %.1f), skipped %u x %.2f ms (max %.1f), "
                   "other %u x %.2f ms; waits asked %.1f ms, slept %.1f ms (%u); paces asked %.1f ms, slept %.1f ms (%u); "
-                  "presents waited %u, yielded %u; update %.1f render %.1f carry %.1f",
+                  "presents waited %u, yielded %u; update %.1f render %.1f carry %.1f; hops %u",
                   n[1], m[1], x[1], n[2], m[2], x[2], n[0], m[0], g_rg_asked, g_rg_slept, g_rg_sleeps,
                   g_rg_pace_asked, g_rg_pace_slept, g_rg_paces, g_rg_presents_waited, g_rg_presents_yielded,
-                  g_rg_update, g_rg_render, g_rg_carry);
+                  g_rg_update, g_rg_render, g_rg_carry, g_rg_hops);
         g_rg_asked = g_rg_slept = g_rg_pace_asked = g_rg_pace_slept = 0.0;
-        g_rg_sleeps = g_rg_paces = g_rg_presents_waited = g_rg_presents_yielded = 0u;
+        g_rg_sleeps = g_rg_paces = g_rg_presents_waited = g_rg_presents_yielded = g_rg_hops = 0u;
     }
     return skip;
 }
@@ -909,7 +984,7 @@ void isaac_render_skipped(CpuState *restrict cpu) {
      * like the present's own yield; the browser composites meanwhile) */
     if (g_rg_wait >= 1.0) {
         double t0 = emscripten_get_now();
-        emscripten_sleep((unsigned)(g_rg_wait + 0.5));
+        gate_wait(g_rg_wait);                    /* round 107: wakes at the deadline */
         g_rg_asked += g_rg_wait; g_rg_slept += emscripten_get_now() - t0; ++g_rg_sleeps;
     }
     isaac_render_gate_resumed(emscripten_get_now());
@@ -984,7 +1059,7 @@ void imp_gdi32__SwapBuffers(CpuState *restrict cpu) {
          * browser's frame may not bring the next tick early */
         double pace = isaac_render_gate_pace_ms(t);
         if (!waited && pace >= 1.0) {
-            emscripten_sleep((unsigned)(pace + 0.5));
+            gate_wait(pace);                     /* round 107: wakes at the deadline */
             double t1 = emscripten_get_now();
             g_rg_pace_asked += pace; g_rg_pace_slept += t1 - t; ++g_rg_paces;
             t = t1;

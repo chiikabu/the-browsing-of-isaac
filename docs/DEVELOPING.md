@@ -358,6 +358,11 @@ python scripts/recomp/assets/portable.py chunks .scratch/game-dist .scratch/port
 
 # Optional mod catalogue
 python scripts/recomp/assets/modpack.py <mods-dir> out/mods --base https://cdn.example.com/mods
+
+# The same, with one very large mod cut into packs the page fetches as the game reads them
+# (--boot-list: a JSON list of the files a boot reads, which go in the packs fetched at install)
+python scripts/recomp/assets/modpack.py <mods-dir> out/mods --packed <mod-folder> \
+    --requires requires.json --boot-list bootlist.json --keep <earlier-catalogue-dir>
 ```
 
 Chunks stay under jsDelivr's 20 MB file limit. They are lightly scrambled (not

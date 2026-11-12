@@ -8,7 +8,8 @@
 // module printed), isaacFrames (the last frames the host's SwapBuffers shim
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
-import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget } from './mods.mjs';
+import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget,
+         listMods, isPacked, createPackStore, createPackedMods, packedIndex } from './mods.mjs';
 import { createPads, createPadGate, rumble } from './gamepad.mjs';
 
 const logEl = document.getElementById('log');
@@ -126,13 +127,23 @@ if (typeof window.addEventListener === 'function') {
   window.addEventListener('gamepaddisconnected', (e) => { pads.wake(); log(`[pad] ${e.gamepad.id} disconnected`); });
 }
 let lazyReads = 0, lazyBytes = 0;
+// round 107: the packed mods of this boot (mods.mjs createPackedMods), set up by 'register packed mods'
+let packedMods = null, packStore = null;
 const lazyByFile = new Map();                              // src -> bytes (round 40: what the run start reads)
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
 const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
-window.isaacLazyStats = () => ({ reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
+window.isaacLazyStats = () => ({ packed: packedMods ? Object.assign({ store: packStore.stats }, packedMods.stats, packedMods.held()) : null, reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
   prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs: Math.round(readerWaitMs), reader: !!reader, trailKept, trailShipped, trailLen: trail.length, trailWritten,
   top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
+  // round 107: a packed mod's file is read in place (isaacLazyPread); an engine
+  // that asks for one whole can only have it if it is at hand
+  if (packedMods && packedMods.owns(src)) {
+    const b = packedMods.readNow(src);
+    if (b && b.length >= len) { m.HEAPU8.set(b.subarray(0, len), dst); lazyReads += 1; lazyBytes += len; return 1; }
+    log(`  lazy read FAILED for ${src}: a packed mod's file asked for whole (this engine has no ranged reads)`);
+    return 0;
+  }
   try {
     const bytes = fetchSync(`/instance/${src}`);
     if (bytes.length < len) { log(`  lazy read of ${src}: ${bytes.length} bytes served, ${len} registered`); return 0; }
@@ -760,6 +771,16 @@ window.isaacRunTrail = () => ({ recording: runRecording, recorded: runRecorded, 
 startReader();
 window.addEventListener('pagehide', () => { writeTrail(); saveRunTrail(); if (reader) reader.terminate(); });   // a short visit still leaves its trail
 cfg.isaacLazyPread = (src, dst, off, len) => {
+  // round 107: a packed mod's file -- the header blob or a pack at hand answers
+  // now, anything else suspends the read until its pack is here
+  if (packedMods && packedMods.owns(src)) {
+    const put = (b) => { m.HEAPU8.set(b, dst); return b.length; };
+    try {
+      const got = packedMods.pread(src, off, len);
+      if (got && typeof got.then === 'function') return got.then(put, (e) => failRead(src, off, len, e.message));
+      return put(got);
+    } catch (e) { return failRead(src, off, len, e.message); }
+  }
   try {
     if (!trailWritten && trail.length < TRAIL_MAX) trail.push([src, off, len]);
     // after the boot, until the first run has played a while: the run's windows
@@ -825,6 +846,7 @@ cfg.isaacWantsFrame = (n) => {
   // Worker drops the windows it fetched ahead and never handed over (up to the
   // 128 MB budget -- ~80 MB of the renderer's working set) and keeps 8 MB of
   // read-ahead for play; the trail's leftovers go with them
+  if (n === READER_CLEAR_FRAME && packedMods) packedMods.release();   // round 107: the eager lane has done its work
   if (n === READER_CLEAR_FRAME && reader && !runArmed) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
   // the same moment for the portable page's cached whole-read chunks (stream A: the
   // engine, the image, the eagerly seeded archives), spent once the boot is over
@@ -1269,6 +1291,58 @@ try {
       + (luaFiles ? `, ${luaFiles} lua into MEMFS` : ''));
     return r.files;
   });
+  // --- round 107: packed mods (a catalogue's large ones). Their files are registered
+  // by name and size and read in place: the engine asks isaacLazyRanged whether a
+  // lazy file is one, and its reads of it come to isaacLazyPread at its own
+  // offsets. Their Lua goes to MEMFS as any mod's does. The index and the eager
+  // lane come from the Cache API (fetched again if the browser cleared them).
+  await stageOk('register packed mods', async () => {
+    if (!modsOn || !modDb) return 0;
+    let list = [];
+    try { list = (await listMods(modDb)).filter((x) => x.enabled !== false && isPacked(x)); } catch (e) { log(`  packed mods: ${e.message}`); }
+    if (!list.length) return 0;
+    packStore = createPackStore({ log });
+    let waitTimer = null;
+    packedMods = createPackedMods({
+      store: packStore,
+      // a read the game is waiting on for more than a moment is shown (play.mjs)
+      onWait: (pending) => {
+        if (!hooks.onModPackWait) return;
+        if (pending && !waitTimer) waitTimer = setTimeout(() => { waitTimer = null; if (packedMods.stats.pending) hooks.onModPackWait(true); }, 700);
+        if (!pending) { if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; } hooks.onModPackWait(false); }
+      },
+    });
+    cfg.isaacLazyRanged = (src) => packedMods.owns(src);
+    let n = 0;
+    for (const mod of list) {
+      const t0 = performance.now();
+      try {
+        const index = await packedIndex(packStore, mod);
+        await packedMods.add(mod.id, mod.packed.base, index);
+        let files = 0, bytes = 0;
+        for (const [src, size] of packedMods.paths(mod.id)) {
+          const pp = cstr(src);
+          try { if (m._isaac_fs_seed_lazy(pp, size)) { files += 1; bytes += size; } } finally { m._free(pp); }
+        }
+        let lua = 0;
+        for (const [rel, body] of await packedMods.lua(mod.id)) {
+          const at = `/mods/${mod.id}/${rel}`;
+          m.FS.mkdirTree(at.slice(0, at.lastIndexOf('/')));
+          m.FS.writeFile(at, body);
+          lua += 1;
+        }
+        n += 1;
+        log(`  ${mod.name} (${mod.id}): ${files} file(s) registered, read in place (${(bytes / 1048576).toFixed(1)} MB), ${lua} lua into MEMFS, ${(performance.now() - t0).toFixed(0)} ms`);
+      } catch (e) {
+        packedMods.remove(mod.id);
+        log(`  ${mod.name} (${mod.id}): not loaded, ${e.message}`);
+      }
+    }
+    const st = packStore.stats;
+    log(`  packed mods: ${n} of ${list.length}; packs from the cache ${st.cacheHits}, fetched ${st.fetched} (${(st.fetchedBytes / 1048576).toFixed(1)} MB)`);
+    return n;
+  });
+
   // --- the host Lua's libc reads scripts through MEMFS: put them there
   await stageOk('lua scripts into MEMFS', async () => {
     // Round 102: and a mod that is part of the instance tree itself (a dist made

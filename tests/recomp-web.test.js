@@ -413,8 +413,11 @@ test('live input: blur and hidden release only physical owners', () => {
 
 test('round 53: draws in the standard quad pattern take one static index buffer, no upload', () => {
   const ca = readFileSync(join(root, 'scripts', 'recomp', 'host', 'src', 'host_gl_clientarrays.c'), 'utf8');
-  assert.ok(ca.includes('if (quad_mode() && is_quad_block(isrc, count, type) && quad_ibo_ready(type, (uint32_t)count / 6u)) {'), 'the quad path comes before the ring');
-  assert.ok(ca.includes('glDrawElements(mode, count, type, (const void *)0);   /* the static quad indices, from the start */'), 'drawn from offset 0 of the static buffer');
+  assert.ok(ca.includes('int quad = quad_mode() && is_quad_block(isrc, count, type);')
+    && ca.includes('int qready = quad && quad_ibo_ready(type, v0 / 4u + (uint32_t)count / 6u);'), 'a quad block takes the static buffer when it reaches far enough');
+  assert.ok(ca.indexOf('if (qready) {') > 0 && ca.indexOf('if (qready) {') < ca.indexOf('iat = ring_put(GL_ELEMENT_ARRAY_BUFFER'), 'the quad path comes before the ring');
+  assert.ok(ca.includes('glDrawElements(mode, count, type, (const void *)(uintptr_t)((v0 / 4u) * 6u * type_size(type)));'),
+    'drawn from quad v0/4 of the static buffer (round 107: 0 unless the pointers stayed still)');
   assert.ok(ca.includes('if (g_bound_ibo != g_iring.buf) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_iring.buf); g_bound_ibo = g_iring.buf; }'), 'a reused ring block rebinds the ring after a quad draw');
   assert.ok(ca.includes('getenv("ISAAC_GL_QUAD_IBO")'), 'ISAAC_GL_QUAD_IBO=0 is the A/B');
   assert.ok(ca.includes('%u draws on the static quad index buffer (pattern %u %u %u %u %u %u), %u index blocks not the pattern'), 'the census');

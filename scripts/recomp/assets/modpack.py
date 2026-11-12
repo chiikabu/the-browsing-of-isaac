@@ -26,13 +26,25 @@ names a file of folder names (one a line) to pack instead of the whole folder.
 --keep <dir> carries every entry (and its parts) of an earlier catalogue that this
 build does not make itself, so a catalogue can grow without its source mods.
 
+Round 107: --packed <folder> ships a mod too big to seed (Fiend Folio) as
+content-addressed packs and an index under pk/ (see pack_mod below): the page
+installs its index and eager lane and reads the rest in place as the game asks.
+Its entry has "parts": 0 and "packed": {base, index, indexBytes, eagerBytes,
+storedBytes}; "bytes" is the stored total, so a page from before round 107 lists it
+as too big and leaves it alone. The output is checked file for file before the
+catalogue is written. Name a folder <dir>_<workshop id> (for example
+repentogon_3127536138) to give a mod without a metadata <id> its Workshop id.
+
 usage:
   modpack.py <mods-dir> <out-dir> [--max-mb 96] [--part-mb 19] [--base URL]
              [--requires FILE] [--select FILE] [--keep DIR]
+             [--packed FOLDER ...] [--boot-list FILE] [--pack-mib 4]
 """
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
 import io
 import json
 import os
@@ -40,6 +52,7 @@ import re
 import shutil
 import sys
 import zipfile
+import zlib
 
 MIB = 1 << 20
 SKIP_NAMES = {"disable.it", ".ds_store", "thumbs.db", "desktop.ini"}
@@ -156,6 +169,234 @@ def resolve_requires(entries: list[dict], needs: dict[str, list[str]]) -> tuple[
             return kept, dropped
 
 
+# ---- packed mods (round 107) -------------------------------------------------
+# A mod too big for the page's seed budget (Fiend Folio: 20,814 files, 667 MB) is
+# not zipped: --packed writes it as content-addressed packs and an index under
+# <out>/pk/, which the page installs a lane at a time and the engine reads in place
+# (mods.mjs createPackedMods, host_shims_fs.c ranged entries).
+#
+#   pk/<sha256[:20]>.idx   gzip'd JSON index (mtime 0)
+#   pk/<sha256[:20]>.bin   b"IMPK" 01 00 00 00, then whole stored files back to back
+#
+# A file is stored raw (codec 0) or as raw deflate level 9 (codec 1) when that saves
+# 5 % or more. Identical files are stored once. A file never straddles packs; one
+# whose stored bytes pass PACK_MAX is cut into packs of its own. Lanes say when the
+# page fetches a pack:
+#
+#   eager  at install: every .lua (the host Lua reads MEMFS before main), metadata.xml,
+#          content/ and content-repentogon/ but their .stb, the files --boot-list names
+#          (a measured boot), and one blob of every WAV's header -- the lazy samples'
+#          header pass reads each WAV only up to its `data` chunk header (round 98)
+#   wav    WAV bodies, apart, so a sound played drags no graphics in
+#   lazy   the rest, in path order, so a folder's files share packs
+#
+# Packs are cut where content says (a file whose path hashes to 0 mod 8, once a pack
+# holds half the target; never past twice the target), so an update re-uploads the
+# packs of the files it changed and not every pack after them. The same folder gives
+# byte-identical packs and index. A mod with content-repentogon/ has those files listed
+# again as content/ (aliases), as REPENTOGON reads them and dev_dist.py does.
+#
+# Index: {"v":1, id, name, version, workshop, directory, bytes, files, target,
+#         packs: [[name, stored, lane]], f: [[path, size, pack, offset, stored, codec,
+#         sha256[:16], head]], alias: [[path, f index]], heads: [pack, offset, length] | null}
+# (a split file has lists for pack and stored, and its parts start at offset 8)
+PACK_MAGIC = b"IMPK\x01\x00\x00\x00"
+PACK_MAX = 19 * MIB              # 19,922,944 < 20,000,000: jsDelivr refuses a GitHub file over 20 MB
+STORED_LIMIT = 20_000_000
+PACK_SKIP_TOP = {"basementrenovator", ".git", ".github"}     # editor data a game never reads
+
+
+def wav_header_end(d: bytes) -> int:
+    """Bytes of a WAV up to and including its `data` chunk header, as the game's parser
+    (0x00a9f630) walks the chunks; 0 for anything that is not RIFF/WAVE."""
+    if len(d) < 12 or d[:4] != b"RIFF" or d[8:12] != b"WAVE":
+        return 0
+    p = 12
+    while p + 8 <= len(d):
+        cid, size = d[p:p + 4], int.from_bytes(d[p + 4:p + 8], "little")
+        if cid == b"data":
+            return p + 8
+        p += 8 + size + (size & 1)
+    return 0
+
+
+def _deflate_raw(b: bytes) -> bytes:
+    c = zlib.compressobj(9, zlib.DEFLATED, -15, 9)
+    return c.compress(b) + c.flush()
+
+
+def _inflate_raw(b: bytes) -> bytes:
+    d = zlib.decompressobj(-15)
+    return d.decompress(b) + d.flush()
+
+
+def _packed_files(folder: str) -> list[tuple[str, str]]:
+    folder = long_path(folder)
+    out = []
+    for dp, dn, fn in os.walk(folder):
+        rel = os.path.relpath(dp, folder).replace("\\", "/")
+        if rel == ".":
+            dn[:] = [d for d in dn if d.lower() not in PACK_SKIP_TOP]
+            rel = ""
+        dn[:] = sorted(d for d in dn if not d.startswith("."))
+        for f in sorted(fn):
+            if f.lower() in SKIP_NAMES:
+                continue
+            out.append(((rel + "/" if rel else "") + f, os.path.join(dp, f)))
+    return out
+
+
+def _lane(rel: str, boot: set) -> str:
+    low = rel.lower()
+    if low.endswith(".lua") or low == "metadata.xml" or low in boot:
+        return "eager"
+    if (low.startswith("content/") or low.startswith("content-repentogon/")) and not low.endswith(".stb"):
+        return "eager"
+    return "wav" if low.endswith(".wav") else "lazy"
+
+
+def pack_mod(folder: str, pk_dir: str, mid: str, meta: dict, boot=(), target_mib: float = 4.0) -> dict:
+    """Write one mod's packs and index into pk_dir; returns the catalogue's `packed`
+    fields plus the index's name and the names of every file written."""
+    boot = {b.lower() for b in boot}
+    target = int(target_mib * MIB)
+    files = _packed_files(folder)
+    bodies, entries, heads = {}, [], bytearray()
+    for rel, full in files:
+        with open(full, "rb") as f:
+            b = f.read()
+        h = hashlib.sha256(b).hexdigest()
+        hl = wav_header_end(b) if rel.lower().endswith(".wav") else 0
+        if hl:
+            heads += b[:hl]
+        lane = _lane(rel, boot)
+        entries.append({"rel": rel, "size": len(b), "h": h, "head": hl})
+        body = bodies.get(h)
+        if body is None:
+            z = _deflate_raw(b) if len(b) >= 64 else b
+            codec = 1 if len(z) <= 0.95 * len(b) else 0
+            bodies[h] = {"stored": z if codec else b, "codec": codec, "lane": lane, "first": rel}
+        elif lane == "eager":
+            body["lane"] = "eager"                  # a body any eager path needs is eager
+    packs, place = [], {}
+
+    def new_pack(lane):
+        packs.append([bytearray(PACK_MAGIC), lane])
+        return len(packs) - 1
+
+    room = PACK_MAX - len(PACK_MAGIC)
+    for lane in ("eager", "wav", "lazy"):
+        cur = None
+        for h, body in sorted(((h, b) for h, b in bodies.items() if b["lane"] == lane), key=lambda kv: (kv[1]["first"].lower(), kv[1]["first"])):
+            s = body["stored"]
+            if len(s) > room:                       # a file of its own packs
+                parts = []
+                for k in range(0, len(s), room):
+                    i = new_pack(lane)
+                    parts.append((i, len(PACK_MAGIC), len(s[k:k + room])))
+                    packs[i][0] += s[k:k + room]
+                place[h] = parts
+                cur = None
+                continue
+            if cur is None or (len(packs[cur][0]) + len(s) > 2 * target and len(packs[cur][0]) > len(PACK_MAGIC)):
+                cur = new_pack(lane)
+            place[h] = [(cur, len(packs[cur][0]), len(s))]
+            packs[cur][0] += s
+            if len(packs[cur][0]) >= target // 2 and int(hashlib.sha1(body["first"].lower().encode("utf-8")).hexdigest()[:8], 16) % 8 == 0:
+                cur = None
+    heads_at = None
+    if heads:
+        i = new_pack("eager")
+        heads_at = [i, len(packs[i][0]), len(heads)]
+        packs[i][0] += heads
+    names, written = [], []
+    for buf, lane in packs:
+        if len(buf) >= STORED_LIMIT:
+            raise SystemExit("a pack of %s is %d bytes, not under %d" % (mid, len(buf), STORED_LIMIT))
+        n = hashlib.sha256(buf).hexdigest()[:20] + ".bin"
+        with open(os.path.join(pk_dir, n), "wb") as f:
+            f.write(buf)
+        names.append([n, len(buf), lane])
+        written.append(n)
+    rows = []
+    for e in entries:
+        pl, body = place[e["h"]], bodies[e["h"]]
+        if len(pl) == 1:
+            rows.append([e["rel"], e["size"], pl[0][0], pl[0][1], pl[0][2], body["codec"], e["h"][:16], e["head"]])
+        else:
+            rows.append([e["rel"], e["size"], [x[0] for x in pl], len(PACK_MAGIC), [x[2] for x in pl], body["codec"], e["h"][:16], e["head"]])
+    have = {e["rel"].lower() for e in entries}
+    alias = []
+    for i, e in enumerate(entries):
+        if e["rel"].lower().startswith("content-repentogon/"):
+            as_content = "content/" + e["rel"][len("content-repentogon/"):]
+            if as_content.lower() not in have:
+                alias.append([as_content, i])
+    index = {"v": 1, "id": mid, "name": meta.get("name"), "version": meta.get("version"),
+             "workshop": meta.get("workshop"), "directory": meta.get("directory"),
+             "bytes": sum(e["size"] for e in entries), "files": len(entries), "target": target,
+             "packs": names, "f": rows, "alias": alias, "heads": heads_at}
+    gz = gzip.compress(json.dumps(index, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), 9, mtime=0)
+    iname = hashlib.sha256(gz).hexdigest()[:20] + ".idx"
+    with open(os.path.join(pk_dir, iname), "wb") as f:
+        f.write(gz)
+    written.append(iname)
+    eager = sum(n[1] for n in names if n[2] == "eager")
+    return {"index": iname, "indexBytes": len(gz), "eagerBytes": eager, "storedBytes": sum(n[1] for n in names),
+            "packs": len(names), "unpacked": index["bytes"], "files": len(entries), "aliases": len(alias),
+            "uniqueBodies": len(bodies), "largest": max(n[1] for n in names), "written": written}
+
+
+def verify_packed(folder: str, pk_dir: str, iname: str) -> tuple[int, int, int]:
+    """Every file of the folder out of the packs, byte for byte, against the source;
+    every pack's and the index's name against its bytes. (files checked, mismatches,
+    largest stored file)"""
+    with open(os.path.join(pk_dir, iname), "rb") as f:
+        gz = f.read()
+    bad = 0
+    if hashlib.sha256(gz).hexdigest()[:20] + ".idx" != iname:
+        bad += 1
+    index = json.loads(gzip.decompress(gz))
+    packs, largest = [], len(gz)
+    for n, size, _lane in index["packs"]:
+        with open(os.path.join(pk_dir, n), "rb") as f:
+            b = f.read()
+        if len(b) != size or hashlib.sha256(b).hexdigest()[:20] + ".bin" != n or b[:8] != PACK_MAGIC:
+            bad += 1
+        largest = max(largest, len(b))
+        packs.append(b)
+    if largest >= STORED_LIMIT:
+        bad += 1
+
+    def body_of(row):
+        p, off, ln, codec = row[2], row[3], row[4], row[5]
+        if isinstance(p, list):
+            s = b"".join(packs[pi][len(PACK_MAGIC):len(PACK_MAGIC) + li] for pi, li in zip(p, ln))
+        else:
+            s = packs[p][off:off + ln]
+        return _inflate_raw(s) if codec == 1 else s
+
+    src = dict(_packed_files(folder))
+    if set(src) != {r[0] for r in index["f"]}:
+        bad += 1
+    hp = index["heads"]
+    blob = packs[hp[0]][hp[1]:hp[1] + hp[2]] if hp else b""
+    at = 0
+    for row in index["f"]:
+        with open(src[row[0]], "rb") as f:
+            want = f.read()
+        if body_of(row) != want or len(want) != row[1] or hashlib.sha256(want).hexdigest()[:16] != row[6]:
+            bad += 1
+        if row[7]:
+            if blob[at:at + row[7]] != want[:row[7]]:
+                bad += 1
+            at += row[7]
+    for path, i in index["alias"]:
+        if not path.lower().startswith("content/") or not index["f"][i][0].lower().startswith("content-repentogon/"):
+            bad += 1
+    return len(index["f"]), bad, largest
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mods")
@@ -167,7 +408,23 @@ def main(argv=None) -> int:
     ap.add_argument("--requires", help="JSON {workshop id: [required workshop ids]} (round 95)")
     ap.add_argument("--select", help="a file of folder names, one a line, to pack instead of every folder")
     ap.add_argument("--keep", help="an earlier catalogue dir whose entries this build does not make are carried over")
+    ap.add_argument("--packed", action="append", default=[],
+                    help="round 107: a folder (by name) to ship as packs + index under pk/ instead of a zip; "
+                         "no size cap applies. Repeatable")
+    ap.add_argument("--boot-list", help="JSON list (or lines) of a packed mod's files a measured boot opens: "
+                                        "they go in its eager lane (paths relative to the mod, or mods/<dir>/...)")
+    ap.add_argument("--pack-mib", type=float, default=4.0, help="a packed mod's pack target, MiB (default 4)")
     args = ap.parse_args(argv)
+    packed_names = set(args.packed)
+    boot = []
+    if args.boot_list:
+        with io.open(args.boot_list, encoding="utf-8") as f:
+            text = f.read()
+        try:
+            boot = json.loads(text)
+        except ValueError:
+            boot = [line.strip() for line in text.splitlines() if line.strip()]
+        boot = [re.sub(r"^mods/[^/]+/", "", b) for b in boot]
     needs = {}
     if args.requires:
         with io.open(args.requires, encoding="utf-8") as f:
@@ -185,6 +442,11 @@ def main(argv=None) -> int:
     os.makedirs(os.path.join(args.out, "m"), exist_ok=True)
     for f in os.listdir(os.path.join(args.out, "m")):
         os.remove(os.path.join(args.out, "m", f))
+    pk_dir = os.path.join(args.out, "pk")
+    if os.path.isdir(pk_dir):
+        for f in os.listdir(pk_dir):
+            os.remove(os.path.join(pk_dir, f))
+    packed_src = {}
 
     entries, seen, left_out, total, blobs = [], {}, [], 0, {}
     for name in sorted(os.listdir(args.mods)):
@@ -198,6 +460,18 @@ def main(argv=None) -> int:
         mid = mod_id(base) or mod_id(name)
         if not mid or mid in seen:
             mid = mod_id("%s-%d" % (mid or "mod", len(entries)))
+        if name in packed_names:
+            # round 107: packed when it is written out (below), once its requirements stand
+            seen[mid] = True
+            packed_src[mid] = (folder, meta)
+            entry = {"id": mid, "name": meta["name"] or base, "description": meta["description"] or "",
+                     "version": meta["version"] or "", "bytes": 0, "unpacked": 0, "files": 0, "parts": 0,
+                     "packed": {"base": "pk"}}
+            ws = workshop_id(name, os.path.join(folder, "metadata.xml"))
+            if ws:
+                entry["workshop"] = ws
+            entries.append(entry)
+            continue
         blob, files, skipped, unpacked = zip_mod_sized(folder)
         if cap and len(blob) > cap:
             left_out.append((meta["name"] or name, "%s (over the %d MB the page can seed)" % (human(len(blob)), args.max_mb)))
@@ -234,8 +508,38 @@ def main(argv=None) -> int:
 
     entries, stranded = resolve_requires(entries, needs)
     left_out.extend(stranded)
+    pk_biggest = 0
     for e in sorted(entries, key=lambda e: e["id"]):
         mid, n = e["id"], e["parts"]
+        if mid in packed_src:
+            folder, meta = packed_src[mid]
+            os.makedirs(pk_dir, exist_ok=True)
+            info = pack_mod(folder, pk_dir, mid, dict(meta, workshop=e.get("workshop")), boot=boot, target_mib=args.pack_mib)
+            checked, bad, largest = verify_packed(folder, pk_dir, info["index"])
+            if bad:
+                print("  %s: the round trip out of the packs FAILED (%d mismatch(es))" % (e["name"], bad))
+                return 1
+            e.update({"bytes": info["storedBytes"], "unpacked": info["unpacked"], "files": info["files"],
+                      "packed": {"base": "pk", "index": info["index"], "indexBytes": info["indexBytes"],
+                                 "eagerBytes": info["eagerBytes"], "storedBytes": info["storedBytes"]}})
+            pk_biggest = max(pk_biggest, largest)
+            total += e["bytes"]
+            print("  %-46s %-10s packed: %d pack(s), %s now, largest %d bytes, %d file(s) (%d aliases) round-tripped%s"
+                  % (e["name"][:46], human(e["bytes"]), info["packs"], human(info["eagerBytes"] + info["indexBytes"]),
+                     largest, checked, info["aliases"], " requires %s" % ",".join(e["requires"]) if e.get("requires") else ""))
+            continue
+        if e.get("packed") and args.keep:
+            # an earlier catalogue's packed entry: its index and every pack it names
+            os.makedirs(pk_dir, exist_ok=True)
+            src_pk = os.path.join(args.keep, "pk")
+            with open(os.path.join(src_pk, e["packed"]["index"]), "rb") as f:
+                ix = json.loads(gzip.decompress(f.read()))
+            for fname in [e["packed"]["index"]] + [p[0] for p in ix["packs"]]:
+                shutil.copyfile(os.path.join(src_pk, fname), os.path.join(pk_dir, fname))
+                pk_biggest = max(pk_biggest, os.path.getsize(os.path.join(pk_dir, fname)))
+            total += e["bytes"]
+            print("  %-46s %-10s packed, kept from %s" % (e["name"][:46], human(e["bytes"]), args.keep))
+            continue
         if mid in blobs:
             blob, skipped = blobs[mid]
             for i in range(n):
@@ -264,6 +568,10 @@ def main(argv=None) -> int:
     if biggest > 20 * MIB:
         print("  WARNING: a part is over 20 MB and jsDelivr will refuse it")
         return 1
+    if pk_biggest:
+        print("packed: largest stored file %d bytes (limit %d)" % (pk_biggest, STORED_LIMIT))
+        if pk_biggest >= STORED_LIMIT:
+            return 1
     for name, why in left_out:
         print("  left out: %-40s %s" % (name[:40], why))
     return 0

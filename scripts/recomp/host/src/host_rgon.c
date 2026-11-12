@@ -214,9 +214,16 @@ static CpuState *g_hook_cpu;
 static int l_xmm(lua_State *L) {
     const lua_Integer n = luaL_checkinteger(L, 1);
     if (!g_hook_cpu) return luaL_error(L, "rgon: xmm outside a hook's before handler");
+#ifdef ISAAC_HAVE_LIFTER_STATE
     if (n < 0 || n > 7) return luaL_error(L, "rgon: no xmm%d", (int)n);
     uint8_t *const zmm[8] = { g_hook_cpu->ZMM0, g_hook_cpu->ZMM1, g_hook_cpu->ZMM2, g_hook_cpu->ZMM3,
                               g_hook_cpu->ZMM4, g_hook_cpu->ZMM5, g_hook_cpu->ZMM6, g_hook_cpu->ZMM7 };
+#else
+    /* the standalone host build (build_selftest.py) has isaac_host.h's fallback
+     * CpuState, which carries ZMM0..3 only */
+    if (n < 0 || n > 3) return luaL_error(L, "rgon: no xmm%d", (int)n);
+    uint8_t *const zmm[4] = { g_hook_cpu->ZMM0, g_hook_cpu->ZMM1, g_hook_cpu->ZMM2, g_hook_cpu->ZMM3 };
+#endif
     float f;
     if (lua_gettop(L) >= 2) { f = (float)luaL_checknumber(L, 2); memcpy(zmm[n], &f, 4); return 0; }
     memcpy(&f, zmm[n], 4);

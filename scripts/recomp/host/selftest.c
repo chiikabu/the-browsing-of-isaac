@@ -774,6 +774,14 @@ static int selftest_preader(const char *src, uint8_t *dst, uint32_t off, uint32_
     return (int)len;
 }
 
+/* Round 107: a reader that always fails, and the page's "is this file ranged" */
+static int selftest_preader_fail(const char *src, uint8_t *dst, uint32_t off, uint32_t len) {
+    (void)src; (void)dst; (void)off; (void)len;
+    ++g_pread_calls;
+    return -1;
+}
+static int selftest_ranged_test(const char *src) { return strstr(src, "mods/packed/") != NULL; }
+
 /* Read through the guest API, including EOF. A writable close also lets the
  * persist hook observe which allocation backs the file, without exposing
  * private FS entries to the tests. These fixtures fit in the supplied scratch. */
@@ -4271,6 +4279,171 @@ int main(int argc, char **argv) {
                 }
                 isaac_fs_set_lazy_preader(NULL);
                 isaac_fs_set_window_min(0u);
+            }
+
+            /* Round 107: ranged lazy files (a packed mod's). Read in place
+             * through the positional reader at the guest's own offsets, never
+             * loaded whole; written, they become ordinary files; host code
+             * peeking at one gets nothing; with no positional reader they load
+             * whole as before. */
+            {
+                extern void isaac_fs_set_lazy_preader(int (*fn)(const char *, uint8_t *, uint32_t, uint32_t));
+                extern int isaac_fs_seed_lazy_ranged(const char *path, uint32_t len);
+                extern void isaac_fs_set_ranged_test(int (*fn)(const char *));
+                extern void isaac_fs_ranged_stats(uint32_t *, uint32_t *, uint64_t *, uint32_t *, uint32_t *);
+                extern const uint8_t *isaac_fs_peek(const char *path, uint32_t *len);
+                #define RG_CALL(fn, a0, a1, a2, a3) do { memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000; \
+                    isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, (a0)); isaac_w32(cpu.ESP + 8, (a1)); \
+                    isaac_w32(cpu.ESP + 12, (a2)); isaac_w32(cpu.ESP + 16, (a3)); fn(&cpu); } while (0)
+                #define RG_PATH(s) do { const char *s_ = (s); for (unsigned i_ = 0; ; ++i_) { *(uint8_t *)isaac_g(pbuf + i_) = (uint8_t)s_[i_]; if (!s_[i_]) break; } } while (0)
+                #define RG_MODE(s) do { const char *s_ = (s); for (unsigned i_ = 0; ; ++i_) { *(uint8_t *)isaac_g(mbuf + i_) = (uint8_t)s_[i_]; if (!s_[i_]) break; } } while (0)
+                uint32_t big = ISAAC_HEAP_VA + 0x100000u;
+                uint32_t r_open0 = 0, r_reads0 = 0, r_fail0 = 0, r_copied0 = 0, r_open1 = 0, r_reads1 = 0, r_fail1 = 0, r_copied1 = 0;
+                isaac_fs_ranged_stats(&r_open0, &r_reads0, NULL, &r_fail0, &r_copied0);
+                isaac_fs_set_lazy_preader(selftest_preader);
+                uint32_t loads0 = isaac_fs_lazy_loads();
+#ifdef __EMSCRIPTEN__
+                size_t live0 = mallinfo().uordblks;
+#endif
+                check(isaac_fs_seed_lazy_ranged("data/Rng.bin", WIN_FILE_SIZE) == 1, "ranged: a 3 MB ranged entry registers by size");
+                unsigned p0 = g_pread_calls;
+                RG_PATH("data/Rng.bin"); RG_MODE("rb");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                uint32_t rh = cpu.EAX;
+                check(rh != 0 && g_pread_calls == p0, "ranged: opening it reads nothing");
+                RG_CALL(imp_api_ms_win_crt_stdio__fseek, rh, 12u, 0u, 0);
+                memset(isaac_g(big), 0xa5, 64);
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                int ok16 = cpu.EAX == 16u;
+                for (uint32_t k = 0; k < 16u; ++k) ok16 &= *(uint8_t *)isaac_g(big + k) == win_byte(12u + k);
+                check(ok16 && g_pread_calls == p0 + 1u, "ranged: a 16-byte read at 12 is one positional read of exactly those bytes");
+                RG_CALL(imp_api_ms_win_crt_stdio__fgetc, rh, 0, 0, 0);
+                check(cpu.EAX == win_byte(28u) && g_pread_calls == p0 + 2u, "ranged: fgetc reads the next byte in place");
+                RG_CALL(imp_api_ms_win_crt_stdio__fseek, rh, WIN_FILE_SIZE - 4u, 0u, 0);
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                check(cpu.EAX == 4u && *(uint8_t *)isaac_g(big + 3) == win_byte(WIN_FILE_SIZE - 1u), "ranged: a read past the end stops at the end");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+#ifdef __EMSCRIPTEN__
+                check(mallinfo().uordblks < live0 + 65536u, "ranged: nothing of the 3 MB file stays in the host heap");
+#endif
+                check(isaac_fs_lazy_loads() == loads0, "ranged: the file is never loaded whole");
+                check(isaac_fs_peek("data/Rng.bin", NULL) == NULL, "ranged: isaac_fs_peek gets nothing for it");
+                /* the page's say-so (Module.isaacLazyRanged), here the C stand-in */
+                isaac_fs_set_ranged_test(selftest_ranged_test);
+                check(isaac_fs_seed_lazy("mods/packed/snd.wav", 1000u) == 1, "ranged: a plain lazy entry under mods/packed registers");
+                p0 = g_pread_calls;
+                RG_PATH("mods/packed/snd.wav");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 8u, rh);
+                check(cpu.EAX == 8u && g_pread_calls == p0 + 1u && *(uint8_t *)isaac_g(big + 7) == win_byte(7u) && isaac_fs_lazy_loads() == loads0,
+                      "ranged: an entry the page names ranged at first open is read in place");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                isaac_fs_set_ranged_test(NULL);
+                /* written: "ab" copies it in first, then appends */
+                check(isaac_fs_seed_lazy_ranged("data/RngA.bin", 5000u) == 1, "ranged: a 5000-byte ranged entry registers");
+                RG_PATH("data/RngA.bin"); RG_MODE("ab");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                memcpy(isaac_g(big), "XY", 2);
+                RG_CALL(imp_api_ms_win_crt_stdio__fwrite, big, 1u, 2u, rh);
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                RG_MODE("rb");
+                isaac_fs_set_lazy_preader(NULL);           /* from here its bytes must be its own */
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fseek, rh, 4996u, 0u, 0);
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                check(rh && cpu.EAX == 6u && *(uint8_t *)isaac_g(big) == win_byte(4996u) && *(uint8_t *)isaac_g(big + 3) == win_byte(4999u)
+                      && memcmp(isaac_g(big + 4), "XY", 2) == 0, "ranged: appended to, it was copied in first and kept its bytes");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                isaac_fs_set_lazy_preader(selftest_preader);
+                /* opened for appending and closed unwritten: copied in all the same */
+                check(isaac_fs_seed_lazy_ranged("data/RngC.bin", 300u) == 1, "ranged: a 300-byte ranged entry registers");
+                RG_PATH("data/RngC.bin"); RG_MODE("ab");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                isaac_fs_set_lazy_preader(NULL);
+                RG_MODE("rb");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fseek, rh, 290u, 0u, 0);
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                check(rh && cpu.EAX == 10u && *(uint8_t *)isaac_g(big + 9) == win_byte(299u), "ranged: fopen for appending copies it in before any write");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                /* re-seeded with bytes of its own, it is an ordinary file */
+                check(isaac_fs_seed_lazy_ranged("data/RngE.bin", 5000u) == 1, "ranged: one more ranged entry registers");
+                RG_PATH("data/RngE.bin");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);       /* opened once as ranged ... */
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                check(isaac_fs_seed("data/RngE.bin", (const uint8_t *)"EAGER", 5u) == 1, "ranged: ... then seeded with five bytes");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                check(cpu.EAX == 5u && memcmp(isaac_g(big), "EAGER", 5) == 0, "ranged: a re-seeded ranged entry reads its new bytes");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                isaac_fs_set_lazy_preader(selftest_preader);
+                /* "wb" starts it empty and reads nothing */
+                check(isaac_fs_seed_lazy_ranged("data/RngW.bin", 5000u) == 1, "ranged: another ranged entry registers");
+                p0 = g_pread_calls;
+                RG_PATH("data/RngW.bin"); RG_MODE("wb");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                memcpy(isaac_g(big), "Z", 1);
+                RG_CALL(imp_api_ms_win_crt_stdio__fwrite, big, 1u, 1u, rh);
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                RG_MODE("rb");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                check(cpu.EAX == 1u && *(uint8_t *)isaac_g(big) == 'Z' && g_pread_calls == p0, "ranged: opened with \"wb\" it starts empty and reads nothing");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                /* a failing reader: no bytes, counted, nothing invented */
+                isaac_fs_set_lazy_preader(selftest_preader_fail);
+                check(isaac_fs_seed_lazy_ranged("data/RngF.bin", 5000u) == 1, "ranged: a ranged entry whose reader fails registers");
+                RG_PATH("data/RngF.bin");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 16u, rh);
+                isaac_fs_ranged_stats(&r_open1, &r_reads1, NULL, &r_fail1, &r_copied1);
+                check(rh && cpu.EAX == 0u && r_fail1 == r_fail0 + 1u, "ranged: a failed positional read returns nothing and is counted");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                check(r_open1 >= r_open0 + 4u && r_reads1 > r_reads0 && r_copied1 == r_copied0 + 2u, "ranged: the census counts opens, reads and the two copy-ins");
+                /* no positional reader at all: loaded whole through the lazy reader, as before */
+                isaac_fs_set_lazy_preader(NULL);
+                isaac_fs_set_lazy_reader(selftest_lazy_reader);
+                check(isaac_fs_seed_lazy_ranged("data/RngL.bin", 6u) == 1, "ranged: a ranged entry registers where no positional reader exists");
+                RG_PATH("data/RngL.bin");
+                RG_CALL(imp_api_ms_win_crt_stdio__fopen, pbuf, mbuf, 0, 0);
+                rh = cpu.EAX;
+                RG_CALL(imp_api_ms_win_crt_stdio__fread, big, 1u, 6u, rh);
+                check(cpu.EAX == 6u && memcmp(isaac_g(big), "LAZY!!", 6) == 0 && isaac_fs_lazy_loads() == loads0 + 1u,
+                      "ranged: without a positional reader it is loaded whole as before");
+                RG_CALL(imp_api_ms_win_crt_stdio__fclose, rh, 0, 0, 0);
+                isaac_fs_set_lazy_reader(NULL);
+                /* a directory wider than the old 2,048-entry listing cap is listed whole */
+                {
+                    char wp[64];
+                    for (unsigned k = 0; k < 3000u; ++k) { snprintf(wp, sizeof wp, "data/wide/f%04u.png", k); isaac_fs_seed(wp, NULL, 0); }
+                    RG_PATH("data/wide/*");
+                    uint32_t fd = big + 0x1000u;
+                    RG_CALL(imp_kernel32__FindFirstFileA, pbuf, fd, 0, 0);
+                    uint32_t fh = cpu.EAX, seen = fh != 0xFFFFFFFFu ? 1u : 0u;
+                    while (fh != 0xFFFFFFFFu) {
+                        RG_CALL(imp_kernel32__FindNextFileA, fh, fd, 0, 0);
+                        if (!cpu.EAX) break;
+                        ++seen;
+                    }
+                    RG_CALL(imp_kernel32__FindClose, fh, 0, 0, 0);
+                    check(seen == 3000u, "FindFirstFileA lists all 3,000 files of a wide directory (the cap was 2,048)");
+                }
+                isaac_fs_set_lazy_preader(NULL);
+                RG_MODE("rb");
+                #undef RG_CALL
+                #undef RG_PATH
+                #undef RG_MODE
             }
             #undef FS_ATTR
         }

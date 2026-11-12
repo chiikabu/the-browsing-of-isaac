@@ -451,6 +451,258 @@ export async function fetchMod(base, entry, onProgress) {
   return out;
 }
 
+// ---- packed mods (round 107) ---------------------------------------------------
+// A mod too big to be seeded (Fiend Folio: 20,814 files, 667 MB) is shipped as
+// content-addressed packs and an index (modpack.py --packed): `pk/<hash>.idx`, a
+// gzip'd JSON index, and `pk/<hash>.bin`, packs of whole files (raw or raw
+// deflate) behind an "IMPK" magic, every one a name that is the start of its own
+// sha256. A catalogue entry says so with `packed: {base, index, indexBytes,
+// eagerBytes, storedBytes}` and `parts: 0`.
+//
+// Installing one downloads the index and the eager lane (every .lua, the XML,
+// what the boot reads, and a blob of every WAV's header) into the Cache API,
+// nothing else; the mods store gets a row with `packed` and no files. At boot
+// the files are registered by name and size (boot_web.mjs), the engine reads
+// them in place at the offsets it asks for (host_shims_fs.c ranged entries), and
+// the page answers each read from the header blob or a pack it holds at once,
+// or from a pack it fetches (Cache API, then the network) by suspending it.
+// No range requests: jsDelivr's cannot be trusted (portable.py), and a pack is
+// small enough to fetch whole.
+export const PACK_CACHE = 'isaac-modpacks-v1';
+const PACK_KEY = 'https://modpacks.isaac.invalid/';          // the cache's key space: a pack is its name, wherever it came from
+export const isPacked = (m) => !!(m && m.packed && m.packed.index);
+const hexOf = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+export async function sha256Hex(bytes) { return hexOf(await crypto.subtle.digest('SHA-256', bytes)); }
+// a pack or an index is named after its bytes: the name (less its extension) is
+// the start of their sha256
+export async function namedRight(name, bytes) {
+  const want = String(name).replace(/\.[a-z]+$/i, '').toLowerCase();
+  return /^[0-9a-f]{16,64}$/.test(want) && (await sha256Hex(bytes)).startsWith(want);
+}
+const streamed = async (bytes, format) => new Uint8Array(await new Response(
+  new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format))).arrayBuffer());
+export const gunzipBytes = (bytes) => streamed(bytes, 'gzip');
+export const inflateRawBytes = (bytes) => streamed(bytes, 'deflate-raw');
+// where an entry's packs are: `packed.base` absolute, or relative to the catalogue
+export function packBase(catalogueBase, entry) {
+  const b = String((entry && entry.packed && entry.packed.base) || 'pk');
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(b)) return b.replace(/\/+$/, '');
+  return `${String(catalogueBase || '').replace(/\/+$/, '')}/${b.replace(/^\/+|\/+$/g, '')}`;
+}
+// index rows: [path, size, pack (or a list of packs for a split file), offset,
+// stored length (or a list), codec 0 raw / 1 raw deflate, sha256 prefix, WAV
+// header length]; packs: [name, stored bytes, lane]; heads: [pack, offset, length]
+export function parseIndex(text) {
+  const ix = JSON.parse(text);
+  if (!ix || ix.v !== 1 || !Array.isArray(ix.packs) || !Array.isArray(ix.f)) throw new Error('not a pack index');
+  for (const row of ix.f) {
+    const p = Array.isArray(row[2]) ? row[2] : [row[2]];
+    if (typeof row[0] !== 'string' || !safeRel(row[0]) || p.some((i) => !ix.packs[i])) throw new Error(`a bad index row: ${row[0]}`);
+  }
+  for (const [path, i] of ix.alias || []) if (!safeRel(path) || !ix.f[i]) throw new Error(`a bad alias: ${path}`);
+  return ix;
+}
+
+// Packs, wherever they are: the Cache API first, then `<base>/<name>` (retried,
+// then given up on), each checked against its name before it is used or kept.
+export function createPackStore(opts) {
+  const o = opts || {};
+  const fetchFn = o.fetch || ((url) => fetch(url));
+  const cacheApi = o.caches !== undefined ? o.caches : (typeof caches !== 'undefined' ? caches : null);
+  const retries = o.retries == null ? 3 : o.retries;
+  const backoff = o.backoffMs || [1000, 3000, 9000];
+  const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const log = o.log || (() => {});
+  const stats = { cacheHits: 0, fetched: 0, fetchedBytes: 0, retried: 0, rejected: 0, kept: 0 };
+  let cacheP = null;
+  const cache = () => {
+    if (!cacheApi) return Promise.resolve(null);
+    if (!cacheP) cacheP = Promise.resolve().then(() => cacheApi.open(PACK_CACHE)).catch(() => null);
+    return cacheP;
+  };
+  async function cached(name) {
+    const c = await cache();
+    if (!c) return null;
+    try { const r = await c.match(PACK_KEY + name); return r ? new Uint8Array(await r.arrayBuffer()) : null; } catch { return null; }
+  }
+  async function keep(name, bytes) {
+    const c = await cache();
+    if (!c) return false;
+    try { await c.put(PACK_KEY + name, new Response(bytes, { headers: { 'content-type': 'application/octet-stream' } })); stats.kept += 1; return true; }
+    catch (e) { log(`[mods] ${name} could not be kept: ${e.message}`); return false; }
+  }
+  const magicOk = (name, b) => !/\.bin$/i.test(name) || (b.length >= 8 && b[0] === 0x49 && b[1] === 0x4d && b[2] === 0x50 && b[3] === 0x4b);
+  async function download(base, name, size) {
+    let last = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt) { stats.retried += 1; await sleep(backoff[Math.min(attempt - 1, backoff.length - 1)]); }
+      try {
+        const r = await fetchFn(`${base}/${name}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const b = new Uint8Array(await r.arrayBuffer());
+        if (size != null && b.length !== size) throw new Error(`${b.length} bytes where ${size} were expected`);
+        if (!magicOk(name, b) || !(await namedRight(name, b))) { stats.rejected += 1; throw new Error('its bytes are not the ones its name stands for'); }
+        stats.fetched += 1; stats.fetchedBytes += b.length;
+        return b;
+      } catch (e) {
+        last = e;
+        log(`[mods] ${name}: ${e.message}${attempt < retries ? '; trying again' : ''}`);
+      }
+    }
+    throw new Error(`${name} could not be fetched (${last ? last.message : 'no answer'})`);
+  }
+  // the bytes of `name`; `keep: false` fetches without keeping
+  async function get(base, name, size, how) {
+    const hit = await cached(name);
+    if (hit && (size == null || hit.length === size) && magicOk(name, hit)) { stats.cacheHits += 1; return hit; }
+    const b = await download(base, name, size);
+    if (!how || how.keep !== false) await keep(name, b);
+    return b;
+  }
+  async function has(name) { return !!(await cached(name)); }
+  async function drop(names) {
+    const c = await cache();
+    let n = 0;
+    if (c) for (const name of names) { try { if (await c.delete(PACK_KEY + name)) n += 1; } catch { /* gone */ } }
+    return n;
+  }
+  return { get, has, drop, stats };
+}
+
+// The packed mods of one boot: which engine paths are theirs, and the bytes of a
+// read. `pread` answers a Uint8Array when it can at once (a WAV header out of the
+// header blob, a file decoded already, a raw file in a pack held) and a Promise
+// of one otherwise. The eager lane is held until release(); then the packs a
+// read needs are held up to `holdBytes`, and decoded files up to `fileBytes`.
+export function createPackedMods(opts) {
+  const o = opts || {};
+  const store = o.store;
+  const holdBytes = o.holdBytes == null ? (48 << 20) : o.holdBytes;
+  const fileBytes = o.fileBytes == null ? (16 << 20) : o.fileBytes;
+  const onWait = o.onWait || (() => {});
+  const files = new Map();                 // engine path -> { mod, row, i }
+  const mods = new Map();                  // id -> { id, base, index, heads, headAt }
+  const packs = new Map(), pinned = new Set(), decoded = new Map(), loading = new Map();
+  const stats = { heads: 0, held: 0, waited: 0, packLoads: 0, bytes: 0, pending: 0, failed: 0 };
+  const lru = (map, k) => { const v = map.get(k); if (v !== undefined) { map.delete(k); map.set(k, v); } return v; };
+  const sizeOf = (map) => { let n = 0; for (const b of map.values()) n += b.length; return n; };
+  function trim() {
+    let held = sizeOf(packs);
+    for (const [k, b] of packs) { if (held <= holdBytes) break; if (pinned.has(k)) continue; packs.delete(k); held -= b.length; }
+    let dec = sizeOf(decoded);
+    for (const [k, b] of decoded) { if (dec <= fileBytes) break; decoded.delete(k); dec -= b.length; }
+  }
+  function pack(mod, p) {
+    const [name, size] = mod.index.packs[p];
+    const have = lru(packs, name);
+    if (have) return have;
+    if (!loading.has(name)) {
+      stats.packLoads += 1;
+      loading.set(name, store.get(mod.base, name, size).then((b) => { packs.set(name, b); trim(); return b; })
+        .finally(() => loading.delete(name)));
+    }
+    return loading.get(name);
+  }
+  async function add(id, base, index) {
+    const mod = { id, base, index, heads: null, headAt: new Map() };
+    let at = 0;
+    index.f.forEach((row, i) => { if (row[7]) { mod.headAt.set(i, at); at += row[7]; } });
+    const eager = [];
+    index.packs.forEach((p, i) => { if (p[2] === 'eager') eager.push(i); });
+    for (const i of eager) { pinned.add(index.packs[i][0]); await pack(mod, i); }
+    if (index.heads) {
+      const [p, off, len] = index.heads;
+      mod.heads = (await pack(mod, p)).slice(off, off + len);
+    }
+    mods.set(id, mod);
+    index.f.forEach((row, i) => files.set(`mods/${id}/${row[0]}`, { mod, row, i }));
+    for (const [path, i] of index.alias || []) files.set(`mods/${id}/${path}`, { mod, row: index.f[i], i });
+    return mod;
+  }
+  function remove(id) {
+    for (const [k, e] of files) if (e.mod.id === id) files.delete(k);
+    mods.delete(id);
+  }
+  // the engine paths and sizes of one mod, for registration
+  function* paths(id) { for (const [k, e] of files) if (e.mod.id === id) yield [k, e.row[1]]; }
+  const key = (e) => `${e.mod.id}#${e.i}`;
+  function bodyNow(e) {
+    const d = lru(decoded, key(e));
+    if (d) return d;
+    const [, , p, off, ln, codec] = e.row;
+    if (codec === 0 && !Array.isArray(p)) {
+      const b = lru(packs, e.mod.index.packs[p][0]);
+      if (b) return b.subarray(off, off + ln);
+    }
+    return null;
+  }
+  async function body(e) {
+    const now = bodyNow(e);
+    if (now) return now;
+    const [path, size, p, off, ln, codec] = e.row;
+    let stored;
+    if (Array.isArray(p)) {
+      const parts = await Promise.all(p.map((pi) => pack(e.mod, pi)));
+      stored = new Uint8Array(ln.reduce((a, b) => a + b, 0));
+      let at = 0;
+      parts.forEach((b, k) => { stored.set(b.subarray(8, 8 + ln[k]), at); at += ln[k]; });
+    } else stored = (await pack(e.mod, p)).subarray(off, off + ln);
+    const out = codec === 1 ? await inflateRawBytes(stored) : stored;
+    if (out.length !== size) throw new Error(`${path}: ${out.length} bytes out of its pack, ${size} in the index`);
+    if (codec === 1 || Array.isArray(p)) { decoded.set(key(e), out); trim(); }
+    return out;
+  }
+  function pread(src, off, len) {
+    const e = files.get(src);
+    if (!e) return null;
+    const size = e.row[1], end = Math.min(size, off + len);
+    if (off >= end) return new Uint8Array(0);
+    const hl = e.row[7];
+    if (hl && end <= hl && e.mod.heads) {
+      stats.heads += 1; stats.bytes += end - off;
+      const h = e.mod.headAt.get(e.i);
+      return e.mod.heads.subarray(h + off, h + end);
+    }
+    const now = bodyNow(e);
+    if (now) { stats.held += 1; stats.bytes += end - off; return now.subarray(off, end); }
+    stats.waited += 1; stats.pending += 1;
+    onWait(stats.pending, src);
+    return body(e).then((b) => { stats.bytes += end - off; return b.subarray(off, end); },
+      (err) => { stats.failed += 1; throw err; })
+      .finally(() => { stats.pending -= 1; onWait(stats.pending, src); });
+  }
+  // a whole file, only if it is at hand (the engine's whole-file read cannot wait)
+  function readNow(src) { const e = files.get(src); return e ? bodyNow(e) : null; }
+  // the mod's Lua, for MEMFS: [relative path, bytes]
+  async function lua(id) {
+    const out = [];
+    for (const [k, e] of files) if (e.mod.id === id && /\.lua$/i.test(k)) out.push([k.slice(`mods/${id}/`.length), await body(e)]);
+    return out;
+  }
+  function release() { pinned.clear(); decoded.clear(); trim(); }
+  return { add, remove, paths, pread, readNow, lua, release, owns: (src) => files.has(src), stats,
+           held: () => ({ packs: packs.size, packBytes: sizeOf(packs), files: decoded.size, fileBytes: sizeOf(decoded) }) };
+}
+
+// An installed packed mod's index, from the Cache API (or its base again)
+export async function packedIndex(store, mod) {
+  const p = mod.packed;
+  const gz = await store.get(p.base, p.index, p.indexBytes == null ? null : p.indexBytes);
+  return parseIndex(new TextDecoder().decode(await gunzipBytes(gz)));
+}
+// What deleting `mod` frees: its index and every pack no other installed packed
+// mod's index names
+export async function packsOnlyOf(store, mod, others) {
+  const keep = new Set();
+  for (const m of others) {
+    if (!isPacked(m) || m.id === mod.id) continue;
+    try { const ix = await packedIndex(store, m); keep.add(m.packed.index); for (const [n] of ix.packs) keep.add(n); } catch { /* unreadable: it keeps nothing */ }
+  }
+  const mine = [mod.packed.index];
+  try { for (const [n] of (await packedIndex(store, mod)).packs) mine.push(n); } catch { /* its index is gone: drop what we can name */ }
+  return mine.filter((n) => !keep.has(n));
+}
+
 // ---- seeding, before the game looks ------------------------------------------
 
 // `seed(path, bytes)` is the pipeline's isaac_fs_seed. Every path is built here,
@@ -577,7 +829,8 @@ export function createModsMenu(opts) {
     if (madeMetadata) notes.push('metadata written');
     if (dropped.length) notes.push(`${dropped.length} path(s) dropped`);
     await refresh();
-    if (mods.reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push(`over the ${mib(SEED_BUDGET)} budget`);
+    // round 107: a packed mod is never seeded, so it takes nothing of the budget
+    if (mods.filter((x) => !isPacked(x)).reduce((n, x) => n + x.bytes, 0) > SEED_BUDGET) notes.push(`over the ${mib(SEED_BUDGET)} budget`);
     // Round 82: installing a mod is choosing to have mods on. A page that ran
     // before round 81 wrote EnableMods=0 and kept it, so the mod was seeded, the
     // engine listed it, and nothing happened -- the quietest failure there is.
@@ -630,10 +883,53 @@ export function createModsMenu(opts) {
     busy = false;
   }
 
+  // Round 107: a packed mod installed from the catalogue -- its index and eager
+  // lane into the Cache API, a row in the mods store with no files.
+  async function installPacked(entry, onProgress) {
+    db = db || await openModDb();
+    if (!db) throw new Error('this browser keeps no database, so a mod could not be kept');
+    const already = await getMod(db, entry.id);
+    if (already) throw new Error(`${already.name} is already installed`);
+    const store = createPackStore({ log });
+    const base = packBase(o.catalogueBase, entry);
+    const p = entry.packed;
+    const want = (p.indexBytes || 0) + (p.eagerBytes || 0);
+    let got = 0;
+    const gz = await store.get(base, p.index, p.indexBytes == null ? null : p.indexBytes);
+    got += gz.length; if (onProgress) onProgress(got, want);
+    const index = parseIndex(new TextDecoder().decode(await gunzipBytes(gz)));
+    let eager = 0;
+    for (const [name, size, lane] of index.packs) {
+      if (lane !== 'eager') continue;
+      await store.get(base, name, size);
+      got += size; eager += size;
+      if (onProgress) onProgress(got, want);
+    }
+    // the rest is fetched as it is played, so the browser is asked not to clear it under pressure
+    try { if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch { /* best effort */ }
+    const mod = { id: entry.id, name: entry.name || index.name || entry.id, files: index.files, bytes: index.bytes,
+                  version: entry.version || index.version || '', added: Date.now(), enabled: true,
+                  packed: { base, index: p.index, indexBytes: gz.length, eagerBytes: eager,
+                            storedBytes: index.packs.reduce((n, x) => n + x[1], 0) } };
+    await putMod(db, mod, []);
+    await refresh();
+    if (o.onInstalled) { try { await o.onInstalled(); } catch (e) { log(`[mods] the options: ${e.message}`); } }
+    say(`${mod.name}: ${mod.files} file(s), ${mib(got)} now, the rest as it is played`, true);
+  }
+
   async function remove(mod) {
     if (busy) return;
     busy = true;
-    try { await deleteMod(db, mod.id); await refresh(); say(`${mod.name} removed`, true); }
+    try {
+      // round 107: a packed mod takes its packs with it, except any another installed one names
+      let freed = 0;
+      if (isPacked(mod)) {
+        const store = createPackStore({ log });
+        freed = await store.drop(await packsOnlyOf(store, mod, mods));
+      }
+      await deleteMod(db, mod.id); await refresh();
+      say(`${mod.name} removed${freed ? `, ${freed} pack(s) freed` : ''}`, true);
+    }
     catch (e) { say(`could not remove ${mod.name}: ${e.message}`); }
     busy = false;
   }
@@ -670,7 +966,9 @@ export function createModsMenu(opts) {
     const byId = new Map(((catalogue && catalogue.mods) || []).map((m) => [m.id, m]));
     const list = ((catalogue && catalogue.mods) || []).map((m) => ({
       id: m.id, name: cleanModName(m.name), desc: describe(m.description, m.whole), version: m.version || '',
-      bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: (m.bytes || 0) > SEED_BUDGET,
+      bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: !isPacked(m) && (m.bytes || 0) > SEED_BUDGET,
+      // round 107: a packed mod downloads its eager lane now and the rest as it is played
+      sizeNote: isPacked(m) ? `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null,
       // round 95: what installing it brings along, by name
       requires: (Array.isArray(m.requires) ? m.requires : []).map((r) => (byId.has(r) ? cleanModName(byId.get(r).name) : r)),
     }));
@@ -720,12 +1018,15 @@ export function createModsMenu(opts) {
         phase = 'download';
         message = browser && browser.isOpen() ? null : (step ? `DOWNLOADING ${step.at} OF ${step.of}...` : 'DOWNLOADING...');
         redraw();
-        const zip = await fetchMod(o.catalogueBase, e, (n, total) => {
+        const onProgress = (n, total) => {
           const pct = total ? Math.min(100, Math.round(100 * n / total)) : 0;
           if (pct === progress) return;                    // a redraw a frame is plenty
           progress = pct;
           redraw();
-        });
+        };
+        // round 107: a packed mod is its index and eager lane now, the rest as it is played
+        if (isPacked(e)) { await installPacked(e, onProgress); fresh.add(e.id); continue; }
+        const zip = await fetchMod(o.catalogueBase, e, onProgress);
         progress = null;
         phase = 'unpack';
         message = browser && browser.isOpen() ? null : 'UNPACKING...';
@@ -751,8 +1052,8 @@ export function createModsMenu(opts) {
       const rows = list.map((m) => ({
         label: m.name.replace(/^[!\s]+/, ''),
         note: busyId === m.id && progress != null ? `${progress}%`
-          : have.has(m.id) ? 'INSTALLED' : (m.bytes > SEED_BUDGET ? 'TOO BIG' : mib(m.bytes)),
-        dim: have.has(m.id) || m.bytes > SEED_BUDGET,
+          : have.has(m.id) ? 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG' : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
+        dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET),
         // what the mod does, under the list, as the game's own mods screen shows it
         detail: [m.version ? `V${m.version}` : '', m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),

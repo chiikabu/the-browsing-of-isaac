@@ -251,6 +251,42 @@ EMSCRIPTEN_KEEPALIVE int unsupported_type_case(int raw) {
     return (int)glGetError();
 }
 
+// Round 107: consecutive quad blocks of one layout keep the attribute pointers
+// still and draw from a later quad of the static index buffer; a ring index
+// block in between moves the pointers. Each quad covers a column of the target.
+EMSCRIPTEN_KEEPALIVE int quad_case(void) {
+    static float vertices[4][4][6];
+    static const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
+    static const uint16_t triangle[3] = {0, 1, 2};
+    static const float colors[4][4] = {{1, 0, 1, 1}, {0, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 0, 1}};
+    clear();
+    for (unsigned q = 0; q < 4u; ++q) {
+        float x0 = -1.0f + 0.5f * (float)q, x1 = x0 + 0.5f;
+        const float corner[4][2] = {{x0, -1.0f}, {x1, -1.0f}, {x0, 1.0f}, {x1, 1.0f}};
+        for (unsigned v = 0; v < 4u; ++v) {
+            memcpy(vertices[q][v], colors[q], 16);
+            memcpy(&vertices[q][v][4], corner[v], 8);
+        }
+    }
+    for (unsigned q = 0; q < 4u; ++q) {
+        isaac_gl_enable_vertex_attrib_array(0);
+        isaac_gl_enable_vertex_attrib_array(1);
+        glEnableVertexAttribArray(0);   // what the shim forwards when the draw does not apply them (ISAAC_GL_ATTR=0)
+        glEnableVertexAttribArray(1);
+        isaac_gl_vertex_attrib_pointer(0, 4, GL_FLOAT, GL_FALSE, 24, isaac_va(vertices[q][0]));
+        isaac_gl_vertex_attrib_pointer(1, 2, GL_FLOAT, GL_FALSE, 24, isaac_va(&vertices[q][0][4]));
+        if (q == 2u) {   // ring index blocks: the third column's quad as two triangles
+            isaac_gl_draw_elements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, isaac_va(triangle));
+            isaac_gl_draw_elements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, isaac_va(&quad[3]));
+        } else {
+            isaac_gl_draw_elements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, isaac_va(quad));
+        }
+        isaac_gl_disable_vertex_attrib_array(0);
+        isaac_gl_disable_vertex_attrib_array(1);
+    }
+    return (int)glGetError();
+}
+
 EMSCRIPTEN_KEEPALIVE uint32_t pixel(int x, int y) {
     uint8_t rgba[4];
     glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
@@ -424,6 +460,21 @@ test('client arrays render exact spans at the Wasm memory boundary', async (t) =
       for (const kind of [0, 1, 2, 3, 4]) {
         expectPixels(await draw(page, '_zero_span_case', [kind]), black, kind === 1 ? 0x501 : 0);
       }
+    });
+    await t.test('quad blocks of one layout draw from later quads of the static index buffer', async () => {
+      const got = await page.evaluate(() => {
+        const error = window.fixture._quad_case();
+        const columns = [8, 24, 40, 56].map((x) => [10, 32, 54].map((y) => {
+          const rgba = window.fixture._pixel(x, y) >>> 0;
+          return [rgba & 255, (rgba >>> 8) & 255, (rgba >>> 16) & 255, rgba >>> 24];
+        }));
+        return { error, readError: window.fixture._error(), columns };
+      });
+      const yellow = [255, 255, 0, 255];
+      assert.deepEqual(got, {
+        error: 0, readError: 0,
+        columns: [magenta, cyan, white, yellow].map((c) => [c, c, c]),
+      });
     });
     await t.test('unsupported attribute types retain raw GL errors and prior attribute state', async () => {
       expectPixels(await draw(page, '_render_case', [1, 0x1406, 3, 0, 0, 0, 0]), magenta);
