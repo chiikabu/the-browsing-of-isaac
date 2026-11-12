@@ -308,6 +308,11 @@ test('a packed mod is not offered to a phone: it would run the game out of memor
   assert.equal(smallDevice({ navigator: {} }), false, 'no matchMedia (node, a worker): not a phone');
   const m = src('mods.mjs'), b = src('mod_browser.mjs');
   assert.ok(m.includes("if (smallDevice()) throw new Error(`${entry.name} needs more memory than a phone's browser gives the game`);"), 'installPacked refuses');
+  // found in a real page: Enter on the paper list's row installed the two mods it needs, then refused
+  const chainAt = m.indexOf('const { order, missing } = requiredChain('), heavyAt = m.indexOf('const heavy = smallDevice() && order.find((e) => isPacked(e));');
+  const fetchAt = m.indexOf('const zip = await fetchMod(o.catalogueBase, e, onProgress);');
+  assert.ok(chainAt > 0 && heavyAt > chainAt && fetchAt > heavyAt, 'the chain is checked for a packed mod before any part is fetched');
+  assert.ok(m.slice(heavyAt, fetchAt).includes('if (heavy) throw new Error('), 'and a phone is refused there');
   assert.ok(m.includes('needsComputer: isPacked(m) && smallDevice(),'), 'the browser is told');
   assert.ok(m.includes(': isPacked(m) && smallDevice() ? NEEDS_COMPUTER') && NEEDS_COMPUTER === 'NEEDS A COMPUTER', 'the paper list says it');
   assert.ok(b.includes("text(F10, 'NEEDS A COMPUTER', d.x0, actionY + 4);") && b.indexOf('} else if (it.needsComputer) {') < b.indexOf('} else if (it.big) {'), 'the browser says it in place of INSTALL');

@@ -1023,6 +1023,10 @@ export function createModsMenu(opts) {
       await refresh();
       const { order, missing } = requiredChain((catalogue && catalogue.mods) || [entry], entry.id, new Set(mods.map((m) => m.id)));
       if (missing.length) throw new Error(`it needs ${missing.join(', ')}, which the browser does not have`);
+      // a phone is refused before anything is fetched: the paper list's row still takes Enter, and
+      // without this the mods it needs were installed first and then the mod itself refused
+      const heavy = smallDevice() && order.find((e) => isPacked(e));
+      if (heavy) throw new Error(`${heavy.id === entry.id ? 'it' : cleanModName(heavy.name)} needs more memory than a phone's browser gives the game`);
       // the row carries the percentage while it downloads, the line says what for
       busyId = entry.id;
       for (let i = 0; i < order.length; i++) {
