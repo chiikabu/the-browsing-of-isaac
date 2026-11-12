@@ -57,11 +57,8 @@ HOOKS = [
     (10, "Game::End", 0x006f9770, "reg", 4, ""),
     # round 103
     (11, "ModManager::LoadConfigs", 0x008f30d0, "asm", 0, "runs each mod's main.lua (call 0x86e6c0 at 0x008f4654); called by ModManager::Reset 0x008f8c5c"),
-    # slot 12 is a FALSE signature match (see api_hooks.lua): 0x00832850 is RoomTransition::Render. No
-    # handler listens on it. The row stays as built into the engine; the candidate for the real function
-    # is 0x007a6680 (ret 4, called per player from Game::ChangeRoom with 0), to be confirmed by a probe
-    # hook at the next engine build.
-    (12, "Entity_Player::TriggerRoomExit", 0x00832850, "sig", None, ""),
+    # slot 12 is RETIRED (round h2): it was a FALSE signature match, 0x00832850 (RoomTransition::Render),
+    # and is never reused. Entity_Player::TriggerRoomExit is slot 81 now.
     (13, "Entity_Player::TriggerTrinketAdded", 0x007ad860, "sig", None, ""),
     (14, "Entity_Player::TriggerTrinketRemoved", 0x007adb30, "sig", None, ""),
     (15, "Entity_Player::InitPreLevelInitStats", 0x0099b520, "sig", None, ""),
@@ -84,7 +81,7 @@ HOOKS = [
     (30, "Entity_Player::GetHeartLimit", 0x007cae60, "reg", None, ""),
     (31, "PersistentGameData::TryUnlock", 0x00929a20, "sig", None, ""),
     (32, "Entity_Player::UseCard", 0x007b2230, "reg", None, ""),
-    (33, "Entity_Player::UsePill", 0x007c4180, "reg", None, ""),
+    (33, "Entity_Player::UsePill", 0x007c4180, "reg", 0xc, "every ret reached from the entry pops 0xc (.scratch/rgon/h2/rets.py)"),
     (34, "Entity_Player::AddHearts", 0x00758a70, "reg", None, ""),
     (35, "Entity_Player::AddMaxHearts", 0x007588a0, "reg", None, ""),
     (36, "Entity_Player::AddSoulHearts", 0x00758d00, "reg", None, ""),
@@ -104,11 +101,11 @@ HOOKS = [
     (50, "Entity::AddShrink", 0x006b5c10, "reg", None, ""),
     (51, "Entity::AddSlowing", 0x006ad750, "reg", None, ""),
     (52, "Entity::AddKnockback", 0x006b7a80, "sig", None, ""),
-    (53, "Entity_Player::DischargeActiveItem", 0x007ac7e0, "reg", None, ""),
+    (53, "Entity_Player::DischargeActiveItem", 0x007ac7e0, "reg", 0x8, "every ret reached from the entry pops 0x8 (.scratch/rgon/h2/rets.py)"),
     (54, "Entity_Player::DropTrinket", 0x00771800, "reg", None, ""),
-    (55, "Entity_Pickup::TryOpenChest", 0x006e6e40, "reg", None, ""),
+    (55, "Entity_Pickup::TryOpenChest", 0x006e6e40, "reg", 0x4, "every ret reached from the entry pops 0x4 (.scratch/rgon/h2/rets.py)"),
     (56, "Game::BombDamage", 0x006ff2a0, "reg", None, ""),
-    (57, "Game::BombTearflagEffects", 0x007009a0, "reg", None, ""),
+    (57, "Game::BombTearflagEffects", 0x007009a0, "reg", 0x20, "every ret reached from the entry pops 0x20 (.scratch/rgon/h2/rets.py)"),
     (58, "Entity_NPC::Morph", 0x006c0f30, "reg", None, ""),
     (59, "Room::TriggerClear", 0x008068f0, "reg", None, ""),
     (60, "Entity_Player::RemoveCollectible", 0x0078f840, "reg", None, ""),
@@ -131,6 +128,56 @@ HOOKS = [
     (77, "Entity_Familiar::FireProjectile", 0x00639750, "reg", None, ""),
     (78, "Entity_NPC::FireProjectiles", 0x006cb2e0, "reg", None, ""),
     (79, "Game::Render", 0x006fbc10, "reg", None, ""),
+    # round h2: each read off the disassembly; the note says what ties the address to the declaration.
+    # Every `ret` reached from the entry pops what the row says (.scratch/rgon/h2/rets.py walks direct
+    # branches and jump tables; the index's own body view stops early in several of these).
+    (80, "Entity_Player::TriggerCollectibleRemoved", 0x0078ff90, "asm", 4,
+     "called by RemoveCollectible (reg 0x0078f840) at 0x0078fc40 and by RecomputeWispCollectibles at 0x007d7b5a; "
+     "arg 1 is the item: 0x12e/0xc -> 0x0075e320(0xd,-1) (Stompy counter), 0x2b6 -> AddBrokenHearts(-3) (reg 0x007d2a40)"),
+    (81, "Entity_Player::TriggerRoomExit", 0x007a6680, "asm", 4,
+     "called per player of the game's list (+0x1baa8) by Game::ChangeRoom (reg 0x006fe2f0) with 0, by "
+     "0x009bd150 with 1; tests the bool's byte (`cmp byte [ebp+8], 0`), this has the player's effects at +0x1508"),
+    (82, "Entity_Player::InitPostLevelInitStats", 0x007bc740, "asm", 0,
+     "called per player after Level::Init (0x00744940) by the run's start (0x006f5788) and on resets; reads the "
+     "player type (+0x13c0) and gives that character's cards, pills, trinkets (AddTrinket reg) and pocket active "
+     "(SetPocketActiveItem reg)"),
+    (83, "PlayerHUD::RenderActiveItem", 0x008453c0, "asm", 0x18,
+     "called by the HUD's per-player render 0x009a6fe0 with ecx = a 0x6dc-byte player slot, slot 1 then 0, "
+     "(slot, &pos, layout, 1.0f size, alpha, 0): six stack words"),
+    (84, "Manager::Render", 0x009555c0, "asm", 0,
+     "called once per frame by the main loop 0x00931050; reads g_Manager (0x00c7169c) itself and calls "
+     "Game::Render (reg 0x006fbc10, its only direct caller)"),
+    (85, "TemporaryEffects::AddEffect", 0x00930220, "asm", 0xc,
+     "called by AddCollectibleEffect (reg 0x009302e0) as (&effect, addCostume, count); tests _disabled at "
+     "+0x11, calls AddCostume (reg) on _player (+0x14) when addCostume"),
+    (86, "Entity_Player::TriggerEffectRemoved", 0x00793970, "asm", 8,
+     "called by TemporaryEffects' removal 0x009303f0 (from RemoveCollectibleEffect reg 0x009304a0) on _player "
+     "(+0x14) with (item, count removed); the room's twin is 0x007ea1a0"),
+    (87, "Entity_Player::GetActiveMaxCharge", 0x007911f0, "asm", 0xc,
+     "(item, varData, an unused word every caller pushes); special-cases the charge-as-vardata actives "
+     "0x11e/0x107/0x15c/0x1fe; called by the slot form 0x00791320 with the slot's item and varData and by "
+     "AddCollectible (reg)"),
+    (88, "Entity_Player::GetActiveMinUsableCharge", 0x00791380, "asm", 4,
+     "(slot): REPENTOGON's signature shape (slot 3, the slot-2 Red Redemption case); 1 for the partly usable "
+     "actives 0x263, 0x2d0, 0x93, else the max charge 0x007911f0"),
+    (89, "Room::Init", 0x007f2800, "asm", 8,
+     "called by the level's room change (0x0073e8a2) with ecx = the game's room (+0x18300) and a RoomDescriptor; "
+     "clears the room's effects (+0x7310, ClearEffects reg 0x009306c0) first"),
+    (90, "Level::Init", 0x00744940, "asm", 4,
+     "REPENTOGON's prologue shape; called by the run's start (0x006f5764 with 1) and the other starts, ecx = "
+     "the level (the game object), before the players' InitPostLevelInitStats"),
+    (91, "Entity_Tear::ApplyTearFlagEffects", 0x0067af60, "asm", 0,
+     "static: ecx = the entity, edx = &pos, then 16 bytes of flags, the source, the damage; the caller cleans "
+     "(`add esp, 0x18` after each of its 17 call sites); begins with IgnoreEffectFromFriendly 0x006acd10"),
+    (92, "Entity_Player::TriggerRoomClear", 0x007a8fd0, "asm", 0,
+     "called per player by 0x009bb840, which Room::TriggerClear (reg 0x008068f0) calls at 0x00806b8c"),
+    (93, "Entity_Player::TriggerNewRoom_TemporaryEffects", 0x007a8350, "asm", 0,
+     "Liberty Cap's room effect: HasTrinket(0x20) (0x00771550), 1 in 4/multiplier, a mushroom item; called "
+     "per player by 0x009bc000 and by the reset 0x009bee80"),
+    (94, "Entity_Player::TriggerNewStage", 0x007a4ba0, "asm", 4,
+     "(bool fromPlayerUpdate): Entity_Player::Update calls it with 1 (0x007830bf), the level's per-player loop "
+     "0x009bb960 (called from Level::Init's body, 0x00745a1d) with 0; tests the bool's byte, places the player "
+     "for a new floor (Level::IsAscent reg 0x0074f090), reads +0x1824, the flag InitPostLevelInitStats sets"),
 ]
 # the entity classes' virtual functions: slots 100 + 12 * k + class index
 _k = 0

@@ -1292,7 +1292,6 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (9, 0x0092dc30, "SFXManager::Play"),    # ret 0x18; reg SFXManager.Play; sig SoundEffects::Play
     (10, 0x006f9770, "Game::End"),    # ret 0x4; reg Game.End; sig Game::End
     (11, 0x008f30d0, "ModManager::LoadConfigs"),    # ret 0x0; asm
-    (12, 0x00832850, "Entity_Player::TriggerRoomExit"),    # ret 0x0; sig Entity_Player::TriggerRoomExit
     (13, 0x007ad860, "Entity_Player::TriggerTrinketAdded"),    # ret 0x8; sig Entity_Player::TriggerTrinketAdded
     (14, 0x007adb30, "Entity_Player::TriggerTrinketRemoved"),    # ret 0x4; sig Entity_Player::TriggerTrinketRemoved
     (15, 0x0099b520, "Entity_Player::InitPreLevelInitStats"),    # ret ?; sig Entity_Player::InitPreLevelInitStats
@@ -1313,7 +1312,7 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (30, 0x007cae60, "Entity_Player::GetHeartLimit"),    # ret 0x4; reg EntityPlayer.GetHeartLimit
     (31, 0x00929a20, "PersistentGameData::TryUnlock"),    # ret 0x4; sig PersistentGameData::TryUnlock
     (32, 0x007b2230, "Entity_Player::UseCard"),    # ret 0x8; reg EntityPlayer.UseCard
-    (33, 0x007c4180, "Entity_Player::UsePill"),    # ret ?; reg EntityPlayer.UsePill
+    (33, 0x007c4180, "Entity_Player::UsePill"),    # ret 0xc; reg EntityPlayer.UsePill
     (34, 0x00758a70, "Entity_Player::AddHearts"),    # ret 0xc; reg EntityPlayer.AddHearts; sig Entity_Player::AddHearts
     (35, 0x007588a0, "Entity_Player::AddMaxHearts"),    # ret 0x8; reg EntityPlayer.AddMaxHearts; sig Entity_Player::AddMaxHearts
     (36, 0x00758d00, "Entity_Player::AddSoulHearts"),    # ret 0x8; reg EntityPlayer.AddSoulHearts
@@ -1333,11 +1332,11 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (50, 0x006b5c10, "Entity::AddShrink"),    # ret 0x10; reg Entity.AddShrink; sig Entity::AddShrink
     (51, 0x006ad750, "Entity::AddSlowing"),    # ret 0x3c; reg Entity.AddSlowing; sig Entity::AddSlowing
     (52, 0x006b7a80, "Entity::AddKnockback"),    # ret 0x10; sig Entity::AddKnockback
-    (53, 0x007ac7e0, "Entity_Player::DischargeActiveItem"),    # ret ?; reg EntityPlayer.DischargeActiveItem
+    (53, 0x007ac7e0, "Entity_Player::DischargeActiveItem"),    # ret 0x8; reg EntityPlayer.DischargeActiveItem
     (54, 0x00771800, "Entity_Player::DropTrinket"),    # ret 0x8; reg EntityPlayer.DropTrinket
-    (55, 0x006e6e40, "Entity_Pickup::TryOpenChest"),    # ret ?; reg EntityPickup.TryOpenChest
+    (55, 0x006e6e40, "Entity_Pickup::TryOpenChest"),    # ret 0x4; reg EntityPickup.TryOpenChest
     (56, 0x006ff2a0, "Game::BombDamage"),    # ret 0x30; reg Game.BombDamage
-    (57, 0x007009a0, "Game::BombTearflagEffects"),    # ret ?; reg Game.BombTearflagEffects
+    (57, 0x007009a0, "Game::BombTearflagEffects"),    # ret 0x20; reg Game.BombTearflagEffects
     (58, 0x006c0f30, "Entity_NPC::Morph"),    # ret 0x10; reg EntityNPC.Morph; sig Entity_NPC::Morph
     (59, 0x008068f0, "Room::TriggerClear"),    # ret 0x4; reg Room.TriggerClear; sig Room::TriggerClear
     (60, 0x0078f840, "Entity_Player::RemoveCollectible"),    # ret 0x10; reg EntityPlayer.RemoveCollectible
@@ -1360,6 +1359,21 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (77, 0x00639750, "Entity_Familiar::FireProjectile"),    # ret 0x8; reg EntityFamiliar.FireProjectile
     (78, 0x006cb2e0, "Entity_NPC::FireProjectiles"),    # ret 0x10; reg EntityNPC.FireProjectiles; sig Entity_NPC::FireProjectiles
     (79, 0x006fbc10, "Game::Render"),    # ret ?; reg Game.Render
+    (80, 0x0078ff90, "Entity_Player::TriggerCollectibleRemoved"),    # ret 0x4; asm
+    (81, 0x007a6680, "Entity_Player::TriggerRoomExit"),    # ret 0x4; asm
+    (82, 0x007bc740, "Entity_Player::InitPostLevelInitStats"),    # ret 0x0; asm
+    (83, 0x008453c0, "PlayerHUD::RenderActiveItem"),    # ret 0x18; asm
+    (84, 0x009555c0, "Manager::Render"),    # ret 0x0; asm
+    (85, 0x00930220, "TemporaryEffects::AddEffect"),    # ret 0xc; asm
+    (86, 0x00793970, "Entity_Player::TriggerEffectRemoved"),    # ret 0x8; asm
+    (87, 0x007911f0, "Entity_Player::GetActiveMaxCharge"),    # ret 0xc; asm
+    (88, 0x00791380, "Entity_Player::GetActiveMinUsableCharge"),    # ret 0x4; asm
+    (89, 0x007f2800, "Room::Init"),    # ret 0x8; asm
+    (90, 0x00744940, "Level::Init"),    # ret 0x4; asm
+    (91, 0x0067af60, "Entity_Tear::ApplyTearFlagEffects"),    # ret 0x0; sig Entity_Tear::ApplyTearFlagEffects; asm
+    (92, 0x007a8fd0, "Entity_Player::TriggerRoomClear"),    # ret 0x0; asm
+    (93, 0x007a8350, "Entity_Player::TriggerNewRoom_TemporaryEffects"),    # ret 0x0; asm
+    (94, 0x007a4ba0, "Entity_Player::TriggerNewStage"),    # ret 0x4; asm
     (100, 0x006a93a0, "Entity::Init"),    # ret 0x10; sig Init; vtable 0x00b6730c slot 1
     (101, 0x00755470, "Entity_Player::Init"),    # ret 0x10; vtable 0x00b6bdd0 slot 1
     (102, 0x006b8b20, "Entity_NPC::Init"),    # ret 0x10; vtable 0x00b67468 slot 1

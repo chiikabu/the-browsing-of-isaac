@@ -170,6 +170,26 @@ local function add_card_pill(id, it, player, what, ...)
   return what
 end
 rule("MC_PRE_PLAYER_ADD_CARD MC_PRE_PLAYER_ADD_PILL", add_card_pill)
+-- false ends the run; tables are merged into one answer, and the values a table
+-- names are what the functions after it are handed (`keys`: name -> argument)
+local function merge_or_false(keys)
+  return function(id, it, ...)
+    local args, count = { ... }, select("#", ...)
+    local out
+    for cb in it do
+      local ret = call(id, cb, table.unpack(args, 1, count))
+      if ret == false then return false end
+      if type(ret) == "table" then
+        for k, n in pairs(keys) do if ret[k] ~= nil then args[n] = ret[k] end end
+        if out then for k, v in pairs(ret) do out[k] = v end else out = ret end
+      end
+    end
+    return out
+  end
+end
+if M.MC_PRE_APPLY_TEARFLAG_EFFECTS then RULE[M.MC_PRE_APPLY_TEARFLAG_EFFECTS] = merge_or_false({ Position = 2, TearFlags = 3, Damage = 5 }) end
+if M.MC_PRE_BOMB_DAMAGE then RULE[M.MC_PRE_BOMB_DAMAGE] = merge_or_false({ Position = 1, Damage = 2, Radius = 3, TearFlags = 6, DamageFlags = 7 }) end
+if M.MC_PRE_BOMB_TEARFLAG_EFFECTS then RULE[M.MC_PRE_BOMB_TEARFLAG_EFFECTS] = merge_or_false({ Position = 1, Radius = 2, TearFlags = 3, RadiusMult = 5 }) end
 
 -- The game's own callbacks whose rule REPENTOGON changes. Every other one of
 -- the game's keeps "the first answer ends the run", with one difference that

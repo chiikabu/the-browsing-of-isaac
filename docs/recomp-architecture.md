@@ -10176,3 +10176,81 @@ Lazarus, `AddCostume = false`. The same measurement says the layer's older
 `test_layer4.lua` 49; deliberate breaks of each new piece were caught by
 their own checks. In a full stress tour Fiend Folio does not stop the game;
 122 of the callbacks it listens on are still not fired.
+
+### 21.136 Round 106: fifteen engine hooks for the callbacks Fiend Folio listens on
+
+Engine (the `RGON_HOOKS` list in `lift_patches.py`, slots 80 to 94) and layer
+(`api_hooks.lua`, three rules in `api_callbacks.lua`, `test_hooks2.lua`).
+
+Round 105 ended with 122 callbacks Fiend Folio registers and the layer never
+fires. They were ranked by how many registrations each has, and the ones whose
+REPENTOGON hook is a whole function were taken: 31 of them fire now, 88 names
+are still reported as not implemented.
+
+**How a slot was probed.** `lab_h2.lua` puts a raw handler on every slot and a
+scripted run makes each event happen; the log says when the slot fired, what
+ECX held and whose virtual table that is, and the return address. A handler
+checks its object before it uses it (a player, pickup, tear, NPC or familiar by
+its class's virtual table; an item by looking it up again by id and wanting the
+same address; the room, the level and a HUD slot by a field that points back),
+logs a wrong one once and lets the call go on unwatched.
+
+**New slots.** Each address has its own evidence in the instructions, and every
+`ret` reached from the entry pops the count given.
+
+| Slot | Address, ret | What it is, and why | Callbacks |
+|---|---|---|---|
+| 80 | 0x0078ff90, 4 | TriggerCollectibleRemoved: called by RemoveCollectible and by the wisp recount; the argument is the item (0x2b6 leads to AddBrokenHearts(-3)) | MC_POST_TRIGGER_COLLECTIBLE_REMOVED |
+| 81 | 0x007a6680, 4 | TriggerRoomExit: Game::ChangeRoom calls it per player with 0, 0x009bd150 with 1; it tests the byte of its argument | MC_PRE_ROOM_EXIT |
+| 82 | 0x007bc740, 0 | InitPostLevelInitStats: called per player after Level::Init at run start; ends by setting player+0x1824 | MC_PLAYER_INIT_POST_LEVEL_INIT_STATS |
+| 83 | 0x008453c0, 0x18 | PlayerHUD::RenderActiveItem: ECX a 0x6dc HUD slot, six stack words | MC_PRE/POST_PLAYERHUD_RENDER_ACTIVE_ITEM |
+| 84 | 0x009555c0, 0 | Manager::Render: once a frame from the main loop | MC_PRE_RENDER |
+| 85 | 0x00930220, 0xc | TemporaryEffects::AddEffect | MC_POST_PLAYER_ADD_EFFECT, MC_POST_ROOM_ADD_EFFECT |
+| 86 | 0x00793970, 8 | TriggerEffectRemoved | MC_POST_PLAYER_TRIGGER_EFFECT_REMOVED |
+| 87 | 0x007911f0, 0xc | GetActiveMaxCharge(item, varData, unused) | MC_PLAYER_GET_ACTIVE_MAX_CHARGE |
+| 88 | 0x00791380, 4 | GetActiveMinUsableCharge(slot) | MC_PLAYER_GET_ACTIVE_MIN_USABLE_CHARGE |
+| 89 | 0x007f2800, 8 | Room::Init: ECX the game's room, first action ClearEffects | MC_PRE_NEW_ROOM |
+| 90 | 0x00744940, 4 | Level::Init | MC_PRE_LEVEL_INIT |
+| 91 | 0x0067af60, 0 | ApplyTearFlagEffects, static: ECX the entity, EDX the position, 0x18 bytes the caller removes (17 callers) | MC_PRE/POST_APPLY_TEARFLAG_EFFECTS |
+| 92 | 0x007a8fd0, 0 | TriggerRoomClear, per player from Room::TriggerClear's callee | MC_PRE/POST_PLAYER_TRIGGER_ROOM_CLEAR |
+| 93 | 0x007a8350, 0 | TriggerNewRoom_TemporaryEffects | MC_POST_PLAYER_NEW_ROOM_TEMP_EFFECTS |
+| 94 | 0x007a4ba0, 4 | TriggerNewStage(bool) | MC_POST_PLAYER_NEW_LEVEL |
+
+Handlers were also written for slots the engine already had: AddCostume and
+RemoveCostume (19, 20), DischargeActiveItem (53), DropTrinket (54),
+TryOpenChest (55), BombDamage (56, `ret 0x30`), BombTearflagEffects (57,
+`ret 0x20`), Level::SetStage (6, MC_PRE_LEVEL_SELECT), UsePill (33, `ret 0xc`,
+MC_PRE_USE_PILL) and Familiar::FireProjectile (77).
+
+**What the probe corrected.**
+
+- Slot 12's address for TriggerRoomExit was a signature match with no `ret`
+  evidence; it is retired and slot 81 is the function Game::ChangeRoom calls.
+- Slot 15 (0x0099b520, "InitPreLevelInitStats") has no callers and never
+  fires: MC_PLAYER_INIT_PRE_LEVEL_INIT_STATS is registered and silent.
+- Slot 21 fires with an NPC as `this` during an explosion; it is not
+  Game::RestoreState, and stays without a handler.
+- The fuzzy match for GetActiveMaxCharge (0x004cdd30) returns a bool. The real
+  one is 0x007911f0 and pops three words.
+- The console's `stage` does not call TriggerRoomExit, so MC_PRE_ROOM_EXIT
+  with newLevel was seen at run start and restart only.
+- MC_PRE_RENDER is not fired on a frame the render gate drops (round 93 skips
+  the Manager::Render call there).
+- BombDamage applies tear flags only when there are flags and a source, and an
+  enemy just hit or still appearing ignores the next explosion; the tests wait.
+
+**Tests.** `test_hooks2.lua`: 49 checks, at least one about behaviour per
+callback (a max charge answer of 2 makes FullCharge fill to 2; `true` or
+`false` from a PRE callback cancels the pill, the chest, the costume, the HUD
+draw, the bomb damage, the room clear; `{Damage = 0}` leaves the gaper's hit
+points as they were). 25 deliberately wrong handlers were each caught by their
+own check and nothing else. The tests found one bug of the round's own: two
+handler blocks shared the variables holding their callback ids, so the costume
+and bomb-damage handlers fired each other's.
+
+**Not done.** MC_POST_TEAR_DEATH and MC_POST_PROJECTILE_DEATH (REPENTOGON
+patches a virtual call inside Update; hooking Remove would also fire on room
+exit), MC_PRE/POST_PLAYER_USE_BOMB, MC_POST_ROOM_RENDER_ENTITIES and
+MC_EVALUATE_STAT (patches in the middle of a function), the weapon callbacks
+(no Weapon class in the layer), MC_POST_TRIGGER_COLLECTIBLE_ADDED, and a table
+answer to PRE_PLAYERHUD_RENDER_ACTIVE_ITEM (accepted, logged as unsupported).
