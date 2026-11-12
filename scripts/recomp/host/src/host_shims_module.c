@@ -566,12 +566,44 @@ void isaac_threads_progress(void) {
 }
 
 /* EnterCriticalSection reports every acquire here. The idle lap of a queue
- * loop is: lock, see nothing queued, unlock, lock again. Two consecutive
- * acquires of one lock with no progress between them is that lap. */
+ * loop is: lock, see nothing queued, unlock, lock again. Consecutive
+ * acquires of one lock with no progress between them are that lap.
+ *
+ * Issue #12: "no progress between" cannot be seen exactly -- lifted code calls
+ * most imports directly, not through host_trap, so a host call there is not
+ * reported -- and abandoning a slice anywhere but at a real idle lap leaves
+ * the function it was in half done (and any engine Mutex it took held). The
+ * hot-plug poller's connect callback 0x00a21d40 takes the logger's lock for
+ * each of its log lines and a device handle's refcount lock for each copy;
+ * at the old count (the third acquire) its slice was abandoned before the
+ * InputManager had the new Gamepad, so a pad that appeared after the boot
+ * was polled and never given to the game. A spinning loop reaches any count
+ * within microseconds, so the count is now ISAAC_IDLE_LAPS (default 64)
+ * repeats; ISAAC_IDLE_LAPS=2 is the old behaviour, ISAAC_THR_TRACE=1 logs
+ * every idle-lap yield. */
+static unsigned idle_laps(void) {
+    static unsigned v;
+    if (!v) {
+        const char *e = getenv("ISAAC_IDLE_LAPS");
+        long n = (e && *e) ? atol(e) : 64;
+        v = n < 1 ? 1u : (unsigned)n;
+    }
+    return v;
+}
+static int thr_trace(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("ISAAC_THR_TRACE"); v = (e && *e && *e != '0'); }
+    return v;
+}
 void isaac_threads_note_cs(uint32_t cs) {
     if (!g_slicing) return;
     if (cs == g_slice_cs_last) {
-        if (++g_slice_cs_repeat >= 2u) isaac_threads_yield();
+        if (++g_slice_cs_repeat >= idle_laps()) {
+            if (thr_trace())
+                isaac_log("[isaac][thr] job #%u 0x%08x yields at an idle lap: lock 0x%08x taken %u times running",
+                          g_slice_cur, g_thr[g_slice_cur].entry, cs, g_slice_cs_repeat + 1u);
+            isaac_threads_yield();
+        }
     } else {
         g_slice_cs_last = cs;
         g_slice_cs_repeat = 0u;

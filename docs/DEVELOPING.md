@@ -75,6 +75,24 @@ it, rumble played on the pad's vibration actuator. The page's own menus (EDIT
 FILE, the mod browser) take the d-pad, A and B while they are open, and the game
 sees a resting pad meanwhile.
 
+A pad that appears after the boot is connected by the game's hot-plug poller,
+which runs as a per-frame thread slice. Chrome on Android shows a pad to the
+page only after its first button press, so on a phone this is the only path.
+The slice runner abandons a slice at the idle lap of a lock loop. Before
+issue #12 that was a lock taken a third time with no host call between, and
+most imports are direct calls the runner never saw. So the connect callback
+`0x00a21d40` lost its slice on the logger's lock (six log lines), and then on
+a device handle's refcount lock. The pad was polled but never given to the
+game. Now `OutputDebugStringA` counts as progress, and an idle lap is 64
+repeats (`?ISAAC_IDLE_LAPS=<n>`; `?ISAAC_THR_TRACE=1` logs each idle-lap
+yield to the console). To check a phone with a pad that connects late:
+
+```sh
+node scripts/recomp/web/drive_pad.mjs http://127.0.0.1:8200/play.html               # phone, pad after the boot
+node scripts/recomp/web/drive_pad.mjs http://127.0.0.1:8200/play.html kind=desktop late=0
+node --test tests/recomp-pad-hotplug.test.js
+```
+
 ### Saves and mods
 
 - Saves and options live in IndexedDB and load before the engine starts.

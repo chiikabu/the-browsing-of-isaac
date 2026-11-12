@@ -9979,3 +9979,81 @@ have yet: `BlockCollectible`, `EntitySaveStateManager`, innate items,
 fired. It is not in `ALLOW`, and the layer's mod is not in the catalogue.
 What a player without the layer gets from this round is the three port fixes
 above.
+
+### 21.134 Round 104: a pad plugged in after the boot, and a callback runner that survives an error
+
+Two separate pieces of work; the first changes the engine, the second only the
+layer's Lua.
+
+**A controller that appears after the game has started (issue 12).** On a phone
+a pad is seen by the browser only once a button is pressed, which is after the
+boot. The game's poller job (0x00a220c0, scan 0x00a6dab0) then saw it and
+logged "Gamepad Connected:", and nothing else happened: no Gamepad in the
+InputManager, no "SELECT A CONTROLLER!" answer, sticks dead. A pad that was
+there at boot worked, which is why desktop testing never saw it.
+
+The cause was in the host, not the game. A guest job runs in slices, and
+`isaac_threads_note_cs` treated a job that took the same lock again with no
+progress in between as an idle lap and yielded. The threshold was 2 repeats.
+The connect callback 0x00a21d40 takes the logger's lock (0x00a112c0) once per
+line it prints and the device-handle refcount lock (0x00d2228c) besides, so it
+was abandoned in the middle, after its second log line, every time. Two
+changes:
+
+- a log line is progress: `OutputDebugStringA` calls `isaac_threads_progress()`,
+  so a job that prints between two acquires is not idle;
+- the idle-lap threshold is 64 (`ISAAC_IDLE_LAPS` overrides it), and
+  `ISAAC_THR_TRACE` prints the job, the lock and the count when a job is
+  yielded for it.
+
+Checked by `scripts/recomp/web/drive_pad.mjs` (a virtual pad through the
+Gamepad API, appearing after the boot or present from the start): 8 of 8 on
+the new engine both ways; 2 of 8 on the engine before it, failing at exactly
+"the game takes the pad in". `tests/recomp-pad-hotplug.test.js` pins the host
+rule. Because the threshold applies to every background job, the whole
+catalogue was swept again on this engine: 203 mods, 203 clean, 0 stops.
+
+**The game's callback runner stops at the first error; REPENTOGON's does not.**
+With the hooks armed Fiend Folio played, and its log was a cascade: one of its
+functions on a callback raised (a name the layer lacks), the game's
+`_RunCallback` (resources/scripts/main.lua) left the whole list, and every
+function after it on that callback never ran, among them the one that builds
+`ffsavedata`. Everything that reads that table then failed too. Under
+REPENTOGON each function runs under its own `xpcall`, the error is logged, and
+the list goes on. The layer's runner now does the same for the game's own
+callbacks as well as for the ones it adds, with the per-callback rules
+REPENTOGON documents (MC_POST_ENTITY_REMOVE returns nothing,
+MC_POST_CURSE_EVAL folds its argument, MC_ENTITY_TAKE_DMG ends only on
+`false`, MC_POST_PICKUP_SELECTION carries a table on), and
+`Isaac.RunCallback` / `Isaac.RunCallbackWithParam` go through it. A mod's
+`__matchParams` on its callback list is honoured.
+
+**Names added** (`api_more.lua`, `api_data.lua`): `RNG:SetSeed(seed)` with the
+shift defaulting to 35; `RoomDescriptor:GetDimension` (put on a real
+descriptor's own tables at the first player init: the global `RoomDescriptor`
+is not where an object looks its methods up); `EntityPlayer:GetActiveItemSlot`,
+`GetMaxCoins` / `GetMaxKeys` / `GetMaxBombs` (the caps the game really
+enforces, 999 coins under Deep Pockets); `PersistentGameData:GetEventCounter`
+(the array at +0x2bc, from `mov edi, [esi+ebx*4+0x2bc]` at 0x00929b68 in
+IncreaseEventCounter); a mod's shader on a sprite is accepted and listed as
+unsupported.
+
+**A second pass over the addresses.** `scripts/recomp/rgon/tools/zhl_fuzzy.py`
+re-derives REPENTOGON's function list against this executable with wildcard
+distance and a `ret N` audit, and cross-checks every address the layer already
+uses. Two fail, both inert because nothing listens on them: slot 12
+(0x00832850, already known from round 103; it draws the room transition) and
+slot 21 (0x006bb790 as `Game::RestoreState`: it is an NPC virtual, slot 25,
+and pops 0 where the declaration says 8). The pass also gives candidates for
+the next engine round, each still to be confirmed by a probe before use:
+0x007a6680 for the real `TriggerRoomExit` (ret 4, called per player from
+Game::ChangeRoom), 0x0078ff90 `TriggerCollectibleRemoved`, and 31 of
+REPENTOGON's 46 mid-function patch sites.
+
+**Where it stands.** `test_layer3.lua` adds 17 in-game checks to the 49 + 95 +
+7. Fiend Folio with all hooks armed plays 45 s with no stop; it still raises
+about two dozen distinct errors for names the layer does not have
+(`EntitySaveStateManager`, `BlockCollectible`, innate items, chance revives,
+`CheckFamiliarEx`, two player fields) and about 120 of the callbacks it
+listens on are not fired. It is not in `ALLOW`, and the layer's mod is not in
+the catalogue.

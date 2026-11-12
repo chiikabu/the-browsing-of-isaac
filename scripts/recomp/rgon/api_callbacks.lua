@@ -29,12 +29,14 @@ end
 -- as a function that returns the next entry (nil at the end).
 local function iterator(id, param, param2)
   local list, i = GetCallbacks(id), 0
+  local mt = getmetatable(list)                       -- a list may bring its own rule (the game's runner asks the same)
+  local match = mt and mt.__matchParams or matches
   return function()
     while true do
       i = i + 1
       local cb = list[i]
       if cb == nil then return nil end
-      if matches(param, cb.Param) or (param2 ~= nil and matches(param2, cb.Param)) then return cb end
+      if match(param, cb.Param) or (param2 ~= nil and match(param2, cb.Param)) then return cb end
     end
   end
 end
@@ -169,6 +171,50 @@ local function add_card_pill(id, it, player, what, ...)
 end
 rule("MC_PRE_PLAYER_ADD_CARD MC_PRE_PLAYER_ADD_PILL", add_card_pill)
 
+-- The game's own callbacks whose rule REPENTOGON changes. Every other one of
+-- the game's keeps "the first answer ends the run", with one difference that
+-- mods written for REPENTOGON count on: an error in one function is logged and
+-- the functions after it still run (the game's runner stops the whole list).
+rule("MC_POST_ENTITY_REMOVE", no_return)
+rule("MC_POST_CURSE_EVAL", fold(1))
+-- only false ends the run; true does not (and is not handed on). A table
+-- ({ Damage, DamageFlags, DamageCountdown }) is shown to the functions after
+-- it and merged. The engine of this build reads a boolean only, so the merged
+-- table changes nothing in the game yet: said once.
+local said_dmg_table = false
+RULE[M.MC_ENTITY_TAKE_DMG] = function(id, it, entity, damage, flags, source, countdown, ...)
+  local out
+  for cb in it do
+    local ret = call(id, cb, entity, damage, flags, source, countdown, ...)
+    if ret == false then return false end
+    if type(ret) == "table" then
+      if type(ret.Damage) == "number" then damage = ret.Damage end
+      if math.type(ret.DamageFlags) == "integer" then flags = ret.DamageFlags end
+      if type(ret.DamageCountdown) == "number" then countdown = ret.DamageCountdown end
+      if out then for k, v in pairs(ret) do out[k] = v end else out = ret end
+      if not said_dmg_table then
+        said_dmg_table = true
+        B.log("accepted, not supported in the browser: a table returned from MC_ENTITY_TAKE_DMG (the damage is not changed)")
+      end
+    end
+  end
+  return out
+end
+-- { variant, subtype, keep going }: without the third entry the answer ends the run
+RULE[M.MC_POST_PICKUP_SELECTION] = function(id, it, pickup, variant, subtype, ...)
+  local last
+  for cb in it do
+    local ret = call(id, cb, pickup, variant, subtype, ...)
+    if type(ret) == "table" then
+      if not ret[3] then return ret end
+      if math.type(ret[1]) == "integer" and math.type(ret[2]) == "integer" then
+        last, variant, subtype = { ret[1], ret[2] }, ret[1], ret[2]
+      end
+    end
+  end
+  return last
+end
+
 local function over(id, it, ...)
   return (RULE[id] or first)(id, it, ...)
 end
@@ -185,17 +231,11 @@ R.Implemented["Isaac.GetCallbackIterator"] = true
 R.Implemented["Isaac.RunCallbackOverIterator"] = true
 R.Implemented["Isaac.RunCallbackWithTwoParams"] = true
 
--- A mod firing one of the layer's callbacks itself (Isaac.RunCallback(ModCallbacks.MC_POST_ADD_COLLECTIBLE, ...))
--- gets the layer's rules; everything else goes to the game's runner as before.
-do
-  local game_run = Isaac.RunCallbackWithParam
-  local function with_param(id, param, ...)
-    if type(id) == "number" and id >= 1000 then return run(id, param, ...) end
-    return game_run(id, param, ...)
-  end
-  rawset(Isaac, "RunCallbackWithParam", with_param)
-  rawset(Isaac, "RunCallback", function(id, ...) return with_param(id, nil, ...) end)
-end
+-- A mod firing a callback itself (Isaac.RunCallback(id, ...)) gets the same
+-- rules as the engine does below, for the game's callbacks, the layer's and a
+-- mod's own (a string id).
+rawset(Isaac, "RunCallbackWithParam", run)
+rawset(Isaac, "RunCallback", function(id, ...) return run(id, nil, ...) end)
 
 ------------------------------------------------------------------------------
 -- between the engine and its callbacks
@@ -203,9 +243,10 @@ end
 -- The engine does not look its runner up by name: LuaEngine::Init
 -- (0x008604c0) takes a registry reference to main.lua's _RunCallback, keeps it
 -- in a small object { lua_State*, key } it points at from +0x10 (the state
--- itself is at +0x18), and clears the global. T.engine_callback[id] = f puts
--- f(game_run, id, param, ...) in front of one callback of the engine's;
--- every other id goes straight through.
+-- itself is at +0x18), and clears the global. The reference is pointed at the
+-- layer's runner (the rules above, one function's error not stopping the
+-- rest), as REPENTOGON replaces _RunCallback. T.engine_callback[id] = f puts
+-- f(run, id, param, ...) in front of one callback of the engine's.
 do
   local r32 = B.r32
   local engine = r32(0x00c71690)                       -- g_LuaEngine (asm: ModManager::Reset reads it at 0x008f8c02)
@@ -215,10 +256,10 @@ do
     local game_run = B.registry(key)
     if type(game_run) == "function" then
       local special = {}
-      B.registry(key, function(id, ...)
+      B.registry(key, function(id, param, ...)
         local f = special[id]
-        if f then return f(game_run, id, ...) end
-        return game_run(id, ...)
+        if f then return f(run, id, param, ...) end
+        return run(id, param, ...)
       end)
       T.engine_callback = special
       T.game_run = game_run

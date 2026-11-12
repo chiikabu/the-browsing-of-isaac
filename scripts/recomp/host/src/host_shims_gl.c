@@ -958,6 +958,18 @@ void imp_kernel32__OutputDebugStringA(CpuState *restrict cpu) {
     }
     buf[n] = 0;
     fprintf(stderr, "[odsa] %s\n", buf);
+    /* A log line is work, not the idle lap of a lock loop (issue #12). The
+     * engine logger 0x00a112c0 takes its Mutex 0xc37958 for every line and
+     * calls this import directly, so it never reached host_trap's "a host
+     * call is progress" rule: a sliced job that logged three lines in a row
+     * acquired that lock three times "with nothing between" and was
+     * abandoned mid-function. The hot-plug poller's connect callback
+     * 0x00a21d40 logs six lines before it builds the InputManager device, so
+     * every pad that appeared after the boot was left half-connected (its
+     * XInput record polled, no Gamepad for the game) -- on any platform, and
+     * on every Android phone, where Chrome shows a pad only after its first
+     * button press. */
+    { extern void isaac_threads_progress(void); isaac_threads_progress(); }
     isaac_room_probe("log");            /* ISAAC_ROOM_PROBE: the door-touch inputs at this line */
     { extern void isaac_room_test(CpuState *cpu, const char *line); isaac_room_test(cpu, buf); }
     cpu->EAX = 0;

@@ -405,6 +405,19 @@ end
 function P:GetBestiaryKillCount(etype, variant) return call(0x0092b100, pgd(), etype, variant or 0) end
 function P:GetBestiaryDeathCount(etype, variant) return call(0x0092b070, pgd(), etype, variant or 0) end
 function P:GetBestiaryEncounterCount(etype, variant) return call(0x0092b190, pgd(), etype, variant or 0) end
+-- the counters are an array of ints at +0x2bc (asm: IncreaseEventCounter reads
+-- its counter with `mov edi, [esi + ebx*4 + 0x2bc]` at 0x00929b68 and stores the
+-- sum back with `mov [esi + ebx*4 + 0x2bc], eax` at 0x00929b7d; it does neither
+-- while the byte at +1, saved data being read-only, is set)
+local COUNTER_MAX = 0
+for _, v in pairs(rawget(_G, "EventCounter") or {}) do
+  if math.type(v) == "integer" and v > COUNTER_MAX then COUNTER_MAX = v end
+end
+function P:GetEventCounter(counter)
+  local n = achievement_id(counter, "GetEventCounter")
+  if n < 0 or n > COUNTER_MAX then error("bad argument #2 to 'GetEventCounter' (EventCounter cannot be higher than " .. COUNTER_MAX .. ")", 2) end
+  return B.ri32(pgd() + 0x2bc + 4 * n)
+end
 local the_pgd = setmetatable({}, P)
 static(Isaac, "Isaac", "GetPersistentGameData", function() return the_pgd end)
 for name in pairs(P) do if name:sub(1, 2) ~= "__" then R.Implemented["PersistentGameData." .. name] = true end end

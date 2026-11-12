@@ -57,8 +57,10 @@ HOOKS = [
     (10, "Game::End", 0x006f9770, "reg", 4, ""),
     # round 103
     (11, "ModManager::LoadConfigs", 0x008f30d0, "asm", 0, "runs each mod's main.lua (call 0x86e6c0 at 0x008f4654); called by ModManager::Reset 0x008f8c5c"),
-    # slot 12 is a FALSE signature match (see api_hooks.lua): no handler listens on it. The row stays
-    # as built into the engine; replace it with the real function at the next engine build.
+    # slot 12 is a FALSE signature match (see api_hooks.lua): 0x00832850 is RoomTransition::Render. No
+    # handler listens on it. The row stays as built into the engine; the candidate for the real function
+    # is 0x007a6680 (ret 4, called per player from Game::ChangeRoom with 0), to be confirmed by a probe
+    # hook at the next engine build.
     (12, "Entity_Player::TriggerRoomExit", 0x00832850, "sig", None, ""),
     (13, "Entity_Player::TriggerTrinketAdded", 0x007ad860, "sig", None, ""),
     (14, "Entity_Player::TriggerTrinketRemoved", 0x007adb30, "sig", None, ""),
@@ -68,6 +70,8 @@ HOOKS = [
     (18, "Manager::SetSaveSlot", 0x00959e70, "sig", None, ""),
     (19, "Entity_Player::AddCostume", 0x0075d1d0, "reg", None, ""),
     (20, "Entity_Player::RemoveCostume", 0x0075d850, "reg", None, ""),
+    # slot 21 is a FALSE signature match too (tools/zhl_fuzzy.py audit: 0x006bb790 is slot 25 of the NPC
+    # vtable, pops 0 where the declaration pops 8). No handler listens on it; replace at the next engine build.
     (21, "Game::RestoreState", 0x006bb790, "sig", None, ""),
     (22, "Room::SpawnGridEntity", 0x007ebca0, "reg", None, ""),
     (23, "GridEntity::Init", 0x00709db0, "sig", None, ""),

@@ -598,7 +598,7 @@ local T = {
   define = define, run = run, class_tables = class_tables, bool_at = bool_at,
   rearm = function() arm(nil) end,
 }
-for _, part in ipairs({ "api_callbacks.lua", "api_lua.lua", "api_data.lua", "api_objects.lua", "api_game.lua", "api_player.lua", "api_sprite.lua", "api_misc.lua", "api_hooks.lua" }) do
+for _, part in ipairs({ "api_callbacks.lua", "api_lua.lua", "api_data.lua", "api_objects.lua", "api_game.lua", "api_player.lua", "api_sprite.lua", "api_misc.lua", "api_more.lua", "api_hooks.lua" }) do
   local chunk, why = B.load(part)
   if chunk then
     local ok, err = pcall(chunk, T)
