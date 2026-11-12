@@ -1374,6 +1374,11 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (92, 0x007a8fd0, "Entity_Player::TriggerRoomClear"),    # ret 0x0; asm
     (93, 0x007a8350, "Entity_Player::TriggerNewRoom_TemporaryEffects"),    # ret 0x0; asm
     (94, 0x007a4ba0, "Entity_Player::TriggerNewStage"),    # ret 0x4; asm
+    (95, 0x006acb00, "Entity::Remove"),    # ret 0x0; sig Remove; asm
+    (96, 0x00846ff0, "PlayerHUD::RenderTrinket"),    # ret 0x14; asm
+    (97, 0x007ebd50, "Room::SpawnGridEntityDesc"),    # ret 0x8; sig Room::SpawnGridEntityDesc
+    (98, 0x004199d0, "Room::RenderEntityPass_004199d0"),    # ret 0x8; asm
+    (99, 0x008151e0, "Room::GetShopItemPrice"),    # ret 0x10; asm
     (100, 0x006a93a0, "Entity::Init"),    # ret 0x10; sig Init; vtable 0x00b6730c slot 1
     (101, 0x00755470, "Entity_Player::Init"),    # ret 0x10; vtable 0x00b6bdd0 slot 1
     (102, 0x006b8b20, "Entity_NPC::Init"),    # ret 0x10; vtable 0x00b67468 slot 1

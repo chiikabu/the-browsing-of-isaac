@@ -471,6 +471,17 @@ export async function fetchMod(base, entry, onProgress) {
 export const PACK_CACHE = 'isaac-modpacks-v1';
 const PACK_KEY = 'https://modpacks.isaac.invalid/';          // the cache's key space: a pack is its name, wherever it came from
 export const isPacked = (m) => !!(m && m.packed && m.packed.index);
+// A packed mod is a very large one: with Fiend Folio the game's memory goes from
+// 640 MiB to about 1.2 GB, which a phone's browser does not give a page. A
+// touch-first device that does not report 8 GB is told so in the list, rather
+// than let run out of memory in the middle of a boot. (deviceMemory is Chrome's
+// and stops at 8; a browser without it is judged by its pointer alone.)
+export const smallDevice = (env = globalThis) => {
+  const coarse = typeof env.matchMedia === 'function' && !!env.matchMedia('(pointer: coarse)').matches;
+  const mem = env.navigator ? env.navigator.deviceMemory : undefined;
+  return coarse && !(mem >= 8);
+};
+export const NEEDS_COMPUTER = 'NEEDS A COMPUTER';
 const hexOf = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
 export async function sha256Hex(bytes) { return hexOf(await crypto.subtle.digest('SHA-256', bytes)); }
 // a pack or an index is named after its bytes: the name (less its extension) is
@@ -888,6 +899,7 @@ export function createModsMenu(opts) {
   async function installPacked(entry, onProgress) {
     db = db || await openModDb();
     if (!db) throw new Error('this browser keeps no database, so a mod could not be kept');
+    if (smallDevice()) throw new Error(`${entry.name} needs more memory than a phone's browser gives the game`);
     const already = await getMod(db, entry.id);
     if (already) throw new Error(`${already.name} is already installed`);
     const store = createPackStore({ log });
@@ -967,6 +979,8 @@ export function createModsMenu(opts) {
     const list = ((catalogue && catalogue.mods) || []).map((m) => ({
       id: m.id, name: cleanModName(m.name), desc: describe(m.description, m.whole), version: m.version || '',
       bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: !isPacked(m) && (m.bytes || 0) > SEED_BUDGET,
+      // a packed mod on a phone: not offered (smallDevice above)
+      needsComputer: isPacked(m) && smallDevice(),
       // round 107: a packed mod downloads its eager lane now and the rest as it is played
       sizeNote: isPacked(m) ? `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null,
       // round 95: what installing it brings along, by name
@@ -1052,8 +1066,10 @@ export function createModsMenu(opts) {
       const rows = list.map((m) => ({
         label: m.name.replace(/^[!\s]+/, ''),
         note: busyId === m.id && progress != null ? `${progress}%`
-          : have.has(m.id) ? 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG' : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
-        dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET),
+          : have.has(m.id) ? 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG'
+            : isPacked(m) && smallDevice() ? NEEDS_COMPUTER
+              : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
+        dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET) || (isPacked(m) && smallDevice()),
         // what the mod does, under the list, as the game's own mods screen shows it
         detail: [m.version ? `V${m.version}` : '', m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),

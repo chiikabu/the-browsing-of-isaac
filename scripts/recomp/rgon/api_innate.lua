@@ -355,6 +355,10 @@ local function add(player, kind, id, amount, key, duration, add_costume)
     g.perm[id] = (g.perm[id] or 0) + amount
   end
   sync(player, r, kind, { [id] = true }, add_costume)
+  -- MC_POST_TRIGGER_COLLECTIBLE_ADDED (player, id, false, true): REPENTOGON's innate items run it when one is
+  -- added (round 109)
+  local TCA = M.MC_POST_TRIGGER_COLLECTIBLE_ADDED
+  if kind == "c" and TCA and T.listening[TCA] then T.run(TCA, id, player, id, false, true) end
   fire(kind, "add", player, id, key, amount, duration)
 end
 local function remove(player, kind, id, amount, key)

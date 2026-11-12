@@ -327,7 +327,7 @@ export function createModBrowser(opts) {
       const note = busy ? (s.progress != null ? `${s.progress}%` : '...') : '';
       const noteW = note ? measure(F10, note) : 0;
       const nameW = l.x1 - (l.x0 + 10) - (noteW ? noteW + 8 : 0) - (it.installed ? 14 : 0);
-      text(F10, clip(F10, it.name, nameW), l.x0 + 10, y, it.big && !it.installed ? 'light' : 'ink');
+      text(F10, clip(F10, it.name, nameW), l.x0 + 10, y, (it.big || it.needsComputer) && !it.installed ? 'light' : 'ink');
       if (note) text(F10, note, l.x1 - noteW, y);
       if (it.installed) tick(l.x1 - 10, y + 2);
       st.regions.push({ kind: 'row', index: i, x: l.x0, y: y - 2, w: l.x1 - l.x0, h: 16 });
@@ -429,6 +429,10 @@ export function createModBrowser(opts) {
       wrapText(sub, width - backW - 12, (t) => measure(F10, t), 2)
         .forEach((line, i) => text(F10, line, d.x0, actionY + 22 + i * 11, st.confirm === it.id ? 'ink' : 'light'));
       if (!done) st.regions.push({ kind: 'act', x: d.x0 - 4, y: actionY - 4, w: width + 8, h: 44 });
+    } else if (it.needsComputer) {
+      // a packed mod (Fiend Folio) on a phone: the game would run out of memory (mods.mjs smallDevice)
+      text(F10, 'NEEDS A COMPUTER', d.x0, actionY + 4);
+      text(F10, 'TOO MUCH MEMORY FOR A PHONE', d.x0, actionY + 18, 'light');
     } else if (it.big) {
       text(F10, 'TOO BIG FOR THE BROWSER', d.x0, actionY + 4);
       text(F10, 'THE GAME IS GIVEN 96 MB FOR MODS', d.x0, actionY + 18, 'light');
@@ -486,7 +490,7 @@ export function createModBrowser(opts) {
       Promise.resolve(st.ctl.remove(it.id)).then(draw, draw);
       return;
     }
-    if (it.big) return;
+    if (it.big || it.needsComputer) return;
     play('select');
     Promise.resolve(st.ctl.install(it.id)).then(draw, draw);
   }

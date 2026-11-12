@@ -276,22 +276,52 @@ do
   mode = nil
   -- an enemy just hurt ignores the next hit for a few frames, and the flags are applied only to a hit that
   -- lands: each explosion below waits that out, and each check also asks that PRE did run for the gaper
+  -- Round 109: these two used to wait a fixed 20 frames and read the counters 2 frames after one
+  -- explosion. Now and then that explosion applied no tear flags to the gaper at all ("0 0 hp 995.0":
+  -- PRE had not run): flags are applied (slot 91) only to an enemy the explosion takes, and an enemy just
+  -- hit, or still appearing, is skipped. The gaper's hit points are no sign of it (a 1-damage explosion that
+  -- applied its flags left them at 995.0, measured), and after the explosions above the gaper can go on
+  -- being skipped for long (measured: 0 of 12 explosions 12 frames apart, in one run of three). So each of
+  -- the two checks has a gaper of its own, out of its appearing, and waits on the event itself: one
+  -- explosion at a time, 12 frames apart, until PRE has run for that gaper (at most 12), then reads the
+  -- counters.
+  local function fresh_gaper(at)
+    local t = Isaac.Spawn(EntityType.ENTITY_GAPER, 0, 0, at, Vector(0, 0), nil):ToNPC()
+    t.MaxHitPoints, t.HitPoints = 1000, 1000
+    for _ = 1, 600 do if t.FrameCount >= 40 then break end wait(1) end
+    return t
+  end
+  local function count_for(list, t)
+    local n = 0
+    for _, e in ipairs(list) do if same(e[1], t) then n = n + 1 end end
+    return n
+  end
+  local function pre_for(t) return count_for(apre, t) end
+  local function land_one(t, at)
+    for try = 1, 12 do
+      local n0 = pre_for(t)
+      t.Position, t.Velocity = at, Vector(0, 0)
+      game:BombDamage(at, 1, 40, false, p, TearFlags.TEAR_SPECTRAL, DamageFlag.DAMAGE_EXPLOSION, false)
+      wait(2)
+      if pre_for(t) > n0 then return try end
+      wait(10)
+    end
+    return 0
+  end
+  local at2 = centre() + Vector(-100, 80)
   amode = "cancel"
-  wait(20)
-  na = #apost
-  local pa = #apre
-  hold()
-  game:BombDamage(g.Position, 1, 40, false, p, TearFlags.TEAR_SPECTRAL, DamageFlag.DAMAGE_EXPLOSION, false)
-  wait(2)
-  T("PRE_APPLY_TEARFLAG_EFFECTS -> false: PRE ran, no POST", #apre == pa + 1 and #apost == na, (#apre - pa) .. " " .. (#apost - na) .. " hp " .. g.HitPoints)
+  local g2 = fresh_gaper(at2)
+  local tries = land_one(g2, at2)
+  T("PRE_APPLY_TEARFLAG_EFFECTS -> false: PRE ran, no POST", tries > 0 and pre_for(g2) == 1 and count_for(apost, g2) == 0,
+    pre_for(g2) .. " " .. count_for(apost, g2) .. " hp " .. g2.HitPoints .. " tries " .. tries)
+  g2:Remove()
   amode = "slow"
-  wait(20)
-  pa = #apre
-  T("the gaper is not slowed before", not g:HasEntityFlags(EntityFlag.FLAG_SLOW))
-  hold()
-  game:BombDamage(g.Position, 1, 40, false, p, TearFlags.TEAR_SPECTRAL, DamageFlag.DAMAGE_EXPLOSION, false)
-  wait(2)
-  T("PRE_APPLY_TEARFLAG_EFFECTS -> {TearFlags = TEAR_SLOW}: the gaper is slowed", #apre == pa + 1 and g:HasEntityFlags(EntityFlag.FLAG_SLOW), #apre - pa)
+  local g3 = fresh_gaper(at2)
+  T("the gaper is not slowed before", not g3:HasEntityFlags(EntityFlag.FLAG_SLOW))
+  tries = land_one(g3, at2)
+  T("PRE_APPLY_TEARFLAG_EFFECTS -> {TearFlags = TEAR_SLOW}: the gaper is slowed", tries > 0 and pre_for(g3) == 1 and g3:HasEntityFlags(EntityFlag.FLAG_SLOW),
+    pre_for(g3) .. " tries " .. tries)
+  g3:Remove()
   amode = nil
   off(M.MC_PRE_BOMB_DAMAGE, f1) off(M.MC_POST_BOMB_DAMAGE, f2) off(M.MC_PRE_APPLY_TEARFLAG_EFFECTS, f3) off(M.MC_POST_APPLY_TEARFLAG_EFFECTS, f4)
 

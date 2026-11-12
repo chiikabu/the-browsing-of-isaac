@@ -73,8 +73,8 @@ test('a wrapper tests its own slot first, runs the lifted body, then any parked 
 test('hook_slots.lua, which the handlers read, is the list the lift wraps', (t) => {
   const h = liftHooks(t); if (!h) return;
   const text = readFileSync(join(rgon, 'hook_slots.lua'), 'utf8');
-  const named = [...text.matchAll(/\["([A-Za-z_]+::[A-Za-z_]+)"\] = \{ (\d+), (false|0x[0-9a-f]+) \}/g)];
-  const alias = [...text.matchAll(/\["([A-Za-z_]+::[A-Za-z_]+)"\] = "([A-Za-z_]+::[A-Za-z_]+)"/g)];
+  const named = [...text.matchAll(/\["([A-Za-z_]+::[A-Za-z_0-9]+)"\] = \{ (\d+), (false|0x[0-9a-f]+) \}/g)];
+  const alias = [...text.matchAll(/\["([A-Za-z_]+::[A-Za-z_0-9]+)"\] = "([A-Za-z_]+::[A-Za-z_0-9]+)"/g)];
   assert.equal(named.length, h.length, 'one entry per wrapped function');
   const byWhat = new Map(h.map((x) => [x.what, x.slot]));
   for (const m of named) assert.equal(byWhat.get(m[1]), Number(m[2]), `${m[1]} is slot ${m[2]} in the lift`);
@@ -82,7 +82,7 @@ test('hook_slots.lua, which the handlers read, is the list the lift wraps', (t) 
   for (const m of alias) assert.ok(names.has(m[2]), `${m[1]} shares ${m[2]}, which is in the table`);
   // every function a handler asks for by name is in the table
   const hooksLua = readFileSync(join(rgon, 'api_hooks.lua'), 'utf8');
-  for (const m of hooksLua.matchAll(/(?:on|fired|head_body|status)\("([A-Za-z_]+::[A-Za-z_]+)"/g)) {
+  for (const m of hooksLua.matchAll(/(?:on|fired|head_body|status)\("([A-Za-z_]+::[A-Za-z_0-9]+)"/g)) {
     assert.ok(names.has(m[1]) || alias.some((a) => a[1] === m[1]), `api_hooks.lua hooks ${m[1]}, which has no slot`);
   }
 });

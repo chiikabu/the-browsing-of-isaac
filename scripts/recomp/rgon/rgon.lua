@@ -257,7 +257,10 @@ local function bool_at(a) return r8(a) ~= 0 end
 --   -> false: the item is not added; an integer: that item instead;
 --      a table {type, charge, firstTime, slot, varData}: those instead
 -- after:  the same six, with what was actually added
-define(SLOT.AddCollectible, { 1004, 1005 }, function(self, esp)
+-- MC_POST_TRIGGER_COLLECTIBLE_ADDED (1053), round 109: (player, type, firstTime, wispOrInnate), param = type,
+--   after the item was added and before MC_POST_ADD_COLLECTIBLE, as REPENTOGON runs both from the end of its
+--   AddCollectible hook; wispOrInnate is false here (api_innate.lua fires it with true for an innate item)
+define(SLOT.AddCollectible, { 1004, 1005, 1053 }, function(self, esp)
   local t, charge, first, slot, var = ri32(esp + 4), ri32(esp + 8), bool_at(esp + 12), ri32(esp + 16), ri32(esp + 20)
   local player = wrap("EntityPlayer", self)
   if listening[1004] then
@@ -276,7 +279,9 @@ define(SLOT.AddCollectible, { 1004, 1005 }, function(self, esp)
   end
   return { t, charge, first, slot, var, player }
 end, function(self, esp, eax, a)
-  if a and listening[1005] then run(1005, a[1], a[1], a[2], a[3], a[4], a[5], a[6]) end
+  if not a then return end
+  if listening[1053] then run(1053, a[1], a[6], a[1], a[3], false) end
+  if listening[1005] then run(1005, a[1], a[1], a[2], a[3], a[4], a[5], a[6]) end
 end)
 
 -- MC_PRE_ADD_TRINKET (1014)
@@ -598,7 +603,7 @@ local T = {
   define = define, run = run, class_tables = class_tables, bool_at = bool_at,
   rearm = function() arm(nil) end,
 }
-for _, part in ipairs({ "api_callbacks.lua", "api_lua.lua", "api_data.lua", "api_objects.lua", "api_game.lua", "api_player.lua", "api_sprite.lua", "api_misc.lua", "api_more.lua", "api_innate.lua", "api_hooks.lua" }) do
+for _, part in ipairs({ "api_callbacks.lua", "api_lua.lua", "api_data.lua", "api_objects.lua", "api_game.lua", "api_player.lua", "api_sprite.lua", "api_misc.lua", "api_more.lua", "api_innate.lua", "api_extra.lua", "api_hooks.lua" }) do
   local chunk, why = B.load(part)
   if chunk then
     local ok, err = pcall(chunk, T)
@@ -759,6 +764,11 @@ local ALLOW = {
   ["fireworks-for-good-items"] = true,    -- EntityPickup:IsBlind()
   ["reactionapi"] = true,                 -- PlayerManager, Level:GetDimension, IsBlind, GetCollectibleCycle,
                                           -- MC_POST_PICKUP_MORPH, Isaac.CanStartTrueCoop, the enums
+  -- Fiend Folio needs REPENTOGON to load at all, so it is let in while the
+  -- layer still lacks part of what it uses (round 109: a stress tour ends with
+  -- no stop and no Lua error from it; 78 of the callbacks it listens on are
+  -- never fired, and each is named in the log when it registers).
+  ["fiendfolio-reloaded"] = true,
   -- Looked at and left out on purpose: mantle-rework and moderrorcontainer
   -- switch themselves off under REPENTOGON because it does their job natively,
   -- which this layer does not; giant_props, andromeda, doki-doki-repentance and

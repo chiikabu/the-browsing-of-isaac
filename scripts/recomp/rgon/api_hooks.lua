@@ -1231,6 +1231,266 @@ if M.MC_PRE_USE_PILL then
   end, nil)
 end
 
+------------------------------------------------------------------------------
+-- round 109
+------------------------------------------------------------------------------
+local GAME_PTR = 0x00c71678                          -- the game object (asm: read by every caller below)
+
+-- MC_PRE_ITEM_OVERLAY_SHOW (1076): (overlayID, delay, player), param = overlayID -> true: not shown;
+--   an integer: that overlay instead.  MC_POST_ITEM_OVERLAY_SHOW (1134): the same, after.
+--   ItemOverlay::Show(id, delay, player) 0x009ad210, ret 0xc (slot 28; every ret reached pops 0xc,
+--   .scratch/rgon/h2/rets.py). `this` is the game's overlay, game+0x1c034 (Game::GetItemOverlay 0x00456860 is
+--   `lea eax, [ecx + 0x1c034]; ret`, and the callers pass what it answers: 0x005be6f3..0x005be700 push
+--   (0x27, 0, 0)). It refuses an id above 0x2f (0x009ad221) and stores it at +4 (0x009ad27a). The player
+--   may be 0.
+do
+  local PRE, POST = M.MC_PRE_ITEM_OVERLAY_SHOW, M.MC_POST_ITEM_OVERLAY_SHOW
+  local list = ids(PRE, POST)
+  if #list > 0 then
+    on("ItemOverlay::Show", list, function(self, esp)
+      if self ~= r32(GAME_PTR) + 0x1c034 then wrong("ItemOverlay::Show", self) return end
+      local pl = r32(esp + 12)
+      local p = pl ~= 0 and as("EntityPlayer", pl, "ItemOverlay::Show (its player)") or nil
+      if p == false then return end
+      local id, delay = ri32(esp + 4), ri32(esp + 8)
+      if PRE and listening[PRE] then
+        local res = run(PRE, id, id, delay, p)
+        if res == true then return true, 0 end
+        if mathtype(res) == "integer" then id = res w32(esp + 4, id) end
+      end
+      return { id, delay, p }
+    end, function(self, esp, eax, k)
+      -- the id the game took is the one it stored at +4 (0x009ad27a); an id it refused leaves +4 as it was
+      if k and POST and listening[POST] then
+        local shown = k[1] >= 0 and k[1] <= 0x2f and ri32(self + 4) or k[1]
+        run(POST, shown, shown, k[2], k[3])
+      end
+    end)
+  end
+end
+
+-- MC_PRE_GRID_ENTITY_SPAWN (1100): (type, variant, varData, gridIndex, seed, desc), param = type
+--   -> false: not spawned (the function answers false); a table {type, variant, varData, seed}: those.
+--   Room::SpawnGridEntity(gridIndex, type, variant, seed, varData) 0x007ebca0, ret 0x14 (slot 22, reg: the
+--   game's Lua Room:SpawnGridEntity is this function, its arguments in that order); desc is nil there, and a
+--   GridEntityDesc answered there is accepted and not supported (said once).
+--   Room::SpawnGridEntityDesc(gridIndex, GridEntityDesc*) 0x007ebd50, ret 8 (slot 97, round 109; REPENTOGON's
+--   signature matches it once): the room's own spawns from a descriptor (its callers 0x004feaba, 0x00820baa).
+--   desc is the game's GridEntityDesc (Type +0, Variant +4, SpawnSeed +0x10, VarData +0x14: the Lua
+--   registration's data members). A table answered there spawns those through SpawnGridEntity instead, and a
+--   GridEntityDesc answered is spawned from in its place, as REPENTOGON does; the callback does not run a
+--   second time for the spawn it caused.
+--   `this` must be the game's room (game+0x18300, Room::Init's `this`, api_hooks slot 89).
+do
+  local PRE = M.MC_PRE_GRID_ENTITY_SPAWN
+  local SPAWN = 0x007ebca0
+  local said_desc, inner = false, false
+  if PRE then
+    on("Room::SpawnGridEntityDesc", { PRE }, function(self, esp)
+      if inner then return end
+      if self ~= ptr(Game():GetRoom()) then wrong("Room::SpawnGridEntityDesc", self) return end
+      local idx, d = ri32(esp + 4), r32(esp + 8)
+      if d == 0 then return end
+      local res = run(PRE, ri32(d), ri32(d), ri32(d + 4), ri32(d + 0x14), idx, r32(d + 0x10), wrap("GridEntityDesc", d))
+      if res == false then return true, 0 end
+      if type(res) == "table" then
+        local function pick(i, cur) return mathtype(res[i]) == "integer" and res[i] or cur end
+        inner = true
+        local ok, eax = pcall(B.call, SPAWN, self, idx & 0xffffffff, pick(1, ri32(d)) & 0xffffffff, pick(2, ri32(d + 4)) & 0xffffffff,
+          pick(4, r32(d + 0x10)) & 0xffffffff, pick(3, ri32(d + 0x14)) & 0xffffffff)
+        inner = false
+        if ok then return true, eax & 0xff end
+        log("api_hooks: MC_PRE_GRID_ENTITY_SPAWN's spawn in place of a descriptor stopped: " .. tostring(eax))
+      elseif type(res) == "userdata" then
+        local nd = ptr(res)
+        if nd ~= 0 then w32(esp + 8, nd) end
+      end
+    end, nil)
+    on("Room::SpawnGridEntity", { PRE }, function(self, esp)
+      if inner then return end
+      if self ~= ptr(Game():GetRoom()) then wrong("Room::SpawnGridEntity", self) return end
+      local idx, gtype, var, seed, vard = ri32(esp + 4), ri32(esp + 8), ri32(esp + 12), r32(esp + 16), ri32(esp + 20)
+      local res = run(PRE, gtype, gtype, var, vard, idx, seed, nil)
+      if res == false then return true, 0 end
+      if type(res) == "table" then
+        if mathtype(res[1]) == "integer" then w32(esp + 8, res[1]) end
+        if mathtype(res[2]) == "integer" then w32(esp + 12, res[2]) end
+        if mathtype(res[3]) == "integer" then w32(esp + 20, res[3]) end
+        if mathtype(res[4]) == "integer" then w32(esp + 16, res[4]) end
+      elseif type(res) == "userdata" and not said_desc then
+        said_desc = true
+        log("accepted, not supported in the browser: a GridEntityDesc returned from MC_PRE_GRID_ENTITY_SPAWN for Room:SpawnGridEntity (the grid entity is spawned as asked)")
+      end
+    end, nil)
+  end
+end
+
+-- MC_POST_TEAR_DEATH (1033): (tear), param = tear variant.  MC_POST_PROJECTILE_DEATH (1032): (projectile),
+--   param = projectile variant. Before Entity::Remove 0x006acb00 (slot 95; vtable slot 10 of every entity
+--   class, ret 0) when it is called from the place in each Update where REPENTOGON's patch replaces the call:
+--   Entity_Tear::Update's `mov eax, [eax + 0x28]; call eax` at 0x0066a366 (return address 0x0066a36b;
+--   REPENTOGON's signature goes on with the code after the jmp that follows, which here begins with
+--   `lea esi, [edi + 0x428]` before the same `push; mov edx, esi; lea ecx, [ebp - ..]`), and
+--   Entity_Projectile::Update's `mov ecx, edi; call [eax + 0x28]` at 0x006580b3 (return address 0x006580b8;
+--   REPENTOGON's signature `8bcfff50??837f??02` matches there once).
+do
+  local TD, PD = M.MC_POST_TEAR_DEATH, M.MC_POST_PROJECTILE_DEATH
+  local list = ids(TD, PD)
+  local TEAR_DIES, PROJ_DIES = 0x0066a36b, 0x006580b8
+  T.death_sites = { tear = TEAR_DIES, projectile = PROJ_DIES }
+  if #list > 0 then
+    on("Entity::Remove", list, function(self, esp)
+      local back = r32(esp)
+      if back == TEAR_DIES then
+        if TD and wants(TD, r32(self + E_VARIANT)) then
+          local t = as("EntityTear", self, "Entity::Remove (a tear's death)")
+          if t then run(TD, r32(self + E_VARIANT), t) end
+        end
+      elseif back == PROJ_DIES then
+        if PD and wants(PD, r32(self + E_VARIANT)) then
+          local pr = as("EntityProjectile", self, "Entity::Remove (a projectile's death)")
+          if pr then run(PD, r32(self + E_VARIANT), pr) end
+        end
+      end
+    end, nil)
+  end
+end
+
+-- MC_POST_ROOM_RENDER_ENTITIES (1044): (), after the room's entities are drawn. REPENTOGON patches Room::Render
+--   (reg 0x0080f200) at the loop that follows them (`xor esi, esi; lea eax, [edi + 0x1218]; cmp [eax + 0xa0],
+--   esi`, here at 0x00810c97). The instruction before it is the last of three calls of 0x004199d0 (slot 98,
+--   ret 8) with ecx = room+0x1218, so the callback runs after that call, when it returns to 0x00810c97.
+if M.MC_POST_ROOM_RENDER_ENTITIES then
+  local id, SITE = M.MC_POST_ROOM_RENDER_ENTITIES, 0x00810c97
+  on("Room::RenderEntityPass_004199d0", { id }, function(self, esp)
+    if r32(esp) == SITE then return { true } end
+  end, function(self, esp, eax, k)
+    if k then run(id, nil) end
+  end)
+end
+
+-- MC_PRE_PLAYERHUD_TRINKET_RENDER (1264): (slot, position, scale, player, cropOffset), param = slot
+--   -> true: not drawn; a table: its Position (Vector) and Scale (number) are drawn with. CropOffset changes the
+--   drawing inside the function in REPENTOGON: accepted here, not supported (said once); the cropOffset handed
+--   over is always (0, 0) (REPENTOGON computes Monkey Paw's from a player field this layer has not measured).
+--   PlayerHUD::RenderTrinket(slot, const Vector* pos, float, float scale, bool) 0x00846ff0, ret 0x14 (slot 96):
+--   `this` is one of the HUD's eight 0x6dc-byte player slots (as for RenderActiveItem); the function draws
+--   nothing when the slot's trinket (+0x200 + slot*0x18) or its image (+8 from there) is 0 (0x0084700e,
+--   0x0084701b), and then the callback does not run either, as in REPENTOGON.
+do
+  local PRE = M.MC_PRE_PLAYERHUD_TRINKET_RENDER
+  local SLOT_SIZE, said_crop = 0x6dc, false
+  if PRE then
+    on("PlayerHUD::RenderTrinket", { PRE }, function(self, esp)
+      local hud = ptr(Game():GetHUD())
+      local off = self - hud
+      local index = off // SLOT_SIZE
+      if hud == 0 or off < 0 or off % SLOT_SIZE ~= 0 or index > 7 or r32(self + 4) ~= hud or r16(self + 8) ~= index then
+        wrong("PlayerHUD::RenderTrinket", self)
+        return
+      end
+      local slot = ri32(esp + 4)
+      if slot < 0 or slot > 1 then return end
+      local e = self + 0x200 + slot * 0x18
+      if r32(e) == 0 or r32(e + 8) == 0 then return end
+      local p = as("EntityPlayer", r32(self), "PlayerHUD::RenderTrinket (its player)")
+      if not p then return end
+      local at = r32(esp + 8)
+      local pos = vec_at(at)
+      local res = run(PRE, slot, slot, Vector(pos.X, pos.Y), rf32(esp + 16), p, Vector(0, 0))
+      if res == true then return true, 0 end
+      if type(res) == "table" then
+        if type(res.Scale) == "number" then wf32(esp + 16, res.Scale) end
+        if res.CropOffset ~= nil and not said_crop then
+          said_crop = true
+          log("accepted, not supported in the browser: CropOffset returned from MC_PRE_PLAYERHUD_TRINKET_RENDER")
+        end
+        if is_vector(res.Position) then
+          -- the function reads the position through the caller's pointer: written, and put back after
+          local keep = { at, r32(at), r32(at + 4) }
+          wf32(at, res.Position.X) wf32(at + 4, res.Position.Y)
+          return keep
+        end
+      end
+    end, function(self, esp, eax, keep)
+      if keep then w32(keep[1], keep[2]) w32(keep[1] + 4, keep[3]) end
+    end)
+  end
+end
+
+-- MC_GET_SHOP_ITEM_PRICE (1066): (variant, subtype, shopItemID, price), param = variant -> an integer: the price.
+--   Room::GetShopItemPrice 0x008151e0 (slot 99), ecx = the game's room, (variant, subtype, shopItemId, a word its
+--   7 callers pass as 0), ret 0x10: one word more than REPENTOGON's declaration. Its callers store what it
+--   answers as the pickup's Price (+0x534) and then hand it to 0x00816250 (ecx the room), which may adjust it
+--   further; REPENTOGON's callback answers for the first function, and so does this one.
+if M.MC_GET_SHOP_ITEM_PRICE then
+  local id = M.MC_GET_SHOP_ITEM_PRICE
+  on("Room::GetShopItemPrice", { id }, function(self, esp)
+    if self ~= ptr(Game():GetRoom()) then wrong("Room::GetShopItemPrice", self) return end
+    return { ri32(esp + 4), ri32(esp + 8), ri32(esp + 12) }
+  end, function(self, esp, eax, k)
+    if not k then return end
+    local cur = signed(eax)
+    local res = run(id, k[1], k[1], k[2], k[3], cur)
+    if mathtype(res) == "integer" and res ~= cur then return res & 0xffffffff end
+  end)
+end
+
+-- MC_EVALUATE_MULTI_SHOT_PARAMS (1289): (player, params, weaponType), param = player type -> a MultiShotParams:
+--   that one for the functions after it and for the game. The deprecated MC_POST_PLAYER_GET_MULTI_SHOT_PARAMS
+--   (1251, (player) -> a MultiShotParams) runs first, as REPENTOGON's main_ex.lua does.
+--   Entity_Player::GetMultiShotParams(MultiShotParams* out, weaponType) 0x00781b90, ret 8 (slot 71, reg): the
+--   struct is returned through the hidden first argument and EAX (api_extra.lua has its layout). The
+--   callbacks are handed a copy (api_extra.lua's MultiShotParams); what they answer is copied over `out`.
+--   While the callbacks run for a player and weapon type the function answers for them unwatched, as
+--   REPENTOGON's recursion guard does, so a callback may call GetMultiShotParams itself.
+do
+  local EV, LEG = M.MC_EVALUATE_MULTI_SHOT_PARAMS, M.MC_POST_PLAYER_GET_MULTI_SHOT_PARAMS
+  local list = ids(EV, LEG)
+  local MSP = T.msp
+  local busy = {}
+  if EV and T.RULE and MSP then
+    -- each function may answer a MultiShotParams; it is what the functions after it are handed
+    T.RULE[EV] = function(id, it, player, params, ...)
+      for cb in it do
+        local ret = T.rules.call(id, cb, player, params, ...)
+        if MSP.is(ret) then params = ret end
+      end
+      return params
+    end
+  end
+  if #list > 0 and MSP then
+    on("Entity_Player::GetMultiShotParams", list, function(self, esp)
+      local p = as("EntityPlayer", self, "Entity_Player::GetMultiShotParams")
+      if not p then return end
+      local weapon = ri32(esp + 8)
+      local key = self * 64 + (weapon & 63)
+      if busy[key] then return end
+      return { p, r32(esp + 4), weapon, key }
+    end, function(self, esp, eax, k)
+      if not k or eax ~= k[2] then return end
+      local p, out, weapon, key = k[1], k[2], k[3], k[4]
+      busy[key] = true
+      local ok, err = pcall(function()
+        local params = MSP.new(out)
+        local ptype = p:GetPlayerType()
+        if LEG and listening[LEG] then
+          local old = run(LEG, ptype, p)
+          if MSP.is(old) then params = old end
+        end
+        local res = params
+        if EV and listening[EV] then res = run(EV, ptype, p, params, weapon) end
+        if MSP.is(res) then
+          local from = MSP.addr(res)
+          for o = 0, MSP.size - 4, 4 do w32(out + o, r32(from + o)) end
+        end
+      end)
+      busy[key] = nil
+      if not ok then log("api_hooks: MC_EVALUATE_MULTI_SHOT_PARAMS stopped: " .. tostring(err)) end
+    end)
+  end
+end
+
 install()
 T.rearm()
 

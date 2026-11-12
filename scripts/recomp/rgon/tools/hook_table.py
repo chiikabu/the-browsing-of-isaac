@@ -178,6 +178,27 @@ HOOKS = [
      "(bool fromPlayerUpdate): Entity_Player::Update calls it with 1 (0x007830bf), the level's per-player loop "
      "0x009bb960 (called from Level::Init's body, 0x00745a1d) with 0; tests the bool's byte, places the player "
      "for a new floor (Level::IsAscent reg 0x0074f090), reads +0x1824, the flag InitPostLevelInitStats sets"),
+    # round 109: each read off the disassembly; every `ret` reached from the entry pops what the row says
+    # (.scratch/rgon/h2/rets.py).
+    (95, "Entity::Remove", 0x006acb00, "asm", 0,
+     "slot 10 (+0x28) of every entity class's vtable (Entity, Player, Tear, Projectile all hold it: vtables.json); "
+     "REPENTOGON's `void Remove()` signature matches it once. Its callers' return address tells a tear's death "
+     "(Entity_Tear::Update's `call eax` at 0x0066a369) and a projectile's (Entity_Projectile::Update's "
+     "`call [eax+0x28]` at 0x006580b5, REPENTOGON's projectile-death signature matches there once)"),
+    (96, "PlayerHUD::RenderTrinket", 0x00846ff0, "asm", 0x14,
+     "called by the HUD's per-player render 0x009a6fe0 in a loop over slot 1 then 0 (0x009a7310..0x009a7334) with "
+     "ecx = the 0x6dc-byte player slot and (slot, &pos, 1.0f, scale, 0); tests the slot's trinket and image "
+     "(+0x200 + slot*0x18, +8) before drawing, as REPENTOGON's hook does"),
+    (97, "Room::SpawnGridEntityDesc", 0x007ebd50, "sig", 8,
+     "(gridIndex, GridEntityDesc*): 2 callers (0x004feaba, 0x00820baa)"),
+    (98, "Room::RenderEntityPass_004199d0", 0x004199d0, "asm", 8,
+     "13 callers, all in Room::Render (reg 0x0080f200) and 0x00820fd0; the one whose return address is 0x00810c97 "
+     "is where REPENTOGON's MC_POST_ROOM_RENDER_ENTITIES patch goes (its signature `33f68d87..39b0..76..8bbd..` "
+     "is the code at 0x00810c97 but for a 3-byte nop where it has `66 90`)"),
+    (99, "Room::GetShopItemPrice", 0x008151e0, "asm", 0x10,
+     "ecx = the game's room (game+0x18300); (variant, subtype, shopItemId, 0): one more word than REPENTOGON's "
+     "declaration; its 7 callers (Entity_Pickup::Init 0x006e0602, Update 0x006e4eae, ...) store what it answers as "
+     "the pickup's Price (+0x534, the Lua property's offset) before 0x00816250 adjusts it"),
 ]
 # the entity classes' virtual functions: slots 100 + 12 * k + class index
 _k = 0

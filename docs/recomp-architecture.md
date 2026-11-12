@@ -10395,5 +10395,242 @@ quads of the static buffer with a ring block in between.
 **What a player will notice.** The first time a sound or a room's graphics of
 a packed mod is used its pack may have to be fetched (about 3.4 MB), so the
 sound can be late. Offline, what was never played is not on the device. The
-memory is still too much for most phones. Not measured: phones, a real
+memory is still too much for most phones, so a touch-first device that does
+not report 8 GB is not offered a packed mod (`smallDevice` in `mods.mjs`): the
+list says NEEDS A COMPUTER and the install refuses. Not measured: phones, a real
 network, offline play in a browser.
+### 21.138 Round 109: what Fiend Folio still missed, from the top of the list
+
+Engine (the `RGON_HOOKS` list in `lift_patches.py`, slots 95 to 99) and layer
+(`api_extra.lua`, new; handlers in `api_hooks.lua`, the slot-0 handler in
+`rgon.lua`, one line in `api_innate.lua`, `test_hooks3.lua`, two checks of
+`test_hooks2.lua`).
+
+**Measured first.** A Fiend Folio tour (`drive_stress.mjs phases=tour` on a
+`dev_dist.py` dist with StageAPI and Fiend Folio in the instance tree, the
+layer beside them, `?ISAAC_RGON_ALLOW=fiendfolio-reloaded`) on the h2 engine
+with round 106's layer: 0 stops; 88 distinct callbacks reported as not
+implemented; two distinct Lua error lines from Fiend Folio:
+
+- `negative_charge.lua:28: attempt to call a nil value (method 'GetActiveMaxCharge')`,
+  150 lines, from MC_POST_PLAYERHUD_RENDER_ACTIVE_ITEM (the regression of round
+  106: the callback now fires, and the mod then calls a method the layer lacked);
+- `propaganda.lua:1347: attempt to index a nil value (global 'RoomTransition')`,
+  2,557 lines, from StageAPI's POST_HUD_RENDER: every frame.
+
+A second tour in probe mode (`?ISAAC_RGON_PROBE=1`) named the plain functions
+the tour reached and the layer lacked: `RoomTransition` (IsRenderingBossIntro),
+`EntityPlayer:GetActiveMaxCharge`, `EntityLaser:SetInitSound`,
+`Isaac.LoadModDataFromFolder` (`EntityTear.TearVariant` and `Color.Alpha` are
+Fiend Folio's own probes for fields, not REPENTOGON names).
+
+**Functions** (`api_extra.lua`):
+
+- `EntityPlayer:GetActiveMaxCharge(slot)` / `GetActiveMinUsableCharge(slot)`.
+  REPENTOGON's Lua takes a slot (0 to 3, default 0, anything else an error) and
+  calls the game's functions of a slot. Here those are 0x00791320 and 0x00791380
+  (slot 88), both `ret 4` on every path, both 0 for slot 3 and for slot 2 holding
+  item 0x244 while game+0x26584 is 0x2c; 0x00791320 then calls 0x007911f0 (slot
+  87) with the slot's item at player+0x1580+slot*0x20 and its varData at
+  +0x159c+slot*0x20, the ActiveItemDesc layout `api_player.lua` already uses
+  (REPENTOGON's signature for the slot form differs here by `mov eax, edx; shl
+  eax, 5` where it has `shl edx, 5`; the structure is the same). So
+  MC_PLAYER_GET_ACTIVE_MAX_CHARGE answers through these too.
+- `RoomTransition.GetTransitionMode`, `IsRenderingBossIntro`,
+  `GetVersusScreenSprite`. The game object is at [0x00c71678] and its room
+  transition at +0x1b83c: StartBossIntro's caller does `mov ecx, [0xc71678];
+  lea ecx, [ecx + 0x1b83c]` (0x004ac076), the game's render calls the
+  transition's render (0x00832850) with `lea ecx, [edi + 0x1b83c]`. The mode is
+  +0 (the render draws only for 2 and 3), the versus screen's sprite +0x38
+  (StartBossIntro replaces its spritesheets through `lea ecx, [edi + 0x38]`),
+  and StartBossIntro stores its first boss at +0x238 (0x0082f217), which with
+  mode 2 is when the render draws the versus screen (0x00832870..0x00832880):
+  that is IsRenderingBossIntro. The sprite is empty until the first boss intro
+  of the session loads `versusscreen.anm2` into it (measured). Not here:
+  StartBossIntro and GetPlayerExtraPortraitSprite.
+- `EntityLaser:SetInitSound(SOUND_NULL)`: the laser's start sound is played by
+  0x0096f880 (REPENTOGON's PlayInitSound signature matches it once), which
+  begins `cmp byte [esi + 0x518], 0; jne <end>`; the game sets that byte itself
+  in several places. Another sound needs the choice inside that function
+  replaced: accepted, said once, the laser keeps its sound.
+- `MultiShotParams` and `EntityPlayer:GetMultiShotParams(weaponType = 1)`. The
+  game's own Lua hands out a MultiShotParams userdata with no metatable at all
+  (measured: indexing it is an error), and REPENTOGON replaces the function.
+  The struct is read off Entity_Player::GetMultiShotParams 0x00781b90 (slot 71),
+  which fills the struct it is handed: the tear count is the word at +0 (it
+  writes the dword 1 there, then `add word ptr [ebx], ...`), lanes +2, the four
+  spread angles +4..+0x10 (90.0 into +0xc), eyes the dword at +0x14, the
+  multi-eye angle +0x18, three bytes at +0x1c..+0x1e, random tears the word at
+  +0x20: REPENTOGON's 0x24-byte layout. A MultiShotParams here is a Lua object
+  over 0x24 bytes of guest memory of its own, filled by calling that function,
+  with REPENTOGON's getters and setters (the bone's and the axe's spread is the
+  knife's times 3, as REPENTOGON has it).
+  Two things were measured on the way: the game's own `resources/scripts/main.lua`
+  puts a Lua `__index` in front of EntityPlayer's class ("Compatibility
+  wrappers") that answers from a table of its own first, and its
+  GetMultiShotParams (defaulting the weapon type) is in that table, so
+  replacing the class table's entry changes nothing; the layer puts one more
+  `__index` in front, for that one name. And `GetMultiShotPositionVelocity` is
+  registered by the game as a static function (its thunk 0x00882f90 binds
+  0x00782160, which pops nothing), so `player:GetMultiShotPositionVelocity` is
+  nil in this build; the layer adds it as a method that calls 0x00782160
+  (cdecl; PosVel through a hidden first argument, then loopIndex, weaponType,
+  the direction and speed, the params by value: its reads go up to
+  [ebp+0x3c]). Its answer is a table with Position and Velocity.
+
+**Callbacks on slots the engine already had:**
+
+| Callback | Slot, function | How |
+|---|---|---|
+| MC_POST_TRIGGER_COLLECTIBLE_ADDED | 0, AddCollectible | after it, before MC_POST_ADD_COLLECTIBLE, (player, item, firstTime, false), as REPENTOGON runs both from the end of its hook; `api_innate.lua` fires it with wispOrInnate true for an innate item |
+| MC_PRE/POST_ITEM_OVERLAY_SHOW | 28, ItemOverlay::Show 0x009ad210, `ret 0xc` on every path | `this` must be game+0x1c034 (Game::GetItemOverlay 0x00456860 is `lea eax, [ecx + 0x1c034]`); true cancels, an integer replaces the id (written to the stack word); POST is handed the id the game stored at +4 (0x009ad27a) |
+| MC_PRE_GRID_ENTITY_SPAWN | 22, Room::SpawnGridEntity | false answers false; a table replaces type, variant, varData, seed; a GridEntityDesc is accepted and not supported (said once) |
+| MC_EVALUATE_MULTI_SHOT_PARAMS, and the deprecated MC_POST_PLAYER_GET_MULTI_SHOT_PARAMS first | 71, GetMultiShotParams, `ret 8` | after it: a copy of what it produced is handed on, a MultiShotParams answered replaces it for the functions after and is copied over the struct; a callback calling GetMultiShotParams for the same player and weapon type gets the game's answer unwatched (REPENTOGON's recursion guard) |
+
+**New slots.** Every `ret` reached from the entry pops the count given
+(`.scratch/rgon/h2/rets.py`), `hook_table.py` 151 hooks, 0 failed.
+
+| Slot | Address, ret | What it is, and why | Callbacks |
+|---|---|---|---|
+| 95 | 0x006acb00, 0 | Entity::Remove: slot 10 (+0x28) of every entity class's vtable; REPENTOGON's `Remove()` signature matches it once | MC_POST_TEAR_DEATH, MC_POST_PROJECTILE_DEATH |
+| 96 | 0x00846ff0, 0x14 | PlayerHUD::RenderTrinket: called by the HUD's per-player render 0x009a6fe0 for slot 1 then 0 with (slot, &pos, 1.0, scale, 0); it draws nothing when the slot's trinket (+0x200+slot*0x18) or its image (+8) is 0 | MC_PRE_PLAYERHUD_TRINKET_RENDER |
+| 97 | 0x007ebd50, 8 | Room::SpawnGridEntityDesc (REPENTOGON's signature matches once); its callers are Room:TurnGold (0x00820ac0, the Lua registration's) and 0x004fdf80 | MC_PRE_GRID_ENTITY_SPAWN |
+| 98 | 0x004199d0, 8 | a render pass over the room's entity list: 13 callers, all in Room::Render (reg 0x0080f200) and 0x00820fd0 | MC_POST_ROOM_RENDER_ENTITIES |
+| 99 | 0x008151e0, 0x10 | Room::GetShopItemPrice: ecx the game's room, (variant, subtype, shopItemId, 0), one word more than REPENTOGON's declaration; its 7 callers store the answer as the pickup's Price (+0x534, the Lua property's offset) | MC_GET_SHOP_ITEM_PRICE |
+
+Three of REPENTOGON's mid-function patches turned out to sit right after or
+right at a call, so a hook on the callee with a return-address test is the same
+place:
+
+- **Tear and projectile death.** REPENTOGON replaces the call to Remove at one
+  place in each Update. Entity_Projectile::Update's `mov ecx, edi; call [eax +
+  0x28]` at 0x006580b3 is where its signature matches once (return address
+  0x006580b8). Its tear signature matches nothing here; Entity_Tear::Update
+  (0x006670f0, 0xeeb0 bytes) has two `mov eax, [eax + 0x28]; call eax; jmp
+  <the end>` and the one at 0x0066a366 is followed, as in REPENTOGON's
+  signature, by `push <imm>; mov edx, esi; lea ecx, [ebp - ..]`, with a `lea
+  esi, [edi + 0x428]` hoisted before the push (return address 0x0066a36b). A
+  tear removed by a script or on leaving the room returns elsewhere and does
+  not fire; a tear that falls and one that hits a wall do (measured, both).
+- **After the room's entities are drawn.** REPENTOGON's pattern (`33f68d87..
+  39b0..76..8bbd..6690`) is the code at 0x00810c97 in Room::Render, but for a
+  3-byte nop where it has `66 90`; the instruction before it is the last of
+  three calls of 0x004199d0, so MC_POST_ROOM_RENDER_ENTITIES runs after that
+  call when it returns to 0x00810c97.
+- **Shop price.** The callback answers for 0x008151e0; the callers then hand the
+  price to 0x00816250, which applies the player's discounts (Steam Sale's 0x40
+  and others), so the price follows the answer without being it.
+
+PRE_PLAYERHUD_TRINKET_RENDER's CropOffset changes the drawing inside the
+function in REPENTOGON: accepted, said once, and the cropOffset handed over is
+(0, 0) (REPENTOGON computes Monkey Paw's from a player field not measured
+here). Room::SpawnGridEntityDesc refuses an index whose grid path is above 900
+(0x007ebd90): a poop's is, so Room:TurnGold gilds nothing until the path is
+cleared (measured; the test clears it).
+
+**test_hooks2's two flaky checks** (PRE_APPLY_TEARFLAG_EFFECTS -> false, and
+-> {TearFlags = TEAR_SLOW}). They waited 20 frames and read the counters 2
+frames after one explosion. The failing runs had PRE not run at all
+("0 0 hp 995.0"): the explosion applied no flags to the gaper, as an enemy
+just hit or still appearing is skipped by the next explosion, and flags are
+applied (slot 91) only to an enemy the explosion takes. The gaper's hit points
+are no sign of a hit: a first rework waited for them to drop, and in its run
+PRE had run 8 times out of 12 explosions of 1 damage with the hit points at
+995.0 throughout. Now each check sets off one explosion at a time, 12 frames
+apart, until PRE has run (at most 12), and reads its counters then.
+
+**Tests.** `test_hooks3.lua`: 42 checks, at least one about behaviour per name
+(Larynx's minimum usable charge is 1 where its maximum is 12, and a
+MC_PLAYER_GET_ACTIVE_MAX_CHARGE answer of 2 is what GetActiveMaxCharge says;
+IsRenderingBossIntro is true while a boss's versus screen plays, sampled in a
+render callback because the game does not update during a transition; a
+brimstone laser made silent at MC_POST_LASER_INIT plays no sound where one
+without plays sounds 5 and 7; a falling tear, a tear hitting the wall and a
+falling projectile each fire their death callback once, a tear or projectile a
+script removes does not; MC_POST_ROOM_RENDER_ENTITIES fires once per frame
+after the player's render callback; the shop price follows the callback's
+answer; Room:TurnGold's poop stays plain when PRE_GRID_ENTITY_SPAWN answers
+false and turns golden without; a MultiShotParams answered from
+MC_EVALUATE_MULTI_SHOT_PARAMS is what the game's own function then answers).
+19 deliberately wrong handlers, in three groups, were each caught by their own
+check (23 failing lines: a wrong tear-death address fails both tear checks, a
+wrong overlay cancel also shifts the next overlay check's counts, a broken
+copy-back fails both multi-shot checks, a wrong room-render return address
+fails both room-render checks); nothing else failed with them.
+
+On the h3 engine with this layer: test_hooks3 42 0, test_hooks2 49 0 (three
+times in a row after the rework; once 49 2 with the first rework, which waited
+on hit points), test_layer 49 0, test_layer2 95 0, test_layer3 53 0,
+test_layer4 49 0, test_gate 7 0. The mutant pair for the two reworked
+test_hooks2 checks fails exactly those two with PRE seen (`tries 1`); that run
+also failed "PRE_NEW_ROOM: the descriptor is the start room's" once (96/97),
+which no mutant touches.
+
+**Fiend Folio, after.** The same tour on h3 with this layer: 0 stops, 0 Lua
+error lines from Fiend Folio (the two above are gone), 78 callbacks reported as
+not implemented (88 before: MC_EVALUATE_MULTI_SHOT_PARAMS,
+MC_GET_SHOP_ITEM_PRICE, MC_PRE/POST_ITEM_OVERLAY_SHOW, MC_POST_PROJECTILE_DEATH,
+MC_POST_ROOM_RENDER_ENTITIES, MC_POST_TEAR_DEATH,
+MC_POST_TRIGGER_COLLECTIBLE_ADDED, MC_PRE_GRID_ENTITY_SPAWN and
+MC_PRE_PLAYERHUD_TRINKET_RENDER are gone; nothing new). The probe tour now
+names one REPENTOGON function Fiend Folio reaches and the layer lacks:
+`Isaac.LoadModDataFromFolder`.
+
+**Not done, and why.**
+
+- MC_EVALUATE_STAT (18 registrations): five patches inside EvaluateItems, each
+  on a stat's running value in a register or a stack slot (REPENTOGON's
+  TearsUpHook, FlatTearsHook, DamageUpHook...), with no call at those points.
+  It needs what the lifter does not offer through RGON_HOOKS: a hook at an
+  instruction address inside a lifted function, handed the CpuState (so that a
+  handler can read and write a register or an [ebp-disp] slot) and resuming at
+  the next instruction. The BLOCK_PATCHES mechanism of `lift_patches.py` edits
+  lifted C in place and could carry such a call, but it is outside this round's
+  remit.
+- MC_POST_FIRE_SPLIT_TEAR (13): 18 patch sites (`ASMSplitTears.cpp`; Cricket's
+  Body, Parasite, Absorb, Spore, Ludovico and their laser and knife forms). Many
+  are a virtual call on the new tear right after it is spawned, so the
+  return-address technique of the death callbacks may serve site by site; each
+  site has to be found in this build first.
+- MC_PRE/POST_PLAYER_USE_BOMB (4/10): REPENTOGON patches control_bombs
+  (0x00780f40 here: its pre signature matches once, at 0x00781260) after the
+  bomb-count test and at the end of the placing loop. The pre point follows a
+  `jg` and precedes a HasCollectible(0x205) call; hooking HasCollectible for it
+  would put a Lua call on every HasCollectible. The post point is the loop's
+  end, after the bomb's own setup; the Spawn call inside the loop (0x0078157b)
+  is before that setup. Needs the instruction hook above.
+- MC_POST_PICKUP_SHOP_PURCHASE (9): REPENTOGON's signature for
+  TriggerShopPurchase matches 0x00918d00 once, but that function pops nothing
+  (the declaration has two arguments) and reads a "report player game state":
+  a false match. The real one was not found this round.
+- MC_POST_TRIGGER_COLLECTIBLE_ADDED for item wisps (REPENTOGON's
+  Entity_Familiar::WispInit hook): its signature is a generic prologue that
+  matches 13 functions here; not found. Normal adds and innate items fire it.
+- slot 15, MC_PLAYER_INIT_PRE_LEVEL_INIT_STATS: 0x0099b520 reads the room's grid
+  width and is no player function; REPENTOGON's signature (an SEH prologue with
+  `sub esp, 0x6c`) matches only it. The run start (0x006f5320) creates the
+  players through 0x009b8f40 before Level::Init and calls
+  InitPostLevelInitStats after it; the per-player function before the level was
+  not found.
+- MC_PRE_LEVEL_PLACE_ROOM, MC_PRE_FORTUNE_DISPLAY, MC_PRE_BACKDROP_CHANGE,
+  MC_IS_PERSISTENT_ROOM_ENTITY, the weapon callbacks: not reached this round.
+  Candidates read so far: HUD::ShowFortuneText 0x00912560 (signature, pops 0
+  where its declaration has one argument: unchecked), Backdrop::Init 0x0093d960
+  (signature, `ret 8`), Room::IsPersistentRoomEntity 0x007ed2a0 (signature, pops
+  0xc); RoomTransition::Update's signature match 0x00779b40 is called only by
+  Entity_Player::Update and is wrong.
+- MC_EVALUATE_CUSTOM_CACHE (7): REPENTOGON's custom caches are a system of
+  their own (`CustomCache.cpp`, 655 lines: items.xml `customcache`, the tears
+  cap, max coins, familiar multipliers); not started.
+- PRE_PLAYERHUD_TRINKET_RENDER's CropOffset, a GridEntityDesc answered for
+  Room:SpawnGridEntity, SetInitSound with a sound other than SOUND_NULL:
+  accepted, said once, not done.
+- Not seen going through Room::SpawnGridEntityDesc: a room's own grid entities
+  when it is entered again (measured: no call), so a PRE_GRID_ENTITY_SPAWN
+  that should keep a grid entity out of a revisited room (Fiend Folio's totems)
+  is not asked there. Where this build rebuilds them is not known yet.
+
+**Remaining, ranked** (callbacks Fiend Folio registers that no hook fires, by
+its number of registrations):
+
+78 in all: MC_EVALUATE_STAT (18), MC_POST_FIRE_SPLIT_TEAR (13), MC_POST_PLAYER_USE_BOMB (10), MC_POST_PICKUP_SHOP_PURCHASE (9), MC_EVALUATE_CUSTOM_CACHE (7), MC_PRE_LEVEL_PLACE_ROOM (6), MC_PRE_LASER_COLLISION (5), MC_POST_TRIGGER_WEAPON_FIRED (5), MC_POST_WEAPON_FIRE (5), MC_PLAYER_HEALTH_TYPE_CHANGE (5), MC_PRE_PLAYER_USE_BOMB (4), MC_POST_START_AMBUSH_WAVE (4), MC_POST_COMPLETION_EVENT (4), MC_POST_BRIMSTONE_SNEEZE (4), MC_PRE_PLAYER_GIVE_BIRTH_IMMACULATE (3), MC_PRE_PLANETARIUM_APPLY_ITEMS (3), MC_PRE_BACKDROP_CHANGE (3), MC_POST_GRID_ROCK_DESTROY (3), MC_POST_GRID_ENTITY_DOOR_UPDATE (3), MC_POST_DEVIL_CALCULATE (3), and 58 with one or two registrations each (`.scratch/rgon/r109/remaining.txt`).

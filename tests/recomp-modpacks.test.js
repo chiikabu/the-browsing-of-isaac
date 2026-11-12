@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createPackStore, createPackedMods, packedIndex, packsOnlyOf, parseIndex, packBase, isPacked, namedRight,
-         seedMods, PACK_CACHE, SEED_BUDGET } from '../scripts/recomp/web/mods.mjs';
+         seedMods, smallDevice, NEEDS_COMPUTER, PACK_CACHE, SEED_BUDGET } from '../scripts/recomp/web/mods.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tool = join(root, 'scripts', 'recomp', 'assets', 'modpack.py');
@@ -297,4 +297,19 @@ test('round 107: the page routes a packed mod\'s reads, and only those, to the p
   // a failed read says it the way the error panel listens for (play.mjs)
   assert.ok(b.includes('(e) => failRead(src, off, len, e.message)'));
   assert.ok(/lazy \(read\|pread\) FAILED/.test(src('play.mjs')));
+});
+
+test('a packed mod is not offered to a phone: it would run the game out of memory', () => {
+  const env = (coarse, mem) => ({ matchMedia: (q) => ({ matches: q === '(pointer: coarse)' && coarse }), navigator: { deviceMemory: mem } });
+  assert.equal(smallDevice(env(true, 4)), true, 'a touch-first device with 4 GB');
+  assert.equal(smallDevice(env(true, undefined)), true, 'a touch-first device that does not say (Safari, Firefox)');
+  assert.equal(smallDevice(env(true, 8)), false, 'a touch-first device with 8 GB may try');
+  assert.equal(smallDevice(env(false, 2)), false, 'a mouse: a computer, whatever it reports');
+  assert.equal(smallDevice({ navigator: {} }), false, 'no matchMedia (node, a worker): not a phone');
+  const m = src('mods.mjs'), b = src('mod_browser.mjs');
+  assert.ok(m.includes("if (smallDevice()) throw new Error(`${entry.name} needs more memory than a phone's browser gives the game`);"), 'installPacked refuses');
+  assert.ok(m.includes('needsComputer: isPacked(m) && smallDevice(),'), 'the browser is told');
+  assert.ok(m.includes(': isPacked(m) && smallDevice() ? NEEDS_COMPUTER') && NEEDS_COMPUTER === 'NEEDS A COMPUTER', 'the paper list says it');
+  assert.ok(b.includes("text(F10, 'NEEDS A COMPUTER', d.x0, actionY + 4);") && b.indexOf('} else if (it.needsComputer) {') < b.indexOf('} else if (it.big) {'), 'the browser says it in place of INSTALL');
+  assert.ok(b.includes('if (it.big || it.needsComputer) return;'), 'and its action does nothing');
 });
