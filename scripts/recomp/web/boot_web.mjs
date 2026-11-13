@@ -1262,6 +1262,16 @@ try {
   // where its bytes land.
   await stageOk('seed mods', async () => {
     if (!modsOn) { log('  mods=0: no mods, and no import row'); return 0; }
+    // round 116: the page's check of the installed mods against the catalogue (play.mjs,
+    // mods.mjs createModUpdater) is waited for here, up to a cap; whatever it writes
+    // after this waits until the mods are read (afterSeed below), for the next start
+    if (hooks.modUpdates) {
+      const w = await hooks.modUpdates.beforeSeed(hooks.modUpdateWaitMs == null ? 2500 : hooks.modUpdateWaitMs);
+      for (const line of hooks.modUpdateLines ? hooks.modUpdateLines() : []) log(line);
+      const s = hooks.modUpdates.stats();
+      log(`  catalogue check: ${s.state}${w.done ? '' : ' (not finished: what is left is for the next start)'}, waited ${Math.round(w.waitedMs)} ms here; `
+        + `${s.fetches} request(s), ${s.refreshed} updated, ${s.same} the same`);
+    }
     try { modDb = await openModDb(); } catch (e) { log(`  mod store unavailable: ${e.message}`); modDb = null; }
     // Round 85: a mod's Lua is opened by the host Lua's own libc, which reads
     // through MEMFS -- the same reason the game's own scripts are copied there
@@ -1353,6 +1363,8 @@ try {
     if (n && packDownloader) { packDownloader.pace(1); packDownloader.start().catch((e) => log(`[mods] the background download: ${e.message}`)); }
     return n;
   });
+  // round 116: the game has read its mods; an update from here on is for the next start
+  if (hooks.modUpdates) hooks.modUpdates.afterSeed();
 
   // --- the host Lua's libc reads scripts through MEMFS: put them there
   await stageOk('lua scripts into MEMFS', async () => {

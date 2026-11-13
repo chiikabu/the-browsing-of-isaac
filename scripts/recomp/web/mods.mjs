@@ -414,8 +414,9 @@ export function mergeDescriptions(catalogue, full) {
 
 // The parts of one mod, joined back into the zip they were cut from. Each part
 // is under jsDelivr's 20 MB ceiling, which is why there is more than one.
-export async function fetchMod(base, entry, onProgress) {
+export async function fetchMod(base, entry, onProgress, fetchFn) {
   const root = String(base).replace(/\/$/, '');
+  const get = fetchFn || ((url) => fetch(url));
   const parts = [];
   // Round 82: in bytes, not in parts. A mod that is one 19 MB part reported
   // nothing until it had arrived, which is a menu that looks hung. The body is
@@ -424,8 +425,8 @@ export async function fetchMod(base, entry, onProgress) {
   let got = 0;
   const want = entry.bytes || 0;
   for (let i = 0; i < entry.parts; i++) {
-    const r = await fetch(`${root}/m/${entry.id}.${i}.bin`);
-    if (!r.ok) throw new Error(`part ${i + 1} of ${entry.parts} answered ${r.status}`);
+    const r = await get(`${root}/m/${entry.id}.${i}.bin`);
+    if (!r.ok) throw Object.assign(new Error(`part ${i + 1} of ${entry.parts} answered ${r.status}`), { status: r.status });
     if (!r.body || !r.body.getReader) {                 // no streams: one lump, one report
       const b = new Uint8Array(await r.arrayBuffer());
       parts.push(b); got += b.length;
@@ -1069,6 +1070,410 @@ export function createPackDownloader(opts) {
   };
 }
 
+// ---- round 116: installed mods follow the catalogue -----------------------------
+// A mod installed from the catalogue was never refreshed: a release that pins a newer
+// catalogue in which the mod changed left the player with the old files until they
+// removed it and installed it again. That matters for the REPENTOGON-compatible
+// layer (`repentogon`), which changes with nearly every release, keeps version "1",
+// and is what Fiend Folio requires.
+//
+//  - Identity, never the version string: what the catalogue entry already carries.
+//    A packed entry is its index's name, which is the start of the index's sha256,
+//    and the index names every pack by its own sha256: exact. An unpacked entry is
+//    its zip's size, the size it unpacks to, its file count and part count -- and
+//    its zip's sha256 when the catalogue carries one (`sha256`, modpack.py does not
+//    write it yet; the page records the sha256 of the zip it installed, so the day
+//    the catalogue carries it the comparison is exact with no refresh needed).
+//  - Remembered at install (`source`, `cat` in the mod's record). A record from
+//    before: a packed one has its index name (exact); an unpacked one has nothing
+//    the catalogue's sizes can be checked against (the zip's size is not kept), so
+//    it is checked once by downloading it -- byte-identical files only get the
+//    identity written; different ones are replaced for the layer only
+//    (`legacyFollow`), and for any other mod are the player's own zip under an id
+//    the catalogue also lists: left as it is and remembered as from the device.
+//    A mod added from the device (`source: 'device'`) is never touched.
+//  - Atomic per mod: everything is downloaded and checked first, then one
+//    transaction replaces the files and merges the record as it is at that moment
+//    (its enabled flag and when it was added are kept; a mod removed meanwhile is
+//    not brought back). A failure writes nothing and is tried again at a later
+//    start. The mod's save data is not in this store at all (c:/isaac/data/<id>/,
+//    the save store), nor is what the game wrote under mods/ (S_STORE): neither is
+//    in the transaction's reach.
+//  - When: small unpacked mods (the layer, 140 KB) before the game reads its mods,
+//    if they are done within the boot's wait (beforeSeed); otherwise, and for
+//    big and packed mods always, after the boot has read them, for the next start.
+
+// what a catalogue entry says its content is
+export function entryIdentity(entry, sha256) {
+  if (!entry) return null;
+  if (isPacked(entry)) return { id: entry.id, index: entry.packed.index };
+  const c = { id: entry.id, bytes: entry.bytes || 0, unpacked: entry.unpacked || 0, files: entry.files || 0, parts: entry.parts || 0 };
+  const sha = sha256 || entry.sha256;
+  if (sha) c.sha256 = String(sha).toLowerCase();
+  return c;
+}
+// whether two identities are the same content (an index name is exact; a sha256 on
+// both sides is exact; otherwise every size must agree)
+export function sameContent(a, b) {
+  if (!a || !b) return false;
+  if (a.index || b.index) return !!a.index && a.index === b.index;
+  if (a.sha256 && b.sha256) return a.sha256 === b.sha256;
+  return a.bytes === b.bytes && a.unpacked === b.unpacked && a.files === b.files && a.parts === b.parts;
+}
+// what an installed mod's record says it is: remembered at install, or for a packed
+// mod from before round 116 its index (exact); null when nothing exact is known
+export function installedIdentity(mod) {
+  if (!mod) return null;
+  if (mod.cat) return mod.cat;
+  if (isPacked(mod)) return { id: mod.id, index: mod.packed.index };
+  return null;
+}
+// What to do with one installed mod, given the catalogue:
+//   'device'  added from this device: never touched
+//   'absent'  the catalogue does not list it: kept as it is
+//   'kind'    the catalogue has it packed where it is unpacked here, or the other way
+//   'same'    the same content
+//   'refresh' different content: replaced
+//   'verify'  installed before round 116 with nothing exact to compare: fetched once,
+//             written only if its files differ
+export function planUpdate(mod, entries) {
+  if (!mod || mod.source === 'device') return { action: 'device', entry: null };
+  const id = (mod.cat && mod.cat.id) || mod.id;
+  const entry = (entries || []).find((e) => e && e.id === id) || null;
+  if (!entry) return { action: 'absent', entry: null };
+  if (isPacked(entry) !== isPacked(mod)) return { action: 'kind', entry };
+  const have = installedIdentity(mod);
+  if (!have) return { action: 'verify', entry };
+  return { action: sameContent(have, entryIdentity(entry)) ? 'same' : 'refresh', entry };
+}
+
+// One transaction: the record as it is now handed to `update` (which returns the new
+// record, or null to leave everything), and the mod's files replaced by `files`
+// (null: its files are not touched). Resolves the record written, or null when the
+// mod is gone or `update` declined.
+export function replaceMod(db, id, update, files) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([F_STORE, M_STORE], 'readwrite');
+    const fs = tx.objectStore(F_STORE), ms = tx.objectStore(M_STORE);
+    let out = null, declined = false;
+    const req = ms.get(id);
+    req.onsuccess = () => {
+      const cur = req.result;
+      const next = cur ? update(cur) : null;
+      if (!next) { declined = true; tx.abort(); return; }
+      if (files) {
+        fs.delete(IDBKeyRange.bound(`${id}/`, `${id}/\uffff`));
+        for (const f of files) fs.put({ bytes: f.bytes }, `${id}/${f.name}`);
+      }
+      // what the player chose stays: on or off, and when it was added
+      out = Object.assign({}, next, { id, enabled: cur.enabled, added: cur.added });
+      if (cur.enabled === undefined) delete out.enabled;
+      ms.put(out, id);
+    };
+    tx.oncomplete = () => resolve(out);
+    tx.onabort = () => (declined ? resolve(null) : reject(tx.error || new Error('the mod store refused the write (out of space?)')));
+  });
+}
+
+// the stored files of one mod: [rel, bytes]
+export const modFilesOf = (db, id) => new Promise((resolve, reject) => {
+  const out = [];
+  const req = db.transaction(F_STORE, 'readonly').objectStore(F_STORE).openCursor(IDBKeyRange.bound(`${id}/`, `${id}/\uffff`));
+  req.onsuccess = () => {
+    const c = req.result;
+    if (!c) { resolve(out); return; }
+    out.push([String(c.key).slice(id.length + 1), c.value.bytes]);
+    c.continue();
+  };
+  req.onerror = () => reject(req.error);
+});
+const sameFiles = (stored, files) => {
+  if (stored.length !== files.length) return false;
+  const by = new Map(stored);
+  for (const f of files) {
+    const b = by.get(f.name);
+    if (!b || b.length !== f.bytes.length) return false;
+    for (let i = 0; i < b.length; i++) if (b[i] !== f.bytes[i]) return false;
+  }
+  return true;
+};
+
+// the catalogue for the check: a base pinned to a commit (`@<40 hex>`, what a release
+// names) cannot change, so the browser's cache answers it; anything else is asked again
+export const pinnedBase = (base) => /@[0-9a-f]{40}(\/|$)/i.test(String(base || ''));
+export async function fetchCatalogueList(base, fetchFn) {
+  const root = String(base).replace(/\/$/, '');
+  const get = fetchFn || ((url, init) => fetch(url, init));
+  const r = await get(`${root}/catalogue.json`, { cache: pinnedBase(base) ? 'default' : 'no-cache' });
+  if (!r.ok) throw Object.assign(new Error(`the catalogue answered ${r.status}`), { status: r.status });
+  const j = await r.json();
+  if (!j || !Array.isArray(j.mods)) throw new Error('that is not a catalogue');
+  return j;
+}
+
+// Packs only an earlier index of a packed mod named: its index and every pack in it
+// that no installed packed mod's index (the mod's own current one included) names.
+export async function stalePacks(store, prev, base, installed) {
+  if (!(await store.has(prev))) return [];               // not kept: nothing of it can be named
+  let old;
+  try { old = await packedIndex(store, { packed: { base, index: prev } }); } catch { return []; }
+  const keep = new Set();
+  for (const m of installed) {
+    if (!isPacked(m)) continue;
+    keep.add(m.packed.index);
+    const ix = await packedIndex(store, m);                // a failure here throws: nothing is dropped
+    for (const [n] of ix.packs) keep.add(n);
+  }
+  return [prev, ...old.packs.map((p) => p[0])].filter((n) => !keep.has(n));
+}
+
+// The words for a mod's row (`short`) and its description (`long`).
+export function updateWords(u) {
+  if (!u) return null;
+  const kb = (n) => mib(n || 0);
+  if (u.state === 'now') return { short: 'UPDATED', long: `UPDATED ${kb(u.from)} TO ${kb(u.to)}` };
+  if (u.state === 'next') return { short: 'NEW ON RELOAD', long: `UPDATED ${kb(u.from)} TO ${kb(u.to)}, LOADS AT THE NEXT START` };
+  if (u.state === 'failed') return { short: null, long: 'AN UPDATE COULD NOT BE FETCHED, TRIED AGAIN NEXT START' };
+  if (u.state === 'kind') return { short: null, long: 'THE CATALOGUE HAS ANOTHER KIND OF IT: REMOVE AND INSTALL TO UPDATE' };
+  return null;
+}
+
+// opts: { catalogueBase, db() -> Promise<db>, store (the page's pack store), log,
+//         fetch, now, sleep, bootBytes (an unpacked mod's zip up to this is fetched
+//         while the game boots; 4 MB), wait403 (65 s), tries403 (2) }
+// start() runs the pass; beforeSeed(capMs) is the boot's wait (up to capMs) for
+// what can still be in this start, after which a write waits for afterSeed() (the
+// boot has read its mods) and counts for the next start.
+export function createModUpdater(opts) {
+  const o = opts || {};
+  const log = o.log || (() => {});
+  const fetchFn = o.fetch || ((url, init) => fetch(url, init));
+  const now = o.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const bootBytes = o.bootBytes == null ? (4 << 20) : o.bootBytes;
+  const wait403 = o.wait403 == null ? 65000 : o.wait403;
+  const tries403 = o.tries403 == null ? 2 : o.tries403;
+  const getDb = o.db || (() => openModDb());
+  const store = o.store || null;
+  const notes = new Map();                        // id -> { state, from, to }
+  // the mods that follow the catalogue even when installed before round 116 with other
+  // files than the catalogue's: the layer, which the engine release expects to match
+  const legacyFollow = new Set(o.legacyFollow || ['repentogon']);
+  const st = { state: 'idle', mods: 0, checked: 0, same: 0, refreshed: 0, verified: 0, own: 0, failed: 0, later: 0,
+               catalogueMs: null, waitedMs: null, fetches: 0, droppedPacks: 0 };
+  let gate = 'open';                              // 'open' -> 'seeding' (writes wait) -> 'late'
+  let openLate = null;
+  const late = new Promise((r) => { openLate = r; });
+  let running = null;
+  const t0 = now();
+  const ms = (t) => `${Math.round(t)} ms`;
+
+  // one write; its transaction made before the boot's wait ended is in this start
+  async function write(db, id, update, files) {
+    if (gate === 'seeding') await late;
+    const inThisStart = gate === 'open';
+    const rec = await replaceMod(db, id, update, files);
+    return { rec, inThisStart };
+  }
+  const counted = async (url, init) => { st.fetches += 1; return fetchFn(url, init); };
+
+  async function refreshUnpacked(db, mod, entry, verify) {
+    const t = now();
+    let zip, tries = 0;
+    for (;;) {
+      try { zip = await fetchMod(o.catalogueBase, entry, null, counted); break; }
+      catch (e) {
+        // jsDelivr's 403 for a file it has not served yet lasts a minute: while the game
+        // boots it is left for after the boot (the boot does not wait a minute), then
+        // asked again past the minute; anything else is for a later start
+        if (e.status === 403 && gate !== 'late') throw Object.assign(new Error(e.message), { defer: true });
+        if (e.status === 403 && tries < tries403) { tries += 1; log(`[mods] ${mod.name}: the update answered 403; asked again in ${Math.round(wait403 / 1000)} s`); await sleep(wait403); continue; }
+        throw e;
+      }
+    }
+    const sha = await sha256Hex(zip);
+    const plan = planMod(await unzip(zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength)), entry.name);
+    if (plan.mod.bytes > SEED_BUDGET) throw new Error(`it is ${mib(plan.mod.bytes)} now, over the ${mib(SEED_BUDGET)} the game is given for mods`);
+    const ident = entryIdentity(entry, sha);
+    const before = installedIdentity(mod);
+    const expect = (cur) => JSON.stringify(installedIdentity(cur)) === JSON.stringify(before) && cur.source !== 'device';
+    if (verify && sameFiles(await modFilesOf(db, mod.id), plan.files)) {
+      // installed before round 116 and the same as the catalogue's: only remembered
+      const { rec } = await write(db, mod.id, (cur) => (expect(cur) ? Object.assign({}, cur, { source: 'catalogue', cat: ident }) : null), null);
+      if (rec) { st.verified += 1; log(`[mods] ${mod.name}: the same as the catalogue's (${mib(entry.bytes)}), remembered, ${ms(now() - t)}`); }
+      return;
+    }
+    if (verify && !legacyFollow.has(mod.id)) {
+      // installed before round 116 and not what the catalogue has. Between the releases
+      // that had a catalogue only the layer's entry ever changed, so this is not an old
+      // catalogue install: it is a zip the player added themself under an id the
+      // catalogue also lists (their own newer copy of a mod, say). It is theirs: left
+      // as it is, and remembered as from this device so it is not looked at again.
+      const { rec } = await write(db, mod.id, (cur) => (expect(cur) ? Object.assign({}, cur, { source: 'device' }) : null), null);
+      if (rec) { st.own += 1; log(`[mods] ${mod.name}: not the catalogue's copy (added from this device before the page kept track): left as it is`); }
+      return;
+    }
+    const from = mod.bytes || 0;
+    const { rec, inThisStart } = await write(db, mod.id, (cur) => (expect(cur) ? Object.assign({}, cur, {
+      name: plan.mod.name, files: plan.files.length, bytes: plan.mod.bytes, source: 'catalogue', cat: ident,
+      updated: Date.now(), was: before || { bytes: cur.bytes, files: cur.files } }) : null), plan.files);
+    if (!rec) { log(`[mods] ${mod.name}: changed or removed meanwhile; not updated`); return; }
+    st.refreshed += 1;
+    notes.set(mod.id, { state: inThisStart ? 'now' : 'next', from, to: plan.mod.bytes });
+    log(`[mods] ${rec.name}: updated from the catalogue, ${mib(from)} -> ${mib(plan.mod.bytes)} `
+      + `(${mod.files || '?'} -> ${plan.files.length} files, zip ${mib(entry.bytes)}), ${ms(now() - t)}; `
+      + (inThisStart ? 'in this start' : 'from the next start'));
+  }
+
+  async function refreshPacked(db, mod, entry) {
+    const t = now();
+    if (!store) throw new Error('no pack store');
+    const base = packBase(o.catalogueBase, entry), p = entry.packed;
+    const kept = await store.names();
+    const gz = await store.get(base, p.index, p.indexBytes == null ? null : p.indexBytes);
+    const index = parseIndex(new TextDecoder().decode(await gunzipBytes(gz)));
+    let eager = 0, fetched = 0, fetchedBytes = 0;
+    for (const [name, size, lane] of index.packs) {
+      if (lane !== 'eager') continue;
+      if (!kept.has(name)) { fetched += 1; fetchedBytes += size; }
+      await store.get(base, name, size);                // the Cache API first: a pack kept is not fetched
+      eager += size;
+    }
+    const stored = index.packs.reduce((n, x) => n + x[1], 0);
+    const changed = index.packs.filter(([n]) => !kept.has(n));
+    const before = installedIdentity(mod);
+    const { rec, inThisStart } = await write(db, mod.id, (cur) => {
+      if (JSON.stringify(installedIdentity(cur)) !== JSON.stringify(before) || !isPacked(cur)) return null;
+      return Object.assign({}, cur, { name: entry.name || index.name || cur.name, files: index.files, bytes: index.bytes,
+        version: entry.version || index.version || cur.version || '', source: 'catalogue', cat: entryIdentity(entry), updated: Date.now(),
+        packed: { base, index: p.index, indexBytes: gz.length, eagerBytes: eager, storedBytes: stored, prev: cur.packed.index } });
+    }, null);
+    if (!rec) { log(`[mods] ${mod.name}: changed or removed meanwhile; not updated`); return; }
+    st.refreshed += 1;
+    notes.set(mod.id, { state: inThisStart ? 'now' : 'next', from: mod.packed.storedBytes || mod.bytes, to: stored });
+    log(`[mods] ${rec.name}: updated from the catalogue, index ${mod.packed.index} -> ${p.index}; ${changed.length} of ${index.packs.length} packs `
+      + `are new (${mib(changed.reduce((n, x) => n + x[1], 0))}), ${fetched} of them fetched now (${mib(fetchedBytes)} with the index), `
+      + `the rest in the background; ${ms(now() - t)}; ${inThisStart ? 'in this start' : 'from the next start'}`);
+  }
+
+  // an earlier start's update left the old index's packs: those no index names go
+  async function dropStale(db, list) {
+    for (const mod of list) {
+      const prev = isPacked(mod) && mod.packed.prev;
+      if (!prev || !store) continue;
+      try {
+        const gone = await stalePacks(store, prev, mod.packed.base, list);
+        const n = gone.length ? await store.drop(gone) : 0;
+        st.droppedPacks += n;
+        await replaceMod(db, mod.id, (cur) => {
+          if (!isPacked(cur) || cur.packed.prev !== prev) return null;
+          const packed = Object.assign({}, cur.packed); delete packed.prev;
+          return Object.assign({}, cur, { packed });
+        }, null);
+        if (n) log(`[mods] ${mod.name}: ${n} pack(s) of its earlier version freed`);
+      } catch (e) { log(`[mods] ${mod.name}: the packs of its earlier version stay for now (${e.message})`); }
+    }
+  }
+
+  // true when it is to be tried again after the boot
+  async function one(db, mod, plan) {
+    try {
+      if (plan.action === 'refresh' && isPacked(mod)) await refreshPacked(db, mod, plan.entry);
+      else await refreshUnpacked(db, mod, plan.entry, plan.action === 'verify');
+      if (notes.has(mod.id) && notes.get(mod.id).state === 'failed') notes.delete(mod.id);
+    } catch (e) {
+      if (e.defer) { log(`[mods] ${mod.name}: the update answered 403 (a file the CDN has not served yet); asked again after the boot`); return true; }
+      st.failed += 1;
+      notes.set(mod.id, { state: 'failed' });
+      log(`[mods] ${mod.name}: the catalogue has another version but it could not be fetched (${e.message}); the installed files stay, tried again at the next start`);
+    }
+    return false;
+  }
+
+  let earlyDone = null;
+  const early = new Promise((r) => { earlyDone = r; });
+  async function pass() {
+    const db = await getDb();
+    if (!db) { st.state = 'nodb'; return; }
+    const list = await listMods(db);
+    // nothing from the catalogue (or nothing that could be): no request at all
+    const candidates = list.filter((m) => m.source !== 'device');
+    st.mods = candidates.length;
+    if (!candidates.length) { st.state = 'nothing'; return; }
+    await dropStale(db, list);
+    // a browser that says it is offline is not asked to wait for a request that cannot answer
+    const nav = o.navigator !== undefined ? o.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+    if (nav && nav.onLine === false) { st.state = 'offline'; log('[mods] offline: the installed mods are not checked against the catalogue this start'); return; }
+    st.state = 'catalogue';
+    const tc = now();
+    let cat;
+    try { cat = await fetchCatalogueList(o.catalogueBase, counted); }
+    catch (e) { st.state = 'offline'; log(`[mods] the catalogue could not be read to check the installed mods (${e.message}); they stay as they are`); return; }
+    st.catalogueMs = now() - tc;
+    const work = [];
+    for (const mod of candidates) {
+      const plan = planUpdate(mod, cat.mods);
+      st.checked += plan.action === 'absent' ? 0 : 1;
+      if (plan.action === 'same') st.same += 1;
+      if (plan.action === 'kind') {
+        notes.set(mod.id, { state: 'kind' });
+        log(`[mods] ${mod.name}: the catalogue has it ${isPacked(plan.entry) ? 'packed' : 'as a zip'} now; remove it and install it again to update`);
+      }
+      if (plan.action === 'refresh' || plan.action === 'verify') work.push({ mod, plan });
+    }
+    if (!work.length) {
+      st.state = 'done';
+      log(`[mods] ${st.same} installed mod(s) match the catalogue (checked in ${ms(now() - t0)})`);
+      return;
+    }
+    // small unpacked ones now, the layer first among them (others require it); the
+    // rest once the boot has read its mods
+    const small = (w) => !isPacked(w.mod) && (w.plan.entry.bytes || 0) <= bootBytes;
+    const rank = (w) => (w.plan.entry.id === 'repentogon' ? 0 : 1);
+    const now1 = work.filter(small).sort((a, b) => rank(a) - rank(b) || (a.plan.entry.bytes || 0) - (b.plan.entry.bytes || 0));
+    const later = work.filter((w) => !small(w));
+    st.state = 'updating';
+    log(`[mods] ${work.length} installed mod(s) differ from the catalogue: ${work.map((w) => w.mod.name).join(', ')}`);
+    for (const w of now1) if (await one(db, w.mod, w.plan)) { w.refusedAt = now(); later.unshift(w); }
+    if (later.length) {
+      st.later = later.length;
+      earlyDone();                              // the boot does not wait for what is left
+      if (gate !== 'late') await late;
+      for (const w of later) {
+        // a 403 while the game booted: the CDN repeats it for a minute, so not before then
+        if (w.refusedAt != null) { const left = wait403 - (now() - w.refusedAt); if (left > 0) await sleep(left); }
+        await one(db, w.mod, w.plan);
+      }
+    }
+    st.state = 'done';
+  }
+
+  function start() {
+    if (running) return running;
+    running = pass().catch((e) => { st.state = 'error'; log(`[mods] the update check stopped: ${e.message}`); })
+      .finally(() => earlyDone());
+    return running;
+  }
+
+  // The boot, just before it reads the mods: waits for this start's part of the pass,
+  // up to capMs; then any write still to come waits for afterSeed().
+  async function beforeSeed(capMs) {
+    if (!running) start();
+    const t = now();
+    let timer = null;
+    const done = await Promise.race([early.then(() => true), new Promise((r) => { timer = setTimeout(() => r(false), Math.max(0, capMs)); })]);
+    if (timer) clearTimeout(timer);
+    st.waitedMs = now() - t;
+    if (gate === 'open') gate = 'seeding';
+    return { done, waitedMs: st.waitedMs, state: st.state };
+  }
+  function afterSeed() { if (gate !== 'late') { gate = 'late'; openLate(); } }
+
+  return { start, beforeSeed, afterSeed, stats: () => Object.assign({}, st, { gate }),
+           note: (id) => updateWords(notes.get(id)), notes: () => new Map(notes),
+           done: () => running || Promise.resolve() };
+}
+
 // ---- seeding, before the game looks ------------------------------------------
 
 // `seed(path, bytes)` is the pipeline's isaac_fs_seed. Every path is built here,
@@ -1190,6 +1595,14 @@ export function createModsMenu(opts) {
     if (!p || !(p.total > 0)) return null;
     return packedWords(p.have, p.total, packs.stats().state);
   };
+  // round 116: what the catalogue check did to an installed mod (createModUpdater)
+  const updateNote = (id) => (o.updates ? o.updates.note(id) : null);
+  // an installed row's note: a packed mod still downloading says how far, else an update says so
+  const installedNote = (m) => {
+    const kept = isPacked(m) ? keptWords(m.id) : null;
+    if (kept && kept.short !== 'INSTALLED') return kept.short;
+    return (updateNote(m.id) || {}).short || (kept ? kept.short : null);
+  };
   // the menus show it as it moves, a few times a second at most
   let redrawSoon = null;
   if (packs) packs.onChange(() => {
@@ -1209,8 +1622,15 @@ export function createModsMenu(opts) {
     catch (e) { mods = []; say(`the mod store is unavailable: ${e.message}`); }
   }
 
+  // round 116: where the next install comes from -- set by add() for a catalogue mod
+  // (with what it is: entryIdentity), so that it can follow the catalogue; anything
+  // else is from this device and is never touched by an update
+  let origin = null;
   async function install(entries, fallback) {
+    const from = origin || { source: 'device' };
+    origin = null;
     const { mod, files, dropped, madeMetadata } = planMod(entries, fallback);
+    Object.assign(mod, from);
     if (mod.bytes > SEED_BUDGET) {
       throw new Error(`${mod.name} is ${mib(mod.bytes)}; the game is given ${mib(SEED_BUDGET)} for mods`);
     }
@@ -1304,6 +1724,7 @@ export function createModsMenu(opts) {
     try { if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch { /* best effort */ }
     const mod = { id: entry.id, name: entry.name || index.name || entry.id, files: index.files, bytes: index.bytes,
                   version: entry.version || index.version || '', added: Date.now(), enabled: true,
+                  source: 'catalogue', cat: entryIdentity(entry),
                   packed: { base, index: p.index, indexBytes: gz.length, eagerBytes: eager,
                             storedBytes: index.packs.reduce((n, x) => n + x[1], 0) } };
     await putMod(db, mod, []);
@@ -1324,6 +1745,11 @@ export function createModsMenu(opts) {
         if (packs) packs.forget(mod.id);
         const store = packStore();
         freed = await store.drop(await packsOnlyOf(store, mod, mods));
+        // round 116: and those of the version an update replaced, if they are still kept
+        if (mod.packed.prev) {
+          try { freed += await store.drop(await stalePacks(store, mod.packed.prev, mod.packed.base, mods.filter((x) => x.id !== mod.id))); }
+          catch { /* kept: another start's check frees them */ }
+        }
       }
       await deleteMod(db, mod.id); await refresh();
       say(`${mod.name} removed${freed ? `, ${freed} pack(s) freed` : ''}`, true);
@@ -1369,9 +1795,10 @@ export function createModsMenu(opts) {
       needsComputer: isPacked(m) && smallDevice(),
       // round 107: a packed mod downloads its eager lane now and the rest as it is played;
       // round 108: installed, how much of it is kept by now
-      sizeNote: isPacked(m) ? ((have.has(m.id) && keptWords(m.id)) || {}).long
-        || `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null,
-      rowNote: isPacked(m) && have.has(m.id) ? ((keptWords(m.id) || {}).short || null) : null,
+      // round 116: an installed mod the catalogue updated says so first
+      sizeNote: (have.has(m.id) && (updateNote(m.id) || {}).long) || (isPacked(m) ? ((have.has(m.id) && keptWords(m.id)) || {}).long
+        || `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null),
+      rowNote: have.has(m.id) ? installedNote(m) : null,
       // round 95: what installing it brings along, by name
       requires: (Array.isArray(m.requires) ? m.requires : []).map((r) => (byId.has(r) ? cleanModName(byId.get(r).name) : r)),
     }));
@@ -1434,11 +1861,15 @@ export function createModsMenu(opts) {
         // round 107: a packed mod is its index and eager lane now, the rest as it is played
         if (isPacked(e)) { await installPacked(e, onProgress); fresh.add(e.id); continue; }
         const zip = await fetchMod(o.catalogueBase, e, onProgress);
+        // round 116: what was installed, kept in its record (the catalogue's sizes and the zip's sha256)
+        const cat = entryIdentity(e, await sha256Hex(zip));
         progress = null;
         phase = 'unpack';
         message = browser && browser.isOpen() ? null : 'UNPACKING...';
         redraw();
-        await install(await unzip(zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength)), e.name);
+        const entries = await unzip(zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength));
+        origin = { source: 'catalogue', cat };
+        await install(entries, e.name);
         fresh.add(e.id);
       }
       if (order.length > 1) say(`${cleanModName(entry.name)} and ${order.length - 1} mod(s) it needs`, true);
@@ -1459,12 +1890,13 @@ export function createModsMenu(opts) {
       const rows = list.map((m) => ({
         label: m.name.replace(/^[!\s]+/, ''),
         note: busyId === m.id && progress != null ? `${progress}%`
-          : have.has(m.id) ? ((isPacked(m) && keptWords(m.id)) || {}).short || 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG'
+          : have.has(m.id) ? installedNote(m) || 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG'
             : isPacked(m) && smallDevice() ? NEEDS_COMPUTER
               : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
         dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET) || (isPacked(m) && smallDevice()),
         // what the mod does, under the list, as the game's own mods screen shows it
-        detail: [m.version ? `V${m.version}` : '', have.has(m.id) && isPacked(m) ? ((keptWords(m.id) || {}).long || '') : '',
+        detail: [m.version ? `V${m.version}` : '', have.has(m.id) ? ((updateNote(m.id) || {}).long || '') : '',
+          have.has(m.id) && isPacked(m) ? ((keptWords(m.id) || {}).long || '') : '',
           m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),
       }));

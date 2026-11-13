@@ -23,7 +23,7 @@ const $ = (id) => document.getElementById(id);
 import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
-import { createPackStore, createPackDownloader } from './mods.mjs';
+import { createPackStore, createPackDownloader, createModUpdater } from './mods.mjs';
 import { createModBrowser } from './mod_browser.mjs';
 import { createPadKeys } from './gamepad.mjs';
 import { createTouchControls } from './touch_controls.mjs';
@@ -1005,11 +1005,32 @@ const packDownloader = params.get('packbg') === '0' ? null
   : createPackDownloader({ store: packStore, log: packLog });
 hooks.packStore = packStore;
 hooks.packDownloader = packDownloader;
+// Round 116: the mods installed from the catalogue follow the catalogue this page pins
+// (mods.mjs createModUpdater): checked from here on, in parallel with the boot, which
+// waits for it just before it reads the mods -- at most ?modupdatewait= ms (2500); what
+// is not done by then is written after the game has read its mods, for the next start.
+// No mod from the catalogue installed: nothing is fetched. ?modupdate=0 leaves it off.
+// Its lines are held until the boot's log exists (boot_web.mjs makes it) and go there.
+const modCatalogue = params.get('catalogue') || (typeof window !== 'undefined' ? window.isaacModCatalogue : null) || null;
+let modUpdateLines = [];
+const modUpdateLog = (line) => {
+  console.log(line);
+  if (modUpdateLines) modUpdateLines.push(String(line)); else if (Array.isArray(window.isaacLog)) window.isaacLog.push(String(line));
+};
+const modUpdates = params.get('modupdate') === '0' || params.get('mods') === '0' || !modCatalogue ? null
+  : createModUpdater({ catalogueBase: modCatalogue, store: packStore, log: modUpdateLog });
+if (modUpdates) {
+  hooks.modUpdates = modUpdates;
+  hooks.modUpdateWaitMs = Number(params.get('modupdatewait') || 2500);
+  hooks.modUpdateLines = () => { const held = modUpdateLines || []; modUpdateLines = null; return held; };
+  modUpdates.start();
+}
 const modsMenu = createModsMenu({
   paper: modsPaper,
   browser: modBrowser,
   store: packStore,
   packs: packDownloader,
+  updates: modUpdates,
   log: (line) => console.log(line),
   catalogueBase: params.get('catalogue') || (typeof window !== 'undefined' ? window.isaacModCatalogue : null) || null,
   onInstalled: enableModsInOptions,

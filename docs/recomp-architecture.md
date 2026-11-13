@@ -11636,3 +11636,152 @@ comparison (the place check sees a shorter list), and the wrappers of
 **Not done.** The closure the walk allocates per firing, and the `pcall`
 around every function, are as before. A mod's own callback runners (Fiend
 Folio has one, `callbacks/dynamic.lua`) are the mod's.
+
+### 21.145 Round 116: installed mods follow the catalogue
+
+Page only (`mods.mjs`, `play.mjs`, `boot_web.mjs`). A mod installed from the
+catalogue was never refreshed: a release that pins a newer catalogue in which
+the mod changed left the player with the old files until they removed it and
+installed it again. That matters for the REPENTOGON-compatible layer
+(`repentogon`), which is game-side Lua the engine release expects to match,
+changes with nearly every release, keeps `<version>1</version>`, and is what
+Fiend Folio requires. Between release 22's catalogue and release 23's it is the
+only one of 206 entries that differs (133,259 -> 142,815 bytes of zip, 464,569 ->
+495,880 unpacked, 19 files both times, five Lua files changed).
+
+**What "different" is.** Never the version string; what the entry already
+carries (`entryIdentity`, `sameContent`):
+
+- a packed entry is its index's name, the start of the index's sha256, and the
+  index names every pack by its own sha256: exact;
+- an unpacked entry is its zip's size, the size it unpacks to, its file count
+  and its part count -- and its zip's sha256 when the entry has one. modpack.py
+  does not write `sha256` yet. The page records the sha256 of the zip it
+  installed, so once modpack.py writes `"sha256": sha256(blob)` the comparison
+  is exact with no refresh needed. Until then, a change that keeps all four
+  sizes the same goes unnoticed. That needs a one-character Lua edit that also
+  deflates to the same length.
+
+**What was installed is remembered.** An install from the catalogue writes
+`source: 'catalogue'` and `cat` (the identity, plus the sha256 of the zip it
+downloaded) into the mod's record; a packed one writes its index; an import from
+the device writes `source: 'device'`, and such a mod is never touched. A record
+from before this round:
+
+- packed: its `packed.index` is its identity, exact.
+- unpacked: nothing in the record can be checked against the catalogue's sizes
+  (the zip's size was not kept), so it is checked once by downloading it
+  (`verify`). Byte-identical files only get the identity written. Different
+  files are replaced only for the layer (`repentogon`, the updater's
+  `legacyFollow`), which the engine release expects to match. For any other
+  mod they mean a zip the player added themself under an id the catalogue
+  also lists (their own newer copy of a mod): between the catalogues that
+  existed before this round only the layer's entry ever changed
+  (`check_cat.py` at each release), so it cannot be an old catalogue install.
+  It is left as it is and remembered as `source: 'device'`, so it is not
+  looked at again.
+
+**One write, whole or nothing** (`replaceMod`). Everything is downloaded,
+unzipped and planned first. Then one transaction over the files and the record
+reads the record as it is at that moment, deletes the mod's files, writes the new
+ones and merges the record, keeping `enabled` and `added` (and the folder, which
+is the id). A mod removed in the meantime is not brought back, and one whose
+identity changed in the meantime (reinstalled) is left alone. A failure (host
+down, a part's 404, a store out of space) writes nothing; the old files stay
+whole and the next start tries again. The mod's save data is not in this store:
+`SaveModData` writes `c:/isaac/data/<id>/save<N>.dat`, which goes to the save
+store (`isaac-saves`). What the game writes under `mods/` is in `S_STORE`. Neither
+is in the transaction's scope.
+
+**When.** `play.mjs` starts the check as the page starts (`createModUpdater`), in
+parallel with the boot. With no catalogue mod installed it makes no request at
+all. The boot waits for it at `seed mods`, just before it reads the mods, for at
+most 2.5 s (`?modupdatewait=`). Small unpacked mods (a zip up to 4 MB: the layer,
+the layer first) are fetched and written before that point when they can be.
+Whatever is not finished then waits until the boot has read its mods
+(`afterSeed`, after `register packed mods`) and is written for the next start, so
+a running game never sees half of an update. A seeded mod is a copy in the
+engine's memory, so a later write cannot reach it anyway. A 403 while the game
+boots (jsDelivr's first answer for a file it has not served, cached for a minute)
+does not hold the boot: the part is asked for again a minute later, after the
+boot. A catalogue base pinned to a commit (`@<40 hex>`, what a release names) is
+fetched with `cache: 'default'`, so the browser's cache can answer it; any other
+base is revalidated. A browser that says it is offline is not asked. `?modupdate=0`
+turns it all off.
+
+**Packed mods** are refreshed only after the boot, always for the next start:
+their index is 600 KB and their changed eager packs can be megabytes. The new index
+and the eager packs the Cache API does not hold are fetched (a pack that is kept
+is reused: packs are named after their contents). Then the record moves to the
+new index with `packed.prev` set to the old one. The changed lazy packs come
+through round 108's background download at the next start, which plans from the
+record. The old index's packs stay through that visit, because the running game
+reads them by name. At the next start, before the game reads its mods, the packs
+that only the old index named are dropped (`stalePacks`: never one any installed
+packed mod's index names, its own new one included). Removing the mod also
+drops them.
+
+**What the player sees.** One `[mods]` line in the game log for each update,
+held until the boot's log exists:
+
+    [mods] REPENTOGON (browser): updated from the catalogue, 454 KB -> 484 KB (19 -> 19 files, zip 139 KB), 234 ms; in this start
+
+(or `from the next start`), `... could not be fetched (part 1 of 1 answered 404);
+the installed files stay, tried again at the next start`, `N installed mod(s)
+match the catalogue`, and the boot's `catalogue check:` line with how long it
+waited. The row in the mod browser and in the paper list notes `UPDATED` (in
+this start) or `NEW ON RELOAD` (next start), with the size change in the
+description. These use round 108's `rowNote` and `sizeNote`; a packed mod still
+downloading shows its percentage first.
+
+**Measured** (`.scratch/r116/drive_r116.mjs`, Chromium through Playwright, the
+dist of `.scratch/dist-n3` with these page files. The catalogue stand-in is
+served at 20 Mbit/s with 150 ms of latency per answer, which is what round 108
+used. One run each):
+
+| | wait at `seed mods` | requests to the catalogue host |
+|---|---|---|
+| nothing installed | 0 ms | 0 |
+| layer installed, the same, base not pinned (revalidated) | 0 ms (check done in 255 to 265 ms, before the boot got there) | 1 (the whole 240 KB) |
+| layer installed, the same, pinned base, persistent profile | 0 ms (check done in 7 ms) | 0: the HTTP cache answered |
+| layer to update (release 22 -> 23) | 0 to 105 ms over eight runs; the update itself took 228 to 248 ms | 2 |
+| catalogue host down (connection refused) | 1,603 to 1,624 ms (Windows retries a refused localhost connection for ~2 s) | 1 |
+| 150 kbit/s link | 2,501 to 2,505 ms (the cap); the update landed 7.8 s later, for the next start | 2 |
+
+The pinned case needs a browser with a disk cache. In an off-the-record
+Playwright context, the game's own downloads pushed the catalogue out of the
+in-memory HTTP cache, and it was fetched again (run1).
+
+With nothing to update and the check finished first, the boot does not wait.
+The check runs while the page fetches the engine, so a cold boot gives it
+seconds. A warm boot of this dist reaches `seed mods` within about a second of
+navigation. There, a catalogue that is slow to answer costs up to the cap: the
+whole 240 KB `catalogue.json` is fetched, and a revalidation without an ETag is
+the whole file again.
+
+Browser checks (all with a save file `c:/isaac/data/repentogon/save1.dat` and a
+state file under `mods/repentogon/` that must come through untouched):
+
+- release 22's layer (round 115's record) reloaded with release 23 pinned: the
+  store holds release 23's 19 files byte for byte, the record keeps `enabled`,
+  `added` and its folder, the save file is restored by the boot unchanged, the
+  engine prints `[REPENTOGON] browser layer, API 1.1.2`. The next start makes one
+  request and writes nothing.
+- the same with round 116's record and the mod turned off: updated, still off,
+  left out by the boot (`1 off`).
+- host down, then a part that 404s: the old files and record intact, the game
+  boots and the old layer runs. A later start with the host back: updated.
+- a 150 kbit/s link: the boot waits 2.5 s, runs the old layer, and the update is
+  written after the boot for the next start.
+
+40 of 40 browser checks (`.scratch/r116/run2/report.txt`). Unit tests:
+`tests/recomp-modupdate.test.js`, 10 tests (a stand-in IndexedDB whose transactions
+commit whole or not at all, a CDN, a Cache API). 25 mutants through `mutate.mjs`,
+all killed. The page's own suites stay at 130 of 130.
+
+Not done: a packed refresh in a browser (no two catalogues with different Fiend
+Folio indexes exist; covered by the unit test with hand-built packs). A new
+`requires` in an updated entry is not followed: a mod that newly needs another
+one does not get it installed. An entry that moved between zip and packed is
+reported, not converted. Not run against jsDelivr itself, on a phone, Firefox or
+Safari.
