@@ -1454,6 +1454,280 @@ if len({_s for _s, _, _ in RGON_HOOKS}) != len(RGON_HOOKS) or len({_v for _, _v,
     raise SystemExit("rgon hooks: a slot or an address is listed twice")
 
 
+# --- instruction hooks of the REPENTOGON-compatible layer (round 110) --------
+# Most of REPENTOGON's callbacks that are left sit in the MIDDLE of a game
+# function, on a value in a register or a stack slot, with no call there to
+# wrap (the stat values inside EvaluateItems, the bomb a player places). An
+# instruction hook is a few lines of C put into the lifted body right after one
+# instruction's `RECOMP_VA(0x<va>u);` marker (and after that instruction's own
+# `L_<va>: ;` label when it follows the marker, so a jump to the instruction
+# runs the hook too):
+#
+#   { extern uint8_t g_rgon_hook_on[];
+#     if (g_rgon_hook_on[slot]) {                 <- the only cost when nobody listens
+#       spill the function's register locals to the CpuState;
+#       go = isaac_rgon_insn_hook(slot, s, va, targets);   (host_rgon.c)
+#       reload them;
+#       if (go == <target>) goto L_<target>;      <- one line per allowed target
+#     } }
+#
+# The handler sees the CpuState as it is at that instruction: the eight
+# registers (the spilled locals), the SSE registers (always in the CpuState in
+# lifted code), the flags are left in their locals and are neither read nor
+# written. It can change a register, an xmm register or memory ([ebp-disp] is
+# memory) and the instruction then runs on what it left. It redirects control
+# only by answering one of the entry's `targets`, each of which must already be
+# a label (`L_<va>: ;`) of the same function -- the address a jump of the game's
+# own goes to -- and the host refuses any other answer. A target inside another
+# part of a split function (split_giants.py) is reached the way the split itself
+# reaches it: spill, set the trampoline's next block, return.
+#
+# Each entry: (slot, function VA, instruction VA, name, (redirect targets...)).
+# The slot space is RGON_HOOKS's (host_rgon.c's 192), shared and never reused.
+# The table is checked by scripts/recomp/rgon/tools/hook_table.py, which prints
+# it (`--write`); edit it there. A build error, never a silent skip: the
+# function not in exactly one TU, the marker not exactly once in it, a target
+# with no label in it, a slot or an address listed twice or used by RGON_HOOKS.
+RGON_INSN_HOOKS: list[tuple[int, int, int, str, tuple[int, ...]]] = [
+    (160, 0x00763570, 0x00764864, "Entity_Player::EvaluateItems@TearsUp", ()),    # 0x00764864  mulss xmm1, dword ptr [0xbaa4cc]
+    (161, 0x00763570, 0x00764f2e, "Entity_Player::EvaluateItems@FlatTears", ()),    # 0x00764f2e  mov ecx, dword ptr [ebp - 0x458]
+    (162, 0x00763570, 0x007662a9, "Entity_Player::EvaluateItems@DamageUp", ()),    # 0x007662a9  mov ecx, dword ptr [ebp - 0x458]
+    (163, 0x00763570, 0x00766ad0, "Entity_Player::EvaluateItems@FlatDamage", ()),    # 0x00766ad0  push 0
+    (164, 0x00780f40, 0x00781266, "Entity_Player::control_bombs@PreUseBomb", (0x00781b84,)),    # 0x00781266  push 0
+    (165, 0x00780f40, 0x00781b6b, "Entity_Player::control_bombs@PostUseBomb", ()),    # 0x00781b6b  mov eax, dword ptr [esp + 0x30]
+    (166, 0x006670f0, 0x006697ba, "Entity_Tear::Update@CricketsBodySplit", ()),    # 0x006697ba  mov eax, dword ptr [ebp - 0x890]
+    (167, 0x00676be0, 0x006770c2, "Entity_Tear::Collision_00676be0@ParasiteSplit", ()),    # 0x006770c2  mov eax, dword ptr [ebp - 0x64]
+    (168, 0x00676be0, 0x00677498, "Entity_Tear::Collision_00676be0@BoneSplit", ()),    # 0x00677498  mov eax, dword ptr [ebp - 0x60]
+]
+RGON_SLOTS = 192            # host_rgon.c RGON_HOOKS
+INSN_REGS = ("EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI")
+_RE_INSN_BLOCK = re.compile(
+    r"^[ \t]*/\* LIFT-PATCH insn 0x([0-9a-f]{8}) slot (\d+) begin[^\n]*\n.*?"
+    r"^[ \t]*/\* LIFT-PATCH insn 0x\1 end \*/[ \t]*\r?\n", re.M | re.S)
+# a split part: sub_X__pN, or sub_X__lifted__pN when the wrapper went on before the split
+_RE_PART_HEAD = re.compile(r"^static void __attribute__\(\(noinline\)\) (sub_[0-9a-f]{8}(?:__lifted)?)__p(\d+)\(CpuState \*restrict s, uint32_t nb\) \{\r?$", re.M)
+_RE_ROOT = re.compile(r"^  (uint(?:8|16|32|64)_t) ([A-Za-z_]\w*) = s->\2;\r?$")
+_RE_FN_END = re.compile(r"^\}\r?\n", re.M)
+
+
+def check_insn_table(hooks=None, wrap_hooks=None) -> None:
+    """The table's own rules, before any TU is read."""
+    hooks = RGON_INSN_HOOKS if hooks is None else hooks
+    wrap_hooks = RGON_HOOKS if wrap_hooks is None else wrap_hooks
+    taken = {s for s, _, _ in wrap_hooks}
+    seen_slot, seen_va = {}, {}
+    for slot, fva, iva, what, targets in hooks:
+        if not (0 <= slot < RGON_SLOTS):
+            raise SystemExit("insn hook %s: slot %d is outside 0..%d" % (what, slot, RGON_SLOTS - 1))
+        if slot in taken:
+            raise SystemExit("insn hook %s: slot %d is a function hook's (RGON_HOOKS)" % (what, slot))
+        if slot in seen_slot:
+            raise SystemExit("insn hooks %s and %s: both on slot %d" % (seen_slot[slot], what, slot))
+        if iva in seen_va:
+            raise SystemExit("insn hooks %s and %s: both at 0x%08x" % (seen_va[iva], what, iva))
+        if iva == fva:
+            raise SystemExit("insn hook %s: 0x%08x is the function's entry (that is a function hook)" % (what, iva))
+        if len(set(targets)) != len(targets) or iva in targets or 0 in targets:
+            raise SystemExit("insn hook %s: its targets are listed twice, include 0 or the hook's own address" % what)
+        if "*/" in what or "\n" in what:
+            raise SystemExit("insn hook %s: the name cannot go in a C comment" % what)
+        seen_slot[slot] = what
+        seen_va[iva] = what
+
+
+def _fn_spans(text: str, fva: int) -> list[tuple[str, int, int]]:
+    """Every body of function fva in one TU: (name, start, end) of `void
+    sub_X(` (when no __lifted body exists: otherwise that one is the wrapper),
+    `void sub_X__lifted(` and the split parts `sub_X__pN(`."""
+    name = "sub_%08x" % fva
+    out = []
+
+    def span(n, head):
+        found = [m for m in re.finditer(head, text, re.M)]
+        if len(found) > 1:
+            raise SystemExit("insn hook: %s is defined %d times in one TU" % (n, len(found)))
+        if not found:
+            return None
+        e = _RE_FN_END.search(text, found[0].end())
+        if not e:
+            raise SystemExit("insn hook: %s has no closing brace" % n)
+        return (n, found[0].start(), e.end())
+
+    lifted = span(name + "__lifted", r"^void %s__lifted\(CpuState \*restrict s\) \{[^\n]*\n" % name)
+    plain = span(name, r"^void %s\(CpuState \*restrict s\) \{[^\n]*\n" % name)
+    if lifted:
+        out.append(lifted)
+    elif plain:
+        out.append(plain)
+    for m in _RE_PART_HEAD.finditer(text):
+        if m.group(1) in (name, name + "__lifted"):
+            e = _RE_FN_END.search(text, m.end())
+            if not e:
+                raise SystemExit("insn hook: %s__p%s has no closing brace" % (m.group(1), m.group(2)))
+            out.append(("%s__p%s" % (m.group(1), m.group(2)), m.start(), e.end()))
+    return out
+
+
+def _roots(text: str, start: int) -> list[str]:
+    """The register locals a lifted body (or split part) declares at its top."""
+    roots = []
+    for line in text[start:start + 20000].split("\n")[1:]:
+        m = _RE_ROOT.match(line)
+        if not m:
+            break
+        roots.append(m.group(2))
+    return roots
+
+
+def insn_hook_text(slot: int, iva: int, what: str, targets, regs, jumps, nl: str = "\n") -> str:
+    """The C put after the instruction's marker. `regs` are the register locals
+    to spill and reload; `jumps` maps each target to its C (a goto, or the
+    split trampoline's cross-part form)."""
+    spill = " ".join("s->%s = %s;" % (r, r) for r in regs)
+    reload = " ".join("%s = s->%s;" % (r, r) for r in regs)
+    to = ", ".join("0x%xu" % t for t in targets) + (", " if targets else "") + "0u"
+    lines = [
+        "  /* LIFT-PATCH insn 0x%08x slot %d begin: %s (host_rgon.c isaac_rgon_insn_hook) */" % (iva, slot, what),
+        "  { extern uint8_t g_rgon_hook_on[];",
+        "    if (g_rgon_hook_on[%d]) {" % slot,
+        "      extern uint32_t isaac_rgon_insn_hook(int, CpuState *restrict, uint32_t, const uint32_t *);",
+        "      static const uint32_t rgon_to[] = { %s };" % to,
+    ]
+    if spill:
+        lines.append("      " + spill)
+    lines.append("      %suint32_t rgon_go = isaac_rgon_insn_hook(%d, s, 0x%xu, rgon_to);" % ("const " if targets else "", slot, iva))
+    if reload:
+        lines.append("      " + reload)
+    for t in targets:
+        lines.append("      if (rgon_go == 0x%xu) %s" % (t, jumps[t]))
+    if not targets:
+        lines.append("      (void)rgon_go;")
+    lines += ["    } }", "  /* LIFT-PATCH insn 0x%08x end */" % iva]
+    return nl.join(lines) + nl
+
+
+def _read_tu(tu: Path) -> str:
+    with open(tu, encoding="utf-8", errors="surrogateescape", newline="") as f:
+        return f.read()
+
+
+def _write_tu(tu: Path, text: str) -> None:
+    with open(tu, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
+        f.write(text)
+
+
+def apply_insn_hooks(lift_dir: Path, check_only: bool = False, hooks=None) -> list[Path]:
+    """Install, update and retire RGON_INSN_HOOKS in the lifted C (idempotent:
+    each block is between its own begin and end markers and is rewritten when
+    the entry's text changes). Returns the TUs modified; with check_only, the
+    TUs that would be (and says why)."""
+    hooks = RGON_INSN_HOOKS if hooks is None else hooks
+    check_insn_table(hooks)
+    live = {iva for _, _, iva, _, _ in hooks}
+    texts: dict[Path, str] = {}
+    changed: set[Path] = set()
+    tus = sorted(lift_dir.glob("lifted_*.c"))
+
+    def text_of(tu):
+        if tu not in texts:
+            texts[tu] = _read_tu(tu)
+        return texts[tu]
+
+    # where the hooked functions are (one read of every TU)
+    want = {"sub_%08x" % fva for _, fva, _, _, _ in hooks}
+    where: dict[str, list[Path]] = {n: [] for n in want}
+    for tu in tus:
+        t = text_of(tu)
+        has_blocks = "LIFT-PATCH insn 0x" in t
+        hit = False
+        for n in want:
+            if re.search(r"^(?:void|static void __attribute__\(\(noinline\)\)) %s(?:__lifted|__p\d+)?\(CpuState \*restrict s(?:, uint32_t nb)?\) \{" % n, t, re.M):
+                where[n].append(tu)
+                hit = True
+        if not hit and not has_blocks:
+            del texts[tu]                        # nothing of ours: do not keep 14 MB per TU around
+    # retire the blocks no entry asks for any more
+    for tu in list(texts):
+        t = texts[tu]
+        for m in reversed(list(_RE_INSN_BLOCK.finditer(t))):
+            if int(m.group(1), 16) not in live:
+                print("insn-hook 0x%s (slot %s): retired, %s %s" % (m.group(1), m.group(2), "would be removed from" if check_only else "removed from", tu.name))
+                t = t[:m.start()] + t[m.end():]
+                changed.add(tu)
+        texts[tu] = t
+    for slot, fva, iva, what, targets in hooks:
+        name = "sub_%08x" % fva
+        if len(where[name]) != 1:
+            raise SystemExit("insn hook %s: %s is in %d TU(s) of %s (needs exactly one)" % (what, name, len(where[name]), lift_dir))
+        tu = where[name][0]
+        t = texts[tu]
+        nl = "\r\n" if t.count("\r\n") * 2 > t.count("\n") else "\n"
+        # the block already there (if any) goes first, so that the marker search sees the lifted text
+        old = None
+        for m in _RE_INSN_BLOCK.finditer(t):
+            if int(m.group(1), 16) == iva:
+                if old is not None:
+                    raise SystemExit("insn hook %s: two blocks for 0x%08x in %s" % (what, iva, tu.name))
+                old = (m.start(), m.end(), m.group(0))
+        if old:
+            t = t[:old[0]] + t[old[1]:]
+        spans = _fn_spans(t, fva)
+        if not spans:
+            raise SystemExit("insn hook %s: %s has no body in %s" % (what, name, tu.name))
+        marker = re.compile(r"^  RECOMP_VA\(0x%xu\);[ \t]*\r?\n" % iva, re.M)
+        hits = [(sn, a, b, m) for sn, a, b in spans for m in marker.finditer(t, a, b)]
+        if len(hits) != 1:
+            raise SystemExit("insn hook %s: RECOMP_VA(0x%xu) occurs %d time(s) in %s (needs exactly one)" % (what, iva, len(hits), name))
+        sn, a, b, m = hits[0]
+        at = m.end()
+        # The instruction's own label, when a jump goes to it, is where the block goes
+        # (after it): the lifter writes the marker and then the label, and the split
+        # of a giant may cut between the two, leaving the marker at the end of one part
+        # and the label at the head of the next. Only when the label comes first
+        # (`L_x: ;` then the marker, after a call) does the block follow the marker.
+        lre = re.compile(r"^L_%08x: ;[ \t]*\r?\n" % iva, re.M)
+        lhits = [(sn2, a2, b2, lm) for sn2, a2, b2 in spans for lm in lre.finditer(t, a2, b2)]
+        if len(lhits) > 1:
+            raise SystemExit("insn hook %s: the label L_%08x occurs %d times in %s" % (what, iva, len(lhits), name))
+        if lhits and not t.startswith("  RECOMP_VA(0x%xu);" % iva, lhits[0][3].end()):
+            sn, a, b, lm = lhits[0]
+            at = lm.end()
+        roots = _roots(t, a)
+        if not roots:
+            raise SystemExit("insn hook %s: %s declares no register locals (a dispatch-shaped or hand-written body)" % (what, sn))
+        regs = [r for r in roots if r in INSN_REGS]
+        jumps = {}
+        for tgt in targets:
+            tl = "\nL_%08x: ;" % tgt
+            if t.find(tl, a, b) >= 0:
+                jumps[tgt] = "goto L_%08x;" % tgt
+                continue
+            other = [(on, oa, ob) for on, oa, ob in spans if on != sn and t.find(tl, oa, ob) >= 0 and "__p" in on]
+            if "__p" in sn and len(other) == 1:
+                # split_giants.py's own cross-part form, character for character (its
+                # unsplit turns it back into a goto)
+                base = sn.rsplit("__p", 1)[0]
+                spill_all = "".join("s->%s = %s; " % (r, r) for r in roots)
+                jumps[tgt] = "{ %s%s__next = 0x%08xu; %s__pend = 1u; return; }" % (spill_all, base, tgt, base)
+                continue
+            raise SystemExit("insn hook %s: its target 0x%08x has no label L_%08x in %s" % (what, tgt, tgt, name))
+        block = insn_hook_text(slot, iva, what, targets, regs, jumps, nl)
+        if old and old[0] == at and old[2] == block:
+            continue                                # current, and where it belongs
+        t = t[:at] + block + t[at:]
+        texts[tu] = t
+        changed.add(tu)
+        print("insn-hook 0x%08x (slot %d, %s): %s in %s" % (
+            iva, slot, what, ("would be " if check_only else "") + ("replaced" if old else "installed"), tu.name))
+    for tu in sorted(changed):
+        if not check_only:
+            _write_tu(tu, texts[tu])
+            _drop_objects(tu)
+    if hooks:
+        print("insn-hooks: %d in the table, %d TU(s) %s" % (len(hooks), len(changed), "to change" if check_only else "changed"))
+    return sorted(changed)
+
+
 # These two answer the standing audio question. The dispatch watch says the WAV
 # loader is never dispatched, but its callers reach it directly, so "never
 # dispatched" and "never called" are not the same claim -- and the same is true
@@ -1959,6 +2233,11 @@ def apply_lift_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
         touched.append(tu)
         print("lift-patch %s: applied in %s (%s); %s dropped for recompile" % (
             name, tu.name, reason, obj.name))
+    # round 110: the REPENTOGON layer's instruction hooks (RGON_INSN_HOOKS). They
+    # go in here, before the wrappers and the split of the giants: both carry the
+    # text along (a wrapped body is renamed, a split one cut at labels), and on a
+    # tree already wrapped or split the pass finds the body under its new name.
+    touched += [tu for tu in apply_insn_hooks(lift_dir, check_only=check_only) if tu not in touched]
     return touched
 
 

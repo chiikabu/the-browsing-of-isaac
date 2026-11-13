@@ -231,6 +231,28 @@ static int l_xmm(lua_State *L) {
     return 1;
 }
 
+/* reg(name [, value]) -> a general register of the CpuState a handler is
+ * running for (round 110): "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi",
+ * "edi". In an instruction hook it is the register as it is at that
+ * instruction (the lifted function's locals are spilled around the handler and
+ * reloaded after it, so a value set here is what the instruction then sees);
+ * in a function hook's `before` handler, at the function's entry. ESP cannot
+ * be set. Outside a handler it is an error. */
+static int l_reg(lua_State *L) {
+    static const char *const NAMES[] = { "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", NULL };
+    const int i = luaL_checkoption(L, 1, NULL, NAMES);
+    if (!g_hook_cpu) return luaL_error(L, "rgon: reg outside a hook's handler");
+    uint32_t *const r[8] = { &g_hook_cpu->EAX, &g_hook_cpu->ECX, &g_hook_cpu->EDX, &g_hook_cpu->EBX,
+                             &g_hook_cpu->ESP, &g_hook_cpu->EBP, &g_hook_cpu->ESI, &g_hook_cpu->EDI };
+    if (lua_gettop(L) >= 2) {
+        if (i == 4) return luaL_error(L, "rgon: esp cannot be set from a handler");
+        *r[i] = word_arg(L, 2);
+        return 0;
+    }
+    lua_pushinteger(L, (lua_Integer)*r[i]);
+    return 1;
+}
+
 /* registry(key [, f]) -> the function the Lua registry holds under an integer
  * key; with f, f takes its place and the one it replaces comes back.
  * The game keeps its callback runner there: LuaEngine::Init (0x008604c0)
@@ -407,6 +429,7 @@ static const luaL_Reg BRIDGE[] = {
     {"f2i", l_f2i}, {"i2f", l_i2f}, {"str", l_str}, {"stdstr", l_stdstr},
     {"alloc", l_alloc}, {"free", l_free}, {"call", l_call}, {"cfn", l_cfn}, {"obj", l_obj},
     {"hook", l_hook}, {"gate", l_gate}, {"log", l_log}, {"load", l_load}, {"env", l_env}, {"xmm", l_xmm}, {"registry", l_registry},
+    {"reg", l_reg},
     {NULL, NULL},
 };
 
@@ -416,6 +439,9 @@ void isaac_rgon_push_bridge(lua_State *L) {
     luaL_setfuncs(L, BRIDGE, 0);
     lua_pushinteger(L, RGON_HOOKS); lua_setfield(L, -2, "HOOKS");
     lua_pushinteger(L, 1); lua_setfield(L, -2, "API");        /* the bridge's own version */
+    /* round 110: this engine runs instruction hooks (lift_patches.py
+     * RGON_INSN_HOOKS) and has reg(); a layer asks before it defines one */
+    lua_pushinteger(L, 1); lua_setfield(L, -2, "INSN");
     /* round 103: Lua's own os library, for the layer to hand mods the four
      * functions of it REPENTOGON gives them (date, time, clock, difftime). The
      * game opens seven libraries by name and os is not one of them, so there
@@ -566,6 +592,46 @@ void isaac_rgon_hook_post(int slot, CpuState *restrict s, rgon_frame *f) {
     if (f->ref != LUA_NOREF) { luaL_unref(L, LUA_REGISTRYINDEX, f->ref); f->ref = LUA_NOREF; }
 }
 
+/* An instruction hook (round 110, lift_patches.py RGON_INSN_HOOKS): called
+ * from inside a lifted body, right before the instruction at `va` runs, with
+ * the function's register locals spilled to `s` (and reloaded from it after).
+ * The handler is the slot's `before`, called as handler(va, esp, ebp); reg()
+ * and xmm() reach the CpuState while it runs. It answers nil (go on with the
+ * instruction) or one of the hook's own redirect targets, `to` (0-terminated,
+ * written into the lifted C next to the jump each one takes). Any other
+ * answer is refused and logged: a jump the C has no label for. Returns the
+ * target, or 0. */
+uint32_t isaac_rgon_insn_hook(int slot, CpuState *restrict s, uint32_t va, const uint32_t *to) {
+    lua_State *L = g_L;
+    if (!L || slot < 0 || slot >= RGON_HOOKS || g_pre[slot] == LUA_NOREF) return 0u;
+    volatile char anchor = 0;
+    const uintptr_t here = (uintptr_t)&anchor;
+    uint32_t go = 0u;
+    ++g_hook_calls;
+    isaac_lua_host_enter(here, s->ESP);
+    CpuState *const outer = g_hook_cpu;
+    g_hook_cpu = s;
+    const int top = lua_gettop(L);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, g_pre[slot]);
+    lua_pushinteger(L, (lua_Integer)va);
+    lua_pushinteger(L, (lua_Integer)s->ESP);
+    lua_pushinteger(L, (lua_Integer)s->EBP);
+    if (lua_pcall(L, 3, 1, 0) != LUA_OK) {
+        hook_error(L, slot, "insn");
+    } else if (!lua_isnil(L, top + 1)) {
+        const uint32_t want = lua_isinteger(L, top + 1) ? (uint32_t)lua_tointeger(L, top + 1) : 0u;
+        for (const uint32_t *t = to; want && *t; ++t)
+            if (*t == want) { go = want; break; }
+        if (!go && ++g_hook_errors <= 24u)
+            isaac_log("[isaac][rgon] hook %d (insn 0x%08x): the answer %s is not one of its jump targets",
+                      slot, (unsigned)va, luaL_tolstring(L, top + 1, NULL));
+    }
+    lua_settop(L, top);
+    g_hook_cpu = outer;
+    isaac_lua_host_leave(here);
+    return go;
+}
+
 void isaac_rgon_report(void) {
     if (!g_L && !g_hook_calls && !g_native_calls) return;
     isaac_log("[isaac][rgon] %u hook call(s), %u hook error(s), %u guest call(s) from the layer",
@@ -576,6 +642,7 @@ void isaac_rgon_report(void) {
 
 int isaac_rgon_hook_pre(int slot, CpuState *restrict s, rgon_frame *f) { (void)slot; (void)s; (void)f; return 0; }
 void isaac_rgon_hook_post(int slot, CpuState *restrict s, rgon_frame *f) { (void)slot; (void)s; (void)f; }
+uint32_t isaac_rgon_insn_hook(int slot, CpuState *restrict s, uint32_t va, const uint32_t *to) { (void)slot; (void)s; (void)va; (void)to; return 0u; }
 void isaac_rgon_report(void) {}
 
 #endif  /* ISAAC_HAVE_LUA */

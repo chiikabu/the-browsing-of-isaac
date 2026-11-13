@@ -208,6 +208,88 @@ for _fn in ("Init", "Update", "Render", "TakeDamage", "HandleCollision"):
     _k += 1
 MAX_SLOTS = 192
 
+# Round 110: instruction hooks (lift_patches.py RGON_INSN_HOOKS): a handler right
+# before one instruction inside a function, which reads and writes the registers
+# and memory as they are there. Slots go on from 160 (the entity virtuals end at
+# 159) and are never reused.
+# (slot, "Class::Function@Point", function VA, instruction VA, redirect targets, note)
+INSN_HOOKS = [
+    (160, "Entity_Player::EvaluateItems@TearsUp", 0x00763570, 0x00764864, (),
+     "REPENTOGON's EvaluateItems_TearsUp signature matches once, at 0x0076485c (`movss [ebp-0x474], xmm1; "
+     "mulss xmm1, [0xbaa4cc]`); its patch point is +8, the mulss by 1.3f; 0x00764864 is also the target of "
+     "`jle` at 0x00764856, with xmm1 = [ebp-0x474] on both paths. The tears-up sum is [ebp-0x474] and xmm1; "
+     "eax = [ebp-0x458] = the player (EvaluateItems' this, stored once at 0x0076359f)"),
+    (161, "Entity_Player::EvaluateItems@FlatTears", 0x00763570, 0x00764f2e, (),
+     "REPENTOGON's EvaluateItems_FlatTears signature (`movss [ebp+X], xmm2; push 0; push 0xf5; mov ecx, esi; "
+     "call; test al, al; jne`) matches nothing here: the same code is 0x00764f26 `movss [ebp-0x460], xmm2`, "
+     "0x00764f2e `mov ecx, [ebp-0x458]; push 0; push 0xf5; call 0x7706e0; test al, al; jne 0x764ff5` (the "
+     "player in a stack slot, not esi). [ebp-0x460] is the shots-per-second value the game turns into "
+     "MaxFireDelay at 0x00765603..0x0076561f (30 / (it * [player+0x1948]) - 1); 0x00764f2e is also the target of "
+     "`je` at 0x00764f08, with [ebp-0x460] stored on both paths"),
+    (162, "Entity_Player::EvaluateItems@DamageUp", 0x00763570, 0x007662a9, (),
+     "REPENTOGON's EvaluateItems_DamageUp signature (`mov ecx, [ebp+X]; push 0; push 0x78`) matches once, "
+     "here. The damage-up sum is [esi]: esi = [ebp-0x460] (0x00766188) = player+0x1470 (0x00765740 "
+     "`lea esi, [eax+0x1470]`, zeroed at 0x00765748, stored at 0x00765750), the Lua data member Damage's "
+     "offset; also the target of `je` at 0x00766283"),
+    (163, "Entity_Player::EvaluateItems@FlatDamage", 0x00763570, 0x00766ad0, (),
+     "REPENTOGON's EvaluateItems_FlatDamage signature (`push 0; push 0x19f; mov ecx, esi; call; test al, al; "
+     "je; push 0x19f`) matches once, here; esi = the player on the three ways in (0x00766aa7, 0x00766ab6, "
+     "fall-through), damage at [esi+0x1470]"),
+    (164, "Entity_Player::control_bombs@PreUseBomb", 0x00780f40, 0x00781266, (0x00781b84,),
+     "REPENTOGON's pre signature (`jg rel32; push 0; push 0x205; mov ecx, edi; call`) matches once, at "
+     "0x00781260 (`jg 0x781b84` after `cmp dword [edi+0x1610], 0`); its patch point is the instruction after "
+     "the jg and a cancel goes where the jg goes, 0x00781b84 (`pop edi; pop esi; mov esp, ebp; pop ebp; ret`). "
+     "edi = the player. 0x00780f40 is called only by Entity_Player::Update (0x00785bc9)"),
+    (165, "Entity_Player::control_bombs@PostUseBomb", 0x00780f40, 0x00781b6b, (),
+     "REPENTOGON's post signature (`mov eax, [esp+X]; inc eax; mov [esp+X], eax; cmp eax, [esp+Y]; jl; pop "
+     "edi`) matches nothing here: the placing loop's end is 0x00781b6b `mov eax, [esp+0x30]; lea esi, "
+     "[edi+0x33c]; inc eax; mov [esp+0x30], eax; cmp eax, [esp+0x48]; jl 0x7812f3`, right after the bomb's "
+     "Update (`mov ecx, [esp+0x20]; mov eax, [ecx]; call [eax+0xc]`). [esp+0x20] is the bomb: Game::Spawn's "
+     "answer (call 0x6fe410 at 0x0078157b; `mov esi, eax; mov [esp+0x20], esi`); edi = the player"),
+    # MC_POST_FIRE_SPLIT_TEAR: each where REPENTOGON's patch replaces the new tear's Update call
+    # (`mov eax, [esi]; mov ecx, esi; call [eax+0xc]`, slot 3 of the tear's vtable) with Update and the
+    # callback; here the hook is the instruction right after that call (esi and edi are callee-saved).
+    (166, "Entity_Tear::Update@CricketsBodySplit", 0x006670f0, 0x006697ba, (),
+     "REPENTOGON's SplitTears_CricketsBody signature (`mov eax, [esi]; mov ecx, esi; mov eax, [eax+?]; call "
+     "eax; mov eax, [ebp-?]; inc eax`) matches twice here, 0x006697b1 and 0x0066a317; 0x006697b1 is the one "
+     "whose loop runs 4 times (`cmp eax, 4; jl 0x669410`, the quad split) behind a tear-flag test "
+     "(0x00669385 on the BitSet128 at 0x00c34880); esi = the new tear ([ebp-0x88c]), edi = the tear being "
+     "updated (Entity_Tear::Update's this, `mov edi, ecx` at 0x00667135). The second match's loop count "
+     "comes from 0x0067f010(5) and is not identified: not hooked"),
+    (167, "Entity_Tear::Collision_00676be0@ParasiteSplit", 0x00676be0, 0x006770c2, (),
+     "REPENTOGON's SplitTears_Parasite signature matches once, at 0x006770bb (its 'trigger_collision'; here a "
+     "thiscall on the tear, called 5 times from Entity_Tear::Update, no name of its own); the loop runs twice "
+     "(`cmp eax, 2; jl 0x676d70`); esi = the new tear ([ebp-0x5c], 0x00677018), edi = the tear "
+     "([ebp-0x98] = this, 0x00676c0f, reloaded at 0x0067700f)"),
+    (168, "Entity_Tear::Collision_00676be0@BoneSplit", 0x00676be0, 0x00677498, (),
+     "REPENTOGON's SplitTears_Bone signature matches once, at 0x00677491; same function; esi = the new tear "
+     "([ebp-0x64], 0x006773ee), edi = the tear ([ebp-0x98], 0x006773e5); the loop `cmp eax, 2; jl 0x677124`"),
+]
+
+
+def check_insn(pe_root, taken):
+    """Each instruction hook: the function starts at its VA, the instruction and
+    every target are instructions of that function, slots and addresses once."""
+    rows, bad, seen = [], 0, set()
+    for slot, name, fva, iva, targets, note in INSN_HOOKS:
+        if slot in taken or slot in seen or not (0 <= slot < MAX_SLOTS):
+            print("FAIL %3d %s: the slot is taken or out of range" % (slot, name)); bad += 1; continue
+        seen.add(slot)
+        f = run_pequery(pe_root, "func", "0x%08x" % iva)
+        m = re.search(r"start 0x([0-9a-f]+)\s+end 0x([0-9a-f]+)", f)
+        if not m or int(m.group(1), 16) != fva:
+            print("FAIL %3d %s: 0x%08x is not in the function at 0x%08x (%s)" % (slot, name, iva, fva, f.strip())); bad += 1; continue
+        lo, hi = int(m.group(1), 16), int(m.group(2), 16)
+        ok = True
+        for a in (iva,) + tuple(targets):
+            d = run_pequery(pe_root, "disasm", "0x%08x" % a, "1").strip()
+            if not d.startswith("0x%08x " % a) or not (lo <= a < hi):
+                print("FAIL %3d %s: 0x%08x is not an instruction of 0x%08x (%s)" % (slot, name, a, fva, d)); ok = False
+        if not ok:
+            bad += 1; continue
+        rows.append((slot, name, fva, iva, targets, run_pequery(pe_root, "disasm", "0x%08x" % iva, "1").strip()))
+    return rows, bad
+
 
 def run_pequery(pe_root, *args):
     r = subprocess.run([sys.executable, "scripts/decomp/tools/pequery.py", *args], cwd=pe_root, capture_output=True, text=True)
@@ -309,6 +391,11 @@ def main():
     for slot, name, first in shared:
         print("same %3d %-40s is %s" % (slot, name, first))
     print("%d hook(s), %d shared with a base class, %d failed" % (len(rows), len(shared), bad))
+    insn, ibad = check_insn(pe_root, {r[0] for r in rows} | {s[0] for s in shared})
+    for slot, name, fva, iva, targets, d in insn:
+        print("insn %3d %-44s in 0x%08x at %s%s" % (slot, name, fva, d, ("  -> " + ", ".join("0x%08x" % t for t in targets)) if targets else ""))
+    print("%d instruction hook(s), %d failed" % (len(insn), ibad))
+    bad += ibad
     if bad:
         return 1
     if args.write:
@@ -316,12 +403,20 @@ def main():
         for slot, name, va, got, why, decl in rows:
             out.append('    (%d, 0x%08x, "%s"),%s' % (slot, va, name, "    # %s; %s" % ("ret ?" if got is None else "ret 0x%x" % got, why)))
         out.append("]")
+        out.append("RGON_INSN_HOOKS: list[tuple[int, int, int, str, tuple[int, ...]]] = [")
+        for slot, name, fva, iva, targets, d in insn:
+            out.append('    (%d, 0x%08x, 0x%08x, "%s", (%s)),    # %s' % (
+                slot, fva, iva, name, "".join("0x%08x, " % t for t in targets).rstrip(" ") if targets else "", d))
+        out.append("]")
         (ROOT / ".scratch" / "rgon" / "hooks.py.txt").write_text("\n".join(out) + "\n")
         lua = ["-- generated by tools/hook_table.py: slot, bytes popped", "return {"]
         for slot, name, va, got, why, decl in rows:
             lua.append('  ["%s"] = { %d, %s },' % (name, slot, "false" if got is None else "0x%x" % got))
         for slot, name, first in shared:
             lua.append('  ["%s"] = "%s",' % (name, first))
+        lua.append("  -- instruction hooks (round 110): slot, false, the instruction's address")
+        for slot, name, fva, iva, targets, d in insn:
+            lua.append('  ["%s"] = { %d, false, 0x%08x },' % (name, slot, iva))
         lua.append("}")
         (ROOT / "scripts" / "recomp" / "rgon" / "hook_slots.lua").write_text("\n".join(lua) + "\n")
         print("wrote .scratch/rgon/hooks.py.txt and scripts/recomp/rgon/hook_slots.lua")

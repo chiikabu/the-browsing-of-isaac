@@ -158,4 +158,14 @@ return {
   ["Entity_Knife::TakeDamage"] = "Entity::TakeDamage",
   ["Entity_Projectile::TakeDamage"] = "Entity::TakeDamage",
   ["Entity_Laser::HandleCollision"] = "Entity_Effect::HandleCollision",
+  -- instruction hooks (round 110): slot, false, the instruction's address
+  ["Entity_Player::EvaluateItems@TearsUp"] = { 160, false, 0x00764864 },
+  ["Entity_Player::EvaluateItems@FlatTears"] = { 161, false, 0x00764f2e },
+  ["Entity_Player::EvaluateItems@DamageUp"] = { 162, false, 0x007662a9 },
+  ["Entity_Player::EvaluateItems@FlatDamage"] = { 163, false, 0x00766ad0 },
+  ["Entity_Player::control_bombs@PreUseBomb"] = { 164, false, 0x00781266 },
+  ["Entity_Player::control_bombs@PostUseBomb"] = { 165, false, 0x00781b6b },
+  ["Entity_Tear::Update@CricketsBodySplit"] = { 166, false, 0x006697ba },
+  ["Entity_Tear::Collision_00676be0@ParasiteSplit"] = { 167, false, 0x006770c2 },
+  ["Entity_Tear::Collision_00676be0@BoneSplit"] = { 168, false, 0x00677498 },
 }

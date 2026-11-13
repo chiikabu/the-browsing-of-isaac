@@ -10634,3 +10634,169 @@ names one REPENTOGON function Fiend Folio reaches and the layer lacks:
 its number of registrations):
 
 78 in all: MC_EVALUATE_STAT (18), MC_POST_FIRE_SPLIT_TEAR (13), MC_POST_PLAYER_USE_BOMB (10), MC_POST_PICKUP_SHOP_PURCHASE (9), MC_EVALUATE_CUSTOM_CACHE (7), MC_PRE_LEVEL_PLACE_ROOM (6), MC_PRE_LASER_COLLISION (5), MC_POST_TRIGGER_WEAPON_FIRED (5), MC_POST_WEAPON_FIRE (5), MC_PLAYER_HEALTH_TYPE_CHANGE (5), MC_PRE_PLAYER_USE_BOMB (4), MC_POST_START_AMBUSH_WAVE (4), MC_POST_COMPLETION_EVENT (4), MC_POST_BRIMSTONE_SNEEZE (4), MC_PRE_PLAYER_GIVE_BIRTH_IMMACULATE (3), MC_PRE_PLANETARIUM_APPLY_ITEMS (3), MC_PRE_BACKDROP_CHANGE (3), MC_POST_GRID_ROCK_DESTROY (3), MC_POST_GRID_ENTITY_DOOR_UPDATE (3), MC_POST_DEVIL_CALCULATE (3), and 58 with one or two registrations each (`.scratch/rgon/r109/remaining.txt`).
+
+### 21.139 Round 110: instruction hooks, and the callbacks that needed them
+
+Engine (`RGON_INSN_HOOKS` and `apply_insn_hooks` in `lift_patches.py`;
+`isaac_rgon_insn_hook` and `reg()` in `host_rgon.c`), layer (`api_hooks.lua`,
+`hook_slots.lua`), tools (`tools/hook_table.py` `INSN_HOOKS`), tests
+(`test_hooks4.lua`, `tests/recomp-insn-hooks.test.js`). Engine `h4`.
+
+**The mechanism.** Most of what Fiend Folio still listened on fires in the
+middle of a game function, on a value in a register or a stack slot, where
+there is no call to wrap. An instruction hook is a block of C the lift-patch
+phase puts into the lifted body right after one instruction's
+`RECOMP_VA(0x<va>u);` marker, or after the instruction's own `L_<va>: ;` label
+when that follows the marker (the lifter's order; a jump to the instruction
+then runs the hook too). The block tests the slot's byte in `g_rgon_hook_on`
+first, and only when a handler is installed spills the function's register
+locals (the eight general registers the body declares as `X = s->X`; never EIP,
+FS_OFFSET, the flags or the x87 locals), calls
+`isaac_rgon_insn_hook(slot, s, va, targets)`, reloads them, and takes one
+`goto L_<t>` per allowed target. The SSE registers are always in the CpuState in
+lifted code, so a handler reads and writes xmm with `B.xmm(n [, v])`, the
+general registers with the new `B.reg(name [, v])` (ESP read-only), and
+`[ebp-disp]` as memory; the flags stay in their locals, untouched. A handler is
+called as `handler(va, esp, ebp)` and answers nil (the instruction runs on what
+it left) or one of the hook's own targets. **Redirects** are explicit: each
+target is listed in the table entry, must already be a label (`L_<t>: ;`) of the
+same function -- a place the game itself jumps to -- or the build stops, and is
+written into the C both as the goto and in a 0-terminated `rgon_to[]` the host
+checks the answer against; any other answer is logged ("not one of its jump
+targets") and ignored. A function nobody hooked costs nothing; a hooked one
+costs the one-byte test on that instruction's path. The engine says it has all
+this with `B.INSN`; on an older engine the layer leaves these callbacks
+unimplemented.
+
+Rules the pass enforces, each a build error (`SystemExit`), never a skip: the
+function in exactly one TU; the marker exactly once among its bodies (the
+`__lifted` body of a wrapped function, the parts of a split one); the label at
+most once; a target without a label; a slot outside 0..191, used by
+`RGON_HOOKS`, or listed twice; an address listed twice; the function's own
+entry (that is a function hook). Each block sits between `/* LIFT-PATCH insn
+0x<va> slot N begin ... */` and `/* LIFT-PATCH insn 0x<va> end */`: a second run
+leaves it alone, a changed entry replaces it, a removed entry takes it out and
+leaves the function byte for byte as it was, CRLF stays CRLF.
+`apply_lift_patches` runs the pass (so do `build_boot.py` and `--check`, which
+reports a block to install, replace or retire). It runs before the wrappers and
+the split of the giants, which carry the block along; on a tree already wrapped
+or split it finds the body under its new name. Two things the split taught: it
+can cut between an instruction's marker and its label (the marker ends one
+part, the label heads the next), so the block follows the label whenever the
+label comes after the marker; and a target in another part is written in
+split_giants.py's own cross-part form (spill, `__next`, `__pend`, return),
+which its unsplit turns back into a goto, so the pass reads its own output as
+current.
+
+Slots go on from 160 (the entity virtuals end at 159). `tools/hook_table.py`
+checks each row against the executable (the instruction and every target are
+instructions of the function the row names, `pequery.py func`/`disasm`) and
+`--write` prints the list for `lift_patches.py` and the hook_slots.lua rows
+(`["Class::Function@Point"] = { slot, false, address }`).
+
+**The hooks** (the evidence of each is also in `tools/hook_table.py`):
+
+| Slot | Function, instruction | Evidence | Callback |
+|---|---|---|---|
+| 160 | EvaluateItems 0x00763570, 0x00764864 | REPENTOGON's EvaluateItems_TearsUp signature matches once, at 0x0076485c (`movss [ebp-0x474], xmm1; mulss xmm1, [0xbaa4cc]`, 1.3f); its patch point is +8, the mulss. 0x00764864 is also the target of the `jle` at 0x00764856, with xmm1 = [ebp-0x474] on both ways in. The player is EvaluateItems' `this`, kept at [ebp-0x458] (one store, 0x0076359f) | MC_EVALUATE_STAT TEARS_UP: [ebp-0x474] and xmm1 |
+| 161 | EvaluateItems, 0x00764f2e | REPENTOGON's FlatTears signature matches nothing; the same code with the player in a stack slot instead of esi is 0x00764f26 `movss [ebp-0x460], xmm2`, 0x00764f2e `mov ecx, [ebp-0x458]; push 0; push 0xf5; call 0x7706e0; test al, al; jne`. [ebp-0x460] is what 0x00765603..0x0076561f turns into MaxFireDelay (30 / (it * [player+0x1948]) - 1); also the target of `je` at 0x00764f08 | FLAT_TEARS: [ebp-0x460]; an answer of 0 or less is ignored |
+| 162 | EvaluateItems, 0x007662a9 | the DamageUp signature matches once, here. The sum is [esi]: esi = [ebp-0x460] (0x00766188) = player+0x1470 (`lea esi, [eax+0x1470]` 0x00765740, zeroed and stored at 0x00765748/0x00765750), the Lua data member Damage's offset | DAMAGE_UP: [esi], checked to be player+0x1470 |
+| 163 | EvaluateItems, 0x00766ad0 | the FlatDamage signature matches once, here; esi = the player on all three ways in | FLAT_DAMAGE: [player+0x1470], esi checked to be the player |
+| 164 | control_bombs 0x00780f40, 0x00781266, target 0x00781b84 | the pre signature matches once, at the `jg 0x781b84` (0x00781260) after `cmp [edi+0x1610], 0`; the hook is the instruction after it and a cancel goes where the jg goes (`pop edi; pop esi; mov esp, ebp; pop ebp; ret`). edi = the player; 0x00780f40's only caller is Entity_Player::Update (0x00785bc9) | MC_PRE_PLAYER_USE_BOMB: false cancels |
+| 165 | control_bombs, 0x00781b6b | the post signature matches nothing; the placing loop's end here is `mov eax, [esp+0x30]; lea esi, [edi+0x33c]; inc eax; mov [esp+0x30], eax; cmp eax, [esp+0x48]; jl`, right after the bomb's Update (`mov ecx, [esp+0x20]; mov eax, [ecx]; call [eax+0xc]`); [esp+0x20] is Game::Spawn's answer (0x0078157b, stored at 0x00781587) | MC_POST_PLAYER_USE_BOMB (player, bomb) |
+| 166 | Entity_Tear::Update 0x006670f0, 0x006697ba | the SplitTears_CricketsBody signature matches twice (0x006697b1, 0x0066a317); 0x006697b1 is the loop that runs 4 times behind the tear-flag test on the BitSet128 at 0x00c34880; the hook is the instruction after the new tear's Update call; esi = the new tear, edi = the tear (`mov edi, ecx`, 0x00667135). The second match (its loop count comes from 0x0067f010(5)) is not identified and not hooked | MC_POST_FIRE_SPLIT_TEAR, QUAD |
+| 167 | 0x00676be0 (a thiscall on the tear, called 5 times by Entity_Tear::Update; REPENTOGON's "trigger_collision"), 0x006770c2 | the Parasite signature matches once, at 0x006770bb, behind the flag test on 0x00c34850 (bit 6, TEAR_SPLIT); a loop of 2; esi = the new tear ([ebp-0x5c]), edi = the tear ([ebp-0x98] = this) | PARASITE |
+| 168 | 0x00676be0, 0x00677498 | the Bone signature matches once, at 0x00677491, behind the flag test on 0x00c348f0 (bit 51, TEAR_BONE) and a height test; esi = the new tear ([ebp-0x64]), edi = the tear | BONE |
+
+The split-tear callback is fired after the new tear's first Update, as
+REPENTOGON's trampoline does, with (tear, source, splitType) and the split type
+as the parameter. A bone that hits a wall does not go through 0x00676be0 (a
+measurement: only a bone hitting an enemy split there). REPENTOGON also adds the
+stat changes of its items.xml attributes at the stat points
+(`CalculateStatChange`); the layer reads no such attributes, so MC_EVALUATE_STAT
+hands over the game's own values.
+
+**Hot paths.** Every hook sits on a path that is not taken per frame per
+entity: EvaluateItems runs when a cache is evaluated; control_bombs reaches
+0x00781266 only when a bomb is about to be placed and 0x00781b6b once per placed
+bomb; the three split hooks only on their split branches. So the one-byte test
+is in no per-frame loop. No frame-rate effect was measured either way.
+
+**Tests.** `tests/recomp-insn-hooks.test.js` (node --test, 9 tests) drives the
+pass over small synthetic TUs: the block's place and shape (after the marker
+and label, only the register locals spilled, never EIP or the flags, one goto
+per target), idempotence, replacement, byte-for-byte retirement, CRLF, a wrapped
+function, a split function hooked before and after the split (including the cut
+between marker and label), the label-first order, ten build errors, that
+`apply_lift_patches` carries the table, and host_rgon.c's refusal of an
+unlisted answer. 9 mutants through `scripts/decomp/mutate.mjs`, each killed by
+that suite: the label rule (2), the register filter, "exactly once", the
+retirement, the idempotence test, the cross-part form, the
+`apply_lift_patches` wiring, and the host's target check (a text check; the
+behavioural one is the layer mutant below).
+
+`test_hooks4.lua`, 23 checks: the four stat points fire once each, in order;
+FLAT_DAMAGE is the damage the player ends with and an answer of 7.25 is the
+damage; one more DAMAGE_UP gives 3.5 * sqrt(2.2) = 5.1913 at FLAT_DAMAGE and in
+Damage; FLAT_TEARS 3.0 gives MaxFireDelay 9.0; 0 and -2.5 are ignored;
+TEARS_UP + 0.5 gives FLAT_TEARS 30 / (16 - 6 * sqrt(1.65) + 1) = 3.2283; with
+Sad Onion and Pentagram TEARS_UP is handed 0.7 and DAMAGE_UP 1.0; the
+parameter selects the stat; the chain is additive; a PRE_PLAYER_USE_BOMB
+answering false leaves no bomb placed, none spent and no POST; true places one
+and spends one; POST runs once, after PRE, with the bomb in the room (its
+SpawnerEntity the player); a PRE for another variant is not asked; Cricket's
+Body's landing tear fires 4 times, Parasite's hit twice, a Compound Fracture
+bone's hit once per bone, each with a new tear, the source and the type, and a
+QUAD-only function runs only for the quad split.
+
+Layer mutants (`.scratch/rgon/mutzip.py`, test_hooks4 on h4), every one caught
+by its own check: a cancel answering 0x00781b85 (refused by the engine, the
+bomb is placed: the cancel check), the bomb read at [esp+0x24] (both POST
+checks), the TEARS_UP slot [ebp-0x478] (the Sad Onion check: it read 0.0; the
+check was added because the first run of this mutant survived, plain Isaac's
+sum being 0 too), xmm1 not written (both TEARS_UP checks), the DAMAGE_UP
+register test +0x146c and the FLAT_DAMAGE address +0x1474 (their checks), the
+FLAT_TEARS slot [ebp-0x474] (the FLAT_TEARS 3.0 and TEARS_UP checks), the
+positive-only guard dropped (the ignore check), the player slot [ebp-0x45c] (9
+EVALUATE_STAT checks), the split's new tear read from edi (all three split
+checks), Parasite's type given as BONE (the Parasite check). A first try with
+the FLAT_TEARS slot at [ebp-0x464] trapped the game (that slot holds a
+pointer), so it was replaced by the harmless [ebp-0x474].
+
+On h4 with this layer: test_hooks4 23 0, test_hooks3 42 0, test_hooks2 49 0,
+test_layer 49 0, test_layer2 95 0, test_layer3 53 0, test_layer4 49 0,
+test_gate 7 0 (drive_stress.mjs through `.scratch/rgon/r110/suites.sh`; the
+other seven ran with the same layer archive while test_hooks4 still had 22
+checks). `node --test tests/recomp-rgon.test.js tests/recomp-host.test.js
+tests/recomp-web.test.js tests/recomp-insn-hooks.test.js`: 84 pass, 0 fail, 5
+skipped (audit outputs not present, as before). `lift_patches.py --check` on the
+tree: 0 TUs to change. `check-repo-safety.mjs` passed.
+
+**Fiend Folio, after.** The tour on h4 (`.scratch/rgon/r110/mk_ffh4.sh`, port
+8346, `?ISAAC_RGON_ALLOW=fiendfolio-reloaded`): 0 stops, 0 Lua error lines, no
+hook errors in the log, 74 callbacks reported as not implemented (78 before:
+MC_EVALUATE_STAT, MC_POST_FIRE_SPLIT_TEAR, MC_PRE_PLAYER_USE_BOMB and
+MC_POST_PLAYER_USE_BOMB are gone; nothing new).
+
+**Not done, and why.**
+
+- MC_POST_FIRE_SPLIT_TEAR at REPENTOGON's other places. Matched once and not yet
+  hooked or tested: the knife's five in 0x0096ae70 (Cricket's Body 0x0096b607,
+  Parasite 0x0096c345, Haemolacria 0x0096b8cb, Compound Fracture 0x0096c64f,
+  sticky 0x0096cb1e), the sword beam (two matches, 0x00630b6c and 0x0096237e;
+  the second is in Entity_Knife::Update), Lachryphagy (0x0066ef3e), Ludovico's
+  sticky (0x006743f4, in Entity_Tear::HandleCollision), the laser's sticky
+  (0x009726af) and Pop! (0x0097739b, which also needs REPENTOGON's flat patch of
+  a jump that matches nothing here). Haemolacria's tear site (0x00678b68) is
+  lifted into five overlapping functions, so there is no one function to hook.
+  No match: the laser's Cricket's Body, Mucormycosis (perhaps 0x0066a317),
+  Angelic Prism. MakeMultidimensionalCopy (a function hook) is not done either.
+- REPENTOGON's items.xml stat attributes (the XML half of its stat hooks, and
+  its RangeUp/SpeedUp/ShotSpeedUp patches, which only apply those): not read.
+- A handler cannot see the flags or x87 state a function keeps in locals (only
+  `FPUInstructionPointer` was seen as one); no hook here needs them.
+
+**Remaining, ranked** (callbacks Fiend Folio registers that no hook fires, by
+its number of registrations):
+
+74 in all: MC_POST_PICKUP_SHOP_PURCHASE (9), MC_EVALUATE_CUSTOM_CACHE (7), MC_PRE_LEVEL_PLACE_ROOM (6), MC_PRE_LASER_COLLISION (5), MC_POST_TRIGGER_WEAPON_FIRED (5), MC_POST_WEAPON_FIRE (5), MC_PLAYER_HEALTH_TYPE_CHANGE (5), MC_POST_START_AMBUSH_WAVE (4), MC_POST_COMPLETION_EVENT (4), MC_POST_BRIMSTONE_SNEEZE (4), MC_PRE_PLAYER_GIVE_BIRTH_IMMACULATE (3), MC_PRE_PLANETARIUM_APPLY_ITEMS (3), MC_PRE_BACKDROP_CHANGE (3), MC_POST_GRID_ROCK_DESTROY (3), MC_POST_GRID_ENTITY_DOOR_UPDATE (3), MC_POST_DEVIL_CALCULATE (3), MC_NPC_GRID_COLLISION (3), MC_POST_GLOWING_HOURGLASS_SAVE (3), MC_CONSOLE_AUTOCOMPLETE (3), MC_PRE_TRIGGER_BED_SLEEP_EFFECT (3), and 54 with one to three registrations each (`.scratch/rgon/r110/remaining.txt`). Several of these are REPENTOGON patches in the middle of a function (MC_PRE_LASER_COLLISION, MC_POST_WEAPON_FIRE, MC_POST_TRIGGER_WEAPON_FIRED, MC_PRE_LEVEL_PLACE_ROOM), now a matter of finding each place here.

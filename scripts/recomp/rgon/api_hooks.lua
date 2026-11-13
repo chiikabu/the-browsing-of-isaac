@@ -1491,6 +1491,117 @@ do
   end
 end
 
+------------------------------------------------------------------------------
+-- round 110: callbacks from inside a game function (instruction hooks)
+------------------------------------------------------------------------------
+-- An instruction hook (lift_patches.py RGON_INSN_HOOKS) runs its handler right
+-- before one instruction, as handler(va, esp, ebp), with the registers there
+-- (B.reg) and the SSE registers (B.xmm) to read and write; [ebp-disp] is plain
+-- memory. It answers nil, or one of the hook's own jump targets (the table
+-- lists them; the engine refuses anything else). hook_slots.lua names each one
+-- "Class::Function@Point" = { slot, false, its instruction's address }.
+if B.INSN and B.reg and B.xmm then
+  local reg, xmm, rf32 = B.reg, B.xmm, B.rf32
+  local function at(name, ids, handler)
+    local s = SLOTS[name]
+    if type(s) ~= "table" or mathtype(s[3]) ~= "integer" then log("api_hooks: no instruction hook " .. name) return end
+    local va = s[3]
+    T.define(s[1], ids, function(at_va, esp, ebp)
+      if at_va ~= va then wrong(name .. " (its address)", at_va) return end
+      return handler(esp, ebp)
+    end, nil)
+  end
+
+  -- MC_EVALUATE_STAT (1226): (player, stat, value), param = the stat (EvaluateStatStage), additive on the
+  -- value; the last number answered is the stat from there on. REPENTOGON fires it at four points of
+  -- Entity_Player::EvaluateItems (0x00763570, slot 74); here each is an instruction hook. The player is
+  -- EvaluateItems' `this`, which it keeps at [ebp-0x458] (stored once, 0x0076359f).
+  --   TEARS_UP    0x00764864, the `mulss xmm1, 1.3f` after the tears-up sum: the sum is [ebp-0x474] and
+  --               xmm1, both set (REPENTOGON writes xmm1 too)
+  --   FLAT_TEARS  0x00764f2e, the shots-per-second value [ebp-0x460] before the multipliers; an answer
+  --               of 0 or less is ignored, as REPENTOGON does
+  --   DAMAGE_UP   0x007662a9, the damage-up sum at [esi], esi = player+0x1470
+  --   FLAT_DAMAGE 0x00766ad0, the damage itself, [player+0x1470] with esi = the player
+  -- REPENTOGON adds a stat change of its own items.xml attributes first; the layer reads no such
+  -- attributes (README, "not supported").
+  local EVAL, STAGE = M.MC_EVALUATE_STAT, EvaluateStatStage
+  if EVAL and type(STAGE) == "table" then
+    local function stat(point, id, slot_of, positive, also_xmm1)
+      at("Entity_Player::EvaluateItems@" .. point, { EVAL }, function(esp, ebp)
+        if not T.wants(EVAL, id) then return end
+        local pa = r32(ebp - 0x458)
+        local where = slot_of(ebp, pa)
+        if not where then wrong("EvaluateItems@" .. point .. " (esi)", reg("esi")) return end
+        local p = as("EntityPlayer", pa, "Entity_Player::EvaluateItems@" .. point)
+        if not p then return end
+        local v = rf32(where)
+        local res = run(EVAL, id, p, id, v)
+        if type(res) ~= "number" or res ~= res or res == v or (positive and not (res > 0)) then return end
+        wf32(where, res)
+        if also_xmm1 then xmm(1, res) end
+      end)
+    end
+    stat("TearsUp", STAGE.TEARS_UP, function(ebp) return ebp - 0x474 end, false, true)
+    stat("FlatTears", STAGE.FLAT_TEARS, function(ebp) return ebp - 0x460 end, true, false)
+    stat("DamageUp", STAGE.DAMAGE_UP, function(ebp, pa)
+      local esi = reg("esi")
+      if esi == pa + 0x1470 then return esi end
+    end, false, false)
+    stat("FlatDamage", STAGE.FLAT_DAMAGE, function(ebp, pa)
+      if reg("esi") == pa then return pa + 0x1470 end
+    end, false, false)
+  end
+
+  -- MC_PRE_PLAYER_USE_BOMB (1220): (player), param = the player's variant -> false: no bomb is placed.
+  --   Entity_Player::control_bombs 0x00780f40 at 0x00781266, right after `cmp [edi+0x1610], 0; jg
+  --   0x781b84` (REPENTOGON's signature matches once at the jg); edi = the player. Cancelling goes where
+  --   that jg goes, 0x00781b84, the function's epilogue.
+  -- MC_POST_PLAYER_USE_BOMB (1221): (player, bomb), param = the player's variant, after each bomb placed:
+  --   0x00781b6b, the placing loop's end, after the bomb's own Update; the bomb is [esp+0x20] (the answer of
+  --   Game::Spawn, 0x0078157b), edi the player.
+  local PRE_BOMB, POST_BOMB = M.MC_PRE_PLAYER_USE_BOMB, M.MC_POST_PLAYER_USE_BOMB
+  if PRE_BOMB then
+    at("Entity_Player::control_bombs@PreUseBomb", { PRE_BOMB }, function()
+      local p = as("EntityPlayer", reg("edi"), "Entity_Player::control_bombs@PreUseBomb")
+      if not p then return end
+      if run(PRE_BOMB, p.Variant, p) == false then return 0x00781b84 end
+    end)
+  end
+  if POST_BOMB then
+    at("Entity_Player::control_bombs@PostUseBomb", { POST_BOMB }, function(esp)
+      local p = as("EntityPlayer", reg("edi"), "Entity_Player::control_bombs@PostUseBomb")
+      if not p then return end
+      local bomb = as("EntityBomb", r32(esp + 0x20), "Entity_Player::control_bombs@PostUseBomb (the bomb)")
+      if not bomb then return end
+      run(POST_BOMB, p.Variant, p, bomb)
+    end)
+  end
+
+  -- MC_POST_FIRE_SPLIT_TEAR (1025): (tear, source, splitType), param = the split type (SplitTearType),
+  -- after the new tear's first Update, as REPENTOGON runs it. Three of REPENTOGON's 18 places are here
+  -- (tools/hook_table.py has the evidence of each): Cricket's Body's quad split (Entity_Tear::Update,
+  -- 0x006697ba), Parasite's split and Compound Fracture's bones (the tear's collision function 0x00676be0,
+  -- 0x006770c2 and 0x00677498). At each the new tear is esi and the tear it came from edi.
+  local SPLIT, ST = M.MC_POST_FIRE_SPLIT_TEAR, SplitTearType
+  if SPLIT and type(ST) == "table" then
+    local function split(point, kind)
+      local name = "Entity_Tear::" .. point
+      at(name, { SPLIT }, function()
+        if not T.wants(SPLIT, kind) then return end
+        local new = as("EntityTear", reg("esi"), name .. " (the new tear)")
+        local src = new and as("EntityTear", reg("edi"), name .. " (the source)")
+        if not src then return end
+        run(SPLIT, kind, new, src, kind)
+      end)
+    end
+    split("Update@CricketsBodySplit", ST.QUAD)
+    split("Collision_00676be0@ParasiteSplit", ST.PARASITE)
+    split("Collision_00676be0@BoneSplit", ST.BONE)
+  end
+else
+  log("api_hooks: this engine has no instruction hooks; MC_EVALUATE_STAT, MC_PRE/POST_PLAYER_USE_BOMB and MC_POST_FIRE_SPLIT_TEAR do not fire")
+end
+
 install()
 T.rearm()
 
