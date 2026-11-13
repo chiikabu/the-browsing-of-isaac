@@ -20,7 +20,7 @@
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
-import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overlay.mjs';
+import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
 import { createPackStore, createPackDownloader } from './mods.mjs';
@@ -455,6 +455,7 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
     let last = window.isaacFrame || 0, lastT = performance.now(), first = true;
     let lastNoRaf = 0;   // round 49: frames the yield ticked on its timer (no animation frames)
     const recent = [];
+    const readout = {};   // the game's speed beside the frame count (menu_overlay.mjs, sampleReadout)
     // the machine, once: cores, memory (Chrome rounds it), the GPU renderer --
     // what a report from the target has to say alongside the frame rate
     // Round 107: the renderer comes from the start-up probe's own context. Asking
@@ -472,10 +473,15 @@ hooks.beforeMain = (m) => new Promise((resolve) => {
       const med = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
       if (first) { first = false; render(); }
       const note = document.hidden ? ' -- paused while hidden' : (nrDelta > 0 ? ` -- no animation frames (${nrDelta} timer tick(s) this second: occluded?)` : '');
-      const line = `${fps.toFixed(0)} fps (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;
+      // the game's logic counter (Game+0x264f8): 30 a second at full speed, whatever the frame count says
+      let ticks = null;
+      try { const G = window.isaacGuest, game = G && G.u32(0x00c71678); if (game) ticks = G.u32(game + 0x264f8); } catch { /* the guest is not up */ }
+      const { speed } = sampleReadout(readout, { frames: f, ticks, ms: t });
+      const slow = speed == null ? '' : `, the game at ${Math.round(speed * 100)}% speed`;
+      const line = `${fps.toFixed(0)} fps${slow} (median of the last ${recent.length} s: ${med.toFixed(0)}) -- frame ${f}${note}`;
       if (gameReady) setStatus('running', line + machine);
       const fpsEl = $('fps'); fpsEl.textContent = line; fpsEl.title = line + machine;   // the header's, live during play
-      editMenu.setFps(fps);                                                          // the in-game FPS VIEWER, when on
+      editMenu.setFps(fps, speed);                                                          // the in-game FPS VIEWER, when on
     }, 1000);
     watchScreen();
   };

@@ -745,3 +745,47 @@ test('round 87: the credit is drawn on the menu paper and nowhere else', () => {
   const bootCode = boot.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   assert.ok(!/m\.HEAPU32/.test(bootCode), 'and it does it through HEAPU8, the view this build exports');
 });
+
+// The FPS readout counted frames handed to the browser, which stays high while
+// the game's own logic falls behind: it now also says the game's speed when
+// that is below full speed.
+test('the FPS readout says how fast the game runs when it runs slow', async () => {
+  const { sampleReadout, readoutText } = await import('../scripts/recomp/web/menu_overlay.mjs');
+  let s = {};
+  assert.deepEqual(sampleReadout(s, { frames: 0, ticks: 0, ms: 0 }), { fps: null, speed: null }, 'the first sample says nothing');
+  // full speed: 30 steps a second
+  assert.deepEqual(sampleReadout(s, { frames: 60, ticks: 30, ms: 1000 }), { fps: 60, speed: null });
+  assert.deepEqual(sampleReadout(s, { frames: 120, ticks: 59, ms: 2000 }), { fps: 60, speed: null }, '29 of 30 is not slow');
+  // a slow second says nothing by itself (a room change), the second one does
+  assert.deepEqual(sampleReadout(s, { frames: 170, ticks: 84, ms: 3000 }), { fps: 50, speed: null }, 'one slow second: nothing yet');
+  const two = sampleReadout(s, { frames: 220, ticks: 109, ms: 4000 });
+  assert.equal(two.fps, 50);
+  assert.ok(Math.abs(two.speed - 25 / 30) < 1e-9, '50 frames, 25 steps: 83% speed');
+  assert.equal(readoutText(two.fps, two.speed), '50 83%');
+  // back to full speed: the number alone
+  const back = sampleReadout(s, { frames: 280, ticks: 139, ms: 5000 });
+  assert.equal(readoutText(back.fps, back.speed), '60');
+  // paused or in a menu: the counter stands still, nothing is said, and it does not count as slow
+  assert.equal(sampleReadout(s, { frames: 340, ticks: 139, ms: 6000 }).speed, null);
+  assert.equal(sampleReadout(s, { frames: 400, ticks: 164, ms: 7000 }).speed, null, 'the first slow second after a pause says nothing');
+  // no run (no Game): nothing; a new run's counter starting again below the old one: nothing
+  assert.equal(sampleReadout(s, { frames: 460, ticks: null, ms: 8000 }).speed, null);
+  assert.equal(sampleReadout(s, { frames: 520, ticks: 10, ms: 9000 }).speed, null);
+  s = {};
+  sampleReadout(s, { frames: 0, ticks: 1000, ms: 0 });
+  sampleReadout(s, { frames: 60, ticks: 1010, ms: 1000 });
+  assert.equal(sampleReadout(s, { frames: 120, ticks: 5, ms: 2000 }).speed, null, 'a counter that went back says nothing');
+  // an interval that is not a second: the rate, not the count
+  s = {};
+  sampleReadout(s, { frames: 0, ticks: 0, ms: 0 });
+  sampleReadout(s, { frames: 60, ticks: 20, ms: 2000 });
+  const half = sampleReadout(s, { frames: 120, ticks: 50, ms: 4000 });
+  assert.equal(half.fps, 30);
+  assert.equal(half.speed, 0.5);
+  assert.equal(readoutText(null, null), '');
+  assert.equal(readoutText(59.6, null), '60');
+  // and the page hands both to the readout
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  assert.match(play, /sampleReadout\(readout, \{ frames: f, ticks, ms: t \}\)/, 'the page samples the logic counter');
+  assert.match(play, /editMenu\.setFps\(fps, speed\);/, 'and hands the speed to the readout');
+});

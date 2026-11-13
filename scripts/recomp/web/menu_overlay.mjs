@@ -161,7 +161,7 @@ export function createEditFileMenu(opts) {
   // readAsset (round 70) is how a build with no server hands over its own files
   const { stage, canvas, assetsUrl, readAsset, actions, injectKey } = opts;
   const log = opts.log || (() => {});
-  const state = { open: false, slot: 0, cursor: 0, message: null, fps: null, fpsOn: false, closing: false, creditOn: false, confirm: false };
+  const state = { open: false, slot: 0, cursor: 0, message: null, fps: null, speed: null, fpsOn: false, closing: false, creditOn: false, confirm: false };
   const M = menuAssets(opts);
   const { A, load, play, measure, drawText } = M;
   // Off on every load. N flips it for this visit only: it used to be remembered,
@@ -249,8 +249,9 @@ export function createEditFileMenu(opts) {
     gg.imageSmoothingEnabled = false;
     gg.clearRect(0, 0, fpsEl.width, fpsEl.height);
     if (state.fps == null) return;
-    // just the number, white, in the game's font, a dark shadow a pixel down-right for the light rooms
-    const text = `${Math.round(state.fps)}`;
+    // the number (and the game's speed when it runs slow), white, in the game's font, a dark shadow a
+    // pixel down-right for the light rooms
+    const text = readoutText(state.fps, state.speed);
     drawText(gg, text, 3, 3, A.atlas);
     drawText(gg, text, 2, 2, A.atlasWhite);
   };
@@ -412,7 +413,7 @@ export function createEditFileMenu(opts) {
     current: () => rows()[state.cursor] || null,
     confirming: () => state.confirm,
     hit, tapRow, back,
-    setFps: (fps) => { state.fps = fps; if (state.fpsOn) { if (!M.isReady()) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
+    setFps: (fps, speed = null) => { state.fps = fps; state.speed = speed; if (state.fpsOn) { if (!M.isReady()) load().then(() => { fpsEl.hidden = false; drawFps(); }).catch(() => {}); else { fpsEl.hidden = false; drawFps(); } } },
     // the screen the engine is on, so the credit knows whether to be there
     setScreen,
     creditShown: () => state.creditOn,
@@ -644,4 +645,47 @@ export function createPaperMenu(opts) {
     element: () => overlay,
     preload: load,
   };
+}
+
+// ---- what the FPS readout says ------------------------------------------------
+//
+// The number alone was the frames the game handed to the browser in the last
+// second. That stays high while the game itself falls behind: the game steps
+// its logic 30 times a second and draws twice per step, so a step that takes
+// 40 ms still gives 50 "fps" while everything on screen moves at 83% of its
+// speed. The readout therefore also says how fast the game is running, when
+// it is not running at full speed: "50 83%".
+//
+// ticks: the game's logic counter (Game+0x264f8), 30 a second at full speed.
+// It stands still in menus and while paused, and for part of a second across
+// a room change, so a low second counts only once the one before it was low
+// too, and a second without a single step says nothing.
+
+export const TICKS_PER_SECOND = 30;
+export const SLOW_BELOW = 0.95;
+
+// One sample per second. `state` is the caller's own object, kept between calls
+// ({} to begin with); returns { fps, speed } with speed null when there is
+// nothing to say (not in a run, paused, or running at full speed).
+export function sampleReadout(state, { frames, ticks, ms }) {
+  const dt = ms - (state.ms ?? ms);
+  const out = { fps: null, speed: null };
+  if (state.ms != null && dt > 0) {
+    out.fps = (frames - state.frames) * 1000 / dt;
+    // (a counter that went back, a new run's, gives a negative count: nothing is said)
+    const stepped = ticks != null && state.ticks != null ? ticks - state.ticks : 0;
+    const speed = stepped > 0 ? Math.min(1, stepped * 1000 / dt / TICKS_PER_SECOND) : null;
+    const low = speed != null && speed < SLOW_BELOW;
+    if (low && state.low) out.speed = speed;
+    state.low = low;
+  }
+  state.ms = ms; state.frames = frames; state.ticks = ticks;
+  return out;
+}
+
+// "58", or "50 83%" when the game is running slow
+export function readoutText(fps, speed) {
+  if (fps == null) return '';
+  const n = `${Math.round(fps)}`;
+  return speed == null ? n : `${n} ${Math.round(speed * 100)}%`;
 }
