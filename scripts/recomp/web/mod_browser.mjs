@@ -54,7 +54,8 @@ export function cleanModName(s) {
 
 // Every word of the query must be somewhere in the name or the description; a
 // name that starts with a word beats one that has a word starting with it,
-// beats one that merely contains it, beats a description that does.
+// beats one that merely contains it (also with its spaces and punctuation
+// taken out, so a name typed as one word is found), beats a description that does.
 export function searchMods(items, query) {
   const words = cleanModText(query).toLowerCase().split(' ').filter(Boolean);
   if (!words.length) return items.slice();
@@ -62,11 +63,12 @@ export function searchMods(items, query) {
   for (const item of items) {
     const name = String(item.name || '').toLowerCase(), desc = String(item.desc || '').toLowerCase();
     const parts = name.split(/[^a-z0-9]+/).filter(Boolean);
+    const joined = parts.join('');                     // "fiendfolio" finds "Fiend Folio"
     let score = 0;
     for (const w of words) {
       if (name.startsWith(w)) score += 8;
       else if (parts.some((p) => p.startsWith(w))) score += 4;
-      else if (name.includes(w)) score += 2;
+      else if (name.includes(w) || joined.includes(w)) score += 2;
       else if (desc.includes(w)) score += 1;
       else { score = -1; break; }
     }

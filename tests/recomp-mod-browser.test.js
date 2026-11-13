@@ -45,6 +45,14 @@ test('search needs every word, and ranks name starts over words over substrings 
   assert.deepEqual(names('NEKO   stoney'), ['Neko Stoney Sprite'], 'case and spacing do not matter');
   assert.deepEqual(names('zzz'), []);
   assert.deepEqual(names('explosions'), ['Better Explosions']);
+  // a name typed as one word: the mod itself comes before the mods that only mention it
+  const ff = [
+    { name: 'Da Rules', desc: 'works with fiendfolio' },
+    { name: 'Damn, Fiend Folio: RELOADED', desc: 'the big one' },
+    { name: 'Folio Fiendish', desc: '' },
+  ];
+  assert.deepEqual(searchMods(ff, 'fiendfolio').map((m) => m.name), ['Damn, Fiend Folio: RELOADED', 'Da Rules']);
+  assert.deepEqual(searchMods(ff, 'folioreloaded').map((m) => m.name), ['Damn, Fiend Folio: RELOADED']);
   assert.deepEqual(searchMods([{ name: 'Tophat', desc: 'hat' }, { name: 'Hat Trick', desc: '' }], 'hat').map((m) => m.name),
     ['Hat Trick', 'Tophat'], 'a name start beats a match inside a word');
 });
