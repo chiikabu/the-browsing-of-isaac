@@ -11337,3 +11337,205 @@ clean.
   behaviour in such a run (the debug console was used).
 - EntityConfigPlayer:GetAchievementID returns the field, so -1 or the id for a
   named one, where REPENTOGON's returns 0 (it does not rewrite players).
+
+### 21.142 Round 113: the game's collector steps, paced
+
+Engine (`isaac_lua_gc` and its three pure rules in `host_lua.c`, behind the
+`lua_gc` shim; `host_lua_gcstate.c`, the one read of Lua's private state),
+tests (`selftest.c`, the "gc" block), lab scripts (`lab_gc.lua`,
+`lab_alloc.lua`, `lab_alloc2.lua`), the page's FPS readout
+(`menu_overlay.mjs` `sampleReadout`, `play.mjs`). No lift patch.
+
+**The report.** A player with Fiend Folio: "still super laggy and I feel
+like the fps counter is lying to me". Both were true. The readout counted
+frames handed to the browser, which stays near 60 while the game hitches and
+while its logic falls behind (it now also says the game's speed when that is
+under 95%: `tests/recomp-web.test.js`). And measured with `perf-run-ff.mjs`
+(a rAF timestamp and a setter on `window.isaacFrame`; the first room, nothing
+pressed, the changelog closed, CPU x1): 70 frames over 25 ms in 20 s, one
+every 0.3 s, with the readout at 60.
+
+**Why.** Once per pass of main's loop (0x009312ff, after the render call) the
+game runs 0x008657c0 on the Lua engine at [0x00c71690]:
+
+- `lua_gc(L, LUA_GCCOUNT, 0)` (0x008657d6, L = [engine+0x18]); the growth
+  since the last pass goes into a ten-entry ring at [engine+0x28 + 4i] (index
+  [engine+0x50] mod 10, last count [engine+0x58]).
+- If none of the ten entries is negative and their sum is positive
+  (0x0086583b..0x00865841): n = min([engine+0x24] + sum/10, 10,000) and a
+  hold of 600 passes starts ([engine+0x54] = 0x258). Otherwise the hold
+  counts down, and once it is over n shrinks by max(n/100, 10).
+- n is never below 50 (0x0086589d), is stored at [engine+0x24], and
+  `lua_gc(L, LUA_GCSTEP, n)` is called (0x008658b0). The game's other calls
+  of `lua_gc` are counts and whole collections (0x00872102, and three
+  register-held sites pushing 2, 3 and 4); it never sets the pause or the
+  step multiplier.
+
+Lua 5.3's LUA_GCSTEP adds n KB to the collector's debt and runs the collector
+while the debt is positive. A cycle's mark phase only allocates, so with a
+heap big enough that marking takes ten passes the rule above always fires:
+with Fiend Folio n was 10,000 within the first 120 renders of a run and
+stayed there (`lab_gc.lua`). At 10 MB of debt a pass, the pause Lua leaves
+after a cycle is over in a few passes, and a 91 MB heap was marked and swept
+again and again, a cycle for every 1 to 7 MB of garbage. The collector was
+31% of the busy time of a profile, and each cycle's end a frame of 40 to
+60 ms.
+
+Three things about Lua's own accounting made a simple "wait longer between
+cycles" wrong, each found by measuring an engine that did only that:
+
+- LUA_GCSTEP answers 1 only when a cycle ends inside that very call. A cycle
+  the game's steps began is often ended by one of Lua's own steps (at an
+  allocation, while the debt is positive); a wrapper that waits for the 1
+  then drives a second cycle straight after the first. Whether a cycle is in
+  progress is read where Lua keeps it (`host_lua_gcstate.c`).
+- Lua counts a swept object, and a finalizer call, as about six bytes of
+  work. One step of a megabyte therefore sweeps the whole heap: with 25 to
+  40 MB of garbage waited for, that was 40 MB freed in one pass, 150 to
+  200 ms (`lab_gc.lua`'s spike lines). A step is now made in slices and
+  stops on the clock.
+- The longest stops (130 to 400 ms) were finalizers, round 114.
+
+**The change.** With `pct` = 25 (`ISAAC_GC_DEFAULT_PCT`, `?ISAAC_LUA_GC=<pct>`,
+0 = every step as the game asks and nothing below):
+
+- Between two cycles a step the game asks for is not made until the heap has
+  grown by pct percent of what it was when the last cycle ended, at most
+  32 MB (`isaac_lua_gc_defer`, `isaac_lua_gc_room`). Lua's own pause is set
+  to 100 + pct, so its allocation-driven steps begin the next cycle at about
+  that point.
+- From there the game's steps are made until the cycle ends, whoever ends
+  it, each no larger than a 128th of the heap plus three times what the heap
+  grew by since the last pass (`isaac_lua_gc_step_kb`); a heap that has
+  outgrown twice the allowance is stepped by as much as the game asks.
+- A step is made in slices of 16 KB and stops when the pass has spent 2 ms on
+  it (8 ms past twice the allowance; `?ISAAC_LUA_GC_MS=<ms>`).
+- The game's own state is untouched: it reads the count, keeps its ring and
+  n, and asks every pass. Counts and whole collections are made as asked.
+
+What it changes for the game: when a `__gc` runs (later) and how big the Lua
+heap gets (with Fiend Folio's changelog open, which makes 700 KB of garbage a
+render and more in one function, `dssmenucore.lua:3012`: 93 to 132 MB in
+place of 91 to 98; with it closed, about 65 KB a render, 93 to 120 MB;
+`lab_gc.lua` on engine n3).
+
+**Measured.** With round 114, below.
+
+**Correctness.** Selftest, the "gc" block: the three rules, and the wrapper on
+a real state with Lua's own collector stopped (waits, steps past the
+allowance to the cycle's end, a cycle someone else ended, a cycle someone
+else began, the spread step that begins a cycle and does not finish it, the
+slices, the clock). 18 mutants through `mutate.mjs` with the selftest as the
+command (`.scratch/r113/mutants2.sh`): 17 killed; the one survivor was a
+branch that noted a whole collection as a cycle end, which the next step
+sees for itself: the branch is removed, and the other 17 are killed again on
+the final code.
+
+### 21.143 Round 114: a finalizer that does nothing is not called, and not kept
+
+Engine (`host_lua.c` 1d `lb_gc_native`, 1e `isaac_lua_setmetatable`;
+`host_lua_gcstate.c` `isaac_lua_setmetatable_nofin`), tests (`selftest.c`,
+the "native __gc" and "no-finalizer" blocks). No lift patch. The evidence
+below is a census over the whole image with `pequery.py` (decode config
+linear+skipdata+jtab-mask v2 (+fld), capstone 5.0.7, 2,082,541 instructions,
+373 resync bytes).
+
+**What was measured.** After round 113's pacing the longest stops remained:
+130 to 400 ms, once per collection cycle. A profile put them under Lua's
+`GCTM`: the `__gc` of every userdata the game hands to Lua. A two-minute
+Fiend Folio tour runs 11 million of them, each a call into lifted code, and
+Lua runs them in batches that double in size with every step (lgc.c
+`runafewfinalizers`), so the last batches of a cycle are hundreds of
+thousands of calls in one uninterruptible step.
+
+**The `__gc` functions.** 66 functions of one 31-byte shape (56 at
+0x008c2bd0..0x008c32b0 and 10 at 0x008c5b90..0x008c5cb0, stride 0x20; the
+byte pattern has 66 hits and 0x0085c3e0 has 66 direct callers, the same 66;
+they differ in the key they push and the call's displacement):
+
+    push ebp; mov ebp, esp; mov ecx, [ebp+8]; push key; call 0x0085c3e0
+    add esp, 4; mov ecx, eax; mov edx, [eax]; push 0; call [edx]
+    xor eax, eax; pop ebp; ret
+
+`sub_0085c3e0(L, key)` is the exact-class check used only by these 66: the
+class table `registry[key]`, the object's metatable, `mt[0x00c7f4b8]` a
+boolean, the two tables raw-equal or `class["__const"]` raw-equal to the
+metatable; it returns the userdata block, and on a mismatch raises
+`luaL_argerror`. Each `__gc` is registered twice (132 `push imm32` sites, on
+the class table and on its const table).
+
+**The destructors.** RTTI gives 36 luabridge Userdata vtables (34
+`UserdataValue<T>`, `Userdata`, `UserdataPtr`), each with the one slot, and
+18 distinct slot-0 functions. For 29 vtables (11 functions) the body is,
+but for the size pushed and the call's displacement,
+
+    push ebp; mov ebp, esp; test byte [ebp+8], 1; push esi; mov esi, ecx
+    mov dword [esi], 0x00b753c0
+    jz +N; push size; push esi; call 0x00aef15c; add esp, 8
+    mov eax, esi; pop esi; pop ebp; ret 4
+
+which, called with 0 as the `__gc` calls it, only stores the base vtable
+into the object. These are `UserdataPtr` (every pointer to a game object:
+202 construction sites under 85 keys), Vector, Color, KColor, EntityRef,
+RNG, ProjectileParams, TearParams, BitSet128, PosVel, QueueItemData,
+GridEntityDesc, and the enum and array-proxy values. The other 7 do work:
+EntityPtr (`LuaEntityRef`), Sprite (`ANM2`), Font, FontRenderSettings,
+PathFinder, EntityList, HomingLaser. Nothing reads an object's vtable word
+but the `__gc`'s own `call [edx]`: all 328 xrefs to the 36 vtables are
+stores, the vtables have one slot, the 937 callers of the ordinary check
+0x0085c590 use `[eax+4]`, and nothing refers to the type descriptors. (Not
+provable from the index: that no register-held `call [reg]` elsewhere is
+ever applied to such a block.)
+
+**The change, in two layers.**
+
+- 1d. A `__gc` of that shape, for an object whose slot 0 is that body and
+  that passes 0x0085c3e0's own check, is the check and the one store, made
+  by host code. Anything else runs the lifted function. Both shapes are read
+  off the guest image (when a `__gc` is first registered, when a vtable is
+  first seen), so a build whose bytes differ takes the lifted path.
+- 1e. When the game sets a class table on such an object -- the table's
+  `__gc` one of the 66, the table that key's class table or its const table
+  -- the metatable is set without Lua's finalizer mark (lapi.c
+  `lua_setmetatable`'s userdata case less `luaC_checkfinalizer`). The object
+  is then collected like a string: no call, and its memory back in the cycle
+  it died in, not the next. An object of another destructor, or one
+  constructed after its metatable was set, keeps the mark and takes 1d's
+  way.
+
+`?ISAAC_LUA_NATIVE=0` runs the lifted `__gc` for everything; `=2` runs it too
+and checks that it returned nothing and left the store the native path would
+have made; `?ISAAC_LUA_NOFIN=0` marks everything as Lua does.
+
+**Measured** (`.scratch/r114/pace_ab.sh`: `perf-run-ff.mjs`, Fiend Folio +
+StageAPI + the layer on engine n3, the changelog closed, CPU x1, real GPU,
+20 s after 8 s of warm-up; the old behaviour (`ISAAC_LUA_GC=0`,
+`ISAAC_LUA_NATIVE=0`) and the build's defaults alternating, two runs each):
+
+| | game steps a second | frames over 25 ms | over 50 ms | longest frame | 95th percentile | CPU a step |
+|---|---|---|---|---|---|---|
+| first room, standing: before | 31.3, 31.2 | 70, 70 | 1, 2 | 63.5, 53.9 ms | 38.3, 40.3 ms | 20.0, 18.5 ms |
+| first room, standing: now | 30.1, 30.0 | 2, 1 | 0, 0 | 27.5, 25.6 ms | 20.3, 19.9 ms | 14.1, 13.2 ms |
+| 60 enemies, firing: before | 24.8, 25.9 | (every frame) | 68, 60 | 86.9, 78.3 ms | 70.9, 71.6 ms | 40.1, 38.6 ms |
+| 60 enemies, firing: now | 28.5, 29.0 | (every frame) | 40, 29 | 116.4, 87.8 ms | 52.3, 50.0 ms | 35.0, 34.4 ms |
+
+The plain game in the same first room, for scale: 5.0 ms of CPU a step. The
+fight is still short of the 30 steps a second (33.3 ms a step): 57% of its
+busy time is Lua's interpreter running the mod's own code (`luaV_execute`
+23%, `luaH_get` 11%, `luaD_precall` 6%), untouched here.
+
+**Correctness.** Selftest 876 checks, 0 failures (the two shapes and their
+near misses written into guest memory; the class, its const table, another
+class, a table that only borrows a class's `__gc`; the collector's own
+calls; the three modes). 19 mutants through `mutate.mjs`
+(`.scratch/r114/mutants.sh`): all 19 killed. On engine n3: a Fiend Folio
+tour with `ISAAC_LUA_NATIVE=2`, 11,000,000 finalizers compared with the
+lifted `__gc`, 0 mismatches (3,333 went to the game alone), and 6,600,000
+`__index` lookups, 0 mismatches; the tour with the defaults, 0 stops and 0
+Lua error lines. The layer suites (`suites.sh`, drive_stress.mjs):
+test_hooks4 23 0, test_hooks3 42 0, test_hooks2 49 0, test_layer 49 0, test_layer2 95 0, test_layer3 53 0, test_layer4 49 0, test_gate 7 0, and round 112's test_ach 24 0.
+
+**Not done.** The Lua interpreter itself. A phone. A run longer than a tour
+(the heap over an hour of play). The mark that 1e leaves out is Lua-internal
+state reached through Lua's own headers: a different Lua version needs that
+function read again.
