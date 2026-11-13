@@ -326,7 +326,8 @@ export function createModBrowser(opts) {
         blit(A.art.cursor, l.x0 - 9, y - 1);
       }
       const busy = s.busyId === it.id;
-      const note = busy ? (s.progress != null ? `${s.progress}%` : '...') : '';
+      // round 108: an installed packed mod still downloading in the background says how far
+      const note = busy ? (s.progress != null ? `${s.progress}%` : '...') : (it.rowNote && it.rowNote !== 'INSTALLED' ? it.rowNote : '');
       const noteW = note ? measure(F10, note) : 0;
       const nameW = l.x1 - (l.x0 + 10) - (noteW ? noteW + 8 : 0) - (it.installed ? 14 : 0);
       text(F10, clip(F10, it.name, nameW), l.x0 + 10, y, (it.big || it.needsComputer) && !it.installed ? 'light' : 'ink');

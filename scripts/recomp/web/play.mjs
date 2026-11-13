@@ -23,6 +23,7 @@ const $ = (id) => document.getElementById(id);
 import { createEditFileMenu, createPaperMenu, createMenuTag } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
+import { createPackStore, createPackDownloader } from './mods.mjs';
 import { createModBrowser } from './mod_browser.mjs';
 import { createPadKeys } from './gamepad.mjs';
 import { createTouchControls } from './touch_controls.mjs';
@@ -987,9 +988,22 @@ const modBrowser = createModBrowser({
   log: (line) => console.log(line),
   touch: () => document.documentElement.classList.contains('isaac-touch'),
 });
+// Round 108: one pack store for the page -- the game's reads of a packed mod and the
+// background download of the rest of it share it (and so share a download both
+// want) -- and that download, started once a packed mod is installed and again by
+// every boot (boot_web.mjs) until every pack is kept. ?packbg=0 leaves it off.
+// Their lines go where boot_web.mjs's own store put them too: the game's log, once there is one.
+const packLog = (line) => { console.log(line); if (Array.isArray(window.isaacLog)) window.isaacLog.push(String(line)); };
+const packStore = createPackStore({ log: packLog });
+const packDownloader = params.get('packbg') === '0' ? null
+  : createPackDownloader({ store: packStore, log: packLog });
+hooks.packStore = packStore;
+hooks.packDownloader = packDownloader;
 const modsMenu = createModsMenu({
   paper: modsPaper,
   browser: modBrowser,
+  store: packStore,
+  packs: packDownloader,
   log: (line) => console.log(line),
   catalogueBase: params.get('catalogue') || (typeof window !== 'undefined' ? window.isaacModCatalogue : null) || null,
   onInstalled: enableModsInOptions,

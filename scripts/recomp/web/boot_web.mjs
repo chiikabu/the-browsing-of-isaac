@@ -9,7 +9,7 @@
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
 import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget,
-         listMods, isPacked, createPackStore, createPackedMods, packedIndex } from './mods.mjs';
+         listMods, isPacked, createPackStore, createPackedMods, packedIndex, createPackDownloader } from './mods.mjs';
 import { createPads, createPadGate, rumble } from './gamepad.mjs';
 
 const logEl = document.getElementById('log');
@@ -129,10 +129,14 @@ if (typeof window.addEventListener === 'function') {
 let lazyReads = 0, lazyBytes = 0;
 // round 107: the packed mods of this boot (mods.mjs createPackedMods), set up by 'register packed mods'
 let packedMods = null, packStore = null;
+// round 108: the background download of every pack of them (play.mjs's, or one of its own here)
+let packDownloader = null;
+const background = () => packDownloader || hooks.packDownloader || null;
 const lazyByFile = new Map();                              // src -> bytes (round 40: what the run start reads)
 const preadTrail = [];                                    // the first window offsets, in order (scan or thrash?)
 const preadStacks = [];                                   // three wasm stacks under a window fetch: who reads the archive?
-window.isaacLazyStats = () => ({ packed: packedMods ? Object.assign({ store: packStore.stats }, packedMods.stats, packedMods.held()) : null, reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
+window.isaacLazyStats = () => ({ packed: packedMods ? Object.assign({ store: packStore.stats }, packedMods.stats, packedMods.held()) : null,
+  background: background() ? background().stats() : null, reads: lazyReads, bytes: lazyBytes, windows: preads, windowBytes: preadBytes, distinctWindows: windowsSeen.size, trail: preadTrail.slice(0, 60), stacks: preadStacks,
   prefetched, prefetchHits, prefetchMisses, aheadFetched, readerWaits, readerWaitMs: Math.round(readerWaitMs), reader: !!reader, trailKept, trailShipped, trailLen: trail.length, trailWritten,
   top: [...lazyByFile].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, v]) => `${k.replace(/^.*\//, '')} ${(v / 1048576).toFixed(1)} MB`) });
 cfg.isaacLazyRead = (src, dst, len) => {
@@ -847,6 +851,8 @@ cfg.isaacWantsFrame = (n) => {
   // 128 MB budget -- ~80 MB of the renderer's working set) and keeps 8 MB of
   // read-ahead for play; the trail's leftovers go with them
   if (n === READER_CLEAR_FRAME && packedMods) packedMods.release();   // round 107: the eager lane has done its work
+  // round 108: the boot's own reads are done: the rest of the packed mods comes in two at a time
+  if (n === READER_CLEAR_FRAME && packedMods && packDownloader) packDownloader.pace(0);
   if (n === READER_CLEAR_FRAME && reader && !runArmed) { reader.postMessage({ clear: true, budget: READER_PLAY_BUDGET }); trailJobs = null; }
   // the same moment for the portable page's cached whole-read chunks (stream A: the
   // engine, the image, the eagerly seeded archives), spent once the boot is over
@@ -1301,7 +1307,9 @@ try {
     let list = [];
     try { list = (await listMods(modDb)).filter((x) => x.enabled !== false && isPacked(x)); } catch (e) { log(`  packed mods: ${e.message}`); }
     if (!list.length) return 0;
-    packStore = createPackStore({ log });
+    packStore = hooks.packStore || createPackStore({ log });
+    packDownloader = hooks.packDownloader !== undefined ? hooks.packDownloader
+      : params.get('packbg') === '0' ? null : createPackDownloader({ store: packStore, log });
     let waitTimer = null;
     packedMods = createPackedMods({
       store: packStore,
@@ -1340,6 +1348,9 @@ try {
     }
     const st = packStore.stats;
     log(`  packed mods: ${n} of ${list.length}; packs from the cache ${st.cacheHits}, fetched ${st.fetched} (${(st.fetchedBytes / 1048576).toFixed(1)} MB)`);
+    // round 108: the rest of them, in the background from here on -- one at a time
+    // while the game boots (its own reads come first), two once the boot is over
+    if (n && packDownloader) { packDownloader.pace(1); packDownloader.start().catch((e) => log(`[mods] the background download: ${e.message}`)); }
     return n;
   });
 

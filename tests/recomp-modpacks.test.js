@@ -4,7 +4,7 @@
 // createPackStore / createPackedMods, boot_web.mjs, host_shims_fs.c ranged
 // entries). These run the real writer and the real reader against each other,
 // through a host that, like jsDelivr, is asked for whole files only.
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
@@ -13,7 +13,9 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createPackStore, createPackedMods, packedIndex, packsOnlyOf, parseIndex, packBase, isPacked, namedRight,
-         seedMods, smallDevice, NEEDS_COMPUTER, PACK_CACHE, SEED_BUDGET } from '../scripts/recomp/web/mods.mjs';
+         seedMods, smallDevice, NEEDS_COMPUTER, PACK_CACHE, SEED_BUDGET,
+         createPackDownloader, packedWords } from '../scripts/recomp/web/mods.mjs';
+import { deflateRawSync } from 'node:zlib';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tool = join(root, 'scripts', 'recomp', 'assets', 'modpack.py');
@@ -89,6 +91,7 @@ function cacheApi() {
         match: async (k) => (m.has(k) ? new Response(m.get(k)) : undefined),
         put: async (k, r) => { m.set(k, new Uint8Array(await r.arrayBuffer())); },
         delete: async (k) => m.delete(k),
+        keys: async () => [...m.keys()].map((url) => ({ url })),
       };
     },
   };
@@ -317,4 +320,375 @@ test('a packed mod is not offered to a phone: it would run the game out of memor
   assert.ok(m.includes(': isPacked(m) && smallDevice() ? NEEDS_COMPUTER') && NEEDS_COMPUTER === 'NEEDS A COMPUTER', 'the paper list says it');
   assert.ok(b.includes("text(F10, 'NEEDS A COMPUTER', d.x0, actionY + 4);") && b.indexOf('} else if (it.needsComputer) {') < b.indexOf('} else if (it.big) {'), 'the browser says it in place of INSTALL');
   assert.ok(b.includes('if (it.big || it.needsComputer) return;'), 'and its action does nothing');
+});
+
+// ---- round 108: the background download of every pack (createPackDownloader) ----
+
+// a pack: the IMPK magic, then bytes; named after its sha256 like modpack.py's
+const sha20 = (b) => createHash('sha256').update(b).digest('hex').slice(0, 20);
+function makePack(seed, n, body) {
+  const b = new Uint8Array(8 + (body ? body.length : n));
+  b.set([0x49, 0x4d, 0x50, 0x4b, 1, 0, 0, 0]);
+  b.set(body || noise(n, seed), 8);
+  return { name: `${sha20(b)}.bin`, bytes: b };
+}
+// a CDN of packs: every request recorded with the fake time it came at; `hold`
+// keeps an answer back until released; `status(name, nth)` answers an error
+function packHost(byName, opts = {}) {
+  const asked = [], at = [], holds = new Map(), aborted = [];
+  const fetch = async (url, init) => {
+    const name = url.split('/').pop(), signal = init && init.signal;
+    asked.push(name); at.push([name, opts.clock ? opts.clock.t : 0]);
+    if (opts.offline && opts.offline()) throw new TypeError('Failed to fetch');
+    const callOff = () => { aborted.push(name); return new DOMException('The operation was aborted.', 'AbortError'); };
+    if (holds.has(name)) {
+      await Promise.race([holds.get(name).promise,
+        new Promise((_, no) => { if (signal) signal.addEventListener('abort', () => no(callOff())); })]);
+    }
+    if (signal && signal.aborted) throw callOff();
+    const s = opts.status && opts.status(name, asked.filter((x) => x === name).length);
+    if (s) return new Response('no', { status: s });
+    const b = byName.get(name);
+    if (!b) return new Response('nope', { status: 404 });
+    const out = b.slice();
+    if (opts.corrupt && opts.corrupt(name)) out[out.length - 1] ^= 0xff;
+    return new Response(out, { status: 200 });
+  };
+  const hold = (name) => { let release; const promise = new Promise((r) => { release = r; }); holds.set(name, { promise }); return () => { holds.delete(name); release(); }; };
+  return { fetch, asked, at, hold, aborted };
+}
+// a clock that moves only when the code under test sleeps
+function fakeClock() {
+  const c = { t: 0 };
+  c.now = () => c.t;
+  c.sleep = (ms) => { const until = c.t + ms; return new Promise((r) => setImmediate(() => { if (c.t < until) c.t = until; r(); })); };
+  return c;
+}
+const tick = () => new Promise((r) => setImmediate(r));
+async function until(cond, what, n = 5000) { for (let i = 0; i < n; i++) { if (cond()) return; await tick(); } assert.fail(`never: ${what}`); }
+// one mod of four packs: index order wav, lazy, lazy, eager
+function fourPacks() {
+  const W1 = makePack(1, 300), L1 = makePack(2, 200), L2 = makePack(3, 100), E1 = makePack(4, 50);
+  const packs = [[W1.name, W1.bytes.length, 'wav'], [L1.name, L1.bytes.length, 'lazy'], [L2.name, L2.bytes.length, 'lazy'], [E1.name, E1.bytes.length, 'eager']];
+  const byName = new Map([W1, L1, L2, E1].map((p) => [p.name, p.bytes]));
+  const mod = { id: 'big', name: 'Big', packed: { base: 'https://cdn.example/pk', index: 'x.idx', indexBytes: 0 } };
+  return { W1, L1, L2, E1, packs, byName, mod };
+}
+// every downloader a test makes is stopped after it, passed or not (a queue left
+// running on the fake clock would keep the process alive)
+const live = new Set();
+const downloader = (o) => { const d = createPackDownloader(o); live.add(d); return d; };
+afterEach(() => { for (const d of live) d.stop(); live.clear(); });
+const keepIn = async (caches, p) => (await caches.open(PACK_CACHE)).put(`https://modpacks.isaac.invalid/${p.name}`, new Response(p.bytes));
+const roomy = { persist: async () => true, estimate: async () => ({ quota: 8 << 30, usage: 0 }) };
+
+test('round 108: the background queue takes the lazy lane first, and a read the game waits on jumps it', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);                                         // the eager lane came with the install
+  const h = packHost(f.byName, { clock });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const dl = downloader({ store, mods: async () => [f.mod], packsOf: async () => f.packs, concurrency: 1,
+    now: clock.now, sleep: clock.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false });
+  const freeL1 = h.hold(f.L1.name), freeW1 = h.hold(f.W1.name);
+  assert.equal(await dl.start(), 'running');
+  assert.deepEqual(dl.queue(), [f.L1.name, f.L2.name, f.W1.name], 'what is not kept, lazy before wav, the kept eager pack not at all');
+  await until(() => h.asked.length === 1, 'the first pack asked for');
+  assert.deepEqual(h.asked, [f.L1.name], 'one at a time, the lazy lane first');
+  // the game wants L1 (being fetched) and W1 (last in the queue)
+  const joined = store.getFrom(f.mod.packed.base, f.L1.name, f.L1.bytes.length);
+  const jumped = store.getFrom(f.mod.packed.base, f.W1.name, f.W1.bytes.length);
+  await until(() => h.asked.length === 2, 'the game\'s own read asked for');
+  assert.deepEqual(h.asked, [f.L1.name, f.W1.name], 'W1 is asked for at once, ahead of L2; L1 is not asked for twice');
+  freeL1();
+  assert.deepEqual(Buffer.from((await joined).bytes), Buffer.from(f.L1.bytes), 'the read of L1 had the background\'s download');
+  for (let i = 0; i < 50; i++) await tick();
+  assert.deepEqual(h.asked, [f.L1.name, f.W1.name], 'nothing new starts while the game waits on the network');
+  freeW1();
+  assert.equal((await jumped).from, 'net');
+  await until(() => dl.stats().state === 'complete', 'complete');
+  assert.deepEqual(h.asked, [f.L1.name, f.W1.name, f.L2.name], 'W1, kept by the game\'s read, is not fetched again');
+  const s = dl.stats();
+  assert.equal(s.fetched, 2, 'L1 and L2 by the background');
+  assert.equal(s.fromGame, 1, 'W1 by the game');
+  assert.equal(s.packsHave, 4);
+  assert.equal(s.bytesHave, s.bytes);
+  assert.deepEqual(dl.progress('big').state, 'complete');
+});
+
+test('round 108: pace(1) runs the queue one at a time (the boot), pace(0) back to its concurrency', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  const h = packHost(f.byName, { clock });
+  const frees = [f.L1, f.L2, f.W1].map((p) => h.hold(p.name));
+  const dl = downloader({ store: createPackStore({ fetch: h.fetch, caches, ...quick }), mods: async () => [f.mod], packsOf: async () => f.packs,
+    concurrency: 2, now: clock.now, sleep: clock.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false });
+  dl.pace(1);
+  await dl.start();
+  for (let i = 0; i < 50; i++) await tick();
+  assert.deepEqual(h.asked, [f.L1.name], 'one at a time while paced');
+  dl.pace(0);
+  await until(() => h.asked.length === 2, 'a second once unpaced');
+  assert.deepEqual(h.asked, [f.L1.name, f.L2.name]);
+  for (const free of frees) free();
+  await until(() => dl.stats().state === 'complete', 'complete');
+});
+
+test('round 108: a later visit carries on where the last stopped, and fetches nothing kept', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  const opts = (store) => ({ store, mods: async () => [f.mod], packsOf: async () => f.packs, concurrency: 1,
+    now: clock.now, sleep: clock.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false });
+  // the first visit: L1 and L2 kept, then the page goes while W1 is on its way
+  const h1 = packHost(f.byName, { clock });
+  h1.hold(f.W1.name);
+  const dl1 = downloader(opts(createPackStore({ fetch: h1.fetch, caches, ...quick })));
+  await dl1.start();
+  await until(() => h1.asked.includes(f.W1.name), 'the first visit reaches W1');
+  dl1.stop();
+  assert.equal(dl1.stats().packsHave, 3, 'three of four kept');
+  assert.equal(dl1.progress('big').have, f.E1.bytes.length + f.L1.bytes.length + f.L2.bytes.length);
+  // the next visit: only W1
+  const h2 = packHost(f.byName, { clock });
+  const dl2 = downloader(opts(createPackStore({ fetch: h2.fetch, caches, ...quick })));
+  await dl2.start();
+  assert.deepEqual(dl2.queue(), [f.W1.name], 'the plan names only what is not kept');
+  await until(() => dl2.stats().state === 'complete', 'the second visit completes');
+  assert.deepEqual(h2.asked, [f.W1.name], 'and asks for nothing else');
+  assert.equal(dl2.stats().fetched, 1);
+  // and the one after: complete at once, nothing asked
+  const h3 = packHost(f.byName, { clock });
+  const dl3 = downloader(opts(createPackStore({ fetch: h3.fetch, caches, ...quick })));
+  assert.equal(await dl3.start(), 'complete');
+  assert.equal(h3.asked.length, 0, 'a complete mod fetches nothing');
+  assert.equal(dl3.progress('big').have, dl3.progress('big').total);
+});
+
+test('round 108: a read the game waits on calls off the other background downloads; they start again after it', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  const h = packHost(f.byName, { clock });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const dl = downloader({ store, mods: async () => [f.mod], packsOf: async () => f.packs, concurrency: 2,
+    now: clock.now, sleep: clock.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false });
+  const freeL1 = h.hold(f.L1.name), freeL2 = h.hold(f.L2.name);
+  await dl.start();
+  await until(() => h.asked.length === 2, 'two under way');
+  assert.deepEqual(h.asked, [f.L1.name, f.L2.name]);
+  const r = await store.getFrom(f.mod.packed.base, f.W1.name, f.W1.bytes.length);
+  assert.deepEqual(Buffer.from(r.bytes), Buffer.from(f.W1.bytes));
+  assert.deepEqual(h.aborted.sort(), [f.L1.name, f.L2.name].sort(), 'both background downloads were called off for it');
+  freeL1(); freeL2();
+  await until(() => dl.stats().state === 'complete', 'complete');
+  assert.equal(h.asked.filter((n) => n === f.L1.name).length, 2, 'L1 started again');
+  assert.equal(h.asked.filter((n) => n === f.W1.name).length, 1, 'W1 once, by the game');
+  const s = dl.stats();
+  assert.equal(s.calledOff, 2);
+  assert.equal(s.failures, 0, 'a download called off is not a failure');
+  assert.equal(s.packsHave, 4);
+});
+
+test('round 108: the packs either side of one the game wanted move to the front of the queue', async () => {
+  const P = Array.from({ length: 8 }, (_, i) => makePack(20 + i, 64));
+  const packs = P.map((p) => [p.name, p.bytes.length, 'lazy']);
+  const byName = new Map(P.map((p) => [p.name, p.bytes]));
+  const mod = { id: 'big', name: 'Big', packed: { base: 'https://cdn.example/pk', index: 'x.idx', indexBytes: 0 } };
+  const caches = cacheApi(), clock = fakeClock(), h = packHost(byName, { clock });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const dl = downloader({ store, mods: async () => [mod], packsOf: async () => packs, concurrency: 1,
+    now: clock.now, sleep: clock.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false });
+  const free0 = h.hold(P[0].name);
+  await dl.start();
+  await until(() => h.asked.length === 1, 'P0 under way');
+  await store.getFrom(mod.packed.base, P[5].name, P[5].bytes.length);      // the game wants P5
+  assert.deepEqual(dl.queue(), [4, 6, 3, 7, 0, 1, 2].map((i) => P[i].name), 'P4 and P6, then P3 and P7, then the rest in order');
+  free0();
+  await until(() => dl.stats().state === 'complete', 'complete');
+  assert.deepEqual(h.asked.slice(2, 6), [4, 6, 3, 7].map((i) => P[i].name), 'and they are the next fetched');
+});
+
+test('round 108: a 403 (jsDelivr, for a file it has not served) is tried again after a minute, not given up on', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  const first = new Map();
+  // a 403 for every pack for 60 s after it was first asked for
+  const h = packHost(f.byName, { clock, status: (name) => { if (!first.has(name)) first.set(name, clock.t); return clock.t - first.get(name) < 60000 ? 403 : 0; } });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const lines = [];
+  const dl = downloader({ store, mods: async () => [f.mod], packsOf: async () => f.packs, now: clock.now, sleep: clock.sleep,
+    storage: roomy, events: null, online: () => true, smallDevice: () => false, log: (l) => lines.push(l) });
+  await dl.start();
+  await until(() => ['complete', 'incomplete'].includes(dl.stats().state), 'the queue settles', 100000);
+  const s = dl.stats();
+  assert.equal(s.state, 'complete', 'every pack kept in the end');
+  assert.equal(s.refused403, 3, 'each of the three asked once into the 403');
+  assert.equal(s.pauses, 0, 'a 403 is not taken for the network being down');
+  for (const p of [f.L1, f.L2, f.W1]) {
+    const times = h.at.filter(([n]) => n === p.name).map(([, t]) => t);
+    assert.equal(times.length, 2, `${p.name}: asked twice`);
+    assert.ok(times[1] - times[0] >= 60000, `${p.name}: the second time after the 403 ran out (${times[1] - times[0]} ms)`);
+  }
+});
+
+test('a read the game waits on outlasts jsDelivr\'s minute of 403, and other failures keep their short count', async () => {
+  const f = fourPacks();
+  // (a) 403 for 60 s after the first request, as jsDelivr does: the read waits it out and gets the pack
+  {
+    const clock = fakeClock(), first = new Map();
+    const h = packHost(f.byName, { clock, status: (name) => { if (!first.has(name)) first.set(name, clock.t); return clock.t - first.get(name) < 60000 ? 403 : 0; } });
+    const store = createPackStore({ fetch: h.fetch, caches: cacheApi(), retries: 3, sleep: clock.sleep });
+    const got = await store.getFrom(f.mod.packed.base, f.L1.name, f.L1.bytes.length);
+    assert.deepEqual([...got.bytes], [...f.L1.bytes], 'the pack, once the 403 ran out');
+    const times = h.at.filter(([n]) => n === f.L1.name).map(([, t]) => t);
+    assert.equal(times.length, 4, 'asked once and three more times');
+    assert.ok(times[3] - times[0] >= 60000, `the last try is past the minute (${times[3] - times[0]} ms)`);
+  }
+  // (b) a 403 that never ends is given up on after those tries, and says it was a 403
+  {
+    const clock = fakeClock();
+    const h = packHost(f.byName, { clock, status: () => 403 });
+    const store = createPackStore({ fetch: h.fetch, caches: cacheApi(), retries: 3, sleep: clock.sleep });
+    await assert.rejects(store.getFrom(f.mod.packed.base, f.L1.name, f.L1.bytes.length), (e) => e.status === 403);
+    assert.equal(h.asked.length, 4, 'four requests, not an endless wait');
+  }
+  // (c) a 500 keeps the ordinary schedule: 1, 3 and 9 s, four requests, 13 s in all
+  {
+    const clock = fakeClock();
+    const h = packHost(f.byName, { clock, status: () => 500 });
+    const store = createPackStore({ fetch: h.fetch, caches: cacheApi(), retries: 3, sleep: clock.sleep });
+    await assert.rejects(store.getFrom(f.mod.packed.base, f.L1.name, f.L1.bytes.length), (e) => e.status === 500);
+    assert.deepEqual(h.at.map(([, t]) => t), [0, 1000, 4000, 13000]);
+  }
+  // (d) a caller with no retries of its own (the background download) gets none for a 403 either
+  {
+    const clock = fakeClock();
+    const h = packHost(f.byName, { clock, status: () => 403 });
+    const store = createPackStore({ fetch: h.fetch, caches: cacheApi(), retries: 3, sleep: clock.sleep });
+    await assert.rejects(store.getFrom(f.mod.packed.base, f.L1.name, f.L1.bytes.length, { background: true, retries: 0 }), (e) => e.status === 403);
+    assert.equal(h.asked.length, 1);
+  }
+});
+
+test('round 108: offline, the queue pauses and fetches nothing until the browser is online again', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  let up = false;
+  const events = new EventTarget();
+  const h = packHost(f.byName, { clock, offline: () => !up });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const dl = downloader({ store, mods: async () => [f.mod], packsOf: async () => f.packs, now: clock.now, sleep: clock.sleep,
+    storage: roomy, events, online: () => up, smallDevice: () => false });
+  await dl.start();
+  await until(() => dl.stats().state === 'paused', 'paused');
+  for (let i = 0; i < 50; i++) await tick();
+  assert.equal(h.asked.length, 0, 'nothing asked while offline');
+  up = true; events.dispatchEvent(new Event('online'));
+  await until(() => dl.stats().state === 'complete', 'complete once online');
+  assert.equal(h.asked.length, 3);
+  // a host that fails every request (the browser thinks it is online): three in a row pause the queue
+  const g = fourPacks(), caches2 = cacheApi(), clock2 = fakeClock();
+  const h2 = packHost(g.byName, { clock: clock2, offline: () => true });
+  const dl2 = downloader({ store: createPackStore({ fetch: h2.fetch, caches: caches2, ...quick }), mods: async () => [g.mod], packsOf: async () => g.packs,
+    now: clock2.now, sleep: clock2.sleep, storage: roomy, events: null, online: () => true, smallDevice: () => false, concurrency: 1 });
+  await dl2.start();
+  await until(() => dl2.stats().pauses >= 1, 'a pause');
+  assert.equal(h2.asked.length, 3, 'three failures, then the pause: not a request per pack in a burst');
+  dl2.stop();
+});
+
+test('round 108: without room for the rest, nothing is fetched and it is said once; with room it starts', async () => {
+  const f = fourPacks(), clock = fakeClock();
+  const h = packHost(f.byName, { clock });
+  let persisted = 0;
+  const tight = { persist: async () => { persisted += 1; return true; }, estimate: async () => ({ quota: 100 << 20, usage: 90 << 20 }) };
+  const lines = [];
+  const dl = downloader({ store: createPackStore({ fetch: h.fetch, caches: cacheApi(), ...quick }), mods: async () => [f.mod], packsOf: async () => f.packs,
+    now: clock.now, sleep: clock.sleep, storage: tight, events: null, online: () => true, smallDevice: () => false, log: (l) => lines.push(l) });
+  assert.equal(await dl.start(), 'noroom');
+  assert.equal(await dl.start(), 'noroom', 'asked again (the next install), still no room');
+  for (let i = 0; i < 20; i++) await tick();
+  assert.equal(h.asked.length, 0, 'nothing fetched');
+  assert.ok(persisted >= 1, 'persistent storage was asked for');
+  assert.equal(lines.filter((l) => /not enough room/.test(l)).length, 1, 'said once');
+  assert.equal(dl.stats().free, 10 << 20);
+  assert.match(packedWords(dl.progress('big').have, dl.progress('big').total, 'noroom').long, /NO ROOM/);
+  // the same with room: it runs
+  const h2 = packHost(f.byName, { clock });
+  const dl2 = downloader({ store: createPackStore({ fetch: h2.fetch, caches: cacheApi(), ...quick }), mods: async () => [f.mod], packsOf: async () => f.packs,
+    now: clock.now, sleep: clock.sleep, storage: { persist: async () => true, estimate: async () => ({ quota: 1 << 30, usage: 90 << 20 }) },
+    events: null, online: () => true, smallDevice: () => false });
+  assert.equal(await dl2.start(), 'running');
+  await until(() => dl2.stats().state === 'complete', 'complete');
+  assert.equal(h2.asked.length, 4);
+  // and a phone never starts
+  const dl3 = downloader({ store: createPackStore({ fetch: h2.fetch, caches: cacheApi(), ...quick }), mods: async () => [f.mod], packsOf: async () => f.packs,
+    storage: roomy, events: null, smallDevice: () => true });
+  assert.equal(await dl3.start(), 'phone');
+});
+
+test('round 108: a pack whose bytes are not its name\'s is refused, retried, then left to the game', async () => {
+  const f = fourPacks(), caches = cacheApi(), clock = fakeClock();
+  await keepIn(caches, f.E1);
+  const h = packHost(f.byName, { clock, corrupt: (name) => name === f.W1.name });
+  const store = createPackStore({ fetch: h.fetch, caches, ...quick });
+  const dl = downloader({ store, mods: async () => [f.mod], packsOf: async () => f.packs, now: clock.now, sleep: clock.sleep,
+    storage: roomy, events: null, online: () => true, smallDevice: () => false, giveUpAfter: 3 });
+  await dl.start();
+  await until(() => ['complete', 'incomplete'].includes(dl.stats().state), 'settled', 100000);
+  assert.equal(dl.stats().state, 'incomplete');
+  assert.equal(dl.stats().gaveUp, 1);
+  assert.equal(h.asked.filter((n) => n === f.W1.name).length, 3, 'tried three times');
+  assert.ok(!(await store.has(f.W1.name)), 'never kept');
+  assert.ok(await store.has(f.L1.name) && await store.has(f.L2.name), 'the others are');
+  assert.ok(store.stats.rejected >= 3);
+});
+
+test('round 108: a read the game waits on is timed, and told apart by what it waited for', async () => {
+  // P1 holds a raw file and a deflated one, P2 a raw file; P2 is kept already
+  const A = noise(5000, 11), B = Buffer.from('<anm2/>'.repeat(400)), C = noise(3000, 12);
+  const Bz = deflateRawSync(B);
+  const P1 = makePack(0, 0, Buffer.concat([A, Bz])), P2 = makePack(0, 0, C);
+  const ix = { v: 1, packs: [[P1.name, P1.bytes.length, 'lazy'], [P2.name, P2.bytes.length, 'lazy']],
+    f: [['a.png', A.length, 0, 8, A.length, 0, '', 0], ['b.anm2', B.length, 0, 8 + A.length, Bz.length, 1, '', 0], ['c.png', C.length, 1, 8, C.length, 0, '', 0]] };
+  const caches = cacheApi();
+  await keepIn(caches, P2);
+  let t = 0;
+  const h = packHost(new Map([[P1.name, P1.bytes]]));
+  const slow = async (url) => { t += 120; return h.fetch(url); };       // the network takes 120 ms
+  const store = createPackStore({ fetch: slow, caches, ...quick });
+  const pm = createPackedMods({ store, now: () => t });
+  await pm.add('m', 'https://cdn.example/pk', parseIndex(JSON.stringify(ix)));
+  const a = pm.pread('mods/m/a.png', 0, A.length);
+  assert.ok(a && typeof a.then === 'function');
+  assert.deepEqual(Buffer.from(await a), A);
+  const b = pm.pread('mods/m/b.anm2', 0, B.length);                       // P1 is held: only the decoding
+  assert.ok(b && typeof b.then === 'function', 'a deflated file waits for its decoding');
+  assert.deepEqual(Buffer.from(await b), B);
+  assert.deepEqual(Buffer.from(await settle(pm.pread('mods/m/c.png', 0, C.length))), C);
+  const s = pm.stats;
+  assert.equal(s.waited, 3);
+  assert.deepEqual([s.waitBy.net.n, s.waitBy.cache.n, s.waitBy.decode.n], [1, 1, 1], 'one each: network, cache, decoding');
+  assert.equal(s.waitMs, 120);
+  assert.equal(s.waitMax, 120);
+  assert.equal(s.waitBy.net.max, 120);
+  assert.equal(s.waitOver50, 1, 'the network read was over 50 ms, the others not');
+  // a raw file in a held pack is answered at once and does not count
+  assert.ok(pm.pread('mods/m/a.png', 10, 10) instanceof Uint8Array);
+  assert.equal(pm.stats.waited, 3);
+});
+
+test('round 108: the page shares one pack store and starts the background download, and the menus show it', () => {
+  const b = src('boot_web.mjs'), p = src('play.mjs'), m = src('mods.mjs'), mb = src('mod_browser.mjs');
+  assert.ok(b.includes('packStore = hooks.packStore || createPackStore({ log });'), 'the game reads with the page\'s store');
+  assert.ok(b.includes("if (n && packDownloader) { packDownloader.pace(1); packDownloader.start()"), 'every boot with a packed mod starts it, one at a time while it boots');
+  assert.ok(b.includes('if (n === READER_CLEAR_FRAME && packedMods && packDownloader) packDownloader.pace(0);'), 'and two at a time once the boot is over');
+  assert.ok(b.includes('background: background() ? background().stats() : null'), 'isaacLazyStats() says how far it is');
+  assert.ok(p.includes('hooks.packStore = packStore;') && p.includes('hooks.packDownloader = packDownloader;') && p.includes('packs: packDownloader,'), 'play.mjs hands both to the boot and the menu');
+  assert.ok(m.includes('if (packs) packs.start().catch('), 'an install starts it at once');
+  assert.ok(m.includes('if (packs) packs.forget(mod.id);'), 'a removal stops fetching for the mod');
+  assert.ok(mb.includes("(it.rowNote && it.rowNote !== 'INSTALLED' ? it.rowNote : '')"), 'the browser\'s row says how far');
+  const w = packedWords(210 << 20, 435 << 20, 'running');
+  assert.deepEqual([w.short, w.note, w.long], ['48%', '210 OF 435 MB', '210 OF 435 MB DOWNLOADED']);
+  assert.equal(packedWords(435 << 20, 435 << 20, 'complete').long, 'ALL 435 MB DOWNLOADED');
+  assert.equal(packedWords(435 << 20, 435 << 20, 'complete').short, 'INSTALLED');
+  assert.match(packedWords(1, 2, 'paused').long, /PAUSED$/);
 });

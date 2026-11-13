@@ -518,13 +518,23 @@ export function parseIndex(text) {
 // then given up on), each checked against its name before it is used or kept.
 export function createPackStore(opts) {
   const o = opts || {};
-  const fetchFn = o.fetch || ((url) => fetch(url));
+  const fetchFn = o.fetch || ((url, init) => fetch(url, init));
   const cacheApi = o.caches !== undefined ? o.caches : (typeof caches !== 'undefined' ? caches : null);
   const retries = o.retries == null ? 3 : o.retries;
   const backoff = o.backoffMs || [1000, 3000, 9000];
+  const coldWaitMs = o.coldWaitMs || 22000, coldTries = o.coldTries == null ? 3 : o.coldTries;
   const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const log = o.log || (() => {});
-  const stats = { cacheHits: 0, fetched: 0, fetchedBytes: 0, retried: 0, rejected: 0, kept: 0 };
+  const stats = { cacheHits: 0, fetched: 0, fetchedBytes: 0, retried: 0, rejected: 0, kept: 0, shared: 0 };
+  // a pack being downloaded, by name: a second asker (the game and the background
+  // download, say) waits on the same download rather than starting another
+  const inflight = new Map();
+  // the reads the game waits on that are on the network now, and who to tell when
+  // there are none (the background download starts nothing while there are some)
+  let urgent = 0;
+  const idle = new Set(), keptBy = new Set(), wantedBy = new Set();
+  const wanted = new Map();                  // name -> how many such reads want it
+  const tell = (set, ...a) => { for (const f of [...set]) { try { f(...a); } catch { /* a listener's own trouble */ } } };
   let cacheP = null;
   const cache = () => {
     if (!cacheApi) return Promise.resolve(null);
@@ -539,45 +549,111 @@ export function createPackStore(opts) {
   async function keep(name, bytes) {
     const c = await cache();
     if (!c) return false;
-    try { await c.put(PACK_KEY + name, new Response(bytes, { headers: { 'content-type': 'application/octet-stream' } })); stats.kept += 1; return true; }
-    catch (e) { log(`[mods] ${name} could not be kept: ${e.message}`); return false; }
+    try {
+      await c.put(PACK_KEY + name, new Response(bytes, { headers: { 'content-type': 'application/octet-stream' } }));
+      stats.kept += 1;
+      tell(keptBy, name, bytes.length);
+      return true;
+    } catch (e) { log(`[mods] ${name} could not be kept: ${e.message}`); return false; }
   }
   const magicOk = (name, b) => !/\.bin$/i.test(name) || (b.length >= 8 && b[0] === 0x49 && b[1] === 0x4d && b[2] === 0x50 && b[3] === 0x4b);
-  async function download(base, name, size) {
-    let last = null;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt) { stats.retried += 1; await sleep(backoff[Math.min(attempt - 1, backoff.length - 1)]); }
+  // a failure says what kind it was: `status` the HTTP answer, `refused` bytes that are not the pack's
+  const failure = (msg, extra) => Object.assign(new Error(msg), extra);
+  async function download(base, name, size, tries, signal, quiet) {
+    const n = tries == null ? retries : tries;
+    // A 403 is its own count: jsDelivr answers the first request for a file it has not
+    // served with a 403 it then repeats for a minute, and the ordinary retries (13 s in
+    // all) end inside that minute -- the game's read, or an install, failed on a pack
+    // that was there. So a 403 waits `coldWaitMs` and is asked for `coldTries` more
+    // times, past the minute. A caller with no retries of its own (the background
+    // download, which keeps its own clock) gets none here either.
+    const coldMax = n > 0 ? coldTries : 0;
+    let last = null, plain = 0, cold = 0;
+    for (;;) {
+      if (last) { stats.retried += 1; await sleep(last.status === 403 ? coldWaitMs : backoff[Math.min(plain - 1, backoff.length - 1)]); }
       try {
-        const r = await fetchFn(`${base}/${name}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const r = await fetchFn(`${base}/${name}`, signal ? { signal } : undefined);
+        if (!r.ok) throw failure(`HTTP ${r.status}`, { status: r.status });
         const b = new Uint8Array(await r.arrayBuffer());
-        if (size != null && b.length !== size) throw new Error(`${b.length} bytes where ${size} were expected`);
-        if (!magicOk(name, b) || !(await namedRight(name, b))) { stats.rejected += 1; throw new Error('its bytes are not the ones its name stands for'); }
+        if (size != null && b.length !== size) throw failure(`${b.length} bytes where ${size} were expected`, { refused: true });
+        if (!magicOk(name, b) || !(await namedRight(name, b))) { stats.rejected += 1; throw failure('its bytes are not the ones its name stands for', { refused: true }); }
         stats.fetched += 1; stats.fetchedBytes += b.length;
         return b;
       } catch (e) {
         last = e;
-        log(`[mods] ${name}: ${e.message}${attempt < retries ? '; trying again' : ''}`);
+        // called off (the background download, for a read the game waits on): no retry
+        if (signal && signal.aborted) throw failure(`${name}: called off`, { aborted: true });
+        const more = e.status === 403 ? (cold += 1) <= coldMax : (plain += 1) <= n;
+        if (!quiet) log(`[mods] ${name}: ${e.message}${more ? (e.status === 403 ? `; trying again in ${Math.round(coldWaitMs / 1000)} s` : '; trying again') : ''}`);
+        if (!more) break;
       }
     }
-    throw new Error(`${name} could not be fetched (${last ? last.message : 'no answer'})`);
+    throw failure(`${name} could not be fetched (${last ? last.message : 'no answer'})`,
+      { status: last && last.status, refused: !!(last && last.refused), network: !!last && !last.status && !last.refused });
+  }
+  // The bytes of `name` and where they came from ('cache' or 'net'), and whether
+  // they were kept. how: { keep: false, or a function of the name saying whether
+  // to keep it; retries: this call's own count; background: true for a fetch
+  // nobody is waiting on (it does not count as urgent, and a failed download it
+  // joined is not tried again for it, and its failures are its own to say);
+  // signal: an AbortSignal that calls it off }.
+  async function getFrom(base, name, size, how) {
+    const h = how || {};
+    const hit = await cached(name);
+    if (hit && (size == null || hit.length === size) && magicOk(name, hit)) { stats.cacheHits += 1; return { bytes: hit, from: 'cache', kept: true }; }
+    const bg = !!h.background;
+    if (!bg) { urgent += 1; wanted.set(name, (wanted.get(name) || 0) + 1); tell(wantedBy, name); }
+    try {
+      const was = inflight.get(name);
+      if (was) {
+        try { const r = await was; stats.shared += 1; return { bytes: r.bytes, from: 'net', kept: r.kept }; }
+        catch (e) { if (bg) throw e; }            // the game's read tries again on its own count
+      }
+      const p = download(base, name, size, h.retries, h.signal, bg).then(async (b) => {
+        const want = typeof h.keep === 'function' ? h.keep(name) : h.keep !== false;
+        return { bytes: b, kept: want ? await keep(name, b) : false };
+      });
+      inflight.set(name, p);
+      p.then(() => {}, () => {}).then(() => { if (inflight.get(name) === p) inflight.delete(name); });
+      const r = await p;
+      return { bytes: r.bytes, from: 'net', kept: r.kept };
+    } finally {
+      if (!bg) {
+        if (wanted.get(name) > 1) wanted.set(name, wanted.get(name) - 1); else wanted.delete(name);
+        if (--urgent === 0) tell(idle);
+      }
+    }
   }
   // the bytes of `name`; `keep: false` fetches without keeping
-  async function get(base, name, size, how) {
-    const hit = await cached(name);
-    if (hit && (size == null || hit.length === size) && magicOk(name, hit)) { stats.cacheHits += 1; return hit; }
-    const b = await download(base, name, size);
-    if (!how || how.keep !== false) await keep(name, b);
-    return b;
+  async function get(base, name, size, how) { return (await getFrom(base, name, size, how)).bytes; }
+  // whether `name` is kept, without reading it
+  async function has(name) {
+    const c = await cache();
+    if (!c) return false;
+    try { return !!(await c.match(PACK_KEY + name)); } catch { return false; }
   }
-  async function has(name) { return !!(await cached(name)); }
+  // the names of every pack and index kept (one listing, no bodies read)
+  async function names() {
+    const c = await cache(), out = new Set();
+    if (!c || typeof c.keys !== 'function') return out;
+    try { for (const req of await c.keys()) { const u = typeof req === 'string' ? req : req.url; if (u.startsWith(PACK_KEY)) out.add(u.slice(PACK_KEY.length)); } }
+    catch { /* an unreadable cache lists nothing: every pack is fetched again, and checked */ }
+    return out;
+  }
   async function drop(names) {
     const c = await cache();
     let n = 0;
     if (c) for (const name of names) { try { if (await c.delete(PACK_KEY + name)) n += 1; } catch { /* gone */ } }
     return n;
   }
-  return { get, has, drop, stats };
+  return { get, getFrom, has, names, drop, stats,
+           urgent: () => urgent,
+           // whether a read the game waits on wants `name` from the network now; and
+           // who to tell, with the name, when such a read starts
+           wants: (name) => wanted.has(name),
+           onWanted: (f) => { wantedBy.add(f); return () => wantedBy.delete(f); },
+           onIdle: (f) => { idle.add(f); return () => idle.delete(f); },
+           onKept: (f) => { keptBy.add(f); return () => keptBy.delete(f); } };
 }
 
 // The packed mods of one boot: which engine paths are theirs, and the bytes of a
@@ -591,10 +667,22 @@ export function createPackedMods(opts) {
   const holdBytes = o.holdBytes == null ? (48 << 20) : o.holdBytes;
   const fileBytes = o.fileBytes == null ? (16 << 20) : o.fileBytes;
   const onWait = o.onWait || (() => {});
+  const clock = o.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
   const files = new Map();                 // engine path -> { mod, row, i }
   const mods = new Map();                  // id -> { id, base, index, heads, headAt }
-  const packs = new Map(), pinned = new Set(), decoded = new Map(), loading = new Map();
-  const stats = { heads: 0, held: 0, waited: 0, packLoads: 0, bytes: 0, pending: 0, failed: 0 };
+  const packs = new Map(), pinned = new Set(), decoded = new Map(), loading = new Map(), cameFrom = new Map();
+  // A read the game waited on: how many, for how long in all (ms), the longest, how
+  // many over 50 ms; and the same by what it waited for -- a pack off the network
+  // ('net'), a pack out of the Cache API ('cache'), or only the decoding of a file
+  // whose pack was held ('decode').
+  const waitKind = () => ({ n: 0, ms: 0, max: 0 });
+  const stats = { heads: 0, held: 0, waited: 0, packLoads: 0, bytes: 0, pending: 0, failed: 0,
+                  waitMs: 0, waitMax: 0, waitOver50: 0, waitBy: { net: waitKind(), cache: waitKind(), decode: waitKind() } };
+  function waitedFor(kind, ms) {
+    stats.waitMs += ms; if (ms > stats.waitMax) stats.waitMax = ms; if (ms > 50) stats.waitOver50 += 1;
+    const k = stats.waitBy[kind];
+    k.n += 1; k.ms += ms; if (ms > k.max) k.max = ms;
+  }
   const lru = (map, k) => { const v = map.get(k); if (v !== undefined) { map.delete(k); map.set(k, v); } return v; };
   const sizeOf = (map) => { let n = 0; for (const b of map.values()) n += b.length; return n; };
   function trim() {
@@ -609,7 +697,7 @@ export function createPackedMods(opts) {
     if (have) return have;
     if (!loading.has(name)) {
       stats.packLoads += 1;
-      loading.set(name, store.get(mod.base, name, size).then((b) => { packs.set(name, b); trim(); return b; })
+      loading.set(name, store.getFrom(mod.base, name, size).then((r) => { cameFrom.set(name, r.from); packs.set(name, r.bytes); trim(); return r.bytes; })
         .finally(() => loading.delete(name)));
     }
     return loading.get(name);
@@ -647,10 +735,13 @@ export function createPackedMods(opts) {
     }
     return null;
   }
-  async function body(e) {
+  // `why`, when given, is told what the read waited for: 'net' over 'cache' over 'decode'
+  async function body(e, why) {
     const now = bodyNow(e);
     if (now) return now;
     const [path, size, p, off, ln, codec] = e.row;
+    const names = (Array.isArray(p) ? p : [p]).map((pi) => e.mod.index.packs[pi][0]);
+    const away = names.filter((n) => !packs.has(n));
     let stored;
     if (Array.isArray(p)) {
       const parts = await Promise.all(p.map((pi) => pack(e.mod, pi)));
@@ -658,6 +749,7 @@ export function createPackedMods(opts) {
       let at = 0;
       parts.forEach((b, k) => { stored.set(b.subarray(8, 8 + ln[k]), at); at += ln[k]; });
     } else stored = (await pack(e.mod, p)).subarray(off, off + ln);
+    if (why && away.length) why.from = away.some((n) => cameFrom.get(n) === 'net') ? 'net' : 'cache';
     const out = codec === 1 ? await inflateRawBytes(stored) : stored;
     if (out.length !== size) throw new Error(`${path}: ${out.length} bytes out of its pack, ${size} in the index`);
     if (codec === 1 || Array.isArray(p)) { decoded.set(key(e), out); trim(); }
@@ -678,7 +770,8 @@ export function createPackedMods(opts) {
     if (now) { stats.held += 1; stats.bytes += end - off; return now.subarray(off, end); }
     stats.waited += 1; stats.pending += 1;
     onWait(stats.pending, src);
-    return body(e).then((b) => { stats.bytes += end - off; return b.subarray(off, end); },
+    const t0 = clock(), why = { from: 'decode' };
+    return body(e, why).then((b) => { stats.bytes += end - off; waitedFor(why.from, clock() - t0); return b.subarray(off, end); },
       (err) => { stats.failed += 1; throw err; })
       .finally(() => { stats.pending -= 1; onWait(stats.pending, src); });
   }
@@ -712,6 +805,268 @@ export async function packsOnlyOf(store, mod, others) {
   const mine = [mod.packed.index];
   try { for (const [n] of (await packedIndex(store, mod)).packs) mine.push(n); } catch { /* its index is gone: drop what we can name */ }
   return mine.filter((n) => !keep.has(n));
+}
+
+// The installed packed mods that are on, from the mods store
+export async function installedPacked(db) {
+  const d = db || await openModDb();
+  return d ? (await listMods(d)).filter((m) => m.enabled !== false && isPacked(m)) : [];
+}
+
+// Round 108: every pack of an installed packed mod, fetched into the pack cache in
+// the background, so that once it is done no read of the mod waits on the network
+// (measured on the live site: 399 reads waited during one tour, ten of them on a
+// pack fetch, each a freeze as long as the fetch).
+//
+//  - What is fetched: the packs of `mods()` (the installed packed mods that are on)
+//    the cache does not list (store.names(): one listing, no bodies read), the lazy
+//    lane before the WAV bodies; so a later boot carries on where the last stopped
+//    and nothing kept is fetched twice.
+//  - How: `concurrency` (2) at a time (pace(n) changes that: one at a time while the
+//    game boots), through the same store the game reads with, which shares a
+//    download two askers want. A read the game is waiting on jumps the
+//    queue: when one goes to the network (store.onWanted), the downloads under way for
+//    other packs are called off (they go back to the front, and start again later),
+//    nothing new starts until no such read is left (store.urgent()), and the packs
+//    either side of the one it wanted (`near`, in the same mod and lane: modpack.py
+//    packs files in path order, so they hold the files next to it) move to the front.
+//  - When it fails: a 403 (jsDelivr's answer, cached for 60 s, to the first request
+//    for a file it has not served) is tried again after `wait403` (65 s); any other
+//    failure after `backoffMs`, growing; the pack goes to the back of the queue in
+//    the meantime. Three failures in a row pause the whole queue (offline, or the
+//    host down), as does the browser saying it is offline, until it says it is
+//    online again or the pause runs out. A pack the host does not have (404) or whose
+//    bytes are not the ones its name stands for is given up on after `giveUpAfter`
+//    tries, for this visit: the game still fetches it as it is played.
+//  - Room: before anything is fetched, storage.estimate() must leave room for what
+//    is left (plus a margin); persist() is asked for. Without room nothing is
+//    fetched, it is said once, and the mod is fetched as it is played, as before.
+// State: 'idle', 'checking', 'running', 'waiting' (everything left is backing off),
+// 'paused' (offline, or failing), 'noroom', 'phone', 'complete', 'incomplete' (some
+// packs given up on), 'stopped'.
+export function createPackDownloader(opts) {
+  const o = opts || {};
+  const store = o.store;
+  const log = o.log || (() => {});
+  const concurrency = Math.max(1, o.concurrency || 2);
+  const backoffMs = o.backoffMs || [5000, 20000, 60000, 120000, 300000];
+  const wait403 = o.wait403 == null ? 65000 : o.wait403;
+  const pauseMs = o.pauseMs || [15000, 60000, 300000];
+  const giveUpAfter = o.giveUpAfter || 4;
+  const near = o.near == null ? 2 : o.near;
+  const margin = o.marginBytes == null ? (64 << 20) : o.marginBytes;
+  const now = o.now || (() => Date.now());
+  const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const nav = o.navigator !== undefined ? o.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+  const storage = o.storage !== undefined ? o.storage : (nav && nav.storage) || null;
+  const online = o.online || (() => !(nav && nav.onLine === false));
+  const small = o.smallDevice || (() => smallDevice());
+  // a mod's packs, read out of its index once per mod (a plan again later costs no parse)
+  const packsMemo = new Map();
+  const packsOf = async (mod) => {
+    if (!packsMemo.has(mod.id)) packsMemo.set(mod.id, await (o.packsOf ? o.packsOf(mod) : packedIndex(store, mod).then((ix) => ix.packs)));
+    return packsMemo.get(mod.id);
+  };
+  let limit = concurrency;
+  const modsNow = o.mods || (() => installedPacked());
+  const events = o.events !== undefined ? o.events : (typeof window !== 'undefined' ? window : null);
+  const listeners = new Set();
+  const st = { state: 'idle', packs: 0, packsHave: 0, bytes: 0, bytesHave: 0, fetched: 0, fetchedBytes: 0, fromGame: 0,
+               failures: 0, refused403: 0, pauses: 0, gaveUp: 0, calledOff: 0, active: 0, startedAt: null, ms: null, need: null, free: null, lastError: null };
+  let jobs = [];                            // { name, base, size, lane, mods: [rec], tries, notBefore, active }
+  let recs = new Map();                     // mod id -> { id, name, total, have, packs, packsHave }
+  let where = new Map();                    // pack name -> { mod, i, lane }: its place in its mod's index
+  const done = new Set(), forgotten = new Set();
+  let running = null, again = false, stopped = false, said = false, inARow = 0, pausedUntil = 0, wakeUp = null;
+  const changed = () => { for (const f of listeners) { try { f(); } catch { /* a listener's own trouble */ } } };
+  const setState = (s) => { if (st.state !== s) { st.state = s; changed(); } };
+  const wake = () => { const w = wakeUp; wakeUp = null; if (w) w(); };
+  const nap = (ms) => new Promise((r) => { wakeUp = r; sleep(Math.max(1, ms)).then(r); });
+  // a pack kept by anyone (the game's own read, say) counts at once
+  function have(name) {
+    if (done.has(name)) return;
+    const j = jobs.find((x) => x.name === name);
+    if (!j || j.active) return;
+    finish(j, false);
+  }
+  if (store && store.onKept) store.onKept((name) => { have(name); });
+  if (store && store.onIdle) store.onIdle(wake);
+  // a read the game waits on went to the network for `name`: it has the line to itself
+  if (store && store.onWanted) store.onWanted((name) => {
+    for (const j of jobs) if (j.active && j.ctl && !j.ctl.signal.aborted && !store.wants(j.name)) { j.calledOff = true; j.ctl.abort(); }
+    const at = where.get(name);
+    if (!at || !near) return;
+    const dist = (j) => Math.abs(j.i - at.i);
+    const close = jobs.filter((j) => !j.active && j.mod === at.mod && j.lane === at.lane && dist(j) <= near).sort((a, b) => dist(a) - dist(b));
+    if (close.length) { jobs = close.concat(jobs.filter((j) => !close.includes(j))); changed(); }
+  });
+  if (events && typeof events.addEventListener === 'function') {
+    events.addEventListener('online', () => { pausedUntil = 0; inARow = 0; for (const j of jobs) if (!j.was403) j.notBefore = 0; wake(); });
+    events.addEventListener('offline', () => wake());
+  }
+  function finish(j, fetched) {
+    jobs = jobs.filter((x) => x !== j);
+    if (done.has(j.name)) return;
+    done.add(j.name);
+    for (const r of j.mods) { r.have += j.size; r.packsHave += 1; }
+    st.packsHave += 1; st.bytesHave += j.size;
+    if (fetched) { st.fetched += 1; st.fetchedBytes += j.size; } else st.fromGame += 1;
+    changed();
+  }
+  async function plan() {
+    // what the store lists now is what is wanted (a mod removed is gone from it; one
+    // installed again is wanted again)
+    const list = await modsNow();
+    for (const m of list) forgotten.delete(m.id);
+    const kept = await store.names();
+    const byName = new Map(), active = new Map(jobs.filter((j) => j.active).map((j) => [j.name, j]));
+    recs = new Map(); where = new Map();
+    const order = { eager: 0, lazy: 1, wav: 2 };
+    for (const mod of list) {
+      let packs;
+      try { packs = await packsOf(mod); } catch (e) { log(`[mods] ${mod.name || mod.id}: its index could not be read (${e.message}); it is fetched as it is played`); continue; }
+      const ib = (mod.packed && mod.packed.indexBytes) || 0;
+      const r = { id: mod.id, name: mod.name || mod.id, total: ib, have: ib, packs: packs.length, packsHave: 0 };
+      recs.set(mod.id, r);
+      packs.forEach(([name, , lane], i) => { if (!where.has(name)) where.set(name, { mod: mod.id, i, lane }); });
+      for (const [name, size, lane] of packs) {
+        r.total += size;
+        if (kept.has(name) || done.has(name)) { r.have += size; r.packsHave += 1; continue; }
+        if (byName.has(name)) { byName.get(name).mods.push(r); continue; }
+        // one being fetched stays the one being fetched
+        const was = active.get(name);
+        if (was) { was.mods = [r]; byName.set(name, was); continue; }
+        const at = where.get(name);
+        byName.set(name, { name, base: mod.packed.base, size, lane, mod: at.mod, i: at.i, mods: [r], tries: 0, notBefore: 0, active: false });
+      }
+    }
+    jobs = [...byName.values()].map((j, i) => [j, i]).sort((a, b) => ((order[a[0].lane] ?? 1) - (order[b[0].lane] ?? 1)) || a[1] - b[1]).map(([j]) => j);
+    st.packs = 0; st.packsHave = 0; st.bytes = 0; st.bytesHave = 0;
+    for (const r of recs.values()) { st.packs += r.packs; st.packsHave += r.packsHave; st.bytes += r.total; st.bytesHave += r.have; }
+  }
+  async function roomFor(need) {
+    if (!storage) return true;
+    try { if (storage.persist) await storage.persist(); } catch { /* best effort */ }
+    if (!storage.estimate) return true;
+    let e;
+    try { e = await storage.estimate(); } catch { return true; }
+    if (!e || !(e.quota > 0)) return true;
+    st.free = Math.max(0, e.quota - (e.usage || 0)); st.need = need;
+    return st.free >= need + margin;
+  }
+  function launch(j) {
+    j.active = true; st.active += 1;
+    j.ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    (async () => {
+      // the game may have fetched it since the plan
+      if (await store.has(j.name)) return { from: 'cache', kept: true };
+      return store.getFrom(j.base, j.name, j.size, { background: true, retries: 0, signal: j.ctl ? j.ctl.signal : undefined,
+                                                       keep: () => !j.mods.every((r) => forgotten.has(r.id)) });
+    })().then((r) => {
+      j.active = false; st.active -= 1;
+      if (r.from === 'net' && !r.kept && !j.mods.every((rr) => forgotten.has(rr.id))) {
+        // fetched and not kept: the storage is full after all
+        st.lastError = `${j.name} could not be kept`;
+        if (!said) { said = true; log(`[mods] there is no room left to keep the rest of the mod's files: they are fetched as they are played`); }
+        stopped = true; setState('noroom');
+        return;
+      }
+      inARow = 0;
+      finish(j, r.from === 'net');
+    }, (e) => {
+      j.active = false; st.active -= 1;
+      // called off for the game's read: not a failure, and it keeps its place
+      if (j.calledOff) { j.calledOff = false; st.calledOff += 1; changed(); return; }
+      st.failures += 1; j.tries += 1; inARow += 1;
+      st.lastError = `${j.name}: ${e.message}`;
+      j.was403 = e.status === 403;
+      if (j.was403) st.refused403 += 1;
+      const hopeless = (e.status === 404 || e.status === 410 || e.refused) && j.tries >= giveUpAfter;
+      if (hopeless) {
+        jobs = jobs.filter((x) => x !== j);
+        st.gaveUp += 1;
+        log(`[mods] ${j.name}: given up on after ${j.tries} tries (${e.message}); it is fetched when the game needs it`);
+      } else {
+        j.notBefore = now() + (j.was403 ? wait403 : backoffMs[Math.min(j.tries - 1, backoffMs.length - 1)]);
+        // to the back of the queue meanwhile
+        jobs = jobs.filter((x) => x !== j).concat([j]);
+        if (inARow >= 3 && !j.was403) { pausedUntil = now() + pauseMs[Math.min(st.pauses, pauseMs.length - 1)]; st.pauses += 1; inARow = 0; }
+      }
+      changed();
+    }).finally(wake);
+  }
+  async function loop() {
+    for (;;) {
+      if (stopped) { if (st.state !== 'noroom') setState('stopped'); return; }
+      if (again) { again = false; await plan(); changed(); }
+      if (!jobs.length && !st.active) {
+        st.ms = now() - st.startedAt;
+        setState(st.gaveUp ? 'incomplete' : 'complete');
+        log(`[mods] ${st.gaveUp ? `every pack but ${st.gaveUp} is kept` : 'every pack is kept'}: ${st.fetched} fetched (${(st.fetchedBytes / 1048576).toFixed(1)} MB) in ${(st.ms / 1000).toFixed(1)} s`);
+        return;
+      }
+      const t = now();
+      if (!online()) { setState('paused'); await nap(30000); continue; }
+      if (pausedUntil > t) { setState('paused'); await nap(pausedUntil - t); continue; }
+      // a read the game is waiting on is on the network: it has the line to itself
+      if (store.urgent && store.urgent() > 0) { await nap(1000); continue; }
+      if (st.active < limit) {
+        const j = jobs.find((x) => !x.active && x.notBefore <= t);
+        if (j) { setState('running'); launch(j); continue; }
+      }
+      const soonest = jobs.filter((x) => !x.active).reduce((m, x) => Math.min(m, x.notBefore), Infinity);
+      if (!st.active) setState('waiting');
+      await nap(st.active ? Math.min(30000, Math.max(0, soonest - t)) || 30000 : Math.max(0, soonest - t));
+    }
+  }
+  // Starts (or, running, looks again at what is installed). The promise settles
+  // once the plan is made and the room checked; the queue then runs on its own.
+  async function start() {
+    if (running) { again = true; wake(); return st.state; }
+    stopped = false;
+    if (small()) { setState('phone'); return st.state; }
+    setState('checking');
+    try { await plan(); } catch (e) { st.lastError = e.message; setState('idle'); log(`[mods] the background download could not start: ${e.message}`); return st.state; }
+    if (!jobs.length) { st.ms = st.ms || 0; setState(st.gaveUp ? 'incomplete' : (st.packs ? 'complete' : 'idle')); return st.state; }
+    const need = jobs.reduce((n, j) => n + j.size, 0);
+    if (!(await roomFor(need))) {
+      if (!said) {
+        said = true;
+        log(`[mods] not enough room to keep every file of the packed mods (${(need / 1048576).toFixed(0)} MB to come, ${(st.free / 1048576).toFixed(0)} MB free): they are fetched as they are played`);
+      }
+      setState('noroom');
+      return st.state;
+    }
+    st.startedAt = now(); st.ms = null;
+    log(`[mods] fetching the rest of the packed mods in the background: ${jobs.length} pack(s), ${(need / 1048576).toFixed(1)} MB`);
+    setState('running');
+    running = loop().catch((e) => { st.lastError = e.message; setState('stopped'); log(`[mods] the background download stopped: ${e.message}`); })
+      .finally(() => { running = null; });
+    return st.state;
+  }
+  // a mod removed: its packs are no longer wanted (one another mod names still is)
+  function forget(id) {
+    forgotten.add(id);
+    packsMemo.delete(id);
+    jobs = jobs.filter((j) => !j.mods.every((r) => forgotten.has(r.id)));
+    recs.delete(id);
+    done.clear();                           // its packs leave the cache: the next plan asks the cache again
+    changed();
+  }
+  function progress(id) {
+    const r = recs.get(id);
+    return r ? { have: r.have, total: r.total, packs: r.packs, packsHave: r.packsHave, state: r.have >= r.total ? 'complete' : st.state } : null;
+  }
+  return {
+    start, forget, progress,
+    stop: () => { stopped = true; wake(); },
+    // how many at a time from now on (0: `concurrency`); the boot asks for one while it loads
+    pace: (n) => { limit = n > 0 ? n : concurrency; wake(); },
+    stats: () => Object.assign({}, st, { queued: jobs.length }),
+    onChange: (f) => { listeners.add(f); return () => listeners.delete(f); },
+    // what the queue holds, in order (for tests and drivers)
+    queue: () => jobs.map((j) => j.name),
+  };
 }
 
 // ---- seeding, before the game looks ------------------------------------------
@@ -782,6 +1137,16 @@ export async function seedMods(db, seed, log, opts) {
 // ---- the menu, drawn like the game's own -------------------------------------
 
 const mib = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+// Round 108: a packed mod's download in words -- `short` for a row's note (a per cent,
+// or INSTALLED once whole), `note` for the remove list, `long` for its description
+export function packedWords(have, total, state) {
+  const mb = (n) => Math.round(n / 1048576);
+  if (have >= total) return { short: 'INSTALLED', note: `${mb(total)} MB`, long: `ALL ${mb(total)} MB DOWNLOADED`, pct: 100 };
+  const pct = Math.min(99, Math.floor(100 * have / total));
+  // the description's line is narrow: a few words for why it is not moving
+  const why = state === 'noroom' ? ', NO ROOM FOR MORE' : state === 'paused' ? ', PAUSED' : '';
+  return { short: `${pct}%`, note: `${mb(have)} OF ${mb(total)} MB`, long: `${mb(have)} OF ${mb(total)} MB DOWNLOADED${why}`, pct };
+}
 
 // opts: { paper, log, catalogueBase, onInstalled() }
 // `paper` is createPaperMenu(...) from menu_overlay.mjs: the game's own paper,
@@ -793,6 +1158,10 @@ export function createModsMenu(opts) {
   const paper = o.paper;
   // the browser (mod_browser.mjs) when the build carries its art; the paper otherwise
   const browser = o.browser || null;
+  // round 108: the page's one pack store and background download (play.mjs), shared
+  // with the game; a menu on its own makes a store of its own
+  const packs = o.packs || null;
+  const packStore = () => o.store || createPackStore({ log });
   let db = null, mods = [], catalogue = null, message = null, dirty = false, busy = false;
   let catalogueLoading = false, catalogueError = null, phase = null;
   const fresh = new Set();                     // installed during this visit: they load on close
@@ -812,6 +1181,20 @@ export function createModsMenu(opts) {
   const fileInput = hiddenInput('mods-file', (el) => { el.accept = '.zip,application/zip'; });
   const dirInput = hiddenInput('mods-folder', (el) => {
     el.setAttribute('webkitdirectory', ''); el.setAttribute('directory', ''); el.multiple = true;
+  });
+
+  // round 108: how much of an installed packed mod is kept (createPackDownloader), in
+  // words for its row: `short` for a list's note, `long` for its description
+  const keptWords = (id) => {
+    const p = packs && packs.progress(id);
+    if (!p || !(p.total > 0)) return null;
+    return packedWords(p.have, p.total, packs.stats().state);
+  };
+  // the menus show it as it moves, a few times a second at most
+  let redrawSoon = null;
+  if (packs) packs.onChange(() => {
+    if (redrawSoon || !(paper.isOpen() || (browser && browser.isOpen()))) return;
+    redrawSoon = setTimeout(() => { redrawSoon = null; redraw(); }, 250);
   });
 
   const say = (text, changed) => {
@@ -902,7 +1285,7 @@ export function createModsMenu(opts) {
     if (smallDevice()) throw new Error(`${entry.name} needs more memory than a phone's browser gives the game`);
     const already = await getMod(db, entry.id);
     if (already) throw new Error(`${already.name} is already installed`);
-    const store = createPackStore({ log });
+    const store = packStore();
     const base = packBase(o.catalogueBase, entry);
     const p = entry.packed;
     const want = (p.indexBytes || 0) + (p.eagerBytes || 0);
@@ -927,6 +1310,8 @@ export function createModsMenu(opts) {
     await refresh();
     if (o.onInstalled) { try { await o.onInstalled(); } catch (e) { log(`[mods] the options: ${e.message}`); } }
     say(`${mod.name}: ${mod.files} file(s), ${mib(got)} now, the rest as it is played`, true);
+    // round 108: and the rest from now on, in the background, while the player is still here
+    if (packs) packs.start().catch((e) => log(`[mods] the background download: ${e.message}`));
   }
 
   async function remove(mod) {
@@ -936,7 +1321,8 @@ export function createModsMenu(opts) {
       // round 107: a packed mod takes its packs with it, except any another installed one names
       let freed = 0;
       if (isPacked(mod)) {
-        const store = createPackStore({ log });
+        if (packs) packs.forget(mod.id);
+        const store = packStore();
         freed = await store.drop(await packsOnlyOf(store, mod, mods));
       }
       await deleteMod(db, mod.id); await refresh();
@@ -981,8 +1367,11 @@ export function createModsMenu(opts) {
       bytes: m.bytes || 0, files: m.files || 0, installed: have.has(m.id), big: !isPacked(m) && (m.bytes || 0) > SEED_BUDGET,
       // a packed mod on a phone: not offered (smallDevice above)
       needsComputer: isPacked(m) && smallDevice(),
-      // round 107: a packed mod downloads its eager lane now and the rest as it is played
-      sizeNote: isPacked(m) ? `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null,
+      // round 107: a packed mod downloads its eager lane now and the rest as it is played;
+      // round 108: installed, how much of it is kept by now
+      sizeNote: isPacked(m) ? ((have.has(m.id) && keptWords(m.id)) || {}).long
+        || `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null,
+      rowNote: isPacked(m) && have.has(m.id) ? ((keptWords(m.id) || {}).short || null) : null,
       // round 95: what installing it brings along, by name
       requires: (Array.isArray(m.requires) ? m.requires : []).map((r) => (byId.has(r) ? cleanModName(byId.get(r).name) : r)),
     }));
@@ -1070,12 +1459,13 @@ export function createModsMenu(opts) {
       const rows = list.map((m) => ({
         label: m.name.replace(/^[!\s]+/, ''),
         note: busyId === m.id && progress != null ? `${progress}%`
-          : have.has(m.id) ? 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG'
+          : have.has(m.id) ? ((isPacked(m) && keptWords(m.id)) || {}).short || 'INSTALLED' : (!isPacked(m) && m.bytes > SEED_BUDGET ? 'TOO BIG'
             : isPacked(m) && smallDevice() ? NEEDS_COMPUTER
               : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
         dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET) || (isPacked(m) && smallDevice()),
         // what the mod does, under the list, as the game's own mods screen shows it
-        detail: [m.version ? `V${m.version}` : '', m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
+        detail: [m.version ? `V${m.version}` : '', have.has(m.id) && isPacked(m) ? ((keptWords(m.id) || {}).long || '') : '',
+          m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),
       }));
       rows.push({ label: 'FROM THIS DEVICE', detail: 'A .ZIP OR A FOLDER OF A MOD YOU ALREADY HAVE', action: () => fileInput.click() });
@@ -1090,7 +1480,7 @@ export function createModsMenu(opts) {
     if (view === 'remove') {
       const rows = mods.map((m) => ({
         label: m.name,
-        note: mib(m.bytes),
+        note: (isPacked(m) && (keptWords(m.id) || {}).note) || mib(m.bytes),
         action: () => remove(m),
         remove: () => remove(m),
       }));
