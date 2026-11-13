@@ -11115,3 +11115,225 @@ outputs, as before). `lift_patches.py --check`: 0 TUs to change.
   the run-to-run spread. The changelog's close (Part 1) doubled the frame
   rate while it would otherwise have stayed open (29.8 -> 60 renders a
   second in the lab_dss run).
+
+### 21.141 Round 112: a mod's named achievements lock the game's own content
+
+Layer (`api_data.lua`: the layer's save file and the named-achievement fields;
+`api_hooks.lua`: five always-armed handlers; `api_innate.lua` moved onto the
+save file; `rgon.lua`: `T.ALWAYS`), engine (`RGON_HOOKS` slot 169 and
+`RGON_INSN_HOOKS` slot 170 in `lift_patches.py`, from `tools/hook_table.py`),
+tests (`test_ach.lua` with the content mod `tools/test_ach_mod.mjs` makes), lab
+scripts (`lab_ach.lua`, `lab_menu.lua`). Engine `m1` (k2 plus slots 169 and 170;
+its host objects were built from the working tree of the time, which held
+round 113's uncommitted host_lua.c change).
+
+A player's screenshot of Fiend Folio's character select page for Friend showed
+"UNLOCKED BY BLASTING AN ARCADE POSTER ..." drawn over the hearts and item
+names: the page drew every layer of the mod's menu sprite, and the character
+could be started although its `achievement="FF_FRIEND"` was never unlocked.
+
+#### What REPENTOGON does (its source, for the facts only)
+
+- `XMLData.cpp` `ParseModdedXMLAttributes`: before the game parses items.xml and
+  pocketitems.xml, a non-numeric `achievement=` of each top-level node is
+  replaced by the mod achievement's id (`SingleValXMLParamParse`); in
+  challenges.xml `achievements` (a comma list) and `unlockachievement`
+  likewise. players.xml is not translated. Entries whose id is past the game's
+  (641 in v1.9.7.12) are kept as `customachievitems` for collectibles,
+  trinkets, cards and pills.
+- `AchievementsStuff.cpp` `ItemPool::Init` hook: for each such entry, the
+  config's `achievementId` is set to -1 when the achievement is unlocked and to
+  its id when not, then the pools are built. `PersistentGameData::Unlocked`
+  answers a mod achievement (id >= 641) from its own table; `TryUnlock` of one
+  refuses while the data is read-only, records it and saves
+  `achievements<slot>.json` (keyed by name + mod), shows a paper popup through a
+  borrowed game achievement; `SetSaveSlot` loads that file; `lockachievement`
+  and `achievement` console commands.
+- `XMLPlayerExtras.cpp`: `IsCharacterUnlockedRgon` reads players.xml's
+  `achievement` (a number, else a name; an unknown name is Unlocked(-1), true);
+  `hideachievement` stands in for a missing `achievement`, and keeps a modded
+  character off the menus until unlocked (`LoadPlayers` clears the hidden flag
+  of such a player; a patch in `Menu_Character::Reset`; a tainted character
+  follows its non-tainted one). Its `RenderCustomCharacterMenu` hook shows the
+  twelve item and stat layers of the mod's menu sprite and hides "Unlocked By"
+  when unlocked, the other way round when not, and clears the menu's
+  `IsCharacterUnlocked` (+5). The wheel's portrait is drawn with layer 0 at
+  frame 1 while locked. `SelectRandomChar` and the co-op wheel skip locked
+  modded characters.
+- No entity, baby or other kind is gated. Since v1.1.1 (its changelog) mods'
+  `resources-repentogon` and `content-repentogon` are read in preference to
+  `-dlc3` and the plain folders.
+
+#### What the engine does here (each with its evidence)
+
+| What | Where, evidence |
+|---|---|
+| `achievement=` parsed with atoi | players 0x006998d0 (`call [atoi]` 0x0069a827, LoadPlayers by its strings), collectibles/trinkets 0x00725570 (0x0072620d, stored `mov [edi+0x50], eax` 0x00726216), cards/pills 0x0072cff0 (0x0072d308, 0x0072d35e). A name gives 0 |
+| Unlocked 0x00929aa0 | -2 false; negative true (0x00929aad); >= 0x282 false (0x00929aba); 0 true (0x00929abe); else the byte at [pgd+0x38+id] |
+| inlined copies of that test | `cmp reg, 0x282` occurs 26 times in .text (18 `cmp eax`, 5 `cmp ecx`, 3 `cmp edi`; `pequery.py sig`), e.g. Menu_Character::UpdateRotations 0x0094d585, SelectRandomChar's 0x0094df45: a wrapper of 0x00929aa0 alone would not reach them |
+| TryUnlock 0x00929a20 | no upper bound: `cmp byte [edi+esi+0x38], 0` (0x00929a37) and `mov byte [edi+esi+0x38], 1` (0x00929a44); refuses while [pgd+1] (read-only) is set (0x00929a2a) |
+| player configs | EntityConfig = g_Manager+0x2a670 (LoadPlayers' `this`, 0x008f4178); vector at +8/+0xc, 0x148 each; achievement +0xe8 (Menu_Character_Entry::IsCharacterAvailable 0x00946d10; lab: every game character holds its players.xml number, -1 without one, Fiend Folio's 0); hidden +0x128 (Reset 0x009491a7 leaves such a character off the wheel; the tainted pairing 0x0069d290, called from LoadConfigs 0x008f468d, skips it too); menu sprite +0x134, portrait sprite +0x138 (lab: shared by a mod's characters, one for normal, one for tainted) |
+| item, card, pill entries | the game's Lua registration binds `Item.AchievementID` = +0x50, `Card.AchievementID` = +0x4, `PillEffect.AchievementID` = +0x4 (bindings-17.json: `push` of the offset at 0x00867f3f, 0x00867c51, 0x00867da3); lab: every one of the game's entries matches its XML |
+| pools | the pool set-up 0x0073635f reads [item+0x50], Unlocked() on it, and marks the pool entry available or not (once per run start) |
+| challenges | Manager::GetChallengeParams 0x009569a0 (sig): g_Manager+0x2a664, 0xa4 each, index = id; the needed achievements a vector<int> at +0x48 (lab: every game challenge matches challenges.xml; Fiend Folio's hold [0]). The game has no `unlockachievement` (no such string in the image) |
+| the character menu | Menu_Character::Update calls the input step 0x0094c580 then UpdateRotations 0x0094d500 (0x00949e69, 0x00949e70) every menu frame; the input step starts a run only with [menu+5] set (0x0094c613); UpdateRotations sets [menu+5] from IsCharacterAvailable for a game character (0x0094d64a..0x0094d657, and hides layers 4..15 of the vanilla page) and to 1 for a mod's (selected id >= 0x12, 0x0094d700). The page render 0x0094bbd0 draws a mod's page through 0x008f8d00 (static: playerType, pos, the vanilla sprite; plays the name on [cfg+0x134] and draws every layer), with playerType = map[id-0x12] of g_ModCharacterMap 0x00c79884, the tainted half while [menu+0xdb4] != 0 (0x0094bc41..0x0094bc58). REPENTOGON's signature for RenderCustomCharacterMenu matches 0x00a54150 here, which is something else (a strtoull), and its three ASM signatures for that function match nothing |
+| the wheel's portrait | 0x008f8860 (playerType [ebx+8]; plays the name on [edi+0x138] by 0x008f89c4, draws after); called by the wheel 0x0094c445 (returns to 0x0094c44a) and by 0x00982100. ANM2::SetLayerFrame 0x0040a7e0 (the Lua registration's `push 0x40a7e0` for Sprite.SetLayerFrame, 0x008673f1) |
+| hooks armed late | the layer starts inside the first ModManager::LoadConfigs, so that call's post-hook never runs (the wrapper tests the slot on entry): MC_POST_MODS_LOADED never fired on a first boot, before and after this round |
+
+#### The design
+
+- **The engine's own test answers.** After every mod's content is loaded, the
+  layer finds every entry whose `achievement` (or `hideachievement`, or a
+  challenge's `achievements` piece) names a mod achievement, and writes
+  REPENTOGON's values into the field the game tests: -1 while unlocked, the
+  achievement's id (0x282 up) while locked. It writes again for that
+  achievement's entries whenever one is unlocked or locked (TryUnlock, Unlock,
+  `achievement`/`lockachievement`, a save slot's file read). A player with
+  `hideachievement` gets its hidden flag set while that achievement is locked.
+  A field is written only while it holds 0, -1 or that id. Nothing calls Lua
+  when the game tests an entry: the item pools, the challenge menu and the
+  wheel's own checks read memory. Fiend Folio: 326 fields and 8 hidden flags.
+  This covers what REPENTOGON gates: collectibles, trinkets, cards and runes,
+  pill effects (as its ItemPool::Init), characters, challenges. As with
+  REPENTOGON the pools take an unlock at the next run start.
+- **When.** The entries are found at the first save-slot choice (or the first
+  character-menu frame), and again when LoadConfigs returns (a reload of the
+  mods).
+- **The character menu** (slot 169, after UpdateRotations, every menu frame):
+  for the selected entry of the mod map, the layer decides "unlocked" as
+  REPENTOGON's IsCharacterUnlockedRgon does (from players.xml), sets the twelve
+  layers' and "Unlocked By"'s visible bytes (+0x74 of each layer state, found
+  by name once per sprite) and clears [menu+5] when locked. The sprite is
+  shared, so it is set for the selected page each frame; the input step reads
+  [menu+5] on the next frame.
+- **The portrait** (slot 170, instruction hook at 0x008f89c4): SetLayerFrame(0,
+  1) for a locked character on the wheel's call, (0, 0) otherwise.
+- **The game's TryUnlock** asked for an id from 0x282 up is answered by the
+  layer (its pre-handler, slot 31, now always armed): nothing past the array is
+  written. No path of the game's makes such a call today (the fields that hold
+  a mod's id are tested, not unlocked), so this is a guard.
+- **Persistence.** The layer's save file is the save data of its own mod
+  (`REPENTOGON (browser)`, per save slot, through SaveModData/LoadModData,
+  which persist over a reload since round 31), now in sections (`rgon-save 1`,
+  `== achievements`, `== innate`; the innate items' file of round 104 is read
+  as the innate section). Unlocked mod achievements are kept by mod folder and
+  name, read at each SetSaveSlot before MC_POST_SAVESLOT_LOAD runs, written
+  once after its functions (Fiend Folio syncs ~300 there), and at once after
+  any later change. `T.achievements_changed` was called before this round but
+  defined nowhere: nothing was kept. HasModData answered false for the layer's
+  written file in a dev_dist instance tree while LoadModData read it back
+  (lab), so the layer reads with LoadModData alone.
+- **Always armed** (`T.ALWAYS`, a pseudo callback id that is always
+  "listening" and never counted as implemented): SetSaveSlot, TryUnlock,
+  LoadConfigs, UpdateRotations and the portrait hook. The cost outside menus is
+  the TryUnlock handler on a game unlock.
+
+**Fiend Folio decides what is unlocked itself.** It keeps its achievements in
+its own save data and syncs REPENTOGON's to them (`ffscripts/achievements/
+repentogon.lua`): on MC_POST_SAVESLOT_LOAD (TryUnlock or `lockachievement` for
+each, by its own record; Bonus/Joke character settings) and whenever it saves.
+Its item unlock tests (`utilities.lua`) read `AchievementID` and fall back to
+the XML name, so they agree with the fields here. On a fresh profile only
+FF_FIENDISH_FOES is unlocked (lab): every Fiend Folio character, Fiend
+included ("beat one Fiend Folio boss"), is locked, and Inaba and the bonus
+characters are hidden, which is what a fresh REPENTOGON player sees.
+
+**content-repentogon.** Fiend Folio ships only `content-repentogon/` (no
+`content/`). The game here reads only `/content/` (the one such string in the
+image). `dev_dist.py` and the page's mod packer (`modpack.py`) list each
+`content-repentogon/` file again under `content/` unless `content/` has that
+file; REPENTOGON prefers `content-repentogon` over `content-dlc3` over
+`content`, and `resources-repentogon` over `resources-dlc3` over `resources`,
+which the port does not do (a mod with both folders gets its plain file here;
+`resources-repentogon` and the `-dlc3` folders are not read). Not changed: no
+mod in use needs it, and the alias is not conditional on the layer. The
+layer's own XML reading takes `content-repentogon` first.
+
+#### Tests
+
+`test_ach.lua` (drive_stress.mjs phases=custom with the layer and the content
+mod `tools/test_ach_mod.mjs` makes: four named achievements, a character
+locked by one, a hidden one shown by another, a collectible in the treasure
+pool and a trinket, a card and a pill effect, a challenge), 24 checks over a
+page reload: on a fresh profile none is unlocked; each entry holds its
+achievement's id (read through the game's own Lua members `AchievementID` and
+EntityConfigPlayer:GetAchievementID/IsHidden); the hideachievement character
+is hidden; the game's own entries keep their numbers (Magdalene 1, Isaac -1,
+Dr. Fetus 11); the treasure pool with every other collectible taken out hands
+out Breakfast, never the locked collectible; TryUnlock unlocks, fires
+MC_POST_ACHIEVEMENT_UNLOCK once with the id, a second answers false, and the
+collectible and trinket then hold -1; the hidden character is shown and hidden
+again; Unlock and `lockachievement` move the card and the pill; the console's
+`achievement <id>` and `lockachievement <id>` move the character; after
+`restart` the pool hands the unlocked collectible out; after a page reload
+(the walk's KEYS reload, the run continued) the unlocked one is still unlocked
+and the others locked, the fields say so, and the pool still hands it out.
+On k2 (layer only, no engine change) and on m1: 24 0.
+
+Twelve layer mutants through `scripts/decomp/mutate.mjs`
+(`.scratch/r112/mutants.sh`, test_ach on m1), each killed: the unlocked value
+-1 written as the id (6 checks), the collectible field at +0x54 (5), the
+player field at +0xec (the Magdalene check: the test reads the field through
+the same offset, so only the game's own number shows it), the card/pill field
+at +0x8 (5), the hidden flag inverted (4), the save written under another
+section name (the 3 after-reload checks), MC_POST_ACHIEVEMENT_UNLOCK not fired
+(2), a second unlock answering true (1), `lockachievement` doing nothing (6),
+the console's `achievement` gone (1), PersistentGameData:Unlocked inverted for
+a mod's achievement (9), every mod achievement numbered 641 (12). Two checks
+are the fixture's own and no mutant was aimed at them: "the test content is
+there" and "a game's collectible keeps its own number".
+
+The character menu (`.scratch/r112/menu_keys.mjs`, `lab_menu.lua`, the Fiend
+Folio dist on m1, a fresh browser profile; menu 5 is the character menu, the
+selected-menu id at g_MenuManager+0x40 measured by the lab): the wheel turned
+to Friend (selected id 20 = mod entry 2 = player type 45) reads
+`unlocked=false menu+5=0 unlockedby=1 itemname=0`, its page shows only the
+"Unlocked By" text (`.scratch/r112/menu3/page-before.png`), Enter starts no
+run; `lab_menu.lua` unlocks FF_FRIEND through PersistentGameData:Unlock after
+240 menu frames: `unlocked=true menu+5=1 unlockedby=0 itemname=1`, the normal
+page with hearts, stats and "her trusty revolver"
+(`page-unlocked.png`), the wheel's portrait changes from frame 1 to frame 0,
+and Enter on that page starts a run (`run.png`). `.scratch/r112/mut_menu.sh`
+checks the locked page and the refused Enter: clean, it passes; two mutants
+through mutate.mjs, both killed: [menu+5] not cleared (`menu+5=1`, "a run
+STARTED"), the twelve layers not set (`itemname=1`). The portrait has no
+mutant (screenshots only).
+
+Original behaviour: the eight layer suites on m1 with the layer alone
+(`.scratch/rgon/r110/suites.sh`, no content mod): test_hooks4 23 0, test_hooks3
+42 0, test_hooks2 49 0, test_layer 49 0, test_layer2 95 0, test_layer3 53 0,
+test_layer4 49 0, test_gate 7 0. The plain dist on m1 (no mod at all) boots, a
+run starts as Isaac (`.scratch/r112/plain-menu/key-6-Enter.png`), and a game
+character locked on a fresh profile stays locked: Eden's page reads "LOCKED"
+and Enter starts nothing (`.scratch/r112/plain-menu2/key-7-Enter.png`).
+Fiend Folio tour (drive_stress.mjs phases=tour, Fiend Folio + StageAPI + the
+layer from dev_dist.py, m1): 0 stops, 0 Lua error lines, 74 callbacks reported
+as not implemented (as round 111); the layer found 326 fields and 8 hidden
+flags. Host selftest 840 checks, 0 failures (it includes round 113's
+uncommitted lua_gc work in host_lua.c, not this round's). `node --test
+tests/recomp-rgon.test.js tests/recomp-insn-hooks.test.js
+tests/recomp-host.test.js`: 50 pass, 0 fail, 5 skipped. `lift_patches.py
+--check`: 0 TUs to change. `check-repo-safety.mjs` passed; `git diff --check`
+clean.
+
+#### Not done, and why
+
+- REPENTOGON's achievement popup (the paper with the mod's gfx) is not shown.
+- challenges.xml `unlockachievement` (REPENTOGON's own challenge completion
+  unlock) is not done: the game has no such attribute. REPENTOGON's custom
+  challenge menu for modded challenges is not reproduced; the game's own
+  challenge menu reads the rewritten list (not checked in a screenshot).
+- SelectRandomChar (0x0094de50) counts every mod entry as a candidate: a random
+  pick can land on a locked mod character (the start is then refused, [menu+5]
+  = 0). The co-op wheel was not checked.
+- `hideachievement` given as a number is evaluated when written, not again when
+  that game achievement changes outside TryUnlock.
+- A tainted mod character whose non-tainted half is hidden by `hideachievement`
+  in the XML is not re-paired: the game's pairing (0x0069d290) runs inside
+  LoadConfigs before the layer clears the flag (REPENTOGON clears it in
+  LoadPlayers). No Fiend Folio character is in that case.
+- The layer's TryUnlock unlocks a mod achievement while the game's data is
+  read-only (REPENTOGON's refuses): test_layer2.lua checks the layer's old
+  behaviour in such a run (the debug console was used).
+- EntityConfigPlayer:GetAchievementID returns the field, so -1 or the id for a
+  named one, where REPENTOGON's returns 0 (it does not rewrite players).

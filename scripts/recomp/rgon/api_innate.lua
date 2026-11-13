@@ -597,20 +597,10 @@ end)
 -- a duration, the "" group does not. A wisp of the layer's (SEED_MARK in its
 -- InitSeed) that no book claims is removed on continue; a player's own item
 -- wisp has a 1 in 65536 chance of carrying the same mark.
-local layer_mod                            -- the layer's own mod (main.lua registers it), for its save file
-do
-  -- the game's RegisterMod (its main.lua) hands the new mod table to Isaac.RegisterMod
-  local register = Isaac.RegisterMod
-  if type(register) == "function" then
-    rawset(Isaac, "RegisterMod", function(m, name, ...)
-      if name == "REPENTOGON (browser)" and layer_mod == nil and type(m) == "table" then
-        layer_mod = m
-        log("api_innate: innate items of a quit run are kept in the save data of the mod '" .. name .. "'")
-      end
-      return register(m, name, ...)
-    end)
-  end
-end
+-- the layer's own save file (api_data.lua, round 112: one file in sections, the
+-- innate items' books one of them)
+local store = T.store
+local function layer_mod() return store and store.mod() end
 
 local function esc(s) return (s:gsub("[^%w_%-]", function(c) return string.format("%%%02x", c:byte()) end)) end
 local function unesc(s) return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)) end
@@ -719,16 +709,16 @@ local function restore(text)
 end
 
 -- for lab_innate.lua
-T.innate = { layer_mod = function() return layer_mod end, snapshot = snapshot }
+T.innate = { layer_mod = layer_mod, snapshot = snapshot }
 
 local kept                                  -- the books of the run that was left, for its continue
 listen(M.MC_PRE_GAME_EXIT, function(_, should_save)
   if should_save then
     kept = snapshot()
-    if layer_mod then pcall(Isaac.SaveModData, layer_mod, kept) end
+    if store then store.set("innate", kept) end
   else
     kept = nil
-    if layer_mod then pcall(Isaac.RemoveModData, layer_mod) end
+    if store then store.set("innate", nil) end
   end
   recs, live_wisps, n_wisps, n_temp = {}, {}, 0, 0
 end, CallbackPriority.IMPORTANT)
@@ -743,10 +733,7 @@ listen(M.MC_POST_GAME_STARTED, function(_, continued)
   recompute()
   if continued then
     local text = kept
-    if not text and layer_mod then
-      local ok, saved = pcall(Isaac.LoadModData, layer_mod)
-      if ok then text = saved end
-    end
+    if not text and store then text = store.get("innate") end
     restore(text)
     -- a wisp of the layer's that no book claims (the save data was lost): it goes,
     -- rather than staying as a plain item wisp with the item for good

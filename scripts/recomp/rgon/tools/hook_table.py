@@ -199,6 +199,13 @@ HOOKS = [
      "ecx = the game's room (game+0x18300); (variant, subtype, shopItemId, 0): one more word than REPENTOGON's "
      "declaration; its 7 callers (Entity_Pickup::Init 0x006e0602, Update 0x006e4eae, ...) store what it answers as "
      "the pickup's Price (+0x534, the Lua property's offset) before 0x00816250 adjusts it"),
+    # round 112: a mod's character locked by a named achievement (api_data.lua, api_hooks.lua)
+    (169, "Menu_Character::UpdateRotations", 0x0094d500, "sig", 0,
+     "REPENTOGON's signature matches once, here; called every menu frame by Menu_Character::Update (0x00949e70), "
+     "right after the input step 0x0094c580 that starts a run when [this+5] is set (0x0094c613). For a game "
+     "character it sets [this+5] from Menu_Character_Entry::IsCharacterAvailable (0x0094d64a, 0x0094d657) and "
+     "shows layers 4..15 or 16 of the big page; for a mod's (selected id [this+0x10] >= 0x12, 0x0094d62d) it "
+     "always sets [this+5] = 1 (0x0094d700)"),
 ]
 # the entity classes' virtual functions: slots 100 + 12 * k + class index
 _k = 0
@@ -264,6 +271,15 @@ INSN_HOOKS = [
     (168, "Entity_Tear::Collision_00676be0@BoneSplit", 0x00676be0, 0x00677498, (),
      "REPENTOGON's SplitTears_Bone signature matches once, at 0x00677491; same function; esi = the new tear "
      "([ebp-0x64], 0x006773ee), edi = the tear ([ebp-0x98], 0x006773e5); the loop `cmp eax, 2; jl 0x677124`"),
+    # round 112: the wheel's portrait of a mod's character, locked or not (REPENTOGON's
+    # RenderModdedCharacterPortrait: layer 0 at frame 1 while locked)
+    (170, "ModManager::RenderCharacterPortrait_008f8860@Frame", 0x008f8860, 0x008f89c4, (),
+     "a stdcall (playerType [ebx+8], pos, color [ebx+0x10], scale) with `mov ebx, esp` at 0x008f8861: edi = "
+     "the player's config (players[playerType], 0x008f88df), its portrait sprite [edi+0x138] (shared by a mod's "
+     "characters) is played under the character's name (0x008f8972, only when another animation is current) "
+     "before 0x008f89c4, which every way reaches (the target of `jb` at 0x008f8994), and drawn after it "
+     "(0x008f8a10..). Called by the wheel 0x0094bee0 (return address 0x0094c44a) and by 0x00982100 "
+     "(0x0098256a). REPENTOGON's signature for its RenderCustomCharacterPortraits matches nothing here"),
 ]
 
 

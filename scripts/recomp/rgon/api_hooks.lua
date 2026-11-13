@@ -146,8 +146,15 @@ local function vec_at(a) return Vector(rf32(a), rf32(a + 4)) end
 ------------------------------------------------------------------------------
 -- ModManager::LoadConfigs 0x008f30d0 runs them (asm: it calls the script runner
 -- 0x0086e6c0 once per mod, at 0x008f4654)
-on("ModManager::LoadConfigs", { M.MC_POST_MODS_LOADED }, nil, function()
-  run(M.MC_POST_MODS_LOADED, nil)
+-- Round 112: always armed (T.ALWAYS): every mod's content is in the game's
+-- tables from here on, so the fields a mod's named achievements decide are found
+-- here (api_data.lua) before any mod hears of it.
+on("ModManager::LoadConfigs", { M.MC_POST_MODS_LOADED, T.ALWAYS }, nil, function()
+  if T.achievements_ready then
+    local ok, err = pcall(T.achievements_ready)
+    if not ok then log("api_hooks: a mod's named achievements: " .. tostring(err)) end
+  end
+  if listening[M.MC_POST_MODS_LOADED] then run(M.MC_POST_MODS_LOADED, nil) end
 end)
 
 ------------------------------------------------------------------------------
@@ -511,13 +518,21 @@ end)
 
 -- MC_POST_SAVESLOT_LOAD (1470): (saveSlot, isSlotSelected, rawSlot)
 --   Manager::SetSaveSlot(slot), ret 4 -- the game selects a save slot (1..3; 0 stands for the first)
-on("Manager::SetSaveSlot", { M.MC_POST_SAVESLOT_LOAD }, function(self, esp)
+-- Round 112: always armed. What the slot's file says of a mod's achievements is
+-- read first (REPENTOGON reads its achievements<slot>.json in its own SetSaveSlot
+-- hook, before the callback's), and what the callback's functions change is
+-- written to the file once, after them (Fiend Folio syncs its 200-odd there).
+on("Manager::SetSaveSlot", { M.MC_POST_SAVESLOT_LOAD, T.ALWAYS }, function(self, esp)
   return { r32(esp + 4) }
 end, function(self, esp, eax, k)
   if not k then return end
   local raw = k[1]
   T.save_slot = raw == 0 and 1 or raw
-  run(M.MC_POST_SAVESLOT_LOAD, nil, T.save_slot, true, raw)
+  local function go()
+    if T.achievements_load then T.achievements_load() end
+    if listening[M.MC_POST_SAVESLOT_LOAD] then run(M.MC_POST_SAVESLOT_LOAD, nil, T.save_slot, true, raw) end
+  end
+  if T.achievements_batch then T.achievements_batch(go) else go() end
 end)
 
 -- MC_POST_NPC_MORPH (1214): (npc, the type, variant and subtype it had before)
@@ -583,10 +598,91 @@ end)
 -- MC_POST_ACHIEVEMENT_UNLOCK (1476): (achievement), param = achievement -- one of the game's own, when
 --   PersistentGameData::TryUnlock(id) answers that it was locked until now. A mod's achievements are the
 --   layer's own (api_data.lua), which fires the callback itself.
-on("PersistentGameData::TryUnlock", { M.MC_POST_ACHIEVEMENT_UNLOCK }, function(self, esp)
-  return { ri32(esp + 4) }
+-- Round 112: always armed. The game's TryUnlock has no upper bound (0x00929a37 `cmp byte
+-- [edi+esi+0x38], 0`, 0x00929a44 `mov byte [edi+esi+0x38], 1`): asked for a mod's achievement
+-- (0x282 and up) it would set a byte past the game's achievements, in the event counters at
+-- +0x2bc. Such a call is answered here instead, by the layer's own TryUnlock (nothing while the
+-- data is read-only, the byte at +1, which the game's own tests first, 0x00929a2a).
+on("PersistentGameData::TryUnlock", { M.MC_POST_ACHIEVEMENT_UNLOCK, T.ALWAYS }, function(self, esp)
+  local id = ri32(esp + 4)
+  if T.unlock_modded and id >= T.GAME_ACHIEVEMENTS then
+    if r8(self + 1) ~= 0 then return true, 0 end
+    return true, T.unlock_modded(id) and 1 or 0
+  end
+  return { id }
 end, function(self, esp, eax, k)
-  if k and (eax & 0xff) ~= 0 then run(M.MC_POST_ACHIEVEMENT_UNLOCK, k[1], k[1]) end
+  if k and (eax & 0xff) ~= 0 then
+    if T.achievement_apply then T.achievement_apply(k[1]) end
+    if listening[M.MC_POST_ACHIEVEMENT_UNLOCK] then run(M.MC_POST_ACHIEVEMENT_UNLOCK, k[1], k[1]) end
+  end
+end)
+
+------------------------------------------------------------------------------
+-- round 112: a mod's character locked by its achievement, in the character menu
+------------------------------------------------------------------------------
+-- The game draws a mod's character's page with every layer of the character's
+-- menu sprite (players[type]+0x134, shared by a mod's characters: lab_ach.lua)
+-- and lets it be started whatever it says (Menu_Character::UpdateRotations sets
+-- [this+5] = 1 for a mod's entry, 0x0094d700; the input step starts a run only
+-- with [this+5] set, 0x0094c613). REPENTOGON's RenderCustomCharacterMenu hook
+-- shows the twelve item and stat layers and hides "Unlocked By" when the
+-- character is unlocked, the other way round when not, and then clears the
+-- menu's IsCharacterUnlocked ([this+5]). Here the same is done right after
+-- UpdateRotations, every menu frame, for the selected entry: id [this+0x10] from
+-- 0x12 up is entry id-0x12 of the mod character map (0x00c79884, {normal,
+-- tainted} pairs), the tainted one while the tainted page is shown ([this+0xdb4]
+-- != 0) -- the page render's own reading, 0x0094bc41..0x0094bc58.
+local w8 = B.w8
+local MENU_LAYERS = { "Item Name", "Item Name 2", "Item Name 3", "Item Icon", "Item Icon 2", "Item Icon 3",
+                      "Power Stat", "Speed Stat", "Life Stat", "Power Icon", "Speed Icon", "Life Icon" }
+-- a sprite's layer states (rgon.lua's layout: an array at +0x7c of 0xa0-byte states,
+-- count at +0x80, each pointing back at its sprite (+4) and at its layer's record,
+-- whose name is at +8; visible at +0x74), by name, found once per sprite
+local layer_cache = {}
+local function layer_states(spr)
+  local n, base = r32(spr + 0x80), r32(spr + 0x7c)
+  local c = layer_cache[spr]
+  if c and c.n == n and c.base == base then return c end
+  c = { n = n, base = base, by = {} }
+  if n > 0 and n <= 64 and base ~= 0 and r32(base + 4) == spr then
+    for i = 0, n - 1 do
+      local l = base + i * 0xa0
+      c.by[B.stdstr(r32(l) + 8)] = l
+    end
+  end
+  layer_cache[spr] = c
+  return c
+end
+T.menu_layer_states = layer_states
+local MOD_MAP, MOD_MAP_END = 0x00c79884, 0x00c79888
+local function menu_page(menu)
+  local sel = ri32(menu + 0x10)
+  if sel < 0x12 then return nil end
+  local at = r32(MOD_MAP) + (sel - 0x12) * 8
+  if at + 8 > r32(MOD_MAP_END) then return nil end
+  return ri32(at + (r32(menu + 0xdb4) ~= 0 and 4 or 0))
+end
+T.menu_page = menu_page
+function T.menu_character_update(menu)
+  if T.achievements_built and not T.achievements_built() then T.achievements_ready() end
+  local pt = menu_page(menu)
+  local cfg = pt and T.player_config and T.player_config(pt)
+  if not cfg then return end
+  local open = T.character_unlocked(pt)
+  local spr = r32(cfg + 0x134)
+  if spr ~= 0 then
+    local by = layer_states(spr).by
+    for i = 1, #MENU_LAYERS do
+      local l = by[MENU_LAYERS[i]]
+      if l then w8(l + 0x74, open and 1 or 0) end
+    end
+    local u = by["Unlocked By"]
+    if u then w8(u + 0x74, open and 0 or 1) end
+  end
+  if not open then w8(menu + 5, 0) end
+end
+on("Menu_Character::UpdateRotations", { T.ALWAYS }, nil, function(self)
+  if T.character_unlocked then T.menu_character_update(self) end
 end)
 
 ------------------------------------------------------------------------------
@@ -1597,6 +1693,27 @@ if B.INSN and B.reg and B.xmm then
     split("Update@CricketsBodySplit", ST.QUAD)
     split("Collision_00676be0@ParasiteSplit", ST.PARASITE)
     split("Collision_00676be0@BoneSplit", ST.BONE)
+  end
+
+  -- Round 112: the wheel's portrait of a mod's character. REPENTOGON draws it with
+  -- layer 0 at frame 1 while the character is locked and at frame 0 otherwise
+  -- (RenderModdedCharacterPortrait, for the wheel only). 0x008f8860 (playerType
+  -- [ebx+8], edi = its config) has played the character's animation on the shared
+  -- portrait sprite [edi+0x138] by 0x008f89c4 and draws it after; the wheel's call
+  -- returns to 0x0094c44a. ANM2::SetLayerFrame is 0x0040a7e0 (thiscall (layer,
+  -- frame), ret 8; the game's Lua registration binds Sprite.SetLayerFrame to it,
+  -- `push 0x40a7e0` at 0x008673f1). It does nothing without a current animation
+  -- ([sprite+0x34], 0x0040a7e3).
+  if T.character_unlocked then
+    local call = B.call
+    at("ModManager::RenderCharacterPortrait_008f8860@Frame", { T.ALWAYS }, function()
+      local ebx, edi = reg("ebx"), reg("edi")
+      local spr = r32(edi + 0x138)
+      if spr == 0 or r32(spr + 0x34) == 0 then return end
+      local frame = 0
+      if r32(ebx + 4) == 0x0094c44a and not T.character_unlocked(ri32(ebx + 8)) then frame = 1 end
+      call(0x0040a7e0, spr, 0, frame)
+    end)
   end
 else
   log("api_hooks: this engine has no instruction hooks; MC_EVALUATE_STAT, MC_PRE/POST_PLAYER_USE_BOMB and MC_POST_FIRE_SPLIT_TEAR do not fire")

@@ -1379,6 +1379,7 @@ RGON_HOOKS: list[tuple[int, int, str]] = [
     (97, 0x007ebd50, "Room::SpawnGridEntityDesc"),    # ret 0x8; sig Room::SpawnGridEntityDesc
     (98, 0x004199d0, "Room::RenderEntityPass_004199d0"),    # ret 0x8; asm
     (99, 0x008151e0, "Room::GetShopItemPrice"),    # ret 0x10; asm
+    (169, 0x0094d500, "Menu_Character::UpdateRotations"),    # ret 0x0; sig Menu_Character::UpdateRotations
     (100, 0x006a93a0, "Entity::Init"),    # ret 0x10; sig Init; vtable 0x00b6730c slot 1
     (101, 0x00755470, "Entity_Player::Init"),    # ret 0x10; vtable 0x00b6bdd0 slot 1
     (102, 0x006b8b20, "Entity_NPC::Init"),    # ret 0x10; vtable 0x00b67468 slot 1
@@ -1498,6 +1499,7 @@ RGON_INSN_HOOKS: list[tuple[int, int, int, str, tuple[int, ...]]] = [
     (166, 0x006670f0, 0x006697ba, "Entity_Tear::Update@CricketsBodySplit", ()),    # 0x006697ba  mov eax, dword ptr [ebp - 0x890]
     (167, 0x00676be0, 0x006770c2, "Entity_Tear::Collision_00676be0@ParasiteSplit", ()),    # 0x006770c2  mov eax, dword ptr [ebp - 0x64]
     (168, 0x00676be0, 0x00677498, "Entity_Tear::Collision_00676be0@BoneSplit", ()),    # 0x00677498  mov eax, dword ptr [ebp - 0x60]
+    (170, 0x008f8860, 0x008f89c4, "ModManager::RenderCharacterPortrait_008f8860@Frame", ()),    # 0x008f89c4  mov edx, dword ptr [edi + 0x138]
 ]
 RGON_SLOTS = 192            # host_rgon.c RGON_HOOKS
 INSN_REGS = ("EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI")

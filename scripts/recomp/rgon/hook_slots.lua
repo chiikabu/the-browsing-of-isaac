@@ -99,6 +99,7 @@ return {
   ["Room::SpawnGridEntityDesc"] = { 97, 0x8 },
   ["Room::RenderEntityPass_004199d0"] = { 98, 0x8 },
   ["Room::GetShopItemPrice"] = { 99, 0x10 },
+  ["Menu_Character::UpdateRotations"] = { 169, 0x0 },
   ["Entity::Init"] = { 100, 0x10 },
   ["Entity_Player::Init"] = { 101, 0x10 },
   ["Entity_NPC::Init"] = { 102, 0x10 },
@@ -168,4 +169,5 @@ return {
   ["Entity_Tear::Update@CricketsBodySplit"] = { 166, false, 0x006697ba },
   ["Entity_Tear::Collision_00676be0@ParasiteSplit"] = { 167, false, 0x006770c2 },
   ["Entity_Tear::Collision_00676be0@BoneSplit"] = { 168, false, 0x00677498 },
+  ["ModManager::RenderCharacterPortrait_008f8860@Frame"] = { 170, false, 0x008f89c4 },
 }

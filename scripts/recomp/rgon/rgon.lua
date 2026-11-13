@@ -184,6 +184,11 @@ local VA = {
 -- the layer wants to know instead, to arm the hook behind it only while a mod
 -- listens.
 local listening = {}            -- callback id -> true while a mod has a function on it
+-- round 112: ALWAYS (0, no callback's number) in a hook's ids keeps the hook armed
+-- whoever listens: for what the layer itself does there (a mod's achievements on
+-- the game's content, the character menu)
+local ALWAYS = 0
+listening[ALWAYS] = true
 local arm                       -- (set below) re-arm the hooks after a change
 do
   local engine_state = Isaac.SetBuiltInCallbackState
@@ -232,7 +237,7 @@ local SLOT = {
 local HOOKS = {}                -- slot -> { ids = {...}, before = f, after = f }
 local function define(slot, ids, before, after)
   HOOKS[slot] = { ids = ids, before = before, after = after }
-  for _, id in ipairs(ids) do R.Implemented[id] = true end
+  for _, id in ipairs(ids) do if id ~= ALWAYS then R.Implemented[id] = true end end
 end
 arm = function(changed)
   for slot, h in pairs(HOOKS) do
@@ -600,7 +605,7 @@ end
 local T = {
   B = B, R = R, VA = VA, CLASS = CLASS, SLOT = SLOT, HOOKS = HOOKS, listening = listening,
   method = method, static = static, property = property, wrap = wrap, this = this, vt_ptr = vt_ptr,
-  define = define, run = run, class_tables = class_tables, bool_at = bool_at,
+  define = define, run = run, class_tables = class_tables, bool_at = bool_at, ALWAYS = ALWAYS,
   rearm = function() arm(nil) end,
 }
 for _, part in ipairs({ "api_callbacks.lua", "api_lua.lua", "api_data.lua", "api_objects.lua", "api_game.lua", "api_player.lua", "api_sprite.lua", "api_misc.lua", "api_more.lua", "api_innate.lua", "api_extra.lua", "api_hooks.lua" }) do

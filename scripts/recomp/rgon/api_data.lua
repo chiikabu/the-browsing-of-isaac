@@ -377,28 +377,424 @@ local function achievement_id(v, what)
   if mathtype(v) ~= "integer" then error("bad argument #1 to '" .. what .. "' (integer expected, got " .. type(v) .. ")", 3) end
   return v
 end
+local function game_unlocked(id) return (call(0x00929aa0, pgd(), id & 0xffffffff) & 0xff) ~= 0 end
+
+------------------------------------------------------------------------------
+-- the layer's own save file (round 112)
+------------------------------------------------------------------------------
+-- What has to outlive the page (a mod's achievements, the innate items of a
+-- quit run) is kept in the save data of the layer's own mod, main.lua's
+-- RegisterMod("REPENTOGON (browser)"), through the game's Isaac.SaveModData /
+-- LoadModData: per save slot, and kept over a reload as any mod's data is (the
+-- game's writes persist, round 31). One file in sections:
+--   rgon-save 1
+--   == <section>
+--   <its lines>
+-- A file written before this round ("rgon-innate 1" ...) is the innate section.
+local layer_mod
+local on_layer_mod = {}
+do
+  local register = Isaac.RegisterMod
+  if type(register) == "function" then
+    rawset(Isaac, "RegisterMod", function(m, name, ...)
+      local r = table.pack(register(m, name, ...))
+      if name == "REPENTOGON (browser)" and layer_mod == nil and type(m) == "table" then
+        layer_mod = m
+        log("the layer keeps a mod's achievements and the innate items of a quit run in the save data of the mod '" .. name .. "'")
+        for _, f in ipairs(on_layer_mod) do
+          local ok, err = pcall(f)
+          if not ok then log("api_data: " .. tostring(err)) end
+        end
+      end
+      return table.unpack(r, 1, r.n)
+    end)
+  end
+end
+local function parse_save(text)
+  local sec = {}
+  if type(text) ~= "string" or text == "" then return sec end
+  if text:sub(1, 13) == "rgon-innate 1" then sec.innate = text return sec end
+  if text:sub(1, 11) ~= "rgon-save 1" then return sec end
+  local name, buf
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    local n = line:match("^== (.+)$")
+    if n then
+      if name then sec[name] = table.concat(buf, "\n") end
+      name, buf = n, {}
+    elseif name then
+      buf[#buf + 1] = line
+    end
+  end
+  if name then sec[name] = table.concat(buf, "\n") end
+  return sec
+end
+local function read_save()
+  if not layer_mod then return {} end
+  -- LoadModData alone (an empty string when there is no file): measured in a dist
+  -- whose mods are its instance tree (dev_dist.py), HasModData answered false for a
+  -- file SaveModData had written and LoadModData read back (lab_ach.lua, round 112)
+  local ok2, text = pcall(Isaac.LoadModData, layer_mod)
+  return parse_save(ok2 and text or nil)
+end
+local function write_save(sec)
+  if not layer_mod then return false end
+  local names = {}
+  for k in pairs(sec) do names[#names + 1] = k end
+  table.sort(names)
+  local out = { "rgon-save 1" }
+  for _, k in ipairs(names) do
+    out[#out + 1] = "== " .. k
+    out[#out + 1] = sec[k]
+  end
+  local ok, err = pcall(Isaac.SaveModData, layer_mod, table.concat(out, "\n"))
+  if not ok then log("api_data: the layer's save file was not written: " .. tostring(err)) end
+  return ok
+end
+local store = {}
+function store.mod() return layer_mod end
+function store.get(name) return read_save()[name] end
+function store.set(name, text)
+  local sec = read_save()
+  if sec[name] == text then return true end
+  sec[name] = text
+  return write_save(sec)
+end
+function store.on_mod(f) on_layer_mod[#on_layer_mod + 1] = f end
+store.parse = parse_save
+T.store = store
+
+------------------------------------------------------------------------------
+-- a mod's named achievements on the game's own content (round 112)
+------------------------------------------------------------------------------
+-- The game reads `achievement="..."` of players.xml, items.xml (collectibles and
+-- trinkets), pocketitems.xml (cards, runes, pill effects) and the
+-- `achievements="a,b"` of challenges.xml with atoi (the call at 0x0069a827 for a
+-- player, 0x0072620d for an item, 0x0072d308 / 0x0072d35e for a card and a pill),
+-- so a name gives 0, which its checks read as unlocked (Unlocked(0), 0x00929abe).
+-- REPENTOGON turns a name into the mod achievement's id before the game parses
+-- the file, and for collectibles, trinkets, cards and pills writes -1 into the
+-- entry when the achievement is unlocked and its id when not, each time an item
+-- pool is set up (its ItemPool::Init hook). Here the same values are written
+-- into the same fields, and again whenever one of those achievements changes:
+-- the game's own test then gives the answer (Unlocked answers true for any
+-- negative id, 0x00929aad, and false from 0x282 up, 0x00929aba, as do the
+-- inlined copies of that test, e.g. Menu_Character::UpdateRotations 0x0094d585),
+-- so nothing is asked of Lua when the game tests an entry.
+--   a player's config: EntityConfig = g_Manager+0x2a670, its vector at +8/+0xc
+--     (0x00946cdf), 0x148 bytes each, the achievement at +0xe8 (read by
+--     Menu_Character_Entry::IsCharacterAvailable at 0x00946d10; lab_ach.lua: each
+--     of the game's characters holds its players.xml number, -1 without one), the
+--     hidden flag at +0x128 (Menu_Character::Reset leaves a character with it set
+--     off the wheel, 0x009491a7)
+--   a collectible's or trinket's ItemConfig_Item: +0x50 (stored at 0x00726216;
+--     read by the item pools' set-up at 0x0073635f; lab_ach.lua: every one of the
+--     game's with an achievement matches items.xml)
+--   a card's or pill effect's entry: +0x4 (lab_ach.lua: likewise, pocketitems.xml)
+--   a challenge: g_Manager+0x2a664, 0xa4 bytes each (Manager::GetChallengeParams
+--     0x009569a0), the achievements it needs a vector<int> at +0x48 (lab_ach.lua:
+--     every one of the game's matches challenges.xml)
+-- A player's `hideachievement` (REPENTOGON: off the menus until it is unlocked;
+-- its LoadPlayers hook clears the hidden flag of such a player first): the
+-- hidden flag follows it. An entry is written only while it holds 0 (the atoi
+-- of a name), -1 or the achievement's id, so a field that is not what this
+-- expects is left alone and said in the log.
+local ADDR = { players = 0x2a678, challenges = 0x2a664 }
+local PLAYER_SIZE, CHALLENGE_SIZE = 0x148, 0xa4
+local P_ACH, P_HIDDEN, ITEM_ACH, POCKET_ACH, C_ACH = 0xe8, 0x128, 0x50, 0x4, 0x48
+
+-- REPENTOGON's reading of such an attribute (IsAchievementUnlockedByXmlString):
+-- a number (strtol, base 0) is that achievement, anything else a name
+local function xml_achievement(text)
+  if type(text) ~= "string" or text == "" then return nil end
+  local sign, rest = text:match("^%s*([+-]?)(.*)$")
+  local n
+  local hex = rest:match("^0[xX](%x+)")
+  if hex then
+    n = tonumber(hex, 16)
+  elseif rest:match("^0[0-7]") then
+    n = tonumber(rest:match("^0([0-7]+)"), 8)
+  elseif rest:match("^%d") then
+    n = tonumber(rest:match("^%d+"))
+  end
+  if n then return sign == "-" and -n or n, true end
+  local set = XN.ACHIEVEMENT and entries(XN.ACHIEVEMENT)
+  local e = set and set.by_name[text]
+  return e and math.tointeger(tonumber(e.id)) or -1, false
+end
+T.xml_achievement = xml_achievement
+
+-- is an achievement given in an XML attribute unlocked (an unknown name: the game's
+-- Unlocked(-1), true)
+local function achieved(text)
+  local id = xml_achievement(text)
+  if id == nil then return true end
+  if id >= GAME_ACHIEVEMENTS then return unlocked[id] == true end
+  return game_unlocked(id)
+end
+
+local function players_base()
+  local man = r32(0x00c7169c)
+  if man == 0 then return 0, 0 end
+  local first, last = r32(man + ADDR.players), r32(man + ADDR.players + 4)
+  if last < first then return 0, 0 end
+  return first, (last - first) // PLAYER_SIZE
+end
+local function player_config(pt)
+  local first, n = players_base()
+  if first == 0 or mathtype(pt) ~= "integer" or pt < 0 or pt >= n then return nil end
+  local at = first + pt * PLAYER_SIZE
+  if ri32(at) ~= pt then return nil end
+  return at
+end
+T.player_config = player_config
+
+-- what players.xml says of a character's lock: REPENTOGON's IsCharacterUnlockedRgon
+-- (`achievement`, or `hideachievement` when it has no `achievement`)
+local player_rows               -- player type -> its players.xml entry, found again once every mod is loaded
+local function player_xml(pt)
+  if player_rows then return player_rows[pt] end
+  local set = XN.PLAYER and entries(XN.PLAYER)
+  return set and set.by_id[pt] or nil
+end
+local function character_unlocked(pt)
+  local x = player_xml(pt)
+  if not x then return true end
+  local a = x.achievement or x.hideachievement
+  if a == nil or a == "" then return true end
+  return achieved(a)
+end
+T.character_unlocked = character_unlocked
+
+local gates                   -- achievement id -> { { at = address, kind = name } } (the value fields)
+local hides                   -- achievement id -> { player config address } (hidden flags)
+local gate_count = 0
+local said_odd = {}
+local function want(id) return mathtype(id) == "integer" and id >= 0 end
+local function add_gate(id, at, kind)
+  if not want(id) or at == 0 then return end
+  local v = ri32(at)
+  if v ~= 0 and v ~= -1 and v ~= id then
+    local k = kind .. at
+    if not said_odd[k] then said_odd[k] = true log(string.format("api_data: %s at 0x%08x holds %d, not 0, -1 or %d: left alone", kind, at, v, id)) end
+    return
+  end
+  gates[id] = gates[id] or {}
+  local g = gates[id]
+  g[#g + 1] = { at = at, kind = kind }
+  gate_count = gate_count + 1
+end
+-- the id the game gave a mod's entry, asked again now (an entries() list may have
+-- been read before every mod's content was loaded)
+local function lookup(f, ...)
+  local ok, id = pcall(f, ...)
+  if ok and mathtype(id) == "integer" and id >= 0 then return id end
+  return nil
+end
+local function build_gates()
+  gates, hides, gate_count = {}, {}, 0
+  player_rows = {}
+  local cfg = Isaac.GetItemConfig()
+  local function named(text)
+    local id, number = xml_achievement(text)
+    if id == nil or number then return nil end       -- a number is the game's own, and the game read it
+    return id
+  end
+  -- players
+  local pset = XN.PLAYER and entries(XN.PLAYER)
+  for _, e in ipairs(pset and pset.list or {}) do
+    if e.sourceid and e.name then
+      local pt = lookup(Isaac.GetPlayerTypeByName, e.name, e.bskinparent ~= nil)
+      local at = pt and player_config(pt)
+      if at and player_rows[pt] == nil then player_rows[pt] = e end
+      if at then
+        local id = named(e.achievement or e.hideachievement)
+        if id then add_gate(id, at + P_ACH, "a player's achievement") end
+        if e.hideachievement and e.hideachievement ~= "" then
+          local hid = xml_achievement(e.hideachievement)
+          if hid then
+            hides[hid] = hides[hid] or {}
+            hides[hid][#hides[hid] + 1] = at
+          end
+        end
+      end
+    end
+  end
+  -- collectibles and trinkets, cards and runes, pill effects
+  local function items(kind, find, get, key, field, what)
+    local set = XN[kind] and entries(XN[kind])
+    for _, e in ipairs(set and set.list or {}) do
+      local id = e.sourceid and named(e.achievement)
+      local name = e[key or "name"]
+      if id and name then
+        local n = lookup(find, name)
+        local it = n and get(n)
+        local at = it and ptr(it) or 0
+        if at ~= 0 then add_gate(id, at + field, what) end
+      end
+    end
+  end
+  if cfg then
+    items("ITEM", Isaac.GetItemIdByName, function(n) return cfg:GetCollectible(n) end, nil, ITEM_ACH, "a collectible's achievement")
+    items("TRINKET", Isaac.GetTrinketIdByName, function(n) return cfg:GetTrinket(n) end, nil, ITEM_ACH, "a trinket's achievement")
+    items("CARD", Isaac.GetCardIdByName, function(n) return cfg:GetCard(n) end, "hud", POCKET_ACH, "a card's achievement")
+    items("PILL", Isaac.GetPillEffectByName, function(n) return cfg:GetPillEffect(n) end, nil, POCKET_ACH, "a pill effect's achievement")
+  end
+  -- challenges: each name of `achievements`, in the place the game put its atoi
+  local cset = XN.CHALLENGE and entries(XN.CHALLENGE)
+  local man = r32(0x00c7169c)
+  local c0, c1 = r32(man + ADDR.challenges), r32(man + ADDR.challenges + 4)
+  for _, e in ipairs(cset and cset.list or {}) do
+    local list = e.sourceid and e.name and e.achievements
+    local cid = list and lookup(Isaac.GetChallengeIdByName, e.name)
+    if cid and c0 + (cid + 1) * CHALLENGE_SIZE <= c1 then
+      local at = c0 + cid * CHALLENGE_SIZE
+      local v0, v1 = r32(at + C_ACH), r32(at + C_ACH + 4)
+      local i = 0
+      for piece in (list .. ","):gmatch("([^,]*),") do
+        if v0 + i * 4 < v1 then
+          local id = named(piece)
+          if id then add_gate(id, v0 + i * 4, "a challenge's achievement") end
+        end
+        i = i + 1
+      end
+    end
+  end
+end
+
+-- the value the game is to find for achievement `id`
+local function gate_value(id)
+  if id < GAME_ACHIEVEMENTS then return id end
+  return unlocked[id] and -1 or id
+end
+local function apply(id)
+  if not gates then return end
+  local g = gates[id]
+  if g then
+    local v = gate_value(id)
+    for i = 1, #g do B.w32(g[i].at, v & 0xffffffff) end
+  end
+  local h = hides[id]
+  if h then
+    local hidden = not (id >= GAME_ACHIEVEMENTS and unlocked[id] == true or id < GAME_ACHIEVEMENTS and game_unlocked(id))
+    for i = 1, #h do w8(h[i] + P_HIDDEN, hidden and 1 or 0) end
+  end
+end
+local function apply_all()
+  if not gates then return end
+  for id in pairs(gates) do apply(id) end
+  for id in pairs(hides) do if not gates[id] then apply(id) end end
+end
+-- every mod's content is loaded (ModManager::LoadConfigs has returned): find the fields
+-- Called when ModManager::LoadConfigs returns (a reload of the mods) and, the
+-- first time, from the first save-slot choice or menu frame: the layer itself is
+-- started inside the first LoadConfigs, whose hook was not armed when it began.
+function T.achievements_ready()
+  build_gates()
+  apply_all()
+  local n = 0
+  for _ in pairs(hides) do n = n + 1 end
+  log(string.format("named achievements: %d field(s) of the game's content follow a mod's achievement, %d hidden flag(s)", gate_count, n))
+end
+T.achievement_gates = function() return gates, hides end
+T.achievements_built = function() return gates ~= nil end
+T.achievement_apply = function(id) if mathtype(id) == "integer" then apply(id) end end
+
+-- what is unlocked is kept in the layer's save file, by mod and name (a mod's
+-- achievement's number changes with what else is installed): one line each,
+-- "<mod folder> <name>", both %-escaped
+local function esc(s) return (s:gsub("[^%w_%-%.]", function(c) return string.format("%%%02x", c:byte()) end)) end
+local function unesc(s) return (s:gsub("%%(%x%x)", function(h) return string.char(tonumber(h, 16)) end)) end
+local function ach_key(e) return e.name or e.text or e.steam_name end
+local batch, dirty = 0, false
+local function save_unlocked()
+  if batch > 0 then dirty = true return end
+  dirty = false
+  local set = XN.ACHIEVEMENT and entries(XN.ACHIEVEMENT)
+  local lines = {}
+  for _, e in ipairs(set and set.list or {}) do
+    local id = math.tointeger(tonumber(e.id))
+    if e.sourceid and id and unlocked[id] and ach_key(e) then lines[#lines + 1] = esc(e.sourceid) .. " " .. esc(ach_key(e)) end
+  end
+  table.sort(lines)
+  store.set("achievements", #lines > 0 and table.concat(lines, "\n") or nil)
+end
+-- run f with the saves of every change it makes written once, at the end
+function T.achievements_batch(f, ...)
+  batch = batch + 1
+  local ok, err = pcall(f, ...)
+  batch = batch - 1
+  if batch == 0 and dirty then save_unlocked() end
+  if not ok then error(err, 0) end
+end
+-- the save slot was chosen (or the layer's mod registered with one chosen): what
+-- that slot's file says is unlocked, as REPENTOGON reads its achievements<slot>.json
+function T.achievements_load(no_build)
+  if not gates and not no_build then T.achievements_ready() end
+  for id in pairs(unlocked) do unlocked[id] = nil end
+  local text = store.get("achievements")
+  local n = 0
+  if text and text ~= "" then
+    local set = XN.ACHIEVEMENT and entries(XN.ACHIEVEMENT)
+    local by = {}
+    for _, e in ipairs(set and set.list or {}) do
+      if e.sourceid and ach_key(e) then by[e.sourceid .. " " .. ach_key(e)] = math.tointeger(tonumber(e.id)) end
+    end
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+      local a, b = line:match("^(%S+) (%S+)$")
+      local id = a and by[unesc(a) .. " " .. unesc(b)]
+      if id then unlocked[id] = true n = n + 1 end
+    end
+  end
+  apply_all()
+  log(string.format("named achievements: save slot %d, %d of a mod's unlocked in the layer's save file", r32(r32(0x00c7169c) + 0x10), n))
+  return n
+end
+store.on_mod(function()
+  if r32(r32(0x00c7169c) + 0x10) ~= 0 then T.achievements_load(true) end
+end)
+
+local function changed(id)
+  apply(id)
+  save_unlocked()
+end
 local function unlock_modded(id)
   if unlocked[id] then return false end
   unlocked[id] = true
-  if T.achievements_changed then T.achievements_changed(unlocked) end
+  changed(id)
   local M = ModCallbacks
   if M.MC_POST_ACHIEVEMENT_UNLOCK then T.run(M.MC_POST_ACHIEVEMENT_UNLOCK, id, id) end
   return true
 end
+local function lock_modded(id)
+  if not unlocked[id] then return false end
+  unlocked[id] = nil
+  changed(id)
+  return true
+end
+T.unlock_modded, T.GAME_ACHIEVEMENTS = unlock_modded, GAME_ACHIEVEMENTS
 local P = {}
 P.__index = P
 P.__type = "PersistentGameData"
 function P:Unlocked(id)
   id = achievement_id(id, "Unlocked")
   if id >= GAME_ACHIEVEMENTS then return unlocked[id] == true end
-  return (call(0x00929aa0, pgd(), id & 0xffffffff) & 0xff) ~= 0
+  return game_unlocked(id)
 end
+-- REPENTOGON's TryUnlock does nothing for a mod's achievement while the game's
+-- data is read-only (the byte at +1, which the game's own TryUnlock tests first,
+-- 0x00929a2a: set in a run where the debug console was used, for one); the
+-- layer's unlocks it all the same, as it did before round 112 (test_layer2.lua
+-- checks it in such a run). Unlock is REPENTOGON's forced unlock.
 function P:TryUnlock(id, blockPaperPopup)
   id = achievement_id(id, "TryUnlock")
   if id >= GAME_ACHIEVEMENTS then return unlock_modded(id) end
   return (call(0x00929a20, pgd(), id & 0xffffffff) & 0xff) ~= 0
 end
-P.Unlock = P.TryUnlock
+function P:Unlock(id, blockPaperPopup)
+  id = achievement_id(id, "Unlock")
+  if id >= GAME_ACHIEVEMENTS then return unlock_modded(id) end
+  return (call(0x00929a20, pgd(), id & 0xffffffff) & 0xff) ~= 0
+end
 function P:IncreaseEventCounter(counter, amount)
   call(0x00929b40, pgd(), achievement_id(counter, "IncreaseEventCounter") & 0xffffffff, achievement_id(amount, "IncreaseEventCounter") & 0xffffffff)
 end
@@ -423,17 +819,21 @@ static(Isaac, "Isaac", "GetPersistentGameData", function() return the_pgd end)
 for name in pairs(P) do if name:sub(1, 2) ~= "__" then R.Implemented["PersistentGameData." .. name] = true end end
 T.modded_achievements = unlocked
 
--- "lockachievement <id>" in the console locks one again; for a mod's achievement that is the layer's to do
+-- "lockachievement <id>" in the console locks one again, "achievement <id>"
+-- unlocks one; for a mod's achievement that is the layer's to do
 do
   local execute = Isaac.ExecuteCommand
   rawset(Isaac, "ExecuteCommand", function(command, ...)
     if type(command) == "string" then
       local id = tonumber(command:match("^%s*lockachievement%s+(%d+)%s*$"))
       if id and id >= GAME_ACHIEVEMENTS then
-        if unlocked[id] then
-          unlocked[id] = nil
-          if T.achievements_changed then T.achievements_changed(unlocked) end
-        end
+        lock_modded(id)
+        return ""
+      end
+      -- "achievement <id>" unlocks one (REPENTOGON's console command)
+      id = tonumber(command:match("^%s*achievement%s+(%d+)%s*$"))
+      if id and id >= GAME_ACHIEVEMENTS then
+        unlock_modded(id)
         return ""
       end
     end
@@ -455,6 +855,20 @@ if rawget(_G, "EntityConfig") == nil and XN.PLAYER and XN.ENTITY then
   function PC:GetCostumeSuffix() return self._x.costumesuffix or "" end
   -- the tainted characters are 21 to 40 and every modded one that names the character it is the other side of
   function PC:IsTainted() return (self._id >= 21 and self._id <= 40) or (self._x.bskinparent ~= nil and self._x.bskinparent ~= "") end
+  -- round 112: the config's own fields (players[type] +0xe8 and +0x128, see the
+  -- achievements above). For a mod's character with a named achievement the field
+  -- holds -1 or that achievement's id here (REPENTOGON leaves it 0 and reads the XML).
+  function PC:GetAchievementID()
+    local at = player_config(self._id)
+    return at and ri32(at + P_ACH) or -1
+  end
+  -- hidden from the menus: its flag, or one of the game's second halves (REPENTOGON's
+  -- list: Lazarus risen, Dark Judas, the Soul, Esau and their tainted forms)
+  local HIDDEN_GAME = { [11] = true, [12] = true, [17] = true, [20] = true, [38] = true, [39] = true, [40] = true }
+  function PC:IsHidden()
+    local at = player_config(self._id)
+    return HIDDEN_GAME[self._id] == true or (at ~= nil and r8(at + P_HIDDEN) ~= 0)
+  end
   local players = {}
   local EC = {}
   function EC.GetPlayer(playerType)
