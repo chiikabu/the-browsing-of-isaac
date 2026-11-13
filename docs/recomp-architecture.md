@@ -10800,3 +10800,318 @@ MC_POST_PLAYER_USE_BOMB are gone; nothing new).
 its number of registrations):
 
 74 in all: MC_POST_PICKUP_SHOP_PURCHASE (9), MC_EVALUATE_CUSTOM_CACHE (7), MC_PRE_LEVEL_PLACE_ROOM (6), MC_PRE_LASER_COLLISION (5), MC_POST_TRIGGER_WEAPON_FIRED (5), MC_POST_WEAPON_FIRE (5), MC_PLAYER_HEALTH_TYPE_CHANGE (5), MC_POST_START_AMBUSH_WAVE (4), MC_POST_COMPLETION_EVENT (4), MC_POST_BRIMSTONE_SNEEZE (4), MC_PRE_PLAYER_GIVE_BIRTH_IMMACULATE (3), MC_PRE_PLANETARIUM_APPLY_ITEMS (3), MC_PRE_BACKDROP_CHANGE (3), MC_POST_GRID_ROCK_DESTROY (3), MC_POST_GRID_ENTITY_DOOR_UPDATE (3), MC_POST_DEVIL_CALCULATE (3), MC_NPC_GRID_COLLISION (3), MC_POST_GLOWING_HOURGLASS_SAVE (3), MC_CONSOLE_AUTOCOMPLETE (3), MC_PRE_TRIGGER_BED_SLEEP_EFFECT (3), and 54 with one to three registrations each (`.scratch/rgon/r110/remaining.txt`). Several of these are REPENTOGON patches in the middle of a function (MC_PRE_LASER_COLLISION, MC_POST_WEAPON_FIRE, MC_POST_TRIGGER_WEAPON_FIRED, MC_PRE_LEVEL_PLACE_ROOM), now a matter of finding each place here.
+
+### 21.140 Round 111: a press in a frame the render gate skips, and luabridge's lookup in native code
+
+Engine (`isaac_input_edge_now` and `isaac_render_gate_decide_input` in
+`host_shims_win.c`; `lb_index_native` and `call_guest_fn` in `host_lua.c`),
+tests (`selftest.c`: `test_input_edges` and the native `__index` block), lab
+scripts (`lab_pause.lua`, `lab_trigpad.lua`, `lab_index.lua`, beside the
+round's earlier `lab_trig.lua`, `lab_trig2.lua`, `lab_dss.lua`). Engine `k2`
+(`k1` is the same but for the verify mode's userdata comparison, below). No
+lift patch changed: both parts are host code.
+
+Players said Fiend Folio was "super laggy and scuffed". Two causes were
+measured and both are engine-side.
+
+#### A press the render gate's skipped frame took from the mods
+
+**The problem, measured.** With Fiend Folio loaded, a mod counting
+`Input.IsButtonTriggered(key, 0)` in MC_POST_RENDER saw 6 of 24 key presses
+with the render gate on (round 93, the default) and 24 of 24 with
+`?ISAAC_RENDER_GATE=0`. Fiend Folio opens a Dead Sea Scrolls changelog at the
+start of a run that is closed with C or F1; with presses lost it stayed open,
+and its text drawing halved the frame rate.
+
+**The mechanism** (instruction stream, `pequery.py body`):
+
+- Manager::Update (0x00954cd0) returns at once on an odd frame count only
+  when [Manager+0x2a3c0] is clear (0x00954d0f `cmp byte [edi+0x2a3c0], 0`);
+  with it set, the body runs on the in-between pass too and runs the game
+  logic only on even counts (0x009551cf `test byte [edi+0x4abbc], 1`). The
+  body polls the pads (0x00a6de60 at 0x00954f73) and updates every input
+  device (0x00a1fc00 at 0x00954f7d, ECX = the input manager 0x00c57b18),
+  both behind `cmp byte [ebp+8], 0` (main's 0x009ab6d0 passes 1, 0x009ab6f0).
+  The flag's value was not read at run time; that the devices advance on the
+  in-between pass is what the measurements below show (in-between frames
+  drawn because a press was in them). So
+  the devices advance on every pass of main's loop, the in-between one
+  included, which is what the recorded callback order (`lab_trig2.lua`)
+  showed.
+- The keyboard device (vtable 0x00ba1678): IsButtonTriggered (slot 10,
+  0x00a6c540) is `[ecx+8] & 2`, key < 0x15d, current [0x00c78c10+key] != 0
+  and previous [0x00c78950+key] == 0; its update (slot 30, 0x00a6c650) copies
+  current to previous (`rep movsd` 0x57 dwords + one byte from 0x00c78c10 to
+  0x00c78950) and pending (0x00c78ab0) to current.
+- So a press is "triggered" in exactly one pass. When that pass is an
+  in-between pass whose render the gate skips (main's render call 0x009312f1),
+  MC_POST_RENDER never runs in it, and the next pass's update has already made
+  previous := current.
+
+**The design.** The gate draws an in-between pass that holds a newly
+triggered key or button, exactly as with the gate off, instead of latching
+triggers for Lua. Nothing is rolled back, delayed or answered differently:
+the device state, every device update and every query are the game's own.
+So no consumer -- an engine one (the pause menu, the player's controls) or a
+mod's -- can see a trigger twice, and every consumer sees each trigger in the
+same pass it sees it in with the gate off, which is the game's own behaviour.
+A latch would have needed to tell a Lua query from an engine one inside the
+game's own input functions, cover IsActionTriggered's action mapping and the
+pads' button numbering, and would still hand a mod a trigger one pass late
+and, in an update callback, in a pass where the game without the gate shows
+none. The price of drawing is one render per press, and only on a device
+that is behind (one that keeps up draws every in-between pass anyway).
+
+"Holds a new trigger" is read off the devices after the pass's update: the
+gate is asked at 0x009312f1, after Manager::Update and before the render, and
+nothing between the two updates a device. The devices are the input
+manager's vector at [0x00c57b18+8, +0xc) of 8-byte entries, object first
+(its slot +0x74, 0x00a20fb0: `sar eax, 3`, `mov ecx, [ecx+edx*8]`). RTTI
+names three device classes: InputDeviceKeyboard, InputDeviceGamepad and
+NetInputDevice (whose slots 9 and 10 are both 0x0042cb80). For each entry:
+
+- keyboard (vtable 0x00ba1678): any key with current != 0 and previous == 0
+  (the flag test left out: a superset);
+- gamepad (vtable 0x00b82c80): IsButtonTriggered (slot 10, 0x00a1e640)
+  answers true for a button only when, after IsButtonPressed (slot 9), its
+  bit is set in the 64-bit set [+0x20, +0x24] and clear in [+0x28, +0x2c]
+  (a raw button: slot 35, 0x00a22d20, ids below 0xabab) or set in
+  [+0x30, +0x34] and clear in [+0x38, +0x3c] (an axis direction: slot 36,
+  0x00a22d80, ids 0xabab..0xabca; the pad's update 0x00a22940 ORs both sets
+  from the poll's buttons and axes, the axes past the device's dead zone
+  [+0xd4]). The check is any bit set in the first word of a pair and clear in
+  the second.
+
+A pass drawn for nothing costs a render; a missed trigger would cost a press,
+so both checks are supersets.
+
+`ISAAC_GATE_INPUT=0` restores the round-93 rule (for measuring). The log says
+`render gate: in-between frame drawn for a keyboard|gamepad press (n so far,
+m skipped)` for the first five and every 50th, and the 1800-skip line counts
+them.
+
+**Tests** (host selftest, `python scripts/recomp/host/build_selftest.py`:
+826 checks, 0 failures; 30 of them new, in `test_input_edges` and the native
+`__index` block). For the gate: the keyboard edge (none down, held, released,
+the last key 0x15c, a value of 2 over 0), the pad edge (each of the four
+words alone, held, one new bit beside a held one, a release), the decision
+(a tick's own pass is drawn and not counted as kept; an in-between pass that
+would be skipped is drawn when a press is in it, counted as drawn and kept and
+not skipped, and its present is paced like any drawn in-between frame; a
+later pass keeps nothing more) and the device walk over a fake input manager
+in guest memory (a key new and held, a pad axis bit new and held, a device
+outside [+8, +0xc) not read, another class not read as a pad, the key arrays
+read only with a keyboard device present, a vector whose size is not a
+multiple of 8 not read). Seven mutants through `scripts/decomp/mutate.mjs`,
+each killed by that selftest: the previous-key test inverted, the key loop
+one short, the pad's second axis word dropped, the rule itself disabled
+(`0 && input_edge`), the pace not set for a kept frame, any vtable taken for a
+pad, the vector-size test dropped.
+
+**Measured on k1** (`.scratch/r111/load_keys.mjs`, a copy of
+`tools/load_probe.mjs` that presses keys or a test pad after the run starts;
+headless Chromium, real GPU; Fiend Folio + StageAPI + the layer from
+`dev_dist.py`; 48 presses 1.65 s apart, each held 150 ms; the counts are
+`lab_trig.lua`'s / `lab_trigpad.lua`'s last report):
+
+| Input | Gate | Load | Presses seen held | Triggered in MC_POST_RENDER |
+|---|---|---|---|---|
+| keyboard F2/F3 | on (k1 rule) | changelog open | 48 | 48 |
+| keyboard F2/F3 | on, `ISAAC_GATE_INPUT=0` (round 93 rule) | changelog open | 48 | 19 |
+| keyboard F2/F3 | off (`ISAAC_RENDER_GATE=0`) | changelog open | 48 | 48 |
+| pad A | on (k1 rule) | CPU x3 | 47 | 47 |
+| pad A | on, `ISAAC_GATE_INPUT=0` | CPU x3 | 47 | 1 |
+| pad A | on (k1 rule) | none (changelog closed) | 48 | 48 |
+| pad A | off | none | 48 | 48 |
+
+"Changelog open": nobody presses C, so Fiend Folio's changelog stays open and
+its text drawing makes the device fall behind (renders 3,000 for 2,760
+updates in the gate-on run: nearly every in-between frame skipped; 1,800 skips
+by 111 s, 24 in-between frames drawn for a press). "CPU x3": C closes the
+changelog first, then the page is throttled three times through CDP
+(`Emulation.setCPUThrottlingRate`) for the presses (renders 1,680 for 1,574
+updates). In the two pad runs under CPU x3 the 48th press came after the
+lab's last report, so 47 of 47. The pad is a page-side stand-in
+(`navigator.getGamepads` answering one standard-mapping pad whose A follows
+the driver), read through the page's own gamepad.mjs and the XInput shim; the
+game adds it as "XInput Controller 1". `lab_trigpad.lua` asks every button
+id 0..31 of controller indices 1..4 and counts a render once when any is
+triggered. Triggered never exceeds presses: nothing is seen twice.
+
+**Fiend Folio's changelog** (`lab_dss.lua`, a fresh browser profile, gate
+on): the menu is open from render 61 ("ff v3.3.2"), C is pressed once at
+render 512 and seen triggered there, and the menu is gone by render 541; F1
+in a second run: seen at render 538, the menu exiting at 541 and gone by 601.
+Screenshots `.scratch/r111/m-on-dssC/shot.png` (open) and `key-1-KeyC.png`
+(closed, the room and "Press [C] to open Dead Sea Scrolls Menu"). The frame
+rate the menu cost: 420 renders in 14.1 s while it was open (29.8 a second),
+480 in 8.0 s after (60).
+
+**The game's own menus** (`lab_pause.lua`: Game():IsPaused() read on every
+render; C first, then Escape 24 times): gate on, CPU x3: 12 openings and 12
+closings, strictly alternating, one per press (and the unpause at the run's
+start); the log shows in-between frames drawn for some of the Escape presses.
+The same with no throttle: 12 and 12. A press seen twice would open and close
+the menu in one press.
+
+#### luabridge's lookup in native code
+
+**Measured** (round 110's profile, `profile_play.mjs` on Fiend Folio with
+StageAPI and the layer, engine h3, 20 s of play): inside Lua entries the
+largest guest function was 0x0085cd40, about 15% of busy time inclusive: the
+`__index` metamethod of every class the game binds (luabridge), run as lifted
+x86 that calls a dozen `imp_lua5_3_3r__lua_*` shims, each through a
+trampoline, `call_guest_cfunction` and `isaac_guest_call`.
+
+**The translation** (`host_lua.c`, section 1c, `lb_index_native`). The body
+(0x0085cd40..0x0085cf30, 191 instructions) is the same sequence of Lua API
+calls made directly on the state, read off the instruction stream branch by
+branch (the comment in the source lists each address):
+
+- `lua_getmetatable(L, 1)` (its result is not tested by the game), then
+  `mt[key]` by rawget; a C function there is the answer (0x0085cd67 ->
+  0x0085ce85: `rotate(-2, -1); settop(-2); return 1`);
+- the loop at 0x0085cd87: a non-nil value that is not a C function throws
+  "not a cfunction" (0x0085ceb0); otherwise `__propget` by rawget, which must
+  be a table ("missing __propget table", 0x0085cef4); a C function at
+  `__propget[key]` is called with the object (`lua_callk(L, 1, 1, 0, 0)`,
+  0x0085cedf) and its one result returned; a non-nil non-function there throws
+  "not a cfunction"; then `__parent`: nil ends the lookup with nil
+  (0x0085ce98 returns the nil on top), a non-table throws "__parent is not a
+  table" (0x0085cf03), a table becomes the class searched next (key by rawget
+  again, 0x0085ce6b; a C function found is returned through 0x0085ce85).
+
+The throws are C++ exceptions (0x0085bf50 builds the exception,
+`_CxxThrowException` 0x00af05eb). Every step before a result is a raw read
+(rawget runs no metamethod; pushstring only interns), so on each way that ends
+in a throw, and when the object has no metatable at all, the native function
+puts the stack back as it came (`settop` to the entry top) and runs the lifted
+function, which throws as the game does. The getter's call is the one thing
+with effects, and it is the same `lua_callk` with the same arguments.
+
+**Where it goes in.** Every guest C function becomes a Lua C function in
+`trampoline_for` (`lua_pushcclosure`, `luaL_requiref`); the one for
+0x0085cd40 is now `lb_index_native` instead of a pool trampoline. It is one
+host address, as the trampoline was, so every closure the game makes of
+0x0085cd40 still compares equal to every other and to nothing else
+(`lua_iscfunction` is true for it, as for the trampoline); the closure's
+upvalues are made by the same `lua_pushcclosure(L, f, n)`, and the function
+reads none (the body has no pseudo-index). The game imports no
+`lua_tocfunction`, so nothing maps a C function back to a guest address. The
+layer's own wrappers of `__index` (probe mode's `wrap_class`, the static
+tables) hold whatever `rawget(c, "__index")` gave them and call it, which
+works the same on either. The fallback needs the guest address, so the
+trampoline call was split into `call_guest_fn(L, fn, slot)`.
+
+`ISAAC_LUA_NATIVE=0` keeps the trampoline (the lifted function, as before);
+`=2` runs both: the native lookup first without calling a getter, then the
+lifted function, whose answer is the one returned, and compares (a getter is
+then called once more natively and its result compared: raw-equal, two NaNs,
+two full userdata with one metatable and the same bytes -- a getter makes a
+new Vector each call -- or two tables). Mismatches are logged (`__index
+MISMATCH #n: key ...`, the first 20) and counted in `__index verify: n lookups
+compared, m mismatch(es); native kinds found a, getter b, nil c, lifted d` at
+1,000, 10,000 and every 200,000.
+
+**Tests.** Host selftest (the same 826 checks): the shim's
+`lua_pushcclosure` of 0x0085cd40 gives the native function and takes no
+trampoline slot; on a luabridge-shaped class (methods in the metatable,
+getters in `__propget`, the base class in `__parent`) a method, a getter
+(called with the object), an inherited method and getter, a missing key and
+a number key are answered natively with one result; five ways go to the
+lifted function (a stand-in here) with the stack as it came: a Lua function
+or a number where a method would be, a base class without `__propget`, a
+`__parent` that is not a table, a getter that is not a C function, and an
+object without a metatable; verify mode compares five lookups (one a value
+userdata that points into itself) with no mismatch, and a differing lifted
+answer is counted and is the one returned. Seven mutants through
+`mutate.mjs`, each killed: the getter handed the key instead of the object,
+a nil `__parent` sent to the lifted function, the non-C-function test after
+the getter dropped, the stack restored one slot high, the `trampoline_for`
+mapping removed, the comparison always "same", and the self-pointer rule of
+the userdata comparison dropped.
+
+**The equivalence over a real session** (k2, `?ISAAC_LUA_NATIVE=2`, Fiend
+Folio + StageAPI + the layer): 2,400,000 lookups compared in 50 s of a run with lab_index.lua, 0 mismatches (found in the class 1,291,603, a getter 1,105,983, nil at the end of the chain 2,414, sent to the lifted function 0); the verify tour below, 5,400,000 compared, 0 mismatches. The first verify run, on k1, reported
+6.7% mismatches, every one of the 20 logged a getter returning a userdata
+(`Position`, `Spawns`): luabridge's value userdata holds a pointer to its own
+storage, so two equal Vectors differ in that word. The comparison was wrong,
+not the lookup; k2's compares such a word by its distance into the block.
+`lab_index.lua` asks, every render for 600 renders: a method of the class
+(`GetName`), a getter (`MaxFireDelay`), a base-class getter through
+`__parent` (`Position`, `Velocity`), a base-class method (`IsDead`), a name no
+class has, a number key, a method the layer added as a C closure
+(`GetActiveMaxCharge`), a Vector's getter, a Room method, and a static
+member; 0 unexpected answers.
+
+**Speed** (`.scratch/r111/prof.sh`: `profile_close.mjs` = `profile_play.mjs`
+pressing C before the window, Fiend Folio + StageAPI + the layer, CPU x1,
+real GPU, 20 s of walking and firing, changelog closed -- checked on each
+run's screenshot; the lifted `__index` (`ISAAC_LUA_NATIVE=0`) and the native
+one alternating on engine k2, 3 runs each; `prof_ab.py` reads the profiles):
+
+| | busy share | `__index` inclusive (ms/frame) | Lua -> guest calls inclusive (`call_guest_fn`, ms/frame) | frames in 20 s |
+|---|---|---|---|---|
+| lifted (`=0`) | 78.0%, 77.2%, 75.3% | 1.01, 0.97, 0.96 | 2.65, 2.63, 2.54 | 1463, 1474, 1507 |
+| native (`=1`) | 75.2%, 72.2%, 75.4% | 0.51, 0.44, 0.53 | 2.07, 1.98, 2.09 | 1454, 1489, 1478 |
+
+`__index` with the getters it calls takes half the time it did, and the time
+under Lua's calls into the game drops by about 0.55 ms a frame. The busy share
+falls by 2.5 points on the means, but the two ranges touch (75.3 and 75.4):
+within this machine's noise. The frame count does not move: the game is
+paced, at about 70 frames a second here either way. No frame-rate gain is
+claimed.
+
+h4 (round 110's engine, the same scene, 3 runs: busy 98.1%, 98.0%, 98.6%,
+26.5 to 28.3 ms a frame) is not a like-for-like "before": its C press was lost
+in all three runs (the round-93 gate, Part 1) and the changelog stayed open
+in every profile (the screenshots), which is exactly what players met. On k2
+the same driver closes it every time; the two fixes together take this scene
+from about 27 ms of work a frame to about 10.
+
+The collector (the per-pass `lua_gc` at 0x008657c0) is a third of busy time
+on k2 with the changelog closed. What the game asks there: LUA_GCCOUNT
+(0x008657d1), the growth since the last pass kept in a ten-pass history at
+[+0x28 + 4i], and a `lua_gc(L, LUA_GCSTEP, n)` every pass (0x008658b0). n is
+[+0x24]: when no pass of the ten shrank the heap and they grew it, n grows by
+a tenth of their sum (at most 10,000) and a 600-pass hold starts; otherwise,
+once the hold is over, n shrinks by a hundredth (at least 10); never below
+50. The collector itself is host C already (Lua 5.3.3);
+making it cheaper means asking it for less, which changes when finalizers
+run: not changed.
+
+**Correctness on k2.** The layer suites (`.scratch/rgon/r110/suites.sh`,
+drive_stress.mjs, the layer packed from this tree): test_hooks4 23 0, test_hooks3 42 0, test_hooks2 49 0, test_layer 49 0, test_layer2 95 0, test_layer3 53 0, test_layer4 49 0, test_gate 7 0 (on k1 test_hooks2 once read 49 2 while another browser ran beside it -- the player walked into a neighbouring room during its 60-frame wait, "3 3 3", a timing check that has failed before in another form; alone on k1 it read 49 0 twice, and on k2 49 0). A Fiend Folio
+tour (`drive_stress.mjs phases=tour`, `?ISAAC_RGON_ALLOW=fiendfolio-reloaded`)
+in the native mode: 0 stops, 0 Lua error lines, 74 callbacks reported as not implemented (as round 110); in verify mode: 0 stops, 0 Lua error lines, 5,400,000 lookups compared, 0 mismatches. `node --test
+tests/recomp-rgon.test.js tests/recomp-host.test.js
+tests/recomp-insn-hooks.test.js`: 50 pass, 0 fail, 5 skipped (the audit
+outputs, as before). `lift_patches.py --check`: 0 TUs to change.
+`check-repo-safety.mjs` passed.
+
+**Not done, and why.**
+
+- The pad's third way to a trigger (the ids 0xcdcd/0xcdce, slot 37
+  0x00a1f930, a record list read through slot 25 0x00a1f0e0) is not read by
+  the gate: what fills that list was not traced. A press of those ids in a
+  skipped frame can still be lost. Every other pad button and axis direction
+  is covered, and the keyboard fully.
+- The pads were tested through a page-side stand-in (`navigator.getGamepads`),
+  not a real controller; the analog sticks and triggers were not pressed in a
+  test (the axis bits are in the selftest only).
+- The gate draws a pass for a press only in a Game (the gate itself does
+  nothing outside one). Its cost, one render per press on a device that is
+  behind, was not measured separately in game speed.
+- Part 2 replaces `__index` only. The class checks 0x0085c590 / 0x0085c3e0
+  (about 5% of busy time; `sub_0085c590` 0.55-0.60 ms a frame on k2) and
+  `__newindex` 0x0085cf30 are still lifted: the checks take ECX/EDX and stack
+  arguments (an LTCG convention) and a replacement must leave ECX, EDX and
+  the flags as every caller expects, which needs a census of what their
+  callers read after the call; `__newindex` calls a setter, so a verify mode
+  cannot run both sides the way `__index`'s does.
+- The collector's per-pass step (a third of busy time) is left as the game
+  asks for it.
+- No frame-rate gain is claimed for Part 2: the busy share moved by about
+  the run-to-run spread. The changelog's close (Part 1) doubled the frame
+  rate while it would otherwise have stayed open (29.8 -> 60 renders a
+  second in the lab_dss run).

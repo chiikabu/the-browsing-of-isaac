@@ -816,6 +816,7 @@ int isaac_editfile_gate(uint32_t menu_va) { (void)menu_va; return 1; }
 static double g_rg_tick_at, g_rg_update, g_rg_resume, g_rg_render, g_rg_draw_at, g_rg_wait, g_rg_due, g_rg_carry;
 static double g_rg_pace_at;
 static uint32_t g_rg_ticks, g_rg_skipped, g_rg_drawn;
+static uint32_t g_rg_kept;      /* round 111: in-between frames drawn because a press was in them */
 static int g_rg_after_tick, g_rg_seen, g_rg_cls, g_rg_pace_pending;
 /* tick intervals by what the pass between them did: 0 no decision, 1 drew, 2 skipped */
 static double g_rg_iv_sum[3], g_rg_iv_max[3];
@@ -823,7 +824,7 @@ static uint32_t g_rg_iv_n[3];
 void isaac_render_gate_reset(void) {
     g_rg_tick_at = g_rg_update = g_rg_resume = g_rg_render = g_rg_draw_at = g_rg_wait = 0.0;
     g_rg_due = g_rg_carry = g_rg_pace_at = 0.0;
-    g_rg_ticks = g_rg_skipped = g_rg_drawn = 0u;
+    g_rg_ticks = g_rg_skipped = g_rg_drawn = g_rg_kept = 0u;
     g_rg_after_tick = g_rg_seen = g_rg_cls = g_rg_pace_pending = 0;
     for (int i = 0; i < 3; ++i) { g_rg_iv_sum[i] = g_rg_iv_max[i] = 0.0; g_rg_iv_n[i] = 0u; }
 }
@@ -882,7 +883,87 @@ uint32_t isaac_render_gate_intervals(int cls, double *mean_ms, double *max_ms) {
     g_rg_iv_n[cls] = 0u; g_rg_iv_sum[cls] = g_rg_iv_max[cls] = 0.0;
     return n;
 }
+/* ---- round 111: an in-between pass that holds a new press is drawn ------
+ * A mod reads its keys in MC_POST_RENDER (Input.IsButtonTriggered,
+ * IsActionTriggered: Dead Sea Scrolls menus, Fiend Folio's changelog). The
+ * devices advance on every pass of main's loop, the in-between one included:
+ * Manager::Update (0x00954cd0) runs its body on an odd frame count when
+ * [Manager+0x2a3c0] is set (0x00954d0f; the game logic itself only on even
+ * counts, 0x009551cf), and that body polls the pads (0x00a6de60, 0x00954f73)
+ * and updates every device (0x00a1fc00, 0x00954f7d). A press that reaches the
+ * game in the in-between pass is "triggered" (current set, previous clear) in
+ * that pass only: the next pass's update makes previous := current. A skipped
+ * render took that one chance from the mods (6 of 24 presses seen with the
+ * gate, 24 of 24 without). So the gate draws an in-between pass that holds a
+ * newly triggered key or button, exactly as with the gate off: no device
+ * state is touched, so no consumer, engine or mod, sees a trigger twice, and
+ * every consumer sees what it sees without the gate. What it costs is one
+ * render per press on a device that is behind.
+ *
+ * "Holds a new trigger" is read off the devices after the pass's update (the
+ * gate is asked at 0x009312f1, after Manager::Update and before the render;
+ * nothing between the two updates a device). The devices are the input
+ * manager's (0x00c57b18) vector at [+8, +0xc) of 8-byte entries, object
+ * first (0x00a20fb0, its slot +0x74: `sar eax, 3`, `mov ecx, [ecx+edx*8]`).
+ * The local device classes are two (RTTI: InputDeviceKeyboard,
+ * InputDeviceGamepad; the third, NetInputDevice, answers its slots 9/10 with
+ * 0x0042cb80):
+ *  - keyboard (vtable 0x00ba1678): IsButtonTriggered (slot 10, 0x00a6c540) is
+ *    key < 0x15d, current [0x00c78c10+key] != 0 and previous [0x00c78950+key]
+ *    == 0 (and the device's flag [+8] & 2); its update (slot 30, 0x00a6c650)
+ *    copies current to previous and the pending keys (0x00c78ab0) to current.
+ *  - gamepad (vtable 0x00b82c80): IsButtonTriggered (slot 10, 0x00a1e640)
+ *    answers true for a button only when its bit is set in the 64-bit set
+ *    [+0x20,+0x24] and clear in [+0x28,+0x2c] (a raw button, slot 35
+ *    0x00a22d20), or set in [+0x30,+0x34] and clear in [+0x38,+0x3c] (an
+ *    axis direction, slot 36 0x00a22d80), after IsButtonPressed (slot 9).
+ *    Its third way, the ids 0xcdcd/0xcdce (slot 37 0x00a1f930, a record
+ *    list read through slot 25), is not covered.
+ * Both are supersets of the trigger (the flag and IsButtonPressed tests are
+ * left out): a pass drawn for nothing costs a render, never a press. */
+int isaac_input_keyboard_edge(const uint8_t *cur, const uint8_t *prev, uint32_t n) {
+    for (uint32_t i = 0; i < n; ++i)
+        if (cur[i] && !prev[i]) return 1;
+    return 0;
+}
+/* w = the gamepad device's words at +0x20, +0x24, +0x28, +0x2c, +0x30, +0x34, +0x38, +0x3c */
+int isaac_input_pad_edge(const uint32_t w[8]) {
+    return ((w[0] & ~w[2]) | (w[1] & ~w[3]) | (w[4] & ~w[6]) | (w[5] & ~w[7])) != 0u;
+}
+#define ISAAC_INPUT_MANAGER_VA   0x00c57b18u
+#define ISAAC_KBD_VTABLE_VA      0x00ba1678u
+#define ISAAC_PAD_VTABLE_VA      0x00b82c80u
+#define ISAAC_KBD_CURRENT_VA     0x00c78c10u
+#define ISAAC_KBD_PREVIOUS_VA    0x00c78950u
+#define ISAAC_KBD_KEYS           0x15du
+/* any local device holding a trigger now: 1 keyboard, 2 gamepad, 0 none */
+int isaac_input_edge_now(void) {
+    uint32_t b = isaac_r32(ISAAC_INPUT_MANAGER_VA + 8u), e = isaac_r32(ISAAC_INPUT_MANAGER_VA + 0xcu);
+    if (!b || e <= b || ((e - b) & 7u) || e - b > 32u * 8u || !isaac_is_guest_va(b) || !isaac_is_guest_va(e - 1u)) return 0;
+    int kbd = 0;
+    for (uint32_t p = b; p < e; p += 8u) {
+        uint32_t obj = isaac_r32(p);
+        if (!obj || !isaac_is_guest_va(obj) || !isaac_is_guest_va(obj + 0x3fu)) continue;
+        uint32_t vt = isaac_r32(obj);
+        if (vt == ISAAC_KBD_VTABLE_VA) kbd = 1;
+        else if (vt == ISAAC_PAD_VTABLE_VA) {
+            uint32_t w[8];
+            for (int i = 0; i < 8; ++i) w[i] = isaac_r32(obj + 0x20u + 4u * (uint32_t)i);
+            if (isaac_input_pad_edge(w)) return 2;
+        }
+    }
+    if (kbd && isaac_input_keyboard_edge((const uint8_t *)isaac_g(ISAAC_KBD_CURRENT_VA),
+                                         (const uint8_t *)isaac_g(ISAAC_KBD_PREVIOUS_VA), ISAAC_KBD_KEYS))
+        return 1;
+    return 0;
+}
+uint32_t isaac_render_gate_kept(void) { return g_rg_kept; }
+int isaac_render_gate_decide_input(double now_ms, int have_game, uint32_t game_ticks, int input_edge);
 int isaac_render_gate_decide(double now_ms, int have_game, uint32_t game_ticks) {
+    return isaac_render_gate_decide_input(now_ms, have_game, game_ticks, 0);
+}
+/* the decision, told whether this pass holds a new press (isaac_input_edge_now) */
+int isaac_render_gate_decide_input(double now_ms, int have_game, uint32_t game_ticks, int input_edge) {
     if (!have_game) { g_rg_after_tick = g_rg_seen = g_rg_pace_pending = 0; g_rg_due = g_rg_carry = 0.0; return 0; }
     if (!g_rg_seen || game_ticks != g_rg_ticks) {
         int first = !g_rg_seen;
@@ -918,6 +999,9 @@ int isaac_render_gate_decide(double now_ms, int have_game, uint32_t game_ticks) 
     if (now_ms - g_rg_tick_at + g_rg_render + g_rg_update < 1000.0 / 30.0) {
         g_rg_draw_at = now_ms; ++g_rg_drawn; g_rg_cls = 1; g_rg_pace_pending = 1; return 0;
     }
+    if (input_edge) {                             /* round 111: a press is in this pass: drawn, and paced like any drawn one */
+        g_rg_draw_at = now_ms; ++g_rg_drawn; ++g_rg_kept; g_rg_cls = 1; g_rg_pace_pending = 1; return 0;
+    }
     g_rg_wait = g_rg_pace_at - now_ms;
     if (g_rg_wait < 0.0) g_rg_wait = 0.0;
     ++g_rg_skipped; g_rg_cls = 2;
@@ -952,12 +1036,24 @@ int isaac_render_gate(void) {
     if (!mode || !isaac_web_yield_enabled()) return 0;
     uint32_t game = isaac_r32(0x00c71678u);
     int have = game && isaac_is_guest_va(game + 0x264fbu);
-    uint32_t before = g_rg_ticks;
-    int skip = isaac_render_gate_decide(emscripten_get_now(), have, have ? isaac_r32(game + 0x264f8u) : 0u);
+    /* round 111: ISAAC_GATE_INPUT=0 skips an in-between frame even when a
+     * press is in it (the round 93..110 rule, for measuring) */
+    static int input_rule = -1;
+    if (input_rule < 0) {
+        const char *e = getenv("ISAAC_GATE_INPUT");
+        input_rule = (e && *e == '0') ? 0 : 1;
+        if (!input_rule) isaac_log("[isaac][frame] ISAAC_GATE_INPUT=0: an in-between frame holding a press may be skipped");
+    }
+    uint32_t before = g_rg_ticks, kept = g_rg_kept;
+    int edge = (have && input_rule) ? isaac_input_edge_now() : 0;
+    int skip = isaac_render_gate_decide_input(emscripten_get_now(), have, have ? isaac_r32(game + 0x264f8u) : 0u, edge);
     if (mode == 3) { skip = 0; g_rg_pace_pending = 0; }   /* measure only: every frame drawn, nothing paced */
     if (skip && (g_rg_skipped == 1u || g_rg_skipped % 1800u == 0u))
-        isaac_log("[isaac][frame] render gate: %u in-between frame(s) skipped, %u drawn (update %.1f ms, render %.1f ms)",
-                  g_rg_skipped, g_rg_drawn, g_rg_update, g_rg_render);
+        isaac_log("[isaac][frame] render gate: %u in-between frame(s) skipped, %u drawn (%u of them for a press; update %.1f ms, render %.1f ms)",
+                  g_rg_skipped, g_rg_drawn, g_rg_kept, g_rg_update, g_rg_render);
+    if (g_rg_kept != kept && (g_rg_kept <= 5u || g_rg_kept % 50u == 0u))
+        isaac_log("[isaac][frame] render gate: in-between frame drawn for a %s press (%u so far, %u skipped)",
+                  edge == 2 ? "gamepad" : "keyboard", g_rg_kept, g_rg_skipped);
     /* ISAAC_RENDER_GATE=2: the tick intervals and the waits, every 150 ticks
      * (=3: the same, measured with every frame drawn and nothing paced) */
     if (mode >= 2 && have && g_rg_ticks != before && g_rg_ticks % 150u == 0u) {

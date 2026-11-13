@@ -48,6 +48,59 @@ void isaac_gl_draw_elements(unsigned mode, int count, unsigned type, uint32_t in
 #endif
 
 #ifdef ISAAC_SELFTEST_HAVE_LUA
+/* Round 111: a luabridge-shaped class for the native __index (host_lua.c). */
+static int selftest_ix_cf(lua_State *L) { (void)L; return 0; }
+static int selftest_ix_getter(lua_State *L) {
+    lua_pushvalue(L, 1);
+    lua_setglobal(L, "__ix_last");
+    lua_pushstring(L, "got");
+    return 1;
+}
+/* a getter that makes a new value userdata the way luabridge does: a pointer
+ * to its own storage first, then the value */
+static int selftest_ix_selfptr(lua_State *L) {
+    unsigned char *u = lua_newuserdata(L, 12);
+    uint32_t self = (uint32_t)(uintptr_t)(u + 4), v = 0x3f800000u;
+    memcpy(u, &self, 4); memcpy(u + 4, &v, 4); memcpy(u + 8, &v, 4);
+    return 1;
+}
+static int selftest_ix_newobj(lua_State *L) {
+    void *u = lua_newuserdata(L, 8);
+    memset(u, 0x5a, 8);
+    lua_pushvalue(L, 1);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+static unsigned g_ix_lifted;
+static int g_ix_top, g_ix_ref_wrong;
+/* the stand-in for the lifted function on the ways the native one leaves */
+static int selftest_ix_lifted(lua_State *L, uint32_t va, unsigned slot) {
+    (void)slot;
+    ++g_ix_lifted;
+    g_ix_top = lua_gettop(L);
+    lua_pushstring(L, va == 0x0085cd40u ? "LIFTED" : "WRONG VA");
+    return 1;
+}
+/* the lifted function's answer for verify mode, by a lookup written in Lua
+ * (absolute indices only: verify calls it with the native find above [2]) */
+static int selftest_ix_reference(lua_State *L, uint32_t va, unsigned slot) {
+    (void)va; (void)slot;
+    if (g_ix_ref_wrong) { lua_pushstring(L, "wrong"); return 1; }
+    if (luaL_dostring(L,
+            "__ix_ref = __ix_ref or function(o, k)\n"
+            "  local c = getmetatable(o)\n"
+            "  while true do\n"
+            "    local v = rawget(c, k) if v ~= nil then return v end\n"
+            "    local pg = rawget(c, '__propget') local g = pg and rawget(pg, k) if g then return g(o) end\n"
+            "    c = rawget(c, '__parent') if c == nil then return nil end\n"
+            "  end\n"
+            "end") != LUA_OK) { lua_pushnil(L); return 1; }
+    lua_getglobal(L, "__ix_ref");
+    lua_pushvalue(L, 1);
+    lua_pushvalue(L, 2);
+    lua_call(L, 2, 1);
+    return 1;
+}
 /* luaL_error raises, so it is called from inside a protected call: a C
  * function that sets up the guest frame the game's require would, and calls
  * the shim. The upvalues are the guest addresses of the format and its two
@@ -189,6 +242,13 @@ double isaac_render_gate_wait_ms(void);
 double isaac_render_gate_carry_ms(void);
 double isaac_render_gate_pace_ms(double now_ms);
 uint32_t isaac_render_gate_intervals(int cls, double *mean_ms, double *max_ms);
+/* Round 111: an in-between pass that holds a new press is drawn */
+int isaac_render_gate_decide_input(double now_ms, int have_game, uint32_t game_ticks, int input_edge);
+uint32_t isaac_render_gate_kept(void);
+uint32_t isaac_render_gate_drawn(void);
+int isaac_input_keyboard_edge(const uint8_t *cur, const uint8_t *prev, uint32_t n);
+int isaac_input_pad_edge(const uint32_t w[8]);
+int isaac_input_edge_now(void);
 /* Round 95: the C++ catch the host carries out (host_shims_eh.c), on tables
  * laid out the way MSVC lays them out, in a scratch corner of the guest. */
 static void eh_str(uint32_t va, const char *s) { for (; *s; ++s, ++va) *(uint8_t *)isaac_g(va) = (uint8_t)*s; *(uint8_t *)isaac_g(va) = 0; }
@@ -710,6 +770,113 @@ static void test_render_gate(void) {
     check(isaac_yield_work_ms(120.0, 0.0, 9.0) == 1e9, "yield: before any present resumed, a pass reads as long");
 }
 
+/* Round 111: the render gate draws an in-between pass that holds a newly
+ * triggered key or pad button (host_shims_win.c isaac_input_edge_now). */
+static void test_input_edges(void) {
+    uint8_t cur[0x15d], prev[0x15d];
+    memset(cur, 0, sizeof cur); memset(prev, 0, sizeof prev);
+    check(!isaac_input_keyboard_edge(cur, prev, 0x15d), "input edge: no key down, no edge");
+    cur[5] = 1; prev[5] = 1;
+    check(!isaac_input_keyboard_edge(cur, prev, 0x15d), "input edge: a key held since the last update is no edge");
+    cur[5] = 0;
+    check(!isaac_input_keyboard_edge(cur, prev, 0x15d), "input edge: a key released is no edge");
+    cur[0x15c] = 1;
+    check(isaac_input_keyboard_edge(cur, prev, 0x15d), "input edge: the last key (0x15c) down now and not before is one");
+    cur[0x15c] = 0; cur[0] = 2;
+    check(isaac_input_keyboard_edge(cur, prev, 0x15d), "input edge: any nonzero current byte over a zero previous one (key 0, value 2)");
+    {
+        uint32_t w[8] = {0};
+        check(!isaac_input_pad_edge(w), "input edge (pad): nothing down");
+        static const char *const what[4] = {
+            "input edge (pad): a raw button 0..31 down now, not before ([+0x20] & ~[+0x28])",
+            "input edge (pad): a raw button 32..63 ([+0x24] & ~[+0x2c])",
+            "input edge (pad): an axis direction 0..31 ([+0x30] & ~[+0x38])",
+            "input edge (pad): an axis direction 32..63 ([+0x34] & ~[+0x3c])" };
+        static const int at[4] = { 0, 1, 4, 5 };
+        for (int k = 0; k < 4; ++k) {
+            memset(w, 0, sizeof w);
+            w[at[k]] = 0x00010000u;
+            int on = isaac_input_pad_edge(w);
+            w[at[k] + 2] = 0x00010000u;                   /* the same bit held since the last update */
+            check(on && !isaac_input_pad_edge(w), what[k]);
+        }
+        memset(w, 0, sizeof w);
+        w[0] = 0x3u; w[2] = 0x1u;
+        check(isaac_input_pad_edge(w), "input edge (pad): one new bit beside one held one");
+        w[2] = 0x7u;
+        check(!isaac_input_pad_edge(w), "input edge (pad): a bit released (previous set, current clear) is no edge");
+    }
+
+    /* the decision: update 5 ms, render 15 ms, so every in-between pass would be skipped */
+    isaac_render_gate_reset();
+    check(isaac_render_gate_decide_input(100.0, 1, 1u, 1) == 0, "render gate (press): first sighting");
+    isaac_render_gate_resumed(100.0);
+    check(isaac_render_gate_decide_input(105.0, 1, 2u, 1) == 0 && isaac_render_gate_kept() == 0u,
+          "render gate (press): a tick's own pass is drawn anyway, and is not counted as kept for a press");
+    isaac_render_gate_presenting(120.0);
+    isaac_render_gate_resumed(121.0);
+    check(isaac_render_gate_decide_input(122.0, 1, 2u, 0) == 1,
+          "render gate (press): an in-between pass with no press is skipped (122 - 105 + 15 + 5 = 37)");
+    isaac_render_gate_resumed(137.0);
+    check(isaac_render_gate_decide_input(142.0, 1, 3u, 0) == 0, "render gate (press): the next tick");
+    isaac_render_gate_presenting(157.0);
+    isaac_render_gate_resumed(158.0);
+    uint32_t drawn = isaac_render_gate_drawn();
+    check(isaac_render_gate_decide_input(159.0, 1, 3u, 1) == 0 && isaac_render_gate_kept() == 1u
+          && isaac_render_gate_drawn() == drawn + 1u && isaac_render_gate_skipped() == 1u,
+          "render gate (press): the same pass holding a press is drawn, counted as drawn and as kept, not as skipped");
+    check(isaac_render_gate_pace_ms(160.0) > 6.66 && isaac_render_gate_pace_ms(160.0) == 0.0,
+          "render gate (press): and its present is paced like any drawn in-between frame (asked once)");
+    check(isaac_render_gate_decide_input(161.0, 1, 3u, 1) == 0 && isaac_render_gate_kept() == 1u,
+          "render gate (press): a later pass before the next tick is drawn anyway and keeps nothing more");
+
+    /* off the devices: the input manager's vector at [0x00c57b18 + 8, + 0xc) */
+    {
+        enum { SAVE = 0x200 };
+        static uint8_t save_mgr[16], save_cur[0x15d], save_prev[0x15d], save_area[SAVE];
+        const uint32_t mgr = 0x00c57b18u, area = ISAAC_STACK_TOP_VA - 0x30000u;
+        const uint32_t vec = area, kbd = area + 0x40u, pad = area + 0x100u;
+        memcpy(save_mgr, isaac_g(mgr), 16);
+        memcpy(save_cur, isaac_g(0x00c78c10u), 0x15d);
+        memcpy(save_prev, isaac_g(0x00c78950u), 0x15d);
+        memcpy(save_area, isaac_g(area), SAVE);
+        memset(isaac_g(area), 0, SAVE);
+        memset(isaac_g(0x00c78c10u), 0, 0x15d);
+        memset(isaac_g(0x00c78950u), 0, 0x15d);
+        isaac_w32(kbd, 0x00ba1678u);
+        isaac_w32(pad, 0x00b82c80u);
+        isaac_w32(vec + 0, kbd); isaac_w32(vec + 8, pad);
+        isaac_w32(mgr + 8, vec); isaac_w32(mgr + 0xc, vec + 16);
+        check(isaac_input_edge_now() == 0, "input edge (devices): a keyboard and a pad, nothing down");
+        *(uint8_t *)isaac_g(0x00c78c10u + 0x2cu) = 1;
+        check(isaac_input_edge_now() == 1, "input edge (devices): a key down now and not before ([0x00c78c10] over [0x00c78950])");
+        *(uint8_t *)isaac_g(0x00c78950u + 0x2cu) = 1;
+        check(isaac_input_edge_now() == 0, "input edge (devices): the same key held");
+        isaac_w32(pad + 0x30u, 0x8u);
+        check(isaac_input_edge_now() == 2, "input edge (devices): a pad axis direction new in [pad+0x30]");
+        isaac_w32(pad + 0x38u, 0x8u);
+        check(isaac_input_edge_now() == 0, "input edge (devices): and held");
+        isaac_w32(pad + 0x24u, 0x1u);
+        isaac_w32(mgr + 0xc, vec + 8);                    /* the pad no longer in the vector */
+        check(isaac_input_edge_now() == 0, "input edge (devices): a device outside [+8, +0xc) is not read");
+        isaac_w32(mgr + 0xc, vec + 16);
+        check(isaac_input_edge_now() == 2, "input edge (devices): back in the vector, its new button is read");
+        isaac_w32(pad, 0x00b78030u);                      /* NetInputDevice's vtable */
+        check(isaac_input_edge_now() == 0, "input edge (devices): another device class is not read as a pad");
+        isaac_w32(kbd, 0x00b78030u);
+        *(uint8_t *)isaac_g(0x00c78950u + 0x2cu) = 0;
+        check(isaac_input_edge_now() == 0, "input edge (devices): the key arrays are read only when a keyboard device is there");
+        isaac_w32(kbd, 0x00ba1678u);
+        check(isaac_input_edge_now() == 1, "input edge (devices): and are read again with the keyboard back");
+        isaac_w32(mgr + 0xc, vec + 12);
+        check(isaac_input_edge_now() == 0, "input edge (devices): a vector whose size is not a multiple of 8 is not read");
+        memcpy(isaac_g(mgr), save_mgr, 16);
+        memcpy(isaac_g(0x00c78c10u), save_cur, 0x15d);
+        memcpy(isaac_g(0x00c78950u), save_prev, 0x15d);
+        memcpy(isaac_g(area), save_area, SAVE);
+    }
+}
+
 /* Round 36: the OpenAL model (host_audio.c) advances on THIS clock in the
  * selftest -- its isaac_audio_clock_ms is weak -- so the retire rules are
  * checked at exact instants; and its backend hooks (weak no-ops in the node
@@ -821,6 +988,7 @@ static int selftest_fs_read_is(uint32_t scratch, const char *path,
 
 int main(int argc, char **argv) {
     test_render_gate();
+    test_input_edges();
     test_thread_naps();
     test_lazy_textures();
     test_lazy_sound();
@@ -3229,6 +3397,106 @@ int main(int argc, char **argv) {
         luaL_dostring(L, "B = nil G = nil NESTVA = nil B = nil setmetatable(_G, nil)");
         lua_settop(L, 0);
         isaac_guest_free(g);
+    }
+
+    /* Round 111: luabridge's __index (0x0085cd40) as a native lua_CFunction
+     * (host_lua.c lb_index_native). A class built the way luabridge builds
+     * one: methods in the metatable, getters in its __propget table, the
+     * base class's metatable in __parent. The lifted function is not in the
+     * selftest, so the ways that end in a throw go to a stand-in here, which
+     * answers "LIFTED" and counts. */
+    {
+        extern lua_CFunction isaac_lua_native_index(void);
+        extern void isaac_lua_native_set_guest(int (*fn)(lua_State *L, uint32_t va, unsigned slot));
+        extern void isaac_lua_native_set_mode(int mode);
+        extern void isaac_lua_native_counts(uint32_t out[6]);
+        lua_CFunction ix = isaac_lua_native_index();
+        uint32_t before = isaac_lua_trampolines_used();
+        LFRAME();
+        LARG(0, isaac_va(L));
+        LARG(1, 0x0085cd40u);
+        LARG(2, 0);
+        imp_lua5_3_3r__lua_pushcclosure(&lc);
+        check(lua_tocfunction(L, -1) == ix && isaac_lua_trampolines_used() == before,
+              "native __index: a closure the game makes of 0x0085cd40 is the native function, and takes no trampoline");
+        lua_settop(L, 0);
+        lua_pushcfunction(L, ix); lua_setglobal(L, "__ix");
+        lua_pushcfunction(L, selftest_ix_cf); lua_setglobal(L, "__ix_cf");
+        lua_pushcfunction(L, selftest_ix_getter); lua_setglobal(L, "__ix_getter");
+        lua_pushcfunction(L, selftest_ix_newobj); lua_setglobal(L, "__ix_newobj");
+        lua_pushcfunction(L, selftest_ix_selfptr); lua_setglobal(L, "__ix_selfptr");
+        isaac_lua_native_set_mode(1);
+        isaac_lua_native_set_guest(selftest_ix_lifted);
+        int ok = luaL_dostring(L,
+            "local base = { BaseMethod = __ix_cf, __propget = { BaseProp = __ix_getter } }\n"
+            "local mt = { Method = __ix_cf, __propget = { Prop = __ix_getter, Self = __ix_selfptr, Lua = function() end }, __parent = base }\n"
+            "mt.__index = __ix\n"
+            "__ix_mt, __ix_base = mt, base\n"
+            "__ix_obj = __ix_newobj(mt)\n") == LUA_OK;
+        check(ok, "native __index: the class is built");
+        g_ix_lifted = 0;
+        ok = luaL_dostring(L,
+            "local o = __ix_obj\n"
+            "assert(o.Method == __ix_cf, 'method')\n"
+            "assert(o.Prop == 'got', 'getter')\n"
+            "assert(__ix_last == o, 'the getter is handed the object')\n"
+            "assert(o.BaseMethod == __ix_cf, 'inherited method')\n"
+            "assert(o.BaseProp == 'got', 'inherited getter')\n"
+            "assert(o.Nothing == nil, 'a key no class in the chain has')\n"
+            "assert(o[7] == nil, 'a number key')\n"
+            "assert(select('#', __ix(o, 'Nothing')) == 1, 'one result')\n") == LUA_OK;
+        if (!ok) printf("      %s\n", lua_tostring(L, -1));
+        check(ok && g_ix_lifted == 0,
+              "native __index: method, getter (called with the object), inherited method and getter, a missing key, all native");
+        lua_settop(L, 0);
+        static const struct { const char *setup, *what; } fall[] = {
+            { "__ix_mt.Odd = function() end", "a Lua function where a method would be (\"not a cfunction\")" },
+            { "__ix_mt.Odd = 5", "a number where a method would be" },
+            { "__ix_base.__propget = nil", "a base class without a __propget table" },
+            { "__ix_base.__parent = 3", "a __parent that is not a table" },
+            { "__ix_mt.__propget.Odd = {}", "a getter that is not a C function" },
+        };
+        for (unsigned i = 0; i < sizeof fall / sizeof fall[0]; ++i) {
+            luaL_dostring(L, "__ix_mt.Odd = nil __ix_mt.__propget.Odd = nil __ix_base.__propget = { BaseProp = __ix_getter } __ix_base.__parent = nil");
+            lua_settop(L, 0);
+            luaL_dostring(L, fall[i].setup);
+            lua_settop(L, 0);
+            g_ix_lifted = 0;
+            ok = luaL_dostring(L, "return __ix_obj.Odd, 'end'") == LUA_OK;
+            char msg[200];
+            snprintf(msg, sizeof msg, "native __index: %s goes to the lifted function, the stack as it came", fall[i].what);
+            check(ok && g_ix_lifted == 1 && g_ix_top == 2 && lua_gettop(L) == 2 && lua_type(L, 1) == LUA_TSTRING
+                  && strcmp(lua_tostring(L, 1), "LIFTED") == 0, msg);
+            lua_settop(L, 0);
+        }
+        luaL_dostring(L, "__ix_mt.Odd = nil __ix_mt.__propget.Odd = nil __ix_base.__propget = { BaseProp = __ix_getter } __ix_base.__parent = nil");
+        lua_settop(L, 0);
+        g_ix_lifted = 0;
+        ok = luaL_dostring(L, "return __ix({}, 'Method')") == LUA_OK;
+        check(ok && g_ix_lifted == 1, "native __index: an object without a metatable goes to the lifted function");
+        lua_settop(L, 0);
+        /* verify mode: the lifted answer is returned, and checked */
+        uint32_t c0[6], c1[6];
+        isaac_lua_native_counts(c0);
+        isaac_lua_native_set_mode(2);
+        isaac_lua_native_set_guest(selftest_ix_reference);
+        ok = luaL_dostring(L, "local o = __ix_obj return o.Method, o.Prop, o.BaseProp, o.Nothing, o.Self") == LUA_OK;
+        isaac_lua_native_counts(c1);
+        check(ok && lua_gettop(L) == 5 && lua_tocfunction(L, 1) == selftest_ix_cf && lua_isstring(L, 2) && lua_isstring(L, 3)
+              && lua_isnil(L, 4) && lua_type(L, 5) == LUA_TUSERDATA && c1[4] - c0[4] == 5u && c1[5] == c0[5],
+              "native __index (verify): five lookups compared (a value userdata pointing into itself among them), no mismatch");
+        lua_settop(L, 0);
+        g_ix_ref_wrong = 1;                              /* a lifted answer that differs */
+        ok = luaL_dostring(L, "return __ix_obj.Prop") == LUA_OK;
+        isaac_lua_native_counts(c1);
+        check(ok && c1[5] == c0[5] + 1u && lua_type(L, -1) == LUA_TSTRING && strcmp(lua_tostring(L, -1), "wrong") == 0,
+              "native __index (verify): a differing lifted answer is counted, and is the one returned");
+        g_ix_ref_wrong = 0;
+        lua_settop(L, 0);
+        isaac_lua_native_set_mode(1);
+        isaac_lua_native_set_guest(NULL);
+        luaL_dostring(L, "__ix, __ix_cf, __ix_getter, __ix_newobj, __ix_selfptr, __ix_mt, __ix_base, __ix_obj, __ix_last, __ix_ref = nil");
+        lua_settop(L, 0);
     }
 
     tl = isaac_lua_trampolines_used();

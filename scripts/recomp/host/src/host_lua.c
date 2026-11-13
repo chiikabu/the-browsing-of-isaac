@@ -192,10 +192,9 @@ static void lua_shim_enter(uintptr_t here, uint32_t esp) {
     g_shim_n = n + 1;
 }
 
-static int call_guest_cfunction(lua_State *L, unsigned slot) {
+static int call_guest_fn(lua_State *L, uint32_t fn, unsigned slot) {
     volatile char anchor = 0;
     const uintptr_t here = (uintptr_t)&anchor;
-    uint32_t fn = g_tramp_va[slot];
     CpuState cpu;
     lua_nest_prune(here);
     memset(&cpu, 0, sizeof cpu);
@@ -222,6 +221,9 @@ static int call_guest_cfunction(lua_State *L, unsigned slot) {
     isaac_guest_call(fn, &cpu);
     g_call_n = d;                         /* isaac_guest_call put the state back itself */
     return (int)cpu.EAX;                  /* number of results */
+}
+static int call_guest_cfunction(lua_State *L, unsigned slot) {
+    return call_guest_fn(L, g_tramp_va[slot], slot);
 }
 
 /* Round 102: the same two things for host code that is not a trampoline
@@ -794,10 +796,199 @@ static const lua_CFunction g_tramp[LUA_TRAMPOLINES] = {
     TREF(2040), TREF(2041), TREF(2042), TREF(2043), TREF(2044), TREF(2045), TREF(2046), TREF(2047),
 };
 
+/* ---- 1c. round 111: luabridge's __index, native --------------------------
+ *
+ * 0x0085cd40 is the __index metamethod of every class the game binds
+ * (luabridge's instance lookup). With Fiend Folio loaded it was about 15% of
+ * the game's busy time inclusive, each `entity.Position` or `player:Method`
+ * a dozen Lua shims called from lifted code. Here it is the same sequence of
+ * Lua API calls made directly, translated from the instruction stream
+ * (indices as the code has them; [1] the object, [2] the key):
+ *
+ *   0x0085cd4c  lua_getmetatable(L, 1)          (the result is not tested)
+ *   0x0085cd55  pushvalue(2); rawget(-2)        mt[key]
+ *   0x0085cd67  iscfunction(-1) -> 0x0085ce85: rotate(-2, -1); settop(-2); return 1
+ *   loop 0x0085cd87:
+ *     lua_type(-1) != nil                       -> 0x0085ceb0 "not a cfunction" (C++ throw)
+ *     settop(-2); t = absindex(-1); pushstring "__propget"; rawget(t)
+ *     lua_type(-1) != table (5)                 -> 0x0085cef4 "missing __propget table"
+ *     pushvalue(2); rawget(-2); rotate(-2, -1); settop(-2)
+ *     iscfunction(-1) -> 0x0085cebf: rotate(-2, -1); settop(-2); pushvalue(1);
+ *                        lua_callk(L, 1, 1, 0, 0); return 1
+ *     lua_type(-1) != nil                       -> "not a cfunction"
+ *     settop(-2); t = absindex(-1); pushstring "__parent"; rawget(t)
+ *     lua_type(-1) != table: nil -> 0x0085ce98 return 1 (the nil);
+ *                            else -> 0x0085cf03 "__parent is not a table"
+ *     rotate(-2, -1); settop(-2); pushvalue(2); rawget(-2)
+ *     iscfunction(-1) -> 0x0085ce85 (as above); else back to the loop
+ *
+ * Everything up to a result is a raw read (rawget runs no metamethod,
+ * pushstring only interns), so on the ways that end in a throw -- and when
+ * [1] has no metatable, where the guest goes on with a stack it did not
+ * expect -- the stack is put back as it came and the lifted function runs
+ * instead: errors stay the game's own. The getter call is the one thing
+ * with effects, and it is the same lua_callk the guest makes.
+ *
+ * ISAAC_LUA_NATIVE=0 keeps the trampoline (the lifted function); =2 runs the
+ * lifted function for the result and checks the native lookup against it
+ * (a getter is then called twice, once by each). */
+#define ISAAC_LB_INDEX_VA 0x0085cd40u
+enum { IX_DIRECT = 0, IX_GETTER = 1, IX_NIL = 2, IX_GUEST = 3 };
+static int g_native_mode = -1;
+static int lua_native_mode(void) {
+    int v = g_native_mode;
+    if (v < 0) {
+        const char *e = getenv("ISAAC_LUA_NATIVE");
+        v = (e && *e >= '0' && *e <= '2') ? *e - '0' : 1;
+        isaac_log("[isaac][lua] round 111: luabridge __index (0x%08x) %s", ISAAC_LB_INDEX_VA,
+                  v == 0 ? "runs as lifted code (ISAAC_LUA_NATIVE=0)" :
+                  v == 1 ? "runs natively" : "runs as lifted code and natively, compared (ISAAC_LUA_NATIVE=2)");
+        g_native_mode = v;
+    }
+    return v;
+}
+/* The lookup without the getter's call: leaves one value above top0 (the
+ * function found, the getter, or the nil that ends the chain) and says which;
+ * IX_GUEST leaves the stack at top0. */
+static int lb_index_resolve(lua_State *L, int top0) {
+    if (!lua_getmetatable(L, 1)) return IX_GUEST;
+    lua_pushvalue(L, 2);
+    lua_rawget(L, -2);
+    for (;;) {
+        if (lua_iscfunction(L, -1)) {
+            lua_rotate(L, -2, -1);
+            lua_settop(L, -2);
+            return IX_DIRECT;
+        }
+        if (lua_type(L, -1) != LUA_TNIL) break;                /* "not a cfunction" */
+        lua_settop(L, -2);
+        int t = lua_absindex(L, -1);
+        lua_pushstring(L, "__propget");
+        lua_rawget(L, t);
+        if (lua_type(L, -1) != LUA_TTABLE) break;              /* "missing __propget table" */
+        lua_pushvalue(L, 2);
+        lua_rawget(L, -2);
+        lua_rotate(L, -2, -1);
+        lua_settop(L, -2);
+        if (lua_iscfunction(L, -1)) {
+            lua_rotate(L, -2, -1);
+            lua_settop(L, -2);
+            return IX_GETTER;
+        }
+        if (lua_type(L, -1) != LUA_TNIL) break;                /* "not a cfunction" */
+        lua_settop(L, -2);
+        t = lua_absindex(L, -1);
+        lua_pushstring(L, "__parent");
+        lua_rawget(L, t);
+        int ty = lua_type(L, -1);
+        if (ty != LUA_TTABLE) {
+            if (ty != LUA_TNIL) break;                         /* "__parent is not a table" */
+            lua_rotate(L, -2, -1);                             /* the nil, alone above top0 */
+            lua_settop(L, -2);
+            return IX_NIL;
+        }
+        lua_rotate(L, -2, -1);
+        lua_settop(L, -2);
+        lua_pushvalue(L, 2);
+        lua_rawget(L, -2);
+    }
+    lua_settop(L, top0);
+    return IX_GUEST;
+}
+/* the lifted function, for the ways the native one does not take (the
+ * selftest, which has no lifted code, puts its own here) */
+static int (*g_lb_guest)(lua_State *L, uint32_t fn, unsigned slot) = call_guest_fn;
+static uint32_t g_ix_n[4], g_ix_checked, g_ix_bad;
+/* two results the same: raw-equal, or two NaNs, or two userdata with one
+ * metatable and the same bytes (a getter makes a new Vector each call), or
+ * two tables (a getter that makes a new table) */
+static int lb_same(lua_State *L, int a, int b) {
+    if (lua_rawequal(L, a, b)) return 1;
+    int ta = lua_type(L, a), tb = lua_type(L, b);
+    if (ta != tb) return 0;
+    if (ta == LUA_TNUMBER) { lua_Number x = lua_tonumber(L, a), y = lua_tonumber(L, b); return x != x && y != y; }
+    if (ta == LUA_TTABLE) return 1;
+    if (ta == LUA_TUSERDATA) {
+        /* luabridge's value userdata (a Vector a getter returns) keeps a
+         * pointer to its own storage inside the block: a word that differs
+         * is the same if it points the same distance into each block */
+        size_t n = lua_rawlen(L, a), i = 0;
+        if (n != lua_rawlen(L, b)) return 0;
+        const unsigned char *pa = lua_touserdata(L, a), *pb = lua_touserdata(L, b);
+        for (; i + 4u <= n; i += 4u) {
+            uint32_t wa, wb;
+            memcpy(&wa, pa + i, 4); memcpy(&wb, pb + i, 4);
+            if (wa == wb) continue;
+            uint32_t ra = wa - (uint32_t)(uintptr_t)pa, rb = wb - (uint32_t)(uintptr_t)pb;
+            if (ra != rb || ra >= n) return 0;
+        }
+        if (memcmp(pa + i, pb + i, n - i)) return 0;
+        int ma = lua_getmetatable(L, a), mb = lua_getmetatable(L, b);
+        int same = ma == mb && (!ma || lua_rawequal(L, -1, -2));
+        lua_settop(L, -1 - ma - mb);
+        return same;
+    }
+    return 0;
+}
+static int lb_index_native(lua_State *L) {
+    const int top0 = lua_gettop(L);
+    const int mode = lua_native_mode();
+    if (mode == 0) return g_lb_guest(L, ISAAC_LB_INDEX_VA, 0);
+    const int kind = lb_index_resolve(L, top0);
+    ++g_ix_n[kind];
+    if (mode == 1) {
+        if (kind == IX_GUEST) return g_lb_guest(L, ISAAC_LB_INDEX_VA, 0);
+        if (kind == IX_GETTER) {
+            lua_pushvalue(L, 1);
+            lua_callk(L, 1, 1, 0, NULL);
+        }
+        return 1;
+    }
+    /* verify: the lifted function's answer is the one returned */
+    if (kind == IX_GUEST) return g_lb_guest(L, ISAAC_LB_INDEX_VA, 0);
+    const int found = top0 + 1;
+    int nres = g_lb_guest(L, ISAAC_LB_INDEX_VA, 0);
+    const int res = lua_gettop(L);
+    int ok = nres == 1 && res > found;
+    if (ok && kind == IX_GETTER) {
+        lua_pushvalue(L, found);
+        lua_pushvalue(L, 1);
+        lua_callk(L, 1, 1, 0, NULL);
+        ok = lb_same(L, -1, res);
+        lua_settop(L, -2);
+    } else if (ok) {
+        ok = lb_same(L, found, res);
+    }
+    ++g_ix_checked;
+    if (!ok) {
+        ++g_ix_bad;
+        if (g_ix_bad <= 20u)
+            isaac_log("[isaac][lua] __index MISMATCH #%u: key %s (%s) on a %s: native %s %s, lifted %d result(s) %s",
+                      g_ix_bad, lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "?", luaL_typename(L, 2),
+                      luaL_typename(L, 1), kind == IX_DIRECT ? "found" : kind == IX_GETTER ? "getter" : "nil",
+                      luaL_typename(L, found), nres, res > found ? luaL_typename(L, res) : "-");
+    }
+    if (g_ix_checked == 1000u || g_ix_checked == 10000u || g_ix_checked % 200000u == 0u)
+        isaac_log("[isaac][lua] __index verify: %u lookups compared, %u mismatch(es); native kinds found %u, getter %u, nil %u, lifted %u",
+                  g_ix_checked, g_ix_bad, g_ix_n[IX_DIRECT], g_ix_n[IX_GETTER], g_ix_n[IX_NIL], g_ix_n[IX_GUEST]);
+    return nres;
+}
+/* the selftest's handles */
+lua_CFunction isaac_lua_native_index(void) { return lb_index_native; }
+void isaac_lua_native_set_mode(int mode) { g_native_mode = mode; }
+void isaac_lua_native_set_guest(int (*fn)(lua_State *L, uint32_t va, unsigned slot)) { g_lb_guest = fn ? fn : call_guest_fn; }
+void isaac_lua_native_counts(uint32_t out[6]) {
+    for (int i = 0; i < 4; ++i) out[i] = g_ix_n[i];
+    out[4] = g_ix_checked; out[5] = g_ix_bad;
+}
+
 /* Distinct guest functions are deduplicated, so a game registering the same
- * method repeatedly does not exhaust the pool. */
+ * method repeatedly does not exhaust the pool. Round 111: luabridge's
+ * __index is the native function above (one host address, as the
+ * trampoline was; its upvalues, if any, are the closure's as before). */
 static lua_CFunction trampoline_for(uint32_t guest_va) {
     if (!guest_va) return NULL;
+    if (guest_va == ISAAC_LB_INDEX_VA) return lb_index_native;
     for (unsigned i = 0; i < g_tramp_n; ++i)
         if (g_tramp_va[i] == guest_va) return g_tramp[i];
     if (g_tramp_n >= LUA_TRAMPOLINES) {
