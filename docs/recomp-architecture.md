@@ -11539,3 +11539,100 @@ test_hooks4 23 0, test_hooks3 42 0, test_hooks2 49 0, test_layer 49 0, test_laye
 (the heap over an hour of play). The mark that 1e leaves out is Lua-internal
 state reached through Lua's own headers: a different Lua version needs that
 function read again.
+
+### 21.144 Round 115: a callback list walked through an index
+
+Layer only (`api_callbacks.lua`), tests (`test_cb.lua`, a new suite), lab
+scripts (`lab_cbsize.lua`). No engine change: it ships as the layer mod.
+
+**What was measured.** With rounds 113 and 114 in, a 60-enemy fight with
+Fiend Folio was still short of full speed (28.3, 28.6 and 25.8 game steps a
+second), and 57% of its busy time was Lua's interpreter. `lab_prof.lua`
+(milliseconds per callback, around the layer's runner) put the per-entity
+callbacks on top: MC_NPC_UPDATE 66 microseconds a call, MC_POST_PROJECTILE_UPDATE
+79, MC_POST_EFFECT_UPDATE 42, each fired tens of thousands of times a
+minute. `lab_cbsize.lua` says why: Fiend Folio has 250 functions on
+MC_NPC_UPDATE of which 6 run for every entity and the rest are for one
+entity type each (157 types); MC_POST_EFFECT_UPDATE 252 and 1;
+MC_POST_ENTITY_REMOVE 390 and 8; 56 lists have 20 functions or more. The
+runner (the layer's, as REPENTOGON replaces the game's `_RunCallback`; the
+game's own is the same loop) asked the list's rule of every entry at every
+firing: a Lua call per entry, 250 of them to find the 6.
+
+A stronger build of Lua itself was tried first and measured: the library at
+`-O3 -flto` in place of `-O2` (`.scratch/r115/lua_variant.py`, engine
+`n4lto`), the same fight, three alternating pairs against engine n3: 36.1,
+36.3, 38.7 ms of CPU a step against 35.9, 35.9, 40.9. No difference; not
+kept. (Do not re-open without a new idea: the interpreter's time is the
+mod's table lookups, `luaH_get` and `luaV_execute`.)
+
+**The change.** For a firing with a plain parameter (a string, or a number
+other than -1 and NaN) and no second parameter, on a list whose metatable is
+main.lua's own (`defaultCallbackMeta`, the one metatable every list gets,
+with the rule `not a or not b or a == -1 or b == -1 or a == b`), the entries
+that rule accepts -- no parameter, -1, or that parameter -- are found once,
+with their places, in list order, and kept per list and parameter. A firing
+then walks those. What is handed out, and in what order, is the plain walk's:
+
+- A kept index is dropped when the list changes: `Isaac.AddPriorityCallback`,
+  `Isaac.RemoveCallback` and `_UnloadMod` are wrapped, the lists' metatable
+  gets a `__newindex` (an entry put at a new place by anything:
+  `table.insert`'s last store, `list[#list + 1] = e`), and the list's length
+  is compared at every firing.
+- Every entry is checked to be the one still at its place before it is
+  handed out. If it is not, or the list changed since the walk began (a
+  function removed itself, added another), the walk goes on plainly from the
+  entry after the last one handed out: exactly what the plain walk, reading
+  the live list with a rising index, does.
+- What cannot be seen is an entry stored over another by hand at a place the
+  index does not look at, or an entry's `Param` changed in place. Every 256th
+  use of an index it is found again from the list, and a difference drops
+  every index and is logged once. So such an edit is seen within 256 firings
+  of that parameter, not at once: the one known difference from the plain
+  walk.
+
+No parameter, -1, two parameters (`RunCallbackWithTwoParams`), and a list
+with a rule of its own are walked plainly as before.
+`?ISAAC_RGON_CBINDEX=0` walks everything plainly.
+
+**Measured** (`.scratch/r114/pace_ab.sh` on engine n3, Fiend Folio, CPU x1,
+20 s, the plain walk and the index alternating):
+
+| | game steps a second | frames handed over a second | CPU a step |
+|---|---|---|---|
+| 60 enemies, firing: plain walk | 28.3, 28.6, 25.8 | 28.3, 28.6, 25.8 | 35.1, 34.8, 38.7 ms |
+| 60 enemies, firing: index | 29.7, 29.9, 29.4 | 34.8, 38.1, 32.9 | 33.5, 33.4, 33.6 ms |
+| first room, standing: plain walk | 30.1 | 60.2 | 14.1 ms |
+| first room, standing: index | 30.2 | 60.3 | 14.6 ms |
+
+The fight reaches the game's 30 steps a second and begins to draw in-between
+frames again (the CPU a step is no lower by as much as the walk saved,
+because those frames are drawn with it). The idle room has few entities and
+does not change. From the start of this series of rounds the same fight went
+from 24.8 and 25.9 steps a second to 29.4 to 29.9.
+
+**Correctness.** `test_cb.lua` (drive_stress.mjs, 28 checks): the fixed
+cases (order with priorities, each kind of parameter, 2.0 and 2, an entry
+added and removed through the game's functions and by hand, a function that
+removes itself, one that adds another, two parameters, an entry stored over
+another by hand, the audit), the counters that say the index was used, and a
+differential: 120 random lists whose functions remove themselves, remove
+others, add others and swap one for another while being walked, and 40 lists
+of 100 to 300 functions, each built twice, one fired through the layer and
+one walked by a reference written in the test from main.lua's loop, compared
+entry by entry (11,530 log entries, 1,375 firings through an index, 222
+walks that left theirs mid-walk). The same suite with the index off fails
+only the checks that say the index is used. 13 mutants through
+`mutate.mjs`, the command packing the mutated layer and running the suite in
+a browser (`.scratch/r115/mutants.sh`): 10 killed (a -1 or a missing
+parameter left out of an index, the place check, the walk's change check,
+the plain walk restarted from the top, -1 and two parameters sent through an
+index, the `__newindex`, the audit, the drop on a changed place); 3 survive
+and are each a second guard for what another already catches: the length
+comparison (the place check sees a shorter list), and the wrappers of
+`AddPriorityCallback` (the `__newindex` sees the new place) and
+`RemoveCallback` (the place check sees the shift). They are kept.
+
+**Not done.** The closure the walk allocates per firing, and the `pcall`
+around every function, are as before. A mod's own callback runners (Fiend
+Folio has one, `callbacks/dynamic.lua`) are the mod's.

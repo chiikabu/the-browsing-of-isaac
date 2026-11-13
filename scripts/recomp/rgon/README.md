@@ -28,7 +28,7 @@ The parts, in the order `rgon.lua` loads them:
 | File | What is in it |
 | --- | --- |
 | `rgon.lua` | The helpers every part uses, the first hooks (items, trinkets, pickups, HUD, sound, music), sprite layers, the gate. |
-| `api_callbacks.lua` | How the layer's callbacks are run (REPENTOGON's rules: additive values, stop on false, an error in one function does not stop the rest), and the watch on the engine's own runner. |
+| `api_callbacks.lua` | How the layer's callbacks are run (REPENTOGON's rules: additive values, stop on false, an error in one function does not stop the rest), the watch on the engine's own runner, and (round 115) the index a list is walked through: the functions for one parameter are found once, not at every firing. |
 | `api_lua.lua` | Colours, `WeightedOutcomePicker`, null-item lookup, sprite render flags. |
 | `api_data.lua` | `XMLData`, a mod's achievements (and, round 112, what they lock in the game's own content), the layer's save file, `PersistentGameData`, `EntityConfig`, lookups by name, item custom tags, card availability. |
 | `api_objects.lua` | Entity fields (status countdowns and the like), `EntitySlot`. |

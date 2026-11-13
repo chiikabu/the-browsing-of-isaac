@@ -27,10 +27,130 @@ end
 
 -- Isaac.GetCallbackIterator(id, param): the functions that would run, in order,
 -- as a function that returns the next entry (nil at the end).
+--
+-- Round 115: a list is walked through an index when it can be. A big mod puts
+-- hundreds of functions on one callback, nearly all for one parameter each
+-- (Fiend Folio: 250 on MC_NPC_UPDATE, 6 of them for every entity), and the
+-- walk asked the list's rule of every entry at every firing: 40 to 80
+-- microseconds per entity per callback, most of a fight's Lua time. For a
+-- firing with a plain parameter on a list with the game's own rule, the
+-- entries that rule accepts (no parameter, -1, or that parameter) are found
+-- once, in list order, and kept until the list changes. What is handed out and
+-- in what order is the plain walk's: every entry is checked to be the one
+-- still at its place, and when a function changes the list under the walk
+-- (removes itself, adds another) the walk goes on plainly from the entry
+-- after the last one handed out, as it always did.
+local DEFAULT_META = getmetatable(GetCallbacks(ModCallbacks.MC_POST_UPDATE, true))   -- main.lua's one metatable for its lists
+local DEFAULT_MATCH = DEFAULT_META and rawget(DEFAULT_META, "__matchParams")
+local epoch = 0                       -- any list changed: every index is stale
+local index = setmetatable({}, { __mode = "k" })     -- list -> { epoch, n, pos = { [param] = places }, ent = { [param] = entries } }
+local indexing = B.env("ISAAC_RGON_CBINDEX") ~= "0" and DEFAULT_MATCH ~= nil
+-- firings walked through an index, firings walked plainly, indexes built,
+-- walks that left their index because the list changed under them, and
+-- indexes an audit found stale (the layer's own tests read this)
+local stats = { built = 0, fast = 0, plain = 0, left = 0, healed = 0, on = indexing }
+T.callback_index_stats = stats
+R.Extras.Misc.CallbackIndex = stats
+do
+  -- the ways a list changes: main.lua's three functions, and an entry put at a
+  -- new place by anything else (table.insert's last store, list[#list + 1] = e)
+  local add, remove = Isaac.AddPriorityCallback, Isaac.RemoveCallback
+  rawset(Isaac, "AddPriorityCallback", function(...) epoch = epoch + 1 return add(...) end)
+  rawset(Isaac, "RemoveCallback", function(...) epoch = epoch + 1 return remove(...) end)
+  local unload = rawget(_G, "_UnloadMod")
+  if type(unload) == "function" then
+    rawset(_G, "_UnloadMod", function(...) epoch = epoch + 1 return unload(...) end)
+  end
+  if DEFAULT_META and rawget(DEFAULT_META, "__newindex") == nil then
+    local rawset = rawset
+    DEFAULT_META.__newindex = function(t, k, v) epoch = epoch + 1 rawset(t, k, v) end
+  end
+end
+-- What a list's change cannot be seen from: an entry stored over another by
+-- hand (list[i] = e), or an entry's Param changed in place. Neither changes
+-- the list's length or puts anything at a new place. So every AUDIT-th use of
+-- an index it is found again from the list, and if it is not what was kept,
+-- every index is dropped (and the layer says so once: it means a mod edits a
+-- callback list in place, and for up to AUDIT firings its edit was not seen).
+local AUDIT = 256
+local function find(list, n, param)
+  local pos, ent, k = {}, {}, 0
+  for i = 1, n do
+    local cb = list[i]
+    local p = cb.Param
+    if not p or p == -1 or p == param then k = k + 1 pos[k] = i ent[k] = cb end
+  end
+  return pos, ent, k
+end
+local said_healed = false
+local function places(list, param)
+  local n = #list
+  local ix = index[list]
+  if not ix or ix.epoch ~= epoch or ix.n ~= n then
+    ix = { epoch = epoch, n = n, pos = {}, ent = {}, uses = {} }
+    index[list] = ix
+  end
+  local pos = ix.pos[param]
+  if not pos then
+    pos, ix.ent[param] = find(list, n, param)
+    ix.pos[param], ix.uses[param] = pos, 0
+    stats.built = stats.built + 1
+    return pos, ix.ent[param]
+  end
+  local uses = ix.uses[param] + 1
+  ix.uses[param] = uses
+  if uses % AUDIT == 0 then
+    local ent = ix.ent[param]
+    local pos2, ent2, k = find(list, n, param)
+    local same = k == #pos
+    for j = 1, same and k or 0 do
+      if pos2[j] ~= pos[j] or ent2[j] ~= ent[j] then same = false break end
+    end
+    if not same then
+      stats.healed = stats.healed + 1
+      if not said_healed then
+        said_healed = true
+        B.log("api_callbacks: a callback list was changed in place (no entry added or removed); its index is found again")
+      end
+      epoch = epoch + 1
+      return places(list, param)
+    end
+  end
+  return pos, ix.ent[param]
+end
+
 local function iterator(id, param, param2)
   local list, i = GetCallbacks(id), 0
   local mt = getmetatable(list)                       -- a list may bring its own rule (the game's runner asks the same)
   local match = mt and mt.__matchParams or matches
+  local tp = type(param)
+  if indexing and param2 == nil and mt == DEFAULT_META and match == DEFAULT_MATCH and param ~= -1
+     and (tp == "string" or (tp == "number" and param == param)) then
+    local pos, ent = places(list, param)
+    local at_epoch, j, fast = epoch, 0, true
+    stats.fast = stats.fast + 1
+    return function()
+      if fast then
+        if epoch == at_epoch then
+          j = j + 1
+          local at = pos[j]
+          if at == nil then return nil end
+          local cb = list[at]
+          if cb == ent[j] then i = at return cb end
+          epoch = epoch + 1                           -- a kept place holds another entry: the list was changed by hand
+        end
+        fast = false                                  -- the list changed under the walk: plainly from here on
+        stats.left = stats.left + 1
+      end
+      while true do
+        i = i + 1
+        local cb = list[i]
+        if cb == nil then return nil end
+        if match(param, cb.Param) then return cb end
+      end
+    end
+  end
+  stats.plain = stats.plain + 1
   return function()
     while true do
       i = i + 1
