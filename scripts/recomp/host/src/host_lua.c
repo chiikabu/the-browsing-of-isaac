@@ -1385,6 +1385,156 @@ LUA_SHIM(lua_callk) {
 LUA_SHIM(lua_pcallk) {
     cpu->EAX = (uint32_t)lua_pcallk(L_ARG(0), I_ARG(1), I_ARG(2), I_ARG(3), 0, NULL);
 }
+/* ---- 1f. round 121: luabridge's class check (0x0085c590), natively -------
+ *
+ * Every bound method and property the game gives Lua starts by asking
+ * 0x0085c590 whether the value at a stack index is an object of the class
+ * it was written for (937 call sites). ECX = L, EDX = the index, [esp+4] the
+ * class's registry key, [esp+8] a byte "may be a const object"; EAX = the
+ * userdata's block, plain ret. The body, from its instructions:
+ *
+ *   rawgetp(REGISTRY, key)                           the class's table
+ *   isuserdata(index) == 0                           -> the error below
+ *   getmetatable(index); rawgetp(-1, 0x00c7f4b8)
+ *   type(-1) != boolean                              -> the error below
+ *   settop(-2)
+ *   rawget(metatable, "__const"); is_const = (its type is nil); settop(-2)
+ *   is_const: the class's table is replaced by its "__const" table
+ *   loop: rawequal(metatable, class)
+ *           yes: settop(-3); is_const and not "may be const"
+ *                -> luaL_argerror("cannot be const"); else
+ *                EAX = touserdata(index)
+ *           no:  rawget(metatable, "__parent"): nil -> the error below;
+ *                else it takes the metatable's place, and again
+ *   error: luaL_argerror("<__type of the class> expected, got <...>")
+ *
+ * In a Fiend Folio fight the lifted function and the Lua calls under it are
+ * 10% of the busy time (perf-run-ff.mjs on engine n8, inclusive): some
+ * twenty calls of the Lua API through the import shims for every method a
+ * mod calls. Here the way to "yes" is walked with the same raw reads on the
+ * host's side, the stack is put back as it came, and the answer is given
+ * only when it is yes and nothing is raised; every other way (not a
+ * userdata, no metatable, not a class of luabridge's, another class, a const
+ * object where none may be, an index that is not a plain positive one) the
+ * stack is put back and the lifted function runs, so the errors stay the
+ * game's own. ISAAC_LUA_NATIVE=0 keeps the lifted function; =2 runs it for
+ * the result and compares the native answer with it (a lifted run that is
+ * unwound by a Lua error before it returns is counted apart). */
+#define ISAAC_LB_GETCLASS_VA 0x0085c590u
+static uint32_t g_gcl_native, g_gcl_guest, g_gcl_mismatch, g_gcl_unreturned;
+/* mode 2: the calls whose lifted run is awaited, innermost last (a class
+ * check can run inside another's lifted body: its Lua calls may step the
+ * collector, and a finalizer is guest code). A call is known by the stack
+ * pointer it was entered with. */
+#define GCL_NEST 32u
+static struct { uint32_t esp, expect, ret; } g_gcl_wait[GCL_NEST];
+static unsigned g_gcl_depth;
+/* the awaited calls entered at or below `esp` did not return: they were
+ * unwound (a Lua error went through them) */
+static void gcl_unwound(uint32_t esp, int inclusive) {
+    while (g_gcl_depth && (g_gcl_wait[g_gcl_depth - 1u].esp < esp || (inclusive && g_gcl_wait[g_gcl_depth - 1u].esp == esp))) {
+        --g_gcl_depth;
+        if (++g_gcl_unreturned <= 5u)
+            isaac_log("[isaac][lua] class check: the lifted function called from 0x%08x did not return where the native way said yes (0x%08x); #%u",
+                      g_gcl_wait[g_gcl_depth].ret, g_gcl_wait[g_gcl_depth].expect, g_gcl_unreturned);
+    }
+}
+/* 1 and the userdata's guest address if the value at `index` is an object of
+ * the class of `key` (or of one derived from it) and may be handed out; 0
+ * for everything else. The stack is left as it came. */
+int isaac_lua_getclass_native(lua_State *L, int index, uint32_t key, int may_be_const, uint32_t *ud) {
+    if (index <= 0 || !isaac_is_guest_va(key)) return 0;
+    const int top0 = lua_gettop(L);
+    if (index > top0 || !lua_isuserdata(L, index) || !lua_checkstack(L, 6)) return 0;
+    lua_rawgetp(L, LUA_REGISTRYINDEX, isaac_g(key));
+    int ok = 0;
+    if (lua_istable(L, -1) && lua_getmetatable(L, index)) {
+        lua_rawgetp(L, -1, isaac_g(ISAAC_LB_CLASSFLAG_VA));
+        if (lua_type(L, -1) == LUA_TBOOLEAN) {
+            lua_pop(L, 1);
+            lua_pushstring(L, "__const");
+            lua_rawget(L, -2);
+            const int is_const = lua_type(L, -1) == LUA_TNIL;
+            lua_pop(L, 1);
+            if (is_const) {                          /* compared with the class's const table */
+                lua_pushstring(L, "__const");
+                lua_rawget(L, -3);
+                lua_replace(L, -3);
+            }
+            if (!is_const || may_be_const) {
+                for (unsigned depth = 0; depth < 64u; ++depth) {
+                    if (lua_rawequal(L, -1, -2)) { ok = 1; break; }
+                    if (!lua_istable(L, -1)) break;
+                    lua_pushstring(L, "__parent");
+                    lua_rawget(L, -2);
+                    if (lua_type(L, -1) == LUA_TNIL) break;
+                    lua_remove(L, -2);
+                }
+            }
+        }
+    }
+    lua_settop(L, top0);
+    if (!ok) return 0;
+    *ud = isaac_va(lua_touserdata(L, index));
+    return 1;
+}
+/* the selftest's look at the records while the check runs */
+static void (*g_gcl_probe)(void);
+void isaac_lua_getclass_set_probe(void (*fn)(void)) { g_gcl_probe = fn; }
+/* answered natively (mode 2: compared), left to the lifted function, answers that differed, lifted runs that did not return */
+void isaac_lua_getclass_counts(uint32_t out[4]) { out[0] = g_gcl_native; out[1] = g_gcl_guest; out[2] = g_gcl_mismatch; out[3] = g_gcl_unreturned; }
+/* The wrapper of 0x0085c590 (lift_patches.py) asks here first. 1 = answered:
+ * EAX and the ret are made. 0 = the lifted function runs. 2 = the lifted
+ * function runs and isaac_lua_getclass_verify is called after it (mode 2). */
+int isaac_lua_getclass(CpuState *restrict cpu) {
+    const int mode = lua_native_mode();
+    if (!mode) return 0;
+    if (mode == 2) gcl_unwound(cpu->ESP, 1);         /* a call awaited from this stack depth or deeper never came back */
+    uint32_t ud = 0;
+    const uint32_t key = isaac_r32(cpu->ESP + 4u);
+    const int may_be_const = (isaac_r32(cpu->ESP + 8u) & 0xffu) != 0u;       /* a byte: `cmp byte ptr [ebp+0xc], 0` */
+    /* This is guest code entering Lua without an import shim (1b above): a
+     * Lua call made here can step the collector, a finalizer is a guest
+     * function, and its frame is placed below the innermost recorded guest
+     * ESP. Without a record of this caller's ESP it landed on the frames
+     * between the last shim and here, and the caller went on with its
+     * arguments overwritten: verify mode on engine n11 showed the lifted run
+     * raising "(null) expected, got Entity" 32 times in 19,000,000 checks. */
+    volatile char anchor = 0;
+    lua_shim_enter((uintptr_t)&anchor, cpu->ESP);
+    if (g_gcl_probe) g_gcl_probe();
+    const int yes = isaac_is_guest_va(cpu->ECX) &&
+                    isaac_lua_getclass_native((lua_State *)isaac_g(cpu->ECX), (int)cpu->EDX, key, may_be_const, &ud);
+    lua_nest_prune((uintptr_t)&anchor);
+    if (!yes) {
+        ++g_gcl_guest;
+        return 0;
+    }
+    if (mode == 2) {
+        if (g_gcl_depth >= GCL_NEST) return 0;       /* deeper than is kept track of: not compared */
+        g_gcl_wait[g_gcl_depth].esp = cpu->ESP; g_gcl_wait[g_gcl_depth].expect = ud; g_gcl_wait[g_gcl_depth].ret = isaac_r32(cpu->ESP);
+        ++g_gcl_depth;
+        return 2;
+    }
+    ++g_gcl_native;
+    cpu->EAX = ud;
+    cpu->EIP = isaac_r32(cpu->ESP);
+    cpu->ESP += 4u;
+    return 1;
+}
+void isaac_lua_getclass_verify(const CpuState *cpu) {
+    const uint32_t entered = cpu->ESP - 4u;          /* the lifted function made its plain ret */
+    gcl_unwound(entered, 0);
+    if (!g_gcl_depth || g_gcl_wait[g_gcl_depth - 1u].esp != entered) return;   /* not one that was awaited */
+    const uint32_t expect = g_gcl_wait[--g_gcl_depth].expect;
+    ++g_gcl_native;
+    if (cpu->EAX != expect && ++g_gcl_mismatch <= 5u)
+        isaac_log("[isaac][lua] class check MISMATCH #%u: native 0x%08x, lifted 0x%08x", g_gcl_mismatch, expect, cpu->EAX);
+    if (g_gcl_native == 1000u || g_gcl_native == 100000u || g_gcl_native % 1000000u == 0u)
+        isaac_log("[isaac][lua] class check verify: %u answers compared, %u mismatch(es), %u lifted run(s) that did not return; "
+                  "%u left to the lifted function alone", g_gcl_native, g_gcl_mismatch, g_gcl_unreturned, g_gcl_guest);
+}
+
 /* ---- round 113: the game's collector steps, deferred between cycles ------
  *
  * Once per pass of its main loop the game steps the collector by n KB
@@ -1713,6 +1863,9 @@ LUAOPEN_SHIM(debug)
 void isaac_lua_report(void) {
     isaac_log("[isaac][lua] upstream 5.3.3 linked; %u/%d trampoline slots used "
               "for guest C functions", g_tramp_n, LUA_TRAMPOLINES);
+    if (g_gcl_native + g_gcl_guest)
+        isaac_log("[isaac][lua] luabridge class check (0x%08x): %u answered natively, %u left to the lifted function, %u mismatch(es)",
+                  ISAAC_LB_GETCLASS_VA, g_gcl_native, g_gcl_guest, g_gcl_mismatch);
 }
 
 #else   /* ------------------------------------------------------------------ */

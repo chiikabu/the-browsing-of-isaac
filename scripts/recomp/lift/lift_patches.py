@@ -652,6 +652,23 @@ WRAP_PATCHES: dict[int, str] = {
   if (s->EAX == out) isaac_img_keep_loaded(s, out, path, before);
 }
 """,
+    # Round 121: luabridge's class check, asked by every bound method and
+    # property (937 call sites; ECX = L, EDX = index, [esp+4] the class's key,
+    # [esp+8] "may be const", plain ret). The host answers when the answer is
+    # yes (host_lua.c 1f: the same raw reads, the stack put back); everything
+    # that ends in an error is the lifted body's. ISAAC_LUA_NATIVE=0 / 2.
+    0x0085c590: """void sub_0085c590(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x0085c590: luabridge's class check, natively when it passes (host_lua.c) */
+  extern int isaac_lua_getclass(CpuState *restrict);
+  extern void isaac_lua_getclass_verify(const CpuState *);
+  RECOMP_VA(0x85c590u);
+  if (g_reentry_eip) { sub_0085c590__lifted(s); return; }
+  const int r = isaac_lua_getclass(s);
+  if (r == 1) return;   /* answered: EAX and the ret are the host's */
+  sub_0085c590__lifted(s);
+  if (r == 2) { if (recomp_jmp_pending) recomp_run_pending(s); isaac_lua_getclass_verify(s); }
+}
+""",
     0x00af0780: """void sub_00af0780(CpuState *restrict s) {
   /* LIFT-PATCH wrap 0x00af0780: x87 ST0 -> int32 truncation (host_fastpath.c) */
   /* no verify path, on purpose: the lifted body IS the defect (round 91) */

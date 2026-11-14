@@ -653,6 +653,13 @@ static void ik_drop(void *ctx, uint32_t i) {
 }
 static int ik_note(uint32_t img, uint64_t bytes) { g_ik_next = img; return isaac_img_keep_note(img, bytes, g_ik_now, ik_hold, ik_drop, NULL); }
 static int ik_holds(uint32_t img) { for (int i = 0; i < 256; ++i) if (g_ik_held[i] == img) return 1; return 0; }
+/* Round 121: what the nesting records say while the native class check runs */
+static uint32_t g_gcl_probe_esp;
+static unsigned g_gcl_probe_shims;
+static void selftest_gcl_probe(void) {
+    extern uint32_t isaac_lua_nest_probe(unsigned *shims, unsigned *calls);
+    g_gcl_probe_esp = isaac_lua_nest_probe(&g_gcl_probe_shims, NULL);
+}
 static void test_img_keep(void) {
     uint32_t c[6]; uint64_t bytes;
     memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = g_ik_last_drop = 0u; g_ik_refuse = g_ik_inside = 0;
@@ -3880,6 +3887,191 @@ int main(int argc, char **argv) {
         g_gcn_store = 0x00b753c0u;
         luaL_dostring(L, "collectgarbage() collectgarbage()");     /* what is left is finalized in verify mode, by a stand-in that stores */
         isaac_lua_native_set_mode(1);
+
+        /* Round 121: luabridge's class check (0x0085c590) answered natively
+         * when the answer is yes (host_lua.c 1f). The classes above, plus one
+         * derived from __gcn_class (with its const table) and one derived
+         * from that. */
+        {
+            extern int isaac_lua_getclass_native(lua_State *L, int index, uint32_t key, int may_be_const, uint32_t *ud);
+            extern int isaac_lua_getclass(CpuState *restrict cpu);
+            extern void isaac_lua_getclass_verify(const CpuState *cpu);
+            extern void isaac_lua_getclass_counts(uint32_t out[4]);
+            luaL_dostring(L, "__gcl_dc = { __parent = __gcn_const } __gcl_d = { __parent = __gcn_class, __const = __gcl_dc } "
+                             "__gcl_d2 = { __parent = __gcl_d, __const = {} } __gcl_plain = {} __gcl_odd = { __parent = 3, __const = {} }");
+            static const char *const flagged[] = { "__gcl_dc", "__gcl_d", "__gcl_d2", "__gcl_odd" };
+            for (unsigned i = 0; i < 4; ++i) {
+                lua_getglobal(L, flagged[i]); lua_pushboolean(L, 1); lua_rawsetp(L, -2, isaac_g(0x00c7f4b8u)); lua_pop(L, 1);
+            }
+#  define GCL_OBJ(mt) (lua_settop(L, 0), lua_getglobal(L, "__gcn_new"), lua_getglobal(L, (mt)), lua_getglobal(L, "__gcn_vt8"), lua_call(L, 2, 1))
+#  define GCL_YES(may) (ud = 0u, isaac_lua_getclass_native(L, 1, key, (may), &ud) == 1 && ud == isaac_va(lua_touserdata(L, 1)) && lua_gettop(L) == 1)
+#  define GCL_NO(k, may) (ud = 0x77u, isaac_lua_getclass_native(L, 1, (k), (may), &ud) == 0 && ud == 0x77u && lua_gettop(L) == 1)
+            uint32_t ud = 0;
+            GCL_OBJ("__gcn_class");
+            check(GCL_YES(0) && GCL_YES(1), "class check: an object of the class is one, whether const objects may pass or not; the stack is as it came");
+            check(isaac_lua_getclass_native(L, -1, key, 1, &ud) == 0 && isaac_lua_getclass_native(L, 0, key, 1, &ud) == 0
+                  && isaac_lua_getclass_native(L, 2, key, 1, &ud) == 0 && lua_gettop(L) == 1,
+                  "class check: an index that is not a plain one within the stack is left to the game");
+            GCL_OBJ("__gcn_const");
+            check(GCL_YES(1), "class check: a const object passes where const objects may");
+            check(GCL_NO(key, 0), "class check: a const object where none may be is left to the game (it raises 'cannot be const')");
+            GCL_OBJ("__gcl_d");
+            check(GCL_YES(0), "class check: an object of a derived class is one of its base");
+            GCL_OBJ("__gcl_d2");
+            check(GCL_YES(0), "class check: so is one of a class derived from that");
+            GCL_OBJ("__gcl_dc");
+            check(GCL_YES(1) && GCL_NO(key, 0), "class check: a const object of a derived class, as a const object of the base");
+            GCL_OBJ("__gcn_other");
+            check(GCL_NO(key, 1), "class check: an object of another class is left to the game");
+            GCL_OBJ("__gcn_class");
+            check(GCL_NO(key2, 1), "class check: and an object of this class is not one of the other");
+            GCL_OBJ("__gcl_plain");
+            check(GCL_NO(key, 1), "class check: a userdata whose metatable is not one of luabridge's is left to the game");
+            GCL_OBJ("__gcl_odd");
+            check(GCL_NO(key, 1), "class check: a __parent that is not a table ends the walk without a fault");
+            lua_settop(L, 0); lua_newuserdata(L, 8);
+            check(GCL_NO(key, 1), "class check: a userdata with no metatable is left to the game");
+            lua_settop(L, 0); lua_newtable(L);
+            check(GCL_NO(key, 1), "class check: a table is left to the game");
+            lua_settop(L, 0); lua_pushinteger(L, 5);
+            check(GCL_NO(key, 1), "class check: a number is left to the game");
+            GCL_OBJ("__gcn_class");
+            check(GCL_NO(scratch, 1) && GCL_NO(0u, 1), "class check: a key with no class behind it, and no key, are left to the game");
+            /* a metatable that names the class as its parent but is not one of luabridge's */
+            luaL_dostring(L, "__gcl_fake = { __parent = __gcn_class, __const = {} }");
+            GCL_OBJ("__gcl_fake");
+            check(GCL_NO(key, 1), "class check: a metatable without luabridge's mark is not a class, whatever its __parent says");
+            /* a table that was given the class's metatable is not an object */
+            lua_settop(L, 0);
+            luaL_dostring(L, "return setmetatable({}, __gcl_d)");
+            check(lua_istable(L, 1) && GCL_NO(key, 1), "class check: a table with a class's metatable is left to the game (it is not a userdata)");
+            /* a negative index: with an object of another class under an object
+             * of this one, -2 is the other object now and this one after a push */
+            GCL_OBJ("__gcn_other");
+            lua_getglobal(L, "__gcn_new"); lua_getglobal(L, "__gcn_class"); lua_getglobal(L, "__gcn_vt8"); lua_call(L, 2, 1);
+            ud = 0x77u;
+            check(lua_gettop(L) == 2 && isaac_lua_getclass_native(L, -2, key, 1, &ud) == 0 && ud == 0x77u && lua_gettop(L) == 2
+                  && isaac_lua_getclass_native(L, 2, key, 1, &ud) == 1 && ud == isaac_va(lua_touserdata(L, 2)),
+                  "class check: a negative index is left to the game; the plain index of the same object is answered");
+            luaL_dostring(L, "__gcl_fake = nil");
+
+            /* the entry the lifted callers reach: registers and stack in, EAX and a plain ret out */
+            CpuState gc;
+            uint32_t g0[4], g1[4];
+#  define GCL_CPU(maybyte) do { memset(&gc, 0, sizeof gc); gc.ECX = isaac_va(L); gc.EDX = 1u; gc.EAX = 0xAAAAAAAAu; \
+                gc.ESP = ISAAC_STACK_TOP_VA - 0x2000u; isaac_w32(gc.ESP, 0x00401234u); isaac_w32(gc.ESP + 4u, key); isaac_w32(gc.ESP + 8u, (maybyte)); } while (0)
+            GCL_OBJ("__gcn_const");
+            const uint32_t want = isaac_va(lua_touserdata(L, 1));
+            isaac_lua_getclass_counts(g0);
+            GCL_CPU(0xFFFFFF01u);
+            int ra = isaac_lua_getclass(&gc);
+            isaac_lua_getclass_counts(g1);
+            check(ra == 1 && gc.EAX == want && gc.EIP == 0x00401234u && gc.ESP == ISAAC_STACK_TOP_VA - 0x2000u + 4u && g1[0] == g0[0] + 1u && g1[1] == g0[1],
+                  "class check (entry): answered: EAX is the userdata, the return address is taken and only it is popped");
+            GCL_CPU(0x00000100u);                                  /* the flag is a byte: 0x100 is 'may not be const' */
+            ra = isaac_lua_getclass(&gc);
+            isaac_lua_getclass_counts(g0);
+            check(ra == 0 && gc.EAX == 0xAAAAAAAAu && gc.EIP == 0u && gc.ESP == ISAAC_STACK_TOP_VA - 0x2000u && g0[1] == g1[1] + 1u && g0[0] == g1[0],
+                  "class check (entry): the 'may be const' flag is its low byte only; left to the game, the registers are untouched");
+            /* while the check's Lua calls run, the caller's guest ESP is on record, as under an
+             * import shim: a finalizer the collector runs then is placed below it (host_lua.c 1b) */
+            {
+                extern void isaac_lua_getclass_set_probe(void (*fn)(void));
+                extern uint32_t isaac_lua_nest_probe(unsigned *shims, unsigned *calls);
+                unsigned sh0 = 0, sh1 = 0;
+                const uint32_t before = isaac_lua_nest_probe(&sh0, NULL);
+                g_gcl_probe_esp = 0u; g_gcl_probe_shims = 0u;
+                isaac_lua_getclass_set_probe(selftest_gcl_probe);
+                GCL_CPU(1u);
+                ra = isaac_lua_getclass(&gc);
+                isaac_lua_getclass_set_probe(NULL);
+                const uint32_t after = isaac_lua_nest_probe(&sh1, NULL);
+                check(ra == 1 && g_gcl_probe_esp == ISAAC_STACK_TOP_VA - 0x2000u && g_gcl_probe_shims == sh0 + 1u && sh1 == sh0 && after == before,
+                      "class check (entry): the caller's guest ESP is on record while the check runs, and is dropped after it");
+                isaac_lua_getclass_counts(g0);
+            }
+            isaac_lua_native_set_mode(0);
+            GCL_CPU(1u);
+            check(isaac_lua_getclass(&gc) == 0 && gc.EAX == 0xAAAAAAAAu && (isaac_lua_getclass_counts(g1), g1[0] == g0[0] && g1[1] == g0[1]),
+                  "class check (mode 0): the lifted function is asked for everything");
+            isaac_lua_native_set_mode(2);
+            /* the lifted function's side is played here: it returns with a plain ret (ESP + 4) and its answer in EAX */
+            const uint32_t e0 = ISAAC_STACK_TOP_VA - 0x2000u;
+#  define GCL_LIFTED(esp_in, answer) do { gc.ESP = (esp_in) + 4u; gc.EAX = (answer); isaac_lua_getclass_verify(&gc); } while (0)
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0, want);
+            isaac_lua_getclass_counts(g1);
+            check(ra == 2 && g1[0] == g0[0] + 1u && g1[2] == g0[2] && g1[3] == g0[3], "class check (verify): the lifted function's answer is the native one: no mismatch");
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0, want + 8u);                              /* a lifted function that answered something else */
+            isaac_lua_getclass_counts(g0);
+            check(ra == 2 && g0[2] == g1[2] + 1u && g0[3] == g1[3], "class check (verify): another answer from the lifted function is counted");
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);                           /* ... and one that never came back (a Lua error unwound it) */
+            GCL_CPU(1u);
+            int rb = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0, want);
+            isaac_lua_getclass_counts(g1);
+            check(ra == 2 && rb == 2 && g1[3] == g0[3] + 1u && g1[2] == g0[2] && g1[0] == g0[0] + 1u,
+                  "class check (verify): a lifted run that did not return is counted as that, at the next call from that depth, and is not a mismatch");
+            /* a check inside another's lifted run (a finalizer run by one of its Lua calls): both are compared, nothing is miscounted */
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);
+            GCL_CPU(1u); gc.ESP = e0 - 0x100u; isaac_w32(gc.ESP, 0x00401234u); isaac_w32(gc.ESP + 4u, key); isaac_w32(gc.ESP + 8u, 1u);
+            rb = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0 - 0x100u, want);
+            GCL_LIFTED(e0, want);
+            isaac_lua_getclass_counts(g0);
+            check(ra == 2 && rb == 2 && g0[0] == g1[0] + 2u && g0[2] == g1[2] && g0[3] == g1[3],
+                  "class check (verify): a check made inside another's lifted run, and the outer one after it, are both compared");
+            /* the inner one unwound, the outer one returning */
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);
+            GCL_CPU(1u); gc.ESP = e0 - 0x100u; isaac_w32(gc.ESP, 0x00401234u); isaac_w32(gc.ESP + 4u, key); isaac_w32(gc.ESP + 8u, 1u);
+            rb = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0, want + 8u);
+            isaac_lua_getclass_counts(g1);
+            check(ra == 2 && rb == 2 && g1[3] == g0[3] + 1u && g1[2] == g0[2] + 1u && g1[0] == g0[0] + 1u,
+                  "class check (verify): an inner run that did not return is counted when the outer one does, whose own answer is still compared");
+            /* a return nobody waits for is not compared */
+            GCL_LIFTED(e0, want);
+            isaac_lua_getclass_counts(g0);
+            check(g0[0] == g1[0] && g0[2] == g1[2] && g0[3] == g1[3], "class check (verify): a return that was not awaited is nothing");
+            /* ... also a deeper one while an outer call is awaited: the outer one stays awaited and is compared when it returns */
+            GCL_CPU(1u);
+            ra = isaac_lua_getclass(&gc);
+            GCL_LIFTED(e0 - 0x200u, want + 8u);
+            isaac_lua_getclass_counts(g1);
+            GCL_LIFTED(e0, want);
+            isaac_lua_getclass_counts(g0);
+            check(ra == 2 && g1[0] == g0[0] - 1u && g1[2] == g0[2] && g0[3] == g1[3],
+                  "class check (verify): a deeper return nobody awaited leaves the outer call awaited, and it is compared when it returns");
+            /* 32 calls awaited inside one another are kept track of; the 33rd is left to the lifted function, uncompared */
+            {
+                int all2 = 1, r33;
+                for (unsigned d = 0; d < 32u; ++d) {
+                    GCL_CPU(1u); gc.ESP = e0 - 0x40u * d; isaac_w32(gc.ESP, 0x00401234u); isaac_w32(gc.ESP + 4u, key); isaac_w32(gc.ESP + 8u, 1u);
+                    all2 &= isaac_lua_getclass(&gc) == 2;
+                }
+                GCL_CPU(1u); gc.ESP = e0 - 0x40u * 32u; isaac_w32(gc.ESP, 0x00401234u); isaac_w32(gc.ESP + 4u, key); isaac_w32(gc.ESP + 8u, 1u);
+                r33 = isaac_lua_getclass(&gc);
+                isaac_lua_getclass_counts(g1);
+                for (unsigned d = 32u; d-- > 0u; ) GCL_LIFTED(e0 - 0x40u * d, want);
+                isaac_lua_getclass_counts(g0);
+                check(all2 && r33 == 0 && g0[0] == g1[0] + 32u && g0[2] == g1[2] && g0[3] == g1[3],
+                      "class check (verify): 32 nested calls are awaited and compared; a 33rd is left to the lifted function alone");
+            }
+#  undef GCL_LIFTED
+            isaac_lua_native_set_mode(1);
+            lua_settop(L, 0);
+            luaL_dostring(L, "__gcl_dc, __gcl_d, __gcl_d2, __gcl_plain, __gcl_odd = nil");
+#  undef GCL_OBJ
+#  undef GCL_YES
+#  undef GCL_NO
+#  undef GCL_CPU
+        }
         luaL_dostring(L, "__gcn_gc, __gcn_class, __gcn_const, __gcn_other, __gcn_new, __gcn_vt, __gcn_vt8, __gcn_vt32, __gcn_vtbad, __gcn_a = nil collectgarbage()");
         lua_pushnil(L); lua_rawsetp(L, LUA_REGISTRYINDEX, isaac_g(key));
         lua_pushnil(L); lua_rawsetp(L, LUA_REGISTRYINDEX, isaac_g(key2));

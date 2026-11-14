@@ -12057,3 +12057,105 @@ share alone. Why the share did not turn into time was not measured (the lists'
 own counters were never read: the run meant to stop the engine and print them
 did not reach its frame count); one guess is that the time under those two
 names is the first touch of a block's memory, which a list pays as well.
+
+### 21.150 Round 121: luabridge's class check, natively when it passes
+
+Host (`host_lua.c` 1f), one wrapper in `lift_patches.py`, `selftest.c`. Engine
+n13.
+
+**What was measured.** A Fiend Folio fight (60 enemies, the player firing,
+`perf-run-ff.mjs`, CPU x1, the CDP profile on engine n8): 72% of the busy time
+is under `lua_pcallk` (the mod's callbacks), 22.5% under `call_guest_cfunction`
+(the game's functions as Lua calls them), and 10.1% under one lifted function,
+`sub_0085c590` (2.2% of it its own, the rest the Lua API calls it makes through
+the import shims). 0x0085c590 is luabridge's class check: every bound method
+and property starts by asking it whether the value at a stack index is an
+object of the class it was written for. 937 direct call sites; ECX = L, EDX =
+the index, [esp+4] the class's registry key, [esp+8] a byte "may be a const
+object"; EAX = the userdata's block; plain ret. Its body is some twenty calls
+of the Lua API: the class's table from the registry, the object's metatable,
+luabridge's mark on it (the boolean at 0x00c7f4b8), `__const` to tell a const
+table, the class's const table in its place for a const object, then
+`rawequal` up the `__parent` chain; on equality `touserdata`, or
+`luaL_argerror` ("cannot be const", or "<__type> expected, got <...>").
+
+**The change.** The wrapper asks the host first (`isaac_lua_getclass`). The
+host walks the way to "yes" with the same raw reads on its own side, puts the
+stack back as it came, and answers only when the answer is yes and nothing is
+raised: EAX, the return address, the one pop. Every other way -- not a
+userdata, no metatable, a metatable without the mark, another class, a const
+object where none may be, an index that is not a plain positive one, a key
+with no table behind it, a `__parent` that is not a table -- the stack is put
+back and the lifted function runs, so every error is the game's own text from
+the game's own code. ECX and EDX are left as they came where the lifted body
+leaves what its last call left; both are caller-saved, and no caller can read
+them after a function that ends in `lua_touserdata`. `ISAAC_LUA_NATIVE=0`
+keeps the lifted function for everything; `=2` runs it for the result and
+compares (a lifted function that raises where the native way said yes is
+counted at the next call).
+
+**What verify mode found.** The first build (engine n11), a Fiend Folio tour
+with `ISAAC_LUA_NATIVE=2`: 19,000,000 answers compared, none different, and
+31 lifted runs that did not return -- in the game's log, 30 of the mod's
+callbacks failing with `calling 'GetPlayerType' on bad self ((null) expected,
+got Entity)`, which a tour without verify mode never shows. The native answer
+was right and the lifted run was looking at a stack the native run had let
+something write over. Every import shim records the guest ESP of its caller
+(1b, round 100) so that a guest function Lua calls back -- a finalizer run by a
+collector step inside `lua_pushstring`, here -- gets its frame below it. The
+wrapper is guest code entering Lua without a shim, and made no record: the
+finalizer's frame went below the last shim's ESP, onto the frames between
+that and the class check's caller. In the plain native mode the caller would
+have gone on with its arguments overwritten about once in 600,000 checks.
+`isaac_lua_getclass` now records its caller's ESP as a shim does, for as long
+as its Lua calls last. With that (engine n13): 20,000,000 answers compared in
+the tour and 12,000,000 in the fight, none different, no run that did not
+return, no such line in the log. The count of runs that do not return is kept
+(a call is known by its ESP; nested ones are compared too).
+
+The class of the defect -- host code calling the Lua API for guest code with
+no record of the guest ESP -- was looked for elsewhere: the native `__index`
+and `__gc` (rounds 111, 114) are entered from Lua through a trampoline, under
+the record of the shim that entered Lua; `isaac_lua_gc` and
+`isaac_lua_setmetatable` are behind import shims; the layer's hooks use
+`isaac_lua_host_enter`; `host_img_keep.c` calls no Lua and places its own
+guest calls 0x1000 below the ESP it is given. This was the only one.
+
+**Measured.** The CDP profile of the fight on the engine with the native check: the
+function is gone from the sixty largest inclusive entries (it was 10.1%),
+`isaac_lua_getclass` is 0.45% of the busy time, and what is under
+`call_guest_cfunction` fell from 22.5% to 16.7%, under `luaT_callTM` from 21.6%
+to 16.0%.
+
+In time (`ab_engines.sh`, engines n8 and n13, the fight, CPU x1, 20 s, ten
+alternating pairs, four with n8 first and six with n13 first; the machine was
+in use, and single runs range from 34 to 52 ms of CPU a game update): n13 is
+ahead in eight of the ten pairs, the differences are -2.4, -0.3, 1.0, 1.1, 1.5,
+1.7, 1.8, 3.6, 5.2 and 12.7 ms, the median 1.6 ms of about 38 (4%), the mean 2.6
+with a standard error of 1.3. A gain of a few percent of a fight; the share the
+profile shows did not all turn into time, because the Lua calls the check makes
+are still made.
+
+**Correctness.** selftest (976 checks in all): an object of the class, of its
+const table, of a derived class and of one derived from that, with and without
+"may be const"; another class, the other way round, a metatable without the
+mark (also one that names the class as its `__parent`), a `__parent` that is
+not a table, a userdata with no metatable, a table with a class's metatable, a
+number, a key with nothing behind it, indexes 0, negative (with another
+object where the push would move it) and past the top; the entry (EAX, the
+return address, one pop; the flag's low byte with 0x100 and 0xFFFFFF01; the
+caller's ESP on record while the check runs and dropped after it; mode 0);
+verify mode's books (the same answer, another answer, a run that did not
+return, a check inside another's lifted run, an inner run unwound, returns
+nobody awaited, 32 nested and a 33rd). 22 mutants through `mutate.mjs`, all
+killed; one more, the walk reading a `__parent` that is not a table, survives
+because Lua's answer for such a read happens to be harmless: the test is kept
+as a guard against undefined behaviour. In the browser on n13: the plain and the Fiend Folio tours with no stop, no Lua error and none of
+the layer's `failed:` lines; test_cb 28 0, test_hooks4 23 0, test_hooks3 42 0,
+test_hooks2 49 0, test_layer 49 0, test_layer2 95 0, test_layer3 53 0,
+test_layer4 49 0, test_gate 7 0, test_ach 24 0.
+
+**Not done.** 0x0085c3e0 (the exact-class check the finalizers use, replicated
+in round 114 for them alone) and `__newindex` 0x0085cf30 are lifted. The
+`index > top` test in the native check is a second guard (Lua answers "no
+value" for such an index itself).
