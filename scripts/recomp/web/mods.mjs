@@ -59,6 +59,10 @@ export const MODS_DB = 'isaac-mods', F_STORE = 'files', M_STORE = 'mods', S_STOR
 export const GUEST_ROOT = 'c:/isaac/mods/';       // fs_key() normalises to this
 export const USER_ROOT = 'c:/isaac/documents/my games/binding of isaac repentance+/mods/';
 export const GUEST_ROOTS = [GUEST_ROOT, USER_ROOT];
+// round 122: the REPENTOGON-compatible layer is the mod of this folder; the page writes
+// one generated file into it at every start (seedMods, createModScan)
+export const RGON_LAYER_ID = 'repentogon';
+export const MODSCAN_FILE = 'modscan.lua';
 export const underMods = (key) => GUEST_ROOTS.find((r) => String(key).startsWith(r)) || null;
 // The game's mods list prints the folder name, not the <name> in the metadata,
 // so the folder is what has to read right -- and the list is sorted by it, which
@@ -1520,11 +1524,24 @@ export async function seedMods(db, seed, log, opts) {
     for (const f of files) for (const root of GUEST_ROOTS) if (seed(`${root}${mod.id}/${f.rel}`, f.bytes)) n += 1;
     out.mods += 1; out.files += n; out.bytes += size;
     log && log(`  ${mod.name} (${mod.id}): ${n} file(s), ${(size / 1048576).toFixed(2)} MB`);
+    // round 122: what this mod's Lua says about REPENTOGON, for the layer's own decision (createModScan below)
+    if (o.scan && mod.id !== RGON_LAYER_ID) {
+      try { o.scan.add(mod.id, files); } catch (e) { log && log(`  ${mod.name}: its Lua was not read for the REPENTOGON layer (${e.message})`); }
+    }
     // round 95: a seed the engine's file table refused is a file the mod will miss
     // (the table overflowed at 16,384 entries before, dropping a big mod's last folders)
     if (n < files.length * GUEST_ROOTS.length) {
       log && log(`  ${mod.name}: ${files.length * GUEST_ROOTS.length - n} of ${files.length * GUEST_ROOTS.length} file(s) did not fit in the game's file table`);
     }
+  }
+  // round 122: the layer's mod is installed and on: it gets the facts about the others,
+  // as a file of its own folder (the layer loads its siblings by name)
+  if (o.scan && known.has(RGON_LAYER_ID) && (byId.get(RGON_LAYER_ID) || []).length) {
+    const body = new TextEncoder().encode(o.scan.lua());
+    let n = 0;
+    for (const root of GUEST_ROOTS) if (seed(`${root}${RGON_LAYER_ID}/${MODSCAN_FILE}`, body)) n += 1;
+    out.scanned = o.scan.size();
+    log && log(`  REPENTOGON layer: ${out.scanned} mod(s) name REPENTOGON in their code; ${MODSCAN_FILE} ${n ? 'written' : 'NOT written'} for the layer`);
   }
   // whatever the game wrote under mods/ last time, for a mod that is installed
   // and on. A disable.it is never seeded back: the flag it stands for lives in
@@ -1537,6 +1554,192 @@ export async function seedMods(db, seed, log, opts) {
     for (const r of GUEST_ROOTS) if (seed(r + rel, value.bytes)) out.state += 1;
   }
   return out;
+}
+
+// ---- round 122: what an installed mod's Lua says about REPENTOGON -----------------
+//
+// The REPENTOGON-compatible layer (scripts/recomp/rgon) shows the global
+// `REPENTOGON` only to mods whose use of it it covers; a mod that reads nil keeps
+// its own code for a game without it. Until this round the mods it showed it to
+// were a list written by hand, one mod at a time. Now the page reads every
+// installed mod's Lua as it seeds it and hands the layer the facts it needs to
+// decide for itself, in one generated file, `mods/repentogon/modscan.lua` (seedMods
+// above writes it). Per mod:
+//
+//   says    how many times the code (not a comment, not a string) names REPENTOGON
+//   quits   how many tests of `not REPENTOGON` at the top level of main.lua end the
+//           file or raise: the mark of a mod that does not run without it. (The
+//           same test at the top of another file is a part of the mod that is
+//           for REPENTOGON only: External Item Descriptions has one.)
+//   yields  how many times `if REPENTOGON then return [true|false|nil] end` stands
+//           anywhere: the mod steps aside where REPENTOGON does the job natively,
+//           which the layer does not
+//   names   every name that could be one of REPENTOGON's: what is called after a
+//           `.` or `:`, every MC_ name, every capitalised name used as a table or
+//           called -- less the function names the mod defines itself (Mantle
+//           Rework's own GetPlayerIndex is not REPENTOGON's). Which of them are
+//           REPENTOGON's, and which of those the layer has, only the layer knows.
+//
+// Only a mod that names REPENTOGON at all is listed: nothing is decided about
+// the others (they never read the global). Nothing here is fetched or stored:
+// it is computed from the bytes the page seeds, at every start.
+
+// Lua source with comments and string contents blanked (newlines kept), so that
+// what is read afterwards is code.
+export function stripLua(src) {
+  const s = String(src);
+  const n = s.length;
+  const parts = [];
+  let i = 0, from = 0;
+  const blank = (a, b) => { let t = ''; for (let k = a; k < b; k++) t += s[k] === '\n' ? '\n' : ' '; return t; };
+  const longAt = (p) => {                       // "[[" or "[==[" at p: its level, or -1
+    if (s[p] !== '[') return -1;
+    let q = p + 1;
+    while (s[q] === '=') q++;
+    return s[q] === '[' ? q - p - 1 : -1;
+  };
+  const longEnd = (p, level) => {               // the index after the bracket that closes the one opened at p
+    const close = ']' + '='.repeat(level) + ']';
+    const e = s.indexOf(close, p + level + 2);
+    return e < 0 ? n : e + close.length;
+  };
+  const cut = (a, b, quote) => {                // [a, b) becomes blanks, between quotes when it was a string
+    parts.push(s.slice(from, a));
+    parts.push(quote ? '"' + blank(a + 1, Math.max(a + 1, b - 1)) + (b - 1 > a ? '"' : '') : blank(a, b));
+    from = b;
+  };
+  while (i < n) {
+    const c = s[i];
+    if (c === '-' && s[i + 1] === '-') {
+      const level = longAt(i + 2);
+      const nlAt = s.indexOf('\n', i);
+      const e = level >= 0 ? longEnd(i + 2, level) : (nlAt < 0 ? n : nlAt);
+      cut(i, e, false); i = e;
+    } else if (c === '"' || c === "'") {
+      let e = i + 1;
+      while (e < n && s[e] !== c && s[e] !== '\n') e += s[e] === '\\' ? 2 : 1;
+      e = Math.min(n, e + 1);
+      cut(i, e, true); i = e;
+    } else if (c === '[' && longAt(i) >= 0) {
+      const e = longEnd(i, longAt(i));
+      cut(i, e, true); i = e;
+    } else i++;
+  }
+  parts.push(s.slice(from));
+  return parts.join('');
+}
+
+const SCAN_OPEN = new Set(['function', 'if', 'do', 'repeat']);
+const SCAN_CLOSE = new Set(['end', 'until']);
+// three passes, not one alternation: `ImGui.Show(` is a table and a call, and a match of the
+// table would swallow the dot the call starts at
+const SCAN_CALLS = /[.:]\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+const SCAN_CALLBACKS = /\bMC_[A-Z0-9_]+\b/g;
+const SCAN_TABLES = /(?:^|[^.:\w])([A-Z][A-Za-z0-9_]*)\s*[.:(]/g;
+const SCAN_DEFINED = /\bfunction\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*[.:]\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\(|[.:]\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*function\b/g;
+
+// One file's facts: { says, quits, yields, names, defined }.
+// `quits` counts, at the top level of the file (inside no function):
+//   if not REPENTOGON [or ...] then ... return | error(...) ... end
+//   if REPENTOGON == nil [or ...] then ... (the same)
+//   the else branch of  if REPENTOGON then ... else ... return | error(...) ... end
+//   assert(REPENTOGON ...)
+// `yields` counts  if REPENTOGON then return [true|false|nil] end  at any depth.
+export function scanLua(src) {
+  const code = stripLua(src);
+  const names = new Set(), defined = new Set();
+  for (const m of code.matchAll(SCAN_CALLS)) names.add(m[1]);
+  for (const m of code.matchAll(SCAN_CALLBACKS)) names.add(m[0]);
+  for (const m of code.matchAll(SCAN_TABLES)) names.add(m[1]);
+  for (const m of code.matchAll(SCAN_DEFINED)) defined.add(m[1] || m[2]);
+  names.delete('REPENTOGON');
+  const says = (code.match(/\bREPENTOGON\b/g) || []).length;
+  if (!says) return { says: 0, quits: 0, yields: 0, names, defined };
+
+  const tok = code.match(/[A-Za-z_][A-Za-z0-9_]*|==|~=|[()]|[^\sA-Za-z_0-9()]/g) || [];
+  let quits = 0, yields = 0, fdepth = 0;
+  const stack = [];                              // the open blocks
+  const guards = [];                             // the top-level tests being read: { depth, live, hit }
+  for (let i = 0; i < tok.length; i++) {
+    const t = tok[i];
+    if (t === 'assert' && fdepth === 0 && tok[i + 1] === '(' && tok[i + 2] === 'REPENTOGON') quits++;
+    if (t === 'if') {
+      // the condition, without its brackets, up to `then`
+      const cond = [];
+      let j = i + 1;
+      for (; j < tok.length && tok[j] !== 'then' && cond.length < 40; j++) if (tok[j] !== '(' && tok[j] !== ')') cond.push(tok[j]);
+      const present = cond.length === 1 && cond[0] === 'REPENTOGON';
+      if (present && tok[j + 1] === 'return') {
+        const k = (tok[j + 2] === 'true' || tok[j + 2] === 'false' || tok[j + 2] === 'nil') ? j + 3 : j + 2;
+        if (tok[k] === 'end') yields++;
+      }
+      stack.push('if');
+      if (fdepth === 0) {
+        const absent = (cond[0] === 'not' && cond[1] === 'REPENTOGON' && (cond.length === 2 || cond[2] === 'or'))
+          || (cond[0] === 'REPENTOGON' && cond[1] === '==' && cond[2] === 'nil' && (cond.length === 3 || cond[3] === 'or'))
+          || (cond[0] === 'nil' && cond[1] === '==' && cond[2] === 'REPENTOGON' && (cond.length === 3 || cond[3] === 'or'));
+        if (absent || present) guards.push({ depth: stack.length, live: absent, hit: false });
+      }
+      continue;
+    }
+    if (SCAN_OPEN.has(t)) { stack.push(t); if (t === 'function') fdepth++; continue; }
+    if (SCAN_CLOSE.has(t)) {
+      const g = guards[guards.length - 1];
+      if (g && g.depth === stack.length) { if (g.hit) quits++; guards.pop(); }
+      if (stack.pop() === 'function') fdepth--;
+      continue;
+    }
+    const g = guards[guards.length - 1];
+    if (!g) continue;
+    if ((t === 'else' || t === 'elseif') && g.depth === stack.length) {
+      // the branch for a game without REPENTOGON is over; or, of `if REPENTOGON then`, it begins at a plain else
+      if (g.live) { if (g.hit) quits++; guards.pop(); } else if (t === 'else') g.live = true; else guards.pop();
+      continue;
+    }
+    if (g.live && fdepth === 0 && (t === 'return' || (t === 'error' && (tok[i + 1] === '(' || tok[i + 1] === '"')))) g.hit = true;
+  }
+  return { says, quits, yields, names, defined };
+}
+
+const SCAN_NAMES_MAX = 8000;                     // per mod; External Item Descriptions has about 2,000
+
+// The page's side: add each mod's files as they are seeded, then ask for the file.
+export function createModScan() {
+  const mods = new Map();
+  const dec = new TextDecoder('utf-8');
+  return {
+    // files: [{ rel, bytes }]. Only .lua is read, and only if some file has the word at all.
+    // Returns the mod's row, or null when its code never names REPENTOGON.
+    add(id, files) {
+      const lua = (files || []).filter((f) => /\.lua$/i.test(f.rel));
+      const texts = lua.map((f) => [String(f.rel).replace(/\\/g, '/').toLowerCase(), dec.decode(f.bytes)]);
+      if (!texts.some(([, t]) => t.includes('REPENTOGON'))) return null;
+      const row = { says: 0, quits: 0, yields: 0, files: lua.length, names: new Set() };
+      const defined = new Set();
+      for (const [rel, t] of texts) {
+        const r = scanLua(t);
+        row.says += r.says; row.yields += r.yields;
+        if (rel === 'main.lua') row.quits += r.quits;
+        for (const nm of r.names) row.names.add(nm);
+        for (const nm of r.defined) defined.add(nm);
+      }
+      if (!row.says) return null;                // named only in comments and strings
+      for (const nm of defined) row.names.delete(nm);
+      mods.set(String(id).toLowerCase(), row);
+      return row;
+    },
+    size() { return mods.size; },
+    // the file the layer loads (B.load("modscan.lua")): a Lua table
+    lua() {
+      const q = (s) => '"' + String(s).replace(/[^A-Za-z0-9_ .!+-]/g, '_') + '"';
+      const rows = [...mods].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([id, r]) => {
+        const names = [...r.names].filter((nm) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(nm)).sort().slice(0, SCAN_NAMES_MAX);
+        return `  [${q(id)}] = { says = ${r.says}, quits = ${r.quits}, yields = ${r.yields}, files = ${r.files}, names = ${q(names.join(' '))} },`;
+      });
+      return '-- generated by the page at this start (mods.mjs createModScan): what the Lua of each installed mod says about REPENTOGON\n'
+        + `return { version = 1, mods = {\n${rows.join('\n')}\n} }\n`;
+    },
+  };
 }
 
 // ---- the menu, drawn like the game's own -------------------------------------

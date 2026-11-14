@@ -130,11 +130,33 @@ test('pack.mjs: the mod carries the layer, the enum table and its licence', (t) 
     const parts = readdirSync(rgon).filter((n) => /^api_[a-z_]+\.lua$/.test(n)).map((n) => `repentogon/${n}`);
     assert.ok(parts.length >= 5, 'the layer has its parts');
     assert.deepEqual(names.sort(), ['repentogon/LICENSE-REPENTOGON.txt', 'repentogon/NOTICE.txt', 'repentogon/enums_ex.lua',
-      'repentogon/hook_slots.lua', 'repentogon/main.lua', 'repentogon/metadata.xml', 'repentogon/rgon.lua', ...parts].sort());
+      'repentogon/gate_names.lua', 'repentogon/hook_slots.lua', 'repentogon/main.lua', 'repentogon/metadata.xml', 'repentogon/rgon.lua', ...parts].sort());
     for (const part of [...layer.matchAll(/"(api_[a-z_]+\.lua)"/g)].map((m) => m[1])) {
       if (existsSync(join(rgon, part))) assert.ok(names.includes(`repentogon/${part}`), `${part} is loaded by rgon.lua and packed`);
     }
     assert.ok(zip.includes(Buffer.from('ModCallbacks.MC_PRE_ADD_COLLECTIBLE = 1004')), 'the enum table is in, unchanged');
     assert.ok(zip.includes(Buffer.from('GNU GENERAL PUBLIC LICENSE')) && zip.includes(Buffer.from('<directory>repentogon</directory>')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// round 122: the gate decides for itself, from the page's scan and from these names
+test('gate_names.lua is what gate_names.py writes from the REPENTOGON sources, and the layer reads it', (t) => {
+  const text = readFileSync(join(rgon, 'gate_names.lua'), 'utf8');
+  const block = (key) => ((key === 'fns' ? /fns = \[\[([^\]]*)\]\]/ : /globals = \[\[([^\]]*)\]\]/).exec(text) || [, ''])[1].split(/\s+/).filter(Boolean);
+  const fns = block('fns'), globals = block('globals');
+  assert.ok(fns.length > 1000 && globals.length > 20, `${fns.length} function names, ${globals.length} globals`);
+  assert.ok(fns.includes('GetDimension') && globals.includes('ImGui'));
+  assert.ok(!fns.includes('GetLevel') && !fns.includes('AddCollectible'), 'none of the names the game has itself');
+  assert.match(layer, /B\.load\("gate_names\.lua"\)/);
+  assert.match(layer, /B\.load\("modscan\.lua"\)/);
+  // the order of the rule: a mod that needs REPENTOGON first, one that steps aside next
+  const rule = layer.slice(layer.indexOf('local function gate_rule('), layer.indexOf('R.Extras.Gate ='));
+  const at = (re) => rule.search(re);
+  assert.ok(at(/if quits > 0 then/) > 0 && at(/if quits > 0 then/) < at(/if yields > 0 then/) && at(/if yields > 0 then/) < at(/if used == 0 then/) && at(/if used == 0 then/) < at(/if nmissing == 0 then/));
+  assert.match(layer, /ALLOW\[key\] == nil then/, 'a mod the hand list names is not weighed');
+  const exe = join(root, 'tools', 'isaac-ng.unpacked.exe');
+  const game = process.env.ISAAC_GAME_DIR || 'C:/Program Files (x86)/Steam/steamapps/common/The Binding of Isaac Rebirth';
+  if (!existsSync(exe) || !existsSync(join(game, 'resources', 'scripts')) || !existsSync(join(root, 'third_party', 'REPENTOGON', 'repentogon'))) { t.skip('no executable, game scripts or REPENTOGON sources here: the file is not regenerated'); return; }
+  const r = spawnSync('python', ['-I', join(rgon, 'tools', 'gate_names.py'), '--check'], { encoding: 'utf8', timeout: 120000 });
+  assert.equal(r.status, 0, (r.stderr || '') + (r.stdout || ''));
 });

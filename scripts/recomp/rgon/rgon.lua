@@ -645,16 +645,19 @@ end
 -- to, and is written once to the game's log ("[REPENTOGON] not implemented:
 -- EntityPlayer:GetFoo"). The mod then does nonsense, but it keeps going, and
 -- one run lists what it reaches. For measuring only: never for playing.
-if B.env("ISAAC_RGON_PROBE") == "1" then
+-- (The stand-in itself is also what the gate below gives a mod that cannot run
+-- without REPENTOGON, for a global table the layer does not have: round 122.)
+local miss, standin
+do
   local said = {}
-  local function miss(name)
+  miss = function(name)
     if not said[name] then
       said[name] = true
       Isaac.DebugString("[REPENTOGON] not implemented: " .. name)
     end
   end
   local standin_mt = {}
-  local function standin(name) return setmetatable({ __n = name }, standin_mt) end
+  standin = function(name) return setmetatable({ __n = name }, standin_mt) end
   standin_mt.__index = function(t, k)
     local n = rawget(t, "__n") .. "." .. tostring(k)
     miss(n)
@@ -664,7 +667,7 @@ if B.env("ISAAC_RGON_PROBE") == "1" then
   standin_mt.__newindex = function() end
   standin_mt.__len = function() return 0 end
   standin_mt.__concat = function(a, b) return (type(a) == "table" and "" or tostring(a)) .. (type(b) == "table" and "" or tostring(b)) end
-  standin_mt.__tostring = function(t) return "<rgon probe " .. rawget(t, "__n") .. ">" end
+  standin_mt.__tostring = function(t) return "<REPENTOGON stand-in " .. rawget(t, "__n") .. ">" end
   standin_mt.__pairs = function() return function() return nil end end
   standin_mt.__eq = function() return false end
   standin_mt.__lt = function() return false end
@@ -674,7 +677,8 @@ if B.env("ISAAC_RGON_PROBE") == "1" then
   end
   standin_mt.__unm = function() return 0 end
   standin_mt.__bnot = function() return 0 end
-
+end
+if B.env("ISAAC_RGON_PROBE") == "1" then
   -- classes: a key no class in the chain knows
   local function wrap_class(c, cname)
     local old = rawget(c, "__index")
@@ -755,11 +759,36 @@ end
 ------------------------------------------------------------------------------
 -- the gate
 ------------------------------------------------------------------------------
--- `REPENTOGON` is a global only for the mods named here: the ones whose use of
--- it the layer covers, checked by running them (drive_stress.mjs phases=tour
--- with the layer installed and no Lua error from the mod). Every other mod
--- reads nil, as it does without the layer, and keeps its own fallback code.
--- ISAAC_RGON_ALLOW=<folder>,<folder> adds mods for a test; =* lets every mod in.
+-- `REPENTOGON` is a global only for the mods the layer covers. Every other mod
+-- reads nil, as it does without the layer, and keeps its own code for a game
+-- without REPENTOGON.
+--
+-- Which mods those are was a list written by hand until round 122 (ALLOW, kept
+-- below: each of its mods was read and run). Now the layer decides the rest
+-- itself, from what the page read in each installed mod's Lua as it seeded it
+-- (mods.mjs createModScan -> modscan.lua in this folder: how often the code
+-- names REPENTOGON, whether a top-level test of `not REPENTOGON` in its main.lua
+-- ends the file or raises, whether it has an `if REPENTOGON then return end`,
+-- and every name it uses that could be REPENTOGON's) and from what the layer
+-- has (R.Implemented; gate_names.lua says which names are REPENTOGON's). In
+-- this order:
+--   it does not run without REPENTOGON (its main.lua quits)          -> shown,
+--      whatever is missing; a global table the layer lacks is a stand-in that
+--      can be indexed and called and does nothing, and each missing name is
+--      written to the log
+--   it steps aside for REPENTOGON (`if REPENTOGON then return end`: the
+--      job is one REPENTOGON does natively, and the layer does not)  -> hidden
+--   it uses names of REPENTOGON's and the layer has all of them      -> shown
+--   it uses names the layer lacks, and runs without REPENTOGON       -> hidden
+--   it names REPENTOGON and uses nothing of it (the mods that switch
+--      themselves off because REPENTOGON does their job natively)    -> hidden
+-- A method is matched by its name alone, without its class, so a mod's own
+-- method of the same name counts as a use: that can hide a mod that could be
+-- shown, and can show one whose only "use" is such a name. The decisions are
+-- in the game's log and in REPENTOGON.Extras.Gate. No scan file (a dist with
+-- the mods in its instance tree, a packed mod, ?modscan=0): the list alone.
+-- ISAAC_RGON_ALLOW=<folder>,<folder> adds mods for a test; =* lets every mod in;
+-- ISAAC_RGON_AUTO=0 keeps to the list.
 local ALLOW = {
   ["repentogon"] = true,
   -- Each of these was read for every use it makes of REPENTOGON, has all of
@@ -786,6 +815,96 @@ do
     ALLOW = true
   elseif extra then
     for name in extra:gmatch("[^,]+") do ALLOW[name:lower()] = true end
+  end
+end
+-- what the names a mod uses come to: how many are REPENTOGON's, and which of those the layer lacks
+local function gate_weigh(names, FN, GL, HAVE, HAVECLASS)
+  local used, missing = 0, {}
+  for name in tostring(names):gmatch("[%a_][%w_]*") do
+    if FN[name] then
+      used = used + 1
+      if not HAVE[name] then missing[#missing + 1] = name end
+    elseif GL[name] then
+      used = used + 1
+      if rawget(_G, name) == nil and not HAVECLASS[name] then missing[#missing + 1] = name end
+    elseif name:sub(1, 3) == "MC_" then
+      local id = rawget(ModCallbacks, name)
+      if type(id) == "number" and id >= 1000 then
+        used = used + 1
+        if not R.Implemented[id] then missing[#missing + 1] = name end
+      end
+    end
+  end
+  table.sort(missing)
+  return used, missing
+end
+-- shown or not, and why (the rule in the comment above)
+local function gate_rule(quits, yields, used, nmissing)
+  if quits > 0 then
+    return true, nmissing == 0 and "it does not run without REPENTOGON" or "it does not run without REPENTOGON, though the layer lacks part of what it uses"
+  end
+  if yields > 0 then return false, "it steps aside where REPENTOGON does the job itself, which the layer does not" end
+  if used == 0 then return false, "it names REPENTOGON and uses nothing of it" end
+  if nmissing == 0 then return true, "the layer has every name of REPENTOGON's it uses" end
+  return false, "the layer lacks part of what it uses, and it runs without REPENTOGON"
+end
+R.Extras = R.Extras or {}
+R.Extras.Gate = { scanned = false, mods = {}, rule = gate_rule, weigh = gate_weigh }
+if ALLOW ~= true and B.env("ISAAC_RGON_AUTO") ~= "0" then
+  local scan, lists
+  do
+    local chunk = B.load("modscan.lua")
+    if chunk then
+      local ok, t = pcall(chunk)
+      if ok and type(t) == "table" and type(t.mods) == "table" then scan = t end
+    end
+    chunk = B.load("gate_names.lua")
+    if chunk then
+      local ok, t = pcall(chunk)
+      if ok and type(t) == "table" then lists = t end
+    end
+  end
+  if scan and lists then
+    local FN, GL, HAVE, HAVECLASS = {}, {}, {}, {}
+    for name in tostring(lists.fns):gmatch("[%a_][%w_]*") do FN[name] = true end
+    for name in tostring(lists.globals):gmatch("[%a_][%w_]*") do GL[name] = true end
+    for k in pairs(R.Implemented) do
+      if type(k) == "string" then
+        HAVE[k:match("([^.]+)$") or k] = true
+        HAVECLASS[k:match("^([^.]+)") or k] = true
+      end
+    end
+    R.Extras.Gate.scanned = true
+    local ids = {}
+    for id in pairs(scan.mods) do ids[#ids + 1] = tostring(id) end
+    table.sort(ids)
+    for _, id in ipairs(ids) do
+      local row = scan.mods[id]
+      local key = id:lower()
+      if type(row) == "table" and ALLOW[key] == nil then
+        local used, missing = gate_weigh(row.names, FN, GL, HAVE, HAVECLASS)
+        local shown, why = gate_rule(tonumber(row.quits) or 0, tonumber(row.yields) or 0, used, #missing)
+        ALLOW[key] = shown
+        R.Extras.Gate.mods[key] = { shown = shown, why = why, used = used, missing = missing, says = row.says, quits = row.quits, yields = row.yields }
+        local list = ""
+        if #missing > 0 then
+          list = ": " .. table.concat(missing, ", ", 1, math.min(#missing, 12)) .. (#missing > 12 and (" and " .. (#missing - 12) .. " more") or "")
+        end
+        log(string.format("gate: %s is %s REPENTOGON: %s (%d name(s) of REPENTOGON's used, %d missing%s)",
+          key, shown and "shown" or "not shown", why, used, #missing, list))
+        if shown then
+          -- a global table the layer lacks would end the mod's file where it is first read
+          for _, name in ipairs(missing) do
+            if GL[name] and rawget(_G, name) == nil then
+              rawset(_G, name, standin(name))
+              miss(name .. " (a stand-in, for " .. key .. ")")
+            end
+          end
+        end
+      end
+    end
+  elseif not scan then
+    log("gate: no scan of the installed mods (modscan.lua): REPENTOGON is shown to the mods of the layer's own list only")
   end
 end
 R.Allowed = ALLOW

@@ -193,7 +193,8 @@ test('with the MOD BROWSER on the page the import row is left out, and the mods 
   // the boot asks the same question the page asks before it shows the MOD BROWSER paper
   const b = src('boot_web.mjs'), p = src('play.mjs');
   assert.ok(b.includes("const modBrowser = !!(params.get('catalogue') || window.isaacModCatalogue);"), 'the boot looks for a catalogue');
-  assert.ok(b.includes('await seedMods(modDb, seed, log, { sentinel: !modBrowser });'), 'and leaves the row out when there is one');
+  assert.ok(b.includes('await seedMods(modDb, seed, log, { sentinel: !modBrowser, scan: '), 'and leaves the row out when there is one');
+  assert.ok(b.includes("scan: params.get('modscan') === '0' ? null : createModScan() });"), 'round 122: the mods are read for the REPENTOGON layer unless the page is told not to');
   assert.ok(p.includes("const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));"),
     'the paper is shown on the same condition');
 });

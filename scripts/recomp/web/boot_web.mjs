@@ -9,7 +9,7 @@
 // read back from the WebGL framebuffer), isaacDone ({mainRc, bootRc, ...}).
 import Module from './boot.mjs';
 import { openModDb, seedMods, putModState, setModEnabled, underMods, isImportMark, disableTarget,
-         listMods, isPacked, createPackStore, createPackedMods, packedIndex, createPackDownloader } from './mods.mjs';
+         listMods, isPacked, createPackStore, createPackedMods, packedIndex, createPackDownloader, createModScan } from './mods.mjs';
 import { createPads, createPadGate, rumble } from './gamepad.mjs';
 
 const logEl = document.getElementById('log');
@@ -1300,7 +1300,9 @@ try {
     // and the browser adds a .zip too, so the IMPORT MOD row would be a second way
     // in to the same place: it is seeded only where there is no browser.
     const modBrowser = !!(params.get('catalogue') || window.isaacModCatalogue);
-    const r = await seedMods(modDb, seed, log, { sentinel: !modBrowser });
+    // round 122: the mods' Lua is read for what it says about REPENTOGON as it is seeded
+    // (mods.mjs createModScan); ?modscan=0 leaves the layer with its own short list
+    const r = await seedMods(modDb, seed, log, { sentinel: !modBrowser, scan: params.get('modscan') === '0' ? null : createModScan() });
     log(`  ${r.mods} mod(s), ${r.files} file(s), ${(r.bytes / 1048576).toFixed(2)} MB`
       + (r.off ? `, ${r.off} off` : '') + (r.state ? `, ${r.state} state file(s)` : '')
       + (r.skipped ? `, ${r.skipped} skipped` : '')

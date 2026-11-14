@@ -31,8 +31,8 @@ const files = [
   ['metadata.xml', readFileSync(join(here, 'metadata.xml'))],
   ['main.lua', readFileSync(join(here, 'main.lua'))],
   ['rgon.lua', readFileSync(join(here, 'rgon.lua'))],
-  // the layer's parts (rgon.lua loads them by name) and the hook table api_hooks.lua reads
-  ...readdirSync(here).filter((n) => /^api_[a-z_]+\.lua$/.test(n) || n === 'hook_slots.lua').sort().map((n) => [n, readFileSync(join(here, n))]),
+  // the layer's parts (rgon.lua loads them by name), the hook table api_hooks.lua reads, the gate's names
+  ...readdirSync(here).filter((n) => /^api_[a-z_]+\.lua$/.test(n) || n === 'hook_slots.lua' || n === 'gate_names.lua').sort().map((n) => [n, readFileSync(join(here, n))]),
   ['enums_ex.lua', readFileSync(join(rg, 'repentogon', 'resources', 'scripts', 'enums_ex.lua'))],
   ['LICENSE-REPENTOGON.txt', readFileSync(join(rg, 'LICENSE'))],
   ['NOTICE.txt', Buffer.from(NOTICE)],

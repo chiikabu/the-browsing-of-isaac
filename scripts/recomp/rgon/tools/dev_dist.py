@@ -85,7 +85,7 @@ def main():
         for name in ("metadata.xml", "main.lua", "rgon.lua"):
             add("repentogon/" + name, os.path.join(RGON, name))
         for name in sorted(os.listdir(RGON)):
-            if (name.startswith(("api_", "lab_")) or name == "hook_slots.lua") and name.endswith(".lua"):
+            if (name.startswith(("api_", "lab_")) or name in ("hook_slots.lua", "gate_names.lua")) and name.endswith(".lua"):
                 add("repentogon/" + name, os.path.join(RGON, name))
         add("repentogon/enums_ex.lua", ENUMS)
     for folder in args.mod:
