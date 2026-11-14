@@ -48,6 +48,9 @@
 #define TEX_BAND_BYTES (4u << 20)
 static int g_tex_band_mode = -1;
 static uint32_t g_tex_uploads, g_tex_banded, g_tex_bands;
+/* round 118: the RGBA bytes handed to glTexImage2D with pixels, kept or uploaded (host_img_keep.c sizes an image by them) */
+static uint64_t g_tex_image_bytes;
+uint64_t isaac_gl_tex_image_bytes(void) { return g_tex_image_bytes; }
 static int tex_band_mode(void) {
     if (g_tex_band_mode < 0) { const char *e = getenv("ISAAC_GL_TEX_BAND"); g_tex_band_mode = (e && *e == '0') ? 0 : 1; }
     return g_tex_band_mode;
@@ -251,6 +254,7 @@ void isaac_web_gl_report(void) {
               "attrib enables %u, uniforms %u",
               gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp, gls_skip_attrib, gls_skip_uniform);
     isaac_lazy_tex_report();
+    isaac_img_keep_report();
     if (g_lazy_at_draw + g_lazy_at_write + g_lazy_at_attach)
         isaac_log("[isaac][gl] kept textures given their pixels at a draw %u, at a write %u, at an attachment %u",
                   g_lazy_at_draw, g_lazy_at_write, g_lazy_at_attach);
@@ -709,7 +713,9 @@ GLFN(glShaderSource) {
 GLFN(glTexImage2D) {
     ENTER;
     isaac_glc_tex_image(A(0));
+    isaac_glc_tex_shape(A(0), A(1), A(2), A(3), A(4));
     ++g_tex_uploads;
+    if (A(8)) g_tex_image_bytes += (uint64_t)A(3) * A(4) * 4u;
     if (A(0) == GL_TEXTURE_2D) {
         uint32_t name = tex2d_bound();
         /* round 97: a kept texture uploaded again: level 0 replaces what was kept,

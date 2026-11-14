@@ -1417,8 +1417,35 @@ LUA_SHIM(lua_pcallk) {
  * Nothing in the game's own state changes (it keeps counting and asking);
  * what changes is how much garbage is waited for before the heap is walked,
  * and so when a finalizer runs and how big the heap gets.
- * ISAAC_LUA_GC=0 makes every step as asked and leaves Lua's pause alone. */
+ * ISAAC_LUA_GC=0 makes every step as asked and leaves Lua's pause alone.
+ *
+ * Round 117: the whole collection the game asks for at every room entry.
+ * The game calls lua_gc(L, LUA_GCCOLLECT, 0) and logs "Lua mem usage" at
+ * 0x007f769f (at every room entry: its log has that line after each
+ * "Room %d.%d(%s)" and "SpawnRNG seed") and at 0x0086ee91 (the Lua engine's
+ * start); no other call site passes LUA_GCCOLLECT. In the plain game the
+ * heap is under a MB and that is a millisecond. With Fiend Folio it marks
+ * and sweeps 90 to 110 MB in the frame the room appears in: about 110 ms of
+ * a 250 ms frame at every door (perf-rooms.mjs). So over
+ * ISAAC_GC_FULL_NOW_KB of heap the collection is not made in that call.
+ * ISAAC_LUA_GC_ROOM says what is done instead:
+ *   2 (the default) nothing: the collector keeps the pace described above,
+ *     and the garbage of the room left goes in the cycle the heap's growth
+ *     brings next;
+ *   1 a cycle is owed: the game's steps are made from the next pass on,
+ *     without the wait for growth, spread and time-boxed as above, until a
+ *     cycle has ended (one already running when the game asks counts; one
+ *     that ended unseen since the game's last step does not). Measured
+ *     against 2 on a walk with a door every two seconds: the same frames,
+ *     and a tenth more of the main thread busy, because a cycle is then
+ *     always running;
+ *   0 the collection is made in the call, as the game asks.
+ * What changes for a mod under 1 and 2: the garbage of the room just left
+ * is freed, and its finalizers run, seconds after the room appears and not
+ * before its first frame, and "Lua mem usage" reports the heap as it is.
+ * At or under the threshold the collection is always made as asked. */
 #define ISAAC_GC_DEFAULT_PCT 25
+#define ISAAC_GC_FULL_NOW_KB 4096
 #define ISAAC_GC_ROOM_CAP_KB (32 * 1024)
 #define ISAAC_GC_SPREAD      128
 #define ISAAC_GC_STEP_MIN_KB 64
@@ -1444,6 +1471,15 @@ int isaac_lua_gc_last_slices(void) { return g_gc_last_slices; }
 enum { GC_RUN = 0, GC_WAIT = 1, GC_PUSH = 2 };
 static int g_gc_pct = -1, g_gc_phase = GC_RUN, g_gc_base_kb, g_gc_last_kb, g_gc_last_step, g_gc_pause_set;
 static uint32_t g_gc_asked, g_gc_deferred, g_gc_cycles;
+/* round 117: a whole collection the game asked for and has not had (see above) */
+static int g_gc_full_mode = -1, g_gc_owed;
+static uint32_t g_gc_full_asked, g_gc_full_paced;
+/* 1 = a whole collection asked for with this heap is spread over the passes to come */
+int isaac_lua_gc_full_paced(int count_kb, int pct, int mode) {
+    return pct > 0 && mode != 0 && count_kb > ISAAC_GC_FULL_NOW_KB;
+}
+void isaac_lua_gc_set_full(int mode) { g_gc_full_mode = mode; g_gc_owed = 0; g_gc_full_asked = g_gc_full_paced = 0u; }
+void isaac_lua_gc_full_counts(uint32_t out[3]) { out[0] = g_gc_full_asked; out[1] = g_gc_full_paced; out[2] = (uint32_t)g_gc_owed; }
 /* the growth waited for: pct percent of the heap at the last cycle end, capped */
 int isaac_lua_gc_room(int base_kb, int pct) {
     int64_t room = (int64_t)base_kb * pct / 100;
@@ -1472,6 +1508,7 @@ void isaac_lua_gc_counts(uint32_t out[4]) { out[0] = g_gc_asked; out[1] = g_gc_d
 int isaac_lua_gc_last_step(void) { return g_gc_last_step; }
 static void gc_cycle_ended(lua_State *L) {
     g_gc_phase = GC_WAIT; g_gc_base_kb = lua_gc(L, LUA_GCCOUNT, 0); ++g_gc_cycles;
+    g_gc_owed = 0;
     if (g_gc_cycles <= 3u || g_gc_cycles % 200u == 0u)
         isaac_log("[isaac][lua] collector: cycle %u ended at %d KB; %u step(s) asked, %u deferred",
                   g_gc_cycles, g_gc_base_kb, g_gc_asked, g_gc_deferred);
@@ -1488,6 +1525,27 @@ int isaac_lua_gc(lua_State *L, int what, int data) {
     }
     if (!g_gc_pct) return lua_gc(L, what, data);
     if (!g_gc_pause_set) { g_gc_pause_set = 1; lua_gc(L, LUA_GCSETPAUSE, 100 + g_gc_pct); }
+    if (what == LUA_GCCOLLECT) {
+        if (g_gc_full_mode < 0) {
+            const char *e = getenv("ISAAC_LUA_GC_ROOM");
+            g_gc_full_mode = (e && *e == '0') ? 0 : (e && *e == '1') ? 1 : 2;
+        }
+        ++g_gc_full_asked;
+        if (isaac_lua_gc_full_paced(lua_gc(L, LUA_GCCOUNT, 0), g_gc_pct, g_gc_full_mode)) {
+            if (!g_gc_full_paced++)
+                isaac_log(g_gc_full_mode == 2
+                          ? "[isaac][lua] round 117: a whole collection the game asks for over %d KB of heap is left to the "
+                            "collector's own pace (ISAAC_LUA_GC_ROOM=0 makes it at once, 1 owes a cycle)"
+                          : "[isaac][lua] round 117: a whole collection the game asks for over %d KB of heap is spread over "
+                            "the passes after it (ISAAC_LUA_GC_ROOM=0 makes it at once, 2 leaves it to the collector's pace)",
+                          ISAAC_GC_FULL_NOW_KB);
+            if (g_gc_full_mode == 2) return 0;
+            /* a cycle that ended since the game's last step is not the one owed */
+            if (g_gc_phase == GC_RUN && isaac_lua_gc_paused(L)) gc_cycle_ended(L);
+            g_gc_owed = 1;
+            return 0;
+        }
+    }
     /* anything else (a count, a whole collection asked for outright) is made
      * as asked; the next step sees for itself where the collector is */
     if (what != LUA_GCSTEP || data <= 0) return lua_gc(L, what, data);
@@ -1502,7 +1560,7 @@ int isaac_lua_gc(lua_State *L, int what, int data) {
     g_gc_last_kb = kb;
     if (g_gc_phase == GC_WAIT) {
         if (kb < g_gc_base_kb) g_gc_base_kb = kb;         /* a collection someone asked for outright shrank it */
-        if (isaac_lua_gc_defer(kb, g_gc_base_kb, 0, g_gc_pct)) {
+        if (!g_gc_owed && isaac_lua_gc_defer(kb, g_gc_base_kb, 0, g_gc_pct)) {
             ++g_gc_deferred;
             g_gc_last_step = 0;
             return 0;

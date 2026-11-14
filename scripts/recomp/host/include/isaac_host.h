@@ -367,6 +367,9 @@ int  isaac_glc_rb_param(uint32_t pname, uint32_t *out);
 void isaac_glc_tex_active(uint32_t unit);
 void isaac_glc_tex_bind(uint32_t target, uint32_t name);
 void isaac_glc_tex_image(uint32_t target);
+void isaac_glc_tex_shape(uint32_t target, uint32_t level, uint32_t ifmt, uint32_t w, uint32_t h);   /* round 118 */
+void isaac_glc_fbo_shape_mode(int on);
+uint32_t isaac_glc_fbo_shape_hits(void);
 void isaac_glc_tex_delete(uint32_t name);
 void isaac_glc_fbo_bind(uint32_t target, uint32_t name);
 void isaac_glc_fbo_attach(uint32_t target, uint32_t attachment, uint8_t kind, uint32_t name, uint32_t extra);
@@ -451,6 +454,13 @@ int    isaac_lazy_tex_materialize(uint32_t name, isaac_lazy_upload_fn up);
 void   isaac_lazy_tex_stats(uint32_t *pending, uint32_t *deferred, uint32_t *materialized, uint32_t *refused,
                             uint64_t *held, uint64_t *raw_pending);
 void   isaac_lazy_tex_report(void);
+/* round 118: an image the game's loader returned is kept past its last user (host_img_keep.c) */
+uint64_t isaac_gl_tex_image_bytes(void);
+void   isaac_img_keep_reset(uint64_t budget_bytes, double idle_ms);
+void   isaac_img_keep_counts(uint32_t out[6], uint64_t *bytes);
+int    isaac_img_keep_note(uint32_t img, uint64_t bytes, double now_ms,
+                           int (*hold)(void *, uint32_t), void (*drop)(void *, uint32_t), void *ctx);
+void   isaac_img_keep_report(void);
 
 /* host_snd_lazy.c (round 98): a sound sample's PCM is read when it is first
  * played. The lift patches in SampleSourceWav's loader (0x00a7b6a0) call

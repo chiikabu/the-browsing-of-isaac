@@ -634,6 +634,24 @@ WRAP_PATCHES: dict[int, str] = {
     # jmp thunk 0x00af0770, which parks recomp_jmp_target and whose ten
     # callers (eight floor, two ceil) all run the pending trampoline. No
     # verify mode, for the same reason as 0x00af0800.
+    # Round 118: the game's image loader (the lookup of the live images by
+    # name, then the load: 0x00a118d0(result, path, arg), ret 0xc). Not a
+    # stand-in: the lifted body runs as it is, and afterwards the host takes a
+    # counted reference of its own to the image it returned, so that the next
+    # room finds it alive (host_img_keep.c). ISAAC_IMG_KEEP=0 takes none.
+    0x00a118d0: """void sub_00a118d0(CpuState *restrict s) {
+  /* LIFT-PATCH wrap 0x00a118d0: a loaded image is kept past its last user (host_img_keep.c) */
+  extern uint64_t isaac_img_keep_enter(void);
+  extern void isaac_img_keep_loaded(const CpuState *, uint32_t, uint32_t, uint64_t);
+  RECOMP_VA(0xa118d0u);
+  if (g_reentry_eip) { sub_00a118d0__lifted(s); return; }
+  const uint32_t out = MEMR32(s->ESP + 4u), path = MEMR32(s->ESP + 8u);
+  const uint64_t before = isaac_img_keep_enter();
+  sub_00a118d0__lifted(s);
+  if (recomp_jmp_pending) recomp_run_pending(s);
+  if (s->EAX == out) isaac_img_keep_loaded(s, out, path, before);
+}
+""",
     0x00af0780: """void sub_00af0780(CpuState *restrict s) {
   /* LIFT-PATCH wrap 0x00af0780: x87 ST0 -> int32 truncation (host_fastpath.c) */
   /* no verify path, on purpose: the lifted body IS the defect (round 91) */

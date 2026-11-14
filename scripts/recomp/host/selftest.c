@@ -391,6 +391,17 @@ static void test_eh(void) {
     check(isaac_eh_tail(0x008659f9u, &c) == 1 && c.EAX == 0x7777u && c.EBX == 0xEB0Bu && c.EIP == 0x00FEDCBAu
           && c.ESP == outer + 8u + 8u && c.EBP == 0x0BADBEEFu && c.ESI == 0xE5u,
           "eh: GetTrinket's aligned frame returns its local through mov esp,ebx");
+    /* PreEntitySpawn (0x00864abc), the tail a mod's error in MC_PRE_ENTITY_SPAWN takes
+     * (angels-drop-items in every Secret Exit room): mov ebx,[ebp-0x14]; fs:[0] from
+     * [ebp-0xc]; pop ecx/edi/esi; mov esp,ebp; pop ebp; mov esp,ebx; pop ebx; ret 0x1c.
+     * The function returns nothing (its results go out through pointers): EAX stays. */
+    isaac_w32(G - 0xcu, 0x0FEDC0C0u);
+    { const uint32_t v[] = {0xEC, 0xED, 0xE5}; eh_w(G - 0x40u, v, 3); }
+    c.EBP = G; c.ESP = G - 0x40u; c.EAX = 0x00864abcu; c.EBX = 0u;
+    check(isaac_eh_tail(0x00864abcu, &c) == 1 && c.EAX == 0x00864abcu && c.EBX == 0xEB0Bu && c.EIP == 0x00FEDCBAu
+          && c.ESP == outer + 8u + 0x1cu && c.EBP == 0x0BADBEEFu && c.ESI == 0xE5u && c.EDI == 0xEDu && c.ECX == 0xECu
+          && isaac_r32(ISAAC_TEB_VA) == 0x0FEDC0C0u,
+          "eh: PreEntitySpawn's aligned frame restores fs:[0] and its registers and returns with ret 0x1c");
     /* Round 101: GetShaderParams. The arm a thrown callback takes (no table
      * referenced yet: [ebp-0x20] still -1) writes {L, LUA_NOREF} through the
      * result pointer at [ebp+8], returns it and pops 8; the arm with a
@@ -464,6 +475,25 @@ static void test_lazy_textures(void) {
           "lazy textures: the sprite comes back exactly (whole pixels)");
     check(isaac_lazy_encode(noise, N, 0, code) == ln && isaac_lazy_decode(code, ln, 0, back, N) && !memcmp(back, noise, N * 4),
           "lazy textures: noise comes back exactly too (literal runs)");
+    {   /* round 117: coded in one pass into a buffer of a given size */
+        extern size_t isaac_lazy_encode_cap(const uint8_t *px, uint32_t npix, int gray, uint8_t *out, size_t cap);
+        uint8_t *one = (uint8_t *)malloc(N * 8);
+        memset(one, 0xA5, N * 8);
+        check(isaac_lazy_encode_cap(sprite, N, 0, one, ls + 8) == ls && isaac_lazy_encode(sprite, N, 0, code) == ls && !memcmp(one, code, ls)
+              && one[ls] == 0xA5,
+              "lazy textures: coded into a buffer with room, the code is the same bytes and nothing more is written");
+        memset(one, 0xA5, N * 8);
+        int over = isaac_lazy_encode_cap(sprite, N, 0, one, ls - 1) == (size_t)-1, clean = 1;
+        for (size_t k = ls - 1; k < ls + 64; ++k) if (one[k] != 0xA5) clean = 0;
+        check(over && clean, "lazy textures: a buffer one byte short is refused, and nothing is written past it");
+        memset(one, 0xA5, N * 8);
+        over = isaac_lazy_encode_cap(noise, N, 0, one, (size_t)N * 2) == (size_t)-1; clean = 1;
+        for (size_t k = (size_t)N * 2; k < (size_t)N * 2 + 64; ++k) if (one[k] != 0xA5) clean = 0;
+        check(over && clean, "lazy textures: noise into half its RGBA is refused the same way");
+        check(isaac_lazy_encode_cap(glyph, N, 1, one, lg + 8) == lg && isaac_lazy_decode(one, lg, 1, back, N) && !memcmp(back, glyph, N * 4),
+              "lazy textures: and a gray page coded in one pass comes back exactly");
+        free(one);
+    }
     {   /* runs at both ends, of every length around the repeat threshold */
         uint8_t edge[64 * 4];
         for (int i = 0; i < 64; ++i) { uint8_t v = (uint8_t)(i < 3 ? 9 : i < 5 ? 1 : i < 13 ? 2 : i < 20 ? i : 200); memset(edge + i * 4, v, 4); }
@@ -491,6 +521,18 @@ static void test_lazy_textures(void) {
     check(pending == 1 && held == lg && raw == (uint64_t)N * 4, "lazy textures: its code is what is held");
     check(!isaac_lazy_tex_defer(9, 0x0DE1, 0, 0x1908, W, H, 0, 0x1908, 0x1401, noise), "lazy textures: noise is uploaded at once");
     check(!isaac_lazy_tex_defer(10, 0x0DE1, 0, 0x1908, 64, 64, 0, 0x1908, 0x1401, glyph), "lazy textures: under 64 KB too");
+    {   /* round 117: five eighths noise codes to more than half and less than the whole RGBA */
+        uint8_t *mixed = (uint8_t *)calloc(N, 4);
+        memcpy(mixed, noise, (size_t)N * 4 * 5 / 8);
+        size_t lm = isaac_lazy_encode(mixed, N, 0, NULL);
+        uint32_t ref0 = 0, ref1 = 0;
+        isaac_lazy_tex_stats(NULL, NULL, NULL, &ref0, NULL, NULL);
+        int kept = isaac_lazy_tex_defer(21, 0x0DE1, 0, 0x1908, W, H, 0, 0x1908, 0x1401, mixed);
+        isaac_lazy_tex_stats(NULL, NULL, NULL, &ref1, NULL, NULL);
+        check(lm > (size_t)N * 2 && lm < (size_t)N * 4 && !kept && ref1 == ref0 + 1u && !isaac_lazy_tex_pending(21),
+              "lazy textures: a code between half and the whole RGBA is uploaded at once");
+        free(mixed);
+    }
     check(!isaac_lazy_tex_defer(11, 0x0DE1, 1, 0x1908, W, H, 0, 0x1908, 0x1401, glyph) &&
           !isaac_lazy_tex_defer(11, 0x0DE1, 0, 0x1907, W, H, 0, 0x1907, 0x1401, glyph) &&
           !isaac_lazy_tex_defer(0, 0x0DE1, 0, 0x1908, W, H, 0, 0x1908, 0x1401, glyph) &&
@@ -590,6 +632,110 @@ static void test_lazy_textures(void) {
               "lazy textures: a texture within the 4 MB band is one whole upload");
     }
     free(glyph); free(sprite); free(noise); free(back); free(code); free(g_up_px); g_up_px = NULL;
+}
+/* Round 118: an image the game's loader returned is kept past its last user
+ * (host_img_keep.c). The table is driven here with stand-ins for the two
+ * guest calls: a reference taken into a slot, a slot let go. */
+static uint32_t g_ik_held[256], g_ik_holds, g_ik_drops, g_ik_last_drop, g_ik_next;
+static int g_ik_refuse, g_ik_inside;
+static double g_ik_now;
+static void ik_drop(void *ctx, uint32_t i);
+static int ik_hold(void *ctx, uint32_t i) {
+    (void)ctx;
+    if (g_ik_refuse) return 0;
+    g_ik_held[i] = g_ik_next; ++g_ik_holds;
+    return 1;
+}
+static void ik_drop(void *ctx, uint32_t i) {
+    g_ik_last_drop = g_ik_held[i]; g_ik_held[i] = 0u; ++g_ik_drops;
+    /* a load made from inside the game's destructor: the slot being let go is left alone */
+    if (g_ik_inside) { g_ik_inside = 0; g_ik_next = 0x9000u; isaac_img_keep_note(0x9000u, 200u, g_ik_now, ik_hold, ik_drop, ctx); g_ik_next = 0xd00u; }
+}
+static int ik_note(uint32_t img, uint64_t bytes) { g_ik_next = img; return isaac_img_keep_note(img, bytes, g_ik_now, ik_hold, ik_drop, NULL); }
+static int ik_holds(uint32_t img) { for (int i = 0; i < 256; ++i) if (g_ik_held[i] == img) return 1; return 0; }
+static void test_img_keep(void) {
+    uint32_t c[6]; uint64_t bytes;
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = g_ik_last_drop = 0u; g_ik_refuse = g_ik_inside = 0;
+    isaac_img_keep_reset(1000u, 0.0);
+    check(ik_note(0x100u, 400u) == 1 && ik_note(0x200u, 400u) == 1 && ik_holds(0x100u) && ik_holds(0x200u) && g_ik_holds == 2u,
+          "image keep: an image the loader returns is taken, once each");
+    isaac_img_keep_counts(c, &bytes);
+    check(c[0] == 2u && c[1] == 2u && c[2] == 0u && c[3] == 0u && bytes == 800u, "image keep: what is held is counted in images and bytes");
+    check(ik_note(0x100u, 0u) == 0 && ik_note(0x100u, 999999u) == 0 && g_ik_holds == 2u && (isaac_img_keep_counts(c, &bytes), c[2] == 2u && bytes == 800u),
+          "image keep: an image held already is not taken again, whatever size comes with it");
+    /* 0x100 was asked for last: 0x200 is the one to go */
+    check(ik_note(0x300u, 300u) == 1 && g_ik_drops == 1u && g_ik_last_drop == 0x200u && ik_holds(0x100u) && ik_holds(0x300u) && !ik_holds(0x200u),
+          "image keep: past the budget the least recently asked-for image is let go, not the oldest taken");
+    isaac_img_keep_counts(c, &bytes);
+    check(c[0] == 2u && c[3] == 1u && bytes == 700u, "image keep: and its bytes are no longer counted");
+    check(ik_note(0x400u, 300u) == 1 && g_ik_drops == 1u && (isaac_img_keep_counts(c, &bytes), bytes == 1000u),
+          "image keep: an image that fits exactly lets nothing go");
+    check(ik_note(0x500u, 1000u) == 1 && g_ik_drops == 4u && ik_holds(0x500u) && (isaac_img_keep_counts(c, &bytes), c[0] == 1u && bytes == 1000u),
+          "image keep: an image of the whole budget lets everything else go");
+    check(ik_note(0x600u, 1001u) == 0 && g_ik_drops == 4u && ik_holds(0x500u) && !ik_holds(0x600u) && (isaac_img_keep_counts(c, &bytes), c[4] == 1u),
+          "image keep: an image larger than the budget is not taken and lets nothing go");
+    check(ik_note(0u, 10u) == 0 && g_ik_holds == 5u, "image keep: no image is nothing");
+    /* a size not known counts as 256 KB */
+    isaac_img_keep_reset(600u * 1024u, 0.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    check(ik_note(0x700u, 0u) == 1 && ik_note(0x800u, 0u) == 1 && (isaac_img_keep_counts(c, &bytes), bytes == 2u * 256u * 1024u)
+          && ik_note(0x900u, 0u) == 1 && g_ik_drops == 1u && !ik_holds(0x700u),
+          "image keep: an image of unknown size counts as 256 KB");
+    /* a reference that could not be taken leaves the table as it was */
+    isaac_img_keep_reset(1000u, 0.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    g_ik_refuse = 1;
+    check(ik_note(0xa00u, 100u) == 0 && (isaac_img_keep_counts(c, &bytes), c[0] == 0u && c[1] == 0u && bytes == 0u),
+          "image keep: a reference that is not taken is not counted");
+    g_ik_refuse = 0;
+    check(ik_note(0xa00u, 100u) == 1 && (isaac_img_keep_counts(c, &bytes), c[0] == 1u && bytes == 100u), "image keep: and the image can be taken later");
+    /* no more slots than 256: the 257th lets the first go */
+    isaac_img_keep_reset(1u << 30, 0.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    int all = 1;
+    for (uint32_t k = 1; k <= 256u; ++k) all &= ik_note(0x1000u + k, 10u);
+    check(all && g_ik_drops == 0u && ik_note(0x5000u, 10u) == 1 && g_ik_drops == 1u && g_ik_last_drop == 0x1001u && (isaac_img_keep_counts(c, &bytes), c[0] == 256u),
+          "image keep: 256 images at most; the next lets the least recent go");
+    /* a load made while a slot is being let go (the game's destructor loads
+     * another image, of 200 bytes, which itself needs room): the slot being
+     * let go is neither handed out nor let go a second time. 0xb00 goes for
+     * 0xd00; inside that, 0xc00 goes for 0x9000; then 0x9000 goes for 0xd00. */
+    isaac_img_keep_reset(250u, 0.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    ik_note(0xb00u, 100u); ik_note(0xc00u, 100u);
+    g_ik_inside = 1;
+    int took = ik_note(0xd00u, 100u);
+    isaac_img_keep_counts(c, &bytes);
+    check(took == 1 && ik_holds(0xd00u) && !ik_holds(0x9000u) && !ik_holds(0xb00u) && !ik_holds(0xc00u) && g_ik_drops == 3u && g_ik_holds == 4u
+          && c[0] == 1u && c[1] == 4u && c[3] == 3u && bytes == 100u,
+          "image keep: a load made from inside a let-go leaves that slot alone, and the books still balance");
+    isaac_img_keep_reset(0u, 0.0);
+    check(ik_note(0xe00u, 10u) == 0 && (isaac_img_keep_counts(c, &bytes), c[0] == 0u), "image keep: with no budget nothing is taken");
+    /* an image nobody asked for within the idle time is let go at the next load */
+    isaac_img_keep_reset(1000u, 5000.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    g_ik_now = 1000.0; ik_note(0xf10u, 100u); ik_note(0xf20u, 100u);
+    g_ik_now = 4000.0; ik_note(0xf10u, 0u);                       /* asked for again at 4 s */
+    g_ik_now = 6000.0;
+    check(ik_note(0xf30u, 100u) == 1 && g_ik_drops == 0u && ik_holds(0xf20u),
+          "image keep: an image asked for exactly the idle time ago is still held");
+    g_ik_now = 6001.0;
+    check(ik_note(0xf40u, 100u) == 1 && g_ik_drops == 1u && g_ik_last_drop == 0xf20u && ik_holds(0xf10u) && ik_holds(0xf30u)
+          && (isaac_img_keep_counts(c, &bytes), c[0] == 3u && c[3] == 0u && c[5] == 1u && bytes == 300u),
+          "image keep: past the idle time it is let go, and one asked for again since is not");
+    g_ik_now = 9500.0;
+    check(ik_note(0xf10u, 0u) == 0 && g_ik_drops == 1u && ik_holds(0xf10u) && (isaac_img_keep_counts(c, &bytes), c[0] == 3u),
+          "image keep: an image asked for after its idle time, and still held, is the most recent again and stays");
+    g_ik_now = 14400.0;
+    check(ik_note(0xf10u, 0u) == 0 && g_ik_drops == 3u && ik_holds(0xf10u) && !ik_holds(0xf30u) && !ik_holds(0xf40u)
+          && (isaac_img_keep_counts(c, &bytes), c[0] == 1u && c[5] == 3u && bytes == 100u),
+          "image keep: a load of a held image lets the idle others go too");
+    isaac_img_keep_reset(1000u, 0.0);
+    memset(g_ik_held, 0, sizeof g_ik_held); g_ik_holds = g_ik_drops = 0u;
+    g_ik_now = 0.0; ik_note(0xf50u, 100u);
+    g_ik_now = 1e12;
+    check(ik_note(0xf60u, 100u) == 1 && g_ik_drops == 0u && ik_holds(0xf50u), "image keep: with no idle time nothing is let go for being idle");
+    g_ik_now = 0.0;
 }
 /* Round 98: a sound sample's PCM is read when it is first played (host_snd_lazy.c).
  * The guest call that fills is replaced: the table, the fill's choice of buffers,
@@ -1027,6 +1173,7 @@ int main(int argc, char **argv) {
     test_input_edges();
     test_thread_naps();
     test_lazy_textures();
+    test_img_keep();
     test_lazy_sound();
     test_eh();
     printf("--- isaac host layer selftest ---\n");
@@ -3886,6 +4033,116 @@ int main(int argc, char **argv) {
             while (!isaac_lua_gc_paused(L) && steps < 10000) { isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
         }
 
+        /* Round 117: a whole collection the game asks for (it does at every
+         * room entry). On a small heap it is made in the call; over 4 MB a
+         * cycle is owed and the steps after it make it, without the wait. */
+        {
+            extern int isaac_lua_gc_full_paced(int count_kb, int pct, int mode);
+            extern void isaac_lua_gc_set_full(int mode);
+            extern void isaac_lua_gc_full_counts(uint32_t out[3]);
+            uint32_t f0[3], f1[3];
+#  define GC_FIN() (lua_getglobal(L, "__gc_fin"), fin = (int)lua_tointeger(L, -1), lua_pop(L, 1), fin)
+#  define GC_DOOMED "setmetatable({}, { __gc = function() __gc_fin = __gc_fin + 1 end })"
+            int fin = 0;
+            check(isaac_lua_gc_full_paced(4096, 25, 1) == 0 && isaac_lua_gc_full_paced(4097, 25, 1) == 1,
+                  "gc whole: a heap over 4096 KB has its whole collection spread; at 4096 KB it is made in the call");
+            check(isaac_lua_gc_full_paced(100000, 0, 1) == 0 && isaac_lua_gc_full_paced(100000, 25, 0) == 0,
+                  "gc whole: with the pacing off, or its own switch off, it is made in the call at any size");
+            isaac_lua_gc_set_full(1);
+            luaL_dostring(L, "__gc_fin = 0 " GC_DOOMED);
+            isaac_lua_gc_full_counts(f0);
+            int rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc_full_counts(f1);
+            check(lua_gc(L, LUA_GCCOUNT, 0) <= 4096 && rw == 0 && GC_FIN() == 1 && f1[0] == f0[0] + 1u && f1[1] == f0[1] && f1[2] == 0u,
+                  "gc whole: on a small heap the collection is made in the call (the finalizer has run)");
+
+            luaL_dostring(L, "__gc_big = {} for i = 1, 60000 do __gc_big[i] = { i, i, i } end");
+            ended = 0; steps = 0;
+            while (!ended && steps < 10000) { ended = isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
+            check(ended == 1 && lua_gc(L, LUA_GCCOUNT, 0) > 4096, "gc whole: (the test's heap is over 4 MB, and between cycles)");
+            luaL_dostring(L, GC_DOOMED);
+            isaac_lua_gc_full_counts(f0); isaac_lua_gc_counts(g0);
+            rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(rw == 0 && GC_FIN() == 1 && isaac_lua_gc_paused(L) && f1[0] == f0[0] + 1u && f1[1] == f0[1] + 1u && f1[2] == 1u
+                  && g1[2] == g0[2],
+                  "gc whole: on a big heap nothing is collected in the call, and a cycle is owed");
+            steps = 0;
+            while (isaac_lua_gc_paused(L) && steps < 2000) { isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
+            isaac_lua_gc_counts(g1);
+            check(!isaac_lua_gc_paused(L) && g1[1] == g0[1] && isaac_lua_gc_last_step() >= 64 && isaac_lua_gc_last_step() < 10000,
+                  "gc whole: the steps after it are made with no growth to wait for, spread, and begin a cycle");
+            ended = 0; steps = 0;
+            while (!ended && steps < 10000) { ended = isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(ended == 1 && GC_FIN() == 2 && g1[2] == g0[2] + 1u && g1[1] == g0[1] && f1[2] == 0u,
+                  "gc whole: that cycle runs to its end, the finalizer has run, and nothing is owed");
+            check(isaac_lua_gc(L, LUA_GCSTEP, 10000) == 0 && (isaac_lua_gc_counts(g0), g0[1] == g1[1] + 1u),
+                  "gc whole: the step after it waits for growth again");
+
+            /* asked while a cycle runs: that cycle is the one */
+            luaL_dostring(L, "for i = 1, 100000 do local t = { i, i } end");
+            steps = 0;
+            while (isaac_lua_gc_paused(L) && steps < 200000) { isaac_lua_gc(L, LUA_GCSTEP, 1); ++steps; }
+            check(!isaac_lua_gc_paused(L), "gc whole: (small steps past the allowance begin a cycle)");
+            isaac_lua_gc_counts(g0);
+            rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(rw == 0 && !isaac_lua_gc_paused(L) && f1[2] == 1u && g1[2] == g0[2], "gc whole: asked while a cycle runs, the cycle goes on");
+            ended = 0; steps = 0;
+            while (!ended && steps < 10000) { ended = isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(ended == 1 && g1[2] == g0[2] + 1u && f1[2] == 0u && isaac_lua_gc(L, LUA_GCSTEP, 10000) == 0
+                  && (isaac_lua_gc_counts(g0), g0[1] == g1[1] + 1u),
+                  "gc whole: and is the one owed: after it the next step waits");
+
+            /* a cycle that ended unseen before the game asked is not the one owed */
+            luaL_dostring(L, "for i = 1, 100000 do local t = { i, i } end");
+            steps = 0;
+            while (isaac_lua_gc_paused(L) && steps < 200000) { isaac_lua_gc(L, LUA_GCSTEP, 1); ++steps; }
+            lua_gc(L, LUA_GCCOLLECT, 0);                   /* asked of Lua itself: the wrapper has not seen the end */
+            luaL_dostring(L, GC_DOOMED);
+            isaac_lua_gc_counts(g0);
+            rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(rw == 0 && GC_FIN() == 2 && f1[2] == 1u && g1[2] == g0[2] + 1u,
+                  "gc whole: a cycle that had ended unseen is counted as ended at the ask, and one is still owed");
+            ended = 0; steps = 0;
+            while (!ended && steps < 10000) { ended = isaac_lua_gc(L, LUA_GCSTEP, 10000); ++steps; }
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g0);
+            check(ended == 1 && GC_FIN() == 3 && f1[2] == 0u && g0[1] == g1[1] && g0[2] == g1[2] + 1u,
+                  "gc whole: the steps after it make that cycle with none deferred");
+
+            /* its switch off: made in the call at any size */
+            isaac_lua_gc_set_full(0);
+            luaL_dostring(L, GC_DOOMED);
+            isaac_lua_gc_full_counts(f0);
+            rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc_full_counts(f1);
+            check(rw == 0 && GC_FIN() == 4 && lua_gc(L, LUA_GCCOUNT, 0) > 4096 && f1[0] == f0[0] + 1u && f1[1] == f0[1] && f1[2] == 0u,
+                  "gc whole: with ISAAC_LUA_GC_ROOM=0 a big heap is collected in the call");
+            /* mode 2: over the threshold it is neither made nor owed; the step after it waits as any other */
+            isaac_lua_gc_set_full(2);
+            ended = 0; steps = 0;
+            while (isaac_lua_gc(L, LUA_GCSTEP, 10000) != 0 && steps < 100) ++steps;   /* between cycles, seen */
+            luaL_dostring(L, GC_DOOMED);
+            isaac_lua_gc_full_counts(f0); isaac_lua_gc_counts(g0);
+            rw = isaac_lua_gc(L, LUA_GCCOLLECT, 0);
+            int rs = isaac_lua_gc(L, LUA_GCSTEP, 10000);
+            isaac_lua_gc_full_counts(f1); isaac_lua_gc_counts(g1);
+            check(rw == 0 && rs == 0 && GC_FIN() == 4 && isaac_lua_gc_paused(L) && f1[0] == f0[0] + 1u && f1[1] == f0[1] + 1u && f1[2] == 0u
+                  && g1[1] == g0[1] + 1u && g1[2] == g0[2],
+                  "gc whole: with ISAAC_LUA_GC_ROOM=2 a big heap is not collected in the call and no cycle is owed (the next step waits)");
+            lua_gc(L, LUA_GCCOLLECT, 0);                   /* the test's last doomed object goes while its counter is still there */
+            check(GC_FIN() == 5, "gc whole: (asked of Lua itself, that object is collected)");
+            isaac_lua_gc_set_full(1);
+            luaL_dostring(L, "__gc_big = nil __gc_fin = nil");
+            lua_gc(L, LUA_GCCOLLECT, 0);
+            isaac_lua_gc(L, LUA_GCSTEP, 10000);            /* the wrapper sees the collector between cycles again */
+#  undef GC_FIN
+#  undef GC_DOOMED
+        }
+
         luaL_dostring(L, "return #__gc_live");
         check(lua_tointeger(L, -1) == 4000, "gc: what is alive stays");
         lua_settop(L, 0);
@@ -4669,6 +4926,101 @@ int main(int argc, char **argv) {
                 check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "gl cache: deleting the bound framebuffer leaves the default bound");
                 isaac_glc_fbo_bind(0x8D40u, 3);
                 check(!isaac_glc_fbo_status(0x8D40u, &st), "gl cache: a deleted name comes back fresh");
+                {   /* round 118: a shape GL called complete is complete for other objects of that shape */
+#  define TEX_AS(name, w, h) do { isaac_glc_tex_bind(0x0DE1u, (name)); isaac_glc_tex_image(0x0DE1u); isaac_glc_tex_shape(0x0DE1u, 0, 0x8058u, (w), (h)); } while (0)
+#  define FBO_COLOR(fb, point, tex, level) do { isaac_glc_fbo_bind(0x8D40u, (fb)); isaac_glc_fbo_attach(0x8D40u, (point), 1, (tex), (0x0DE1u << 8) ^ (level)); } while (0)
+                    isaac_glc_fbo_shape_mode(1);
+                    isaac_glc_tex_active(0x84C0u);
+                    TEX_AS(31, 442, 286); TEX_AS(32, 442, 286); TEX_AS(33, 442, 287); TEX_AS(34, 442, 287);
+                    FBO_COLOR(40, 0x8CE0u, 31, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a shape not seen before asks GL");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                    FBO_COLOR(41, 0x8CE0u, 32, 0);
+                    uint32_t h0 = isaac_glc_fbo_shape_hits();
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u && isaac_glc_fbo_shape_hits() == h0 + 1u,
+                          "fbo shape: another framebuffer with another texture of that format and size is complete without asking");
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u && isaac_glc_fbo_shape_hits() == h0 + 1u,
+                          "fbo shape: and then remembers it as its own");
+                    FBO_COLOR(42, 0x8CE0u, 33, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a texture one row taller asks GL");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD6u);
+                    FBO_COLOR(45, 0x8CE0u, 34, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: an answer other than complete is not passed on to the shape");
+                    FBO_COLOR(43, 0x8CE0u, 32, 1);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: another level of the texture asks GL");
+                    FBO_COLOR(44, 0x8CE1u, 32, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: the same texture at another attachment point asks GL");
+                    /* a texture whose image came by a call that does not say what it is */
+                    isaac_glc_tex_bind(0x0DE1u, 35); isaac_glc_tex_image(0x0DE1u);
+                    FBO_COLOR(46, 0x8CE0u, 35, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a texture whose image was not seen asks GL");
+                    /* colour and a depth-stencil renderbuffer */
+                    isaac_glc_rb_bind(12); isaac_glc_rb_storage(0x88F0u, 442, 286, 0);
+                    isaac_glc_rb_bind(13); isaac_glc_rb_storage(0x88F0u, 442, 286, 0);
+                    isaac_glc_rb_bind(14); isaac_glc_rb_storage(0x81A5u, 442, 286, 0);
+                    isaac_glc_rb_bind(15); isaac_glc_rb_storage(0x88F0u, 442, 286, 4);
+                    FBO_COLOR(47, 0x8CE0u, 31, 0); isaac_glc_fbo_attach(0x8D40u, 0x821Au, 0, 12, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: colour with a depth-stencil renderbuffer is another shape");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                    FBO_COLOR(48, 0x8CE0u, 32, 0); isaac_glc_fbo_attach(0x8D40u, 0x821Au, 0, 13, 0);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: the same with another renderbuffer of that storage is complete");
+                    FBO_COLOR(49, 0x8CE0u, 32, 0); isaac_glc_fbo_attach(0x8D40u, 0x821Au, 0, 14, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a renderbuffer of another format asks GL");
+                    FBO_COLOR(52, 0x8CE0u, 32, 0); isaac_glc_fbo_attach(0x8D40u, 0x821Au, 0, 15, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a renderbuffer with another sample count asks GL");
+                    /* depth and stencil as two attachments: one image, or two */
+                    FBO_COLOR(53, 0x8CE0u, 31, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D00u, 0, 12, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D20u, 0, 12, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: (depth and stencil attached apart, one renderbuffer: a new shape)");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                    FBO_COLOR(54, 0x8CE0u, 32, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D00u, 0, 13, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D20u, 0, 13, 0);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: depth and stencil on one renderbuffer again is complete");
+                    FBO_COLOR(55, 0x8CE0u, 32, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D00u, 0, 12, 0); isaac_glc_fbo_attach(0x8D40u, 0x8D20u, 0, 13, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: depth on one renderbuffer and stencil on another of that storage asks GL");
+                    /* the switch, a new image, a deleted texture */
+                    isaac_glc_fbo_shape_mode(0);
+                    FBO_COLOR(50, 0x8CE0u, 32, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: with ISAAC_GL_FBO_SHAPE=0 GL is asked");
+                    isaac_glc_fbo_shape_mode(1);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: (and answered again with it on)");
+                    TEX_AS(32, 100, 100);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a new image of another size for the attached texture asks GL");
+                    TEX_AS(32, 442, 286);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: the first size again is complete");
+                    isaac_glc_tex_delete(32);
+                    isaac_glc_tex_bind(0x0DE1u, 32); isaac_glc_tex_image(0x0DE1u);
+                    FBO_COLOR(51, 0x8CE0u, 32, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a deleted texture leaves no shape to its name");
+                    /* two names on one entry of the table: the first is no longer known */
+                    TEX_AS(31, 442, 286); TEX_AS(31 + 4096, 442, 286);
+                    FBO_COLOR(56, 0x8CE0u, 31, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a texture whose entry another name took asks GL");
+                    FBO_COLOR(57, 0x8CE0u, 31 + 4096, 0);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: and the one that took it is known");
+                    /* a level other than 0 is never answered by shape, even once GL has called one complete */
+                    TEX_AS(36, 300, 200); TEX_AS(37, 300, 200);
+                    FBO_COLOR(58, 0x8CE0u, 36, 1);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: (level 1 of a texture asks GL)");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                    FBO_COLOR(59, 0x8CE0u, 37, 1);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: level 1 of another texture of that size asks GL too");
+                    /* an image given by a call that does not say what it is: the shape seen before is forgotten */
+                    FBO_COLOR(60, 0x8CE0u, 36, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: (a 300 by 200 texture at level 0: a new shape)");
+                    isaac_glc_fbo_set_status(0x8D40u, 0x8CD5u);
+                    isaac_glc_tex_bind(0x0DE1u, 37); isaac_glc_tex_image(0x0DE1u);
+                    FBO_COLOR(61, 0x8CE0u, 37, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: a texture given a new image of unknown size is not known by its old one");
+                    /* a deleted texture's name, attached with no new image */
+                    TEX_AS(38, 300, 200);
+                    isaac_glc_tex_delete(38);
+                    FBO_COLOR(62, 0x8CE0u, 38, 0);
+                    check(!isaac_glc_fbo_status(0x8D40u, &st), "fbo shape: the name of a deleted texture has no shape");
+                    TEX_AS(38, 300, 200);
+                    check(isaac_glc_fbo_status(0x8D40u, &st) && st == 0x8CD5u, "fbo shape: (and with an image of that size again it is complete)");
+                    isaac_glc_fbo_bind(0x8D40u, 3);
+#  undef TEX_AS
+#  undef FBO_COLOR
+                }
                 check(!isaac_glc_loc_get(5, 1, "Transform", &loc), "gl cache: an unknown uniform asks GL");
                 isaac_glc_loc_put(5, 1, "Transform", 3);
                 check(isaac_glc_loc_get(5, 1, "Transform", &loc) && loc == 3, "gl cache: the uniform location is remembered");

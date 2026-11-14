@@ -125,6 +125,18 @@ LIFT_CFLAGS = ["-O2", "-w", "-DRECOMP_MEM_CHECK=1"]
 
 LDFLAGS = [
     "-O2", "-w", "--no-entry", "--profiling-funcs",
+    # Round 119: Binaryen inlines a function that has one caller whatever its
+    # size (--one-caller-inline-max-function-size is unlimited by default), and
+    # so put the parts split_giants.py cuts the giant functions into back into
+    # their trampolines at the link: the wasm had one 1.83 MB function for
+    # sub_005d4380 again (round 43 noted it and measured only memory). V8
+    # compiles a function whole the first time it is called, on the main
+    # thread: 440 ms for that one at the first effect of a run, 77 ms for the
+    # next largest (the trace of perf-rooms.mjs: wasm.CompileLazy). With this
+    # limit, in Binaryen's own size measure (expression nodes), a part stays a
+    # function of its own, is compiled when it is first reached, and is
+    # optimised on its own.
+    "-sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=4000",
     # The wasm memory is committed the moment it is created, so INITIAL_MEMORY is
     # resident bytes on every machine that opens the page; growing it later
     # reallocates and copies the whole heap (round 15e: a 200-s play run managed
@@ -526,7 +538,8 @@ def main():
     if args.fast_link:
         # -O2 at link runs wasm-opt over the whole 272 MB module and dominates
         # the 8-minute link; the objects are already -O2. Measured per build.
-        ldflags = ["-O0" if f == "-O2" else f for f in ldflags]
+        # (and no wasm-opt at all, so nothing for its inliner's limit either)
+        ldflags = ["-O0" if f == "-O2" else f for f in ldflags if not f.startswith("-sBINARYEN_EXTRA_PASSES=")]
     result["fastLink"] = bool(args.fast_link)
     lines.extend(ldflags)
     lines += ["-sEXPORTED_FUNCTIONS=@" + str(expo).replace("\\", "/")]

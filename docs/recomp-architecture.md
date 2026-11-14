@@ -11785,3 +11785,254 @@ Folio indexes exist; covered by the unit test with hand-built packs). A new
 one does not get it installed. An entry that moved between zip and packed is
 reported, not converted. Not run against jsDelivr itself, on a phone, Firefox or
 Safari.
+
+### 21.146 Round 117: the whole collection at every door is spread over the passes after it
+
+Host only (`host_lua.c`, `host_gl_lazy.c`), `selftest.c`. Engine n8.
+
+**What was measured.** `.scratch/perf/perf-rooms.mjs` is new: a tiny mod walks
+the floor (a room transition every 60 updates, the door-walk animation, debug 3
+on, enemies left alone), the page records the time of every frame handed over
+and of the mod's log lines, and a browser trace of the walk carries the CPU
+samples (`disabled-by-default-v8.cpu_profiler`, exact times; the CDP profiler
+started beside the walk was tens of ms out of step and put a 90 ms frame at 24 ms
+busy). Per transition: the longest frame interval and the time lost to frames
+over 34 ms. On engine n3 (release 23), CPU x1:
+
+| | longest frame at a door, median | of it |
+|---|---|---|
+| plain game | 84 to 100 ms | 48 ms PNG decoding and upload, 5 ms `checkFramebufferStatus` |
+| Fiend Folio | 256 to 262 ms (max 393 to 454) | 112 ms `propagatemark`, `sweeplist`, `guest_free`; 38 ms PNG |
+
+The 112 ms is a whole collection. The game asks for one itself:
+`lua_gc(L, LUA_GCCOLLECT, 0)` at 0x007f769f, followed by `LUA_GCCOUNT` and
+`LUA_GCCOUNTB` for the line `Lua mem usage: %d KB and %d bytes` (the game's log
+has that line after `Room %d.%d(%s)` and `SpawnRNG seed: %u` at every room
+entry: 29 of them for 23 rooms and the start in a Fiend Folio tour), and at
+0x0086ee91 in the Lua engine's start. The import has three direct call sites and three register-held
+ones (`pequery.py xrefs-to 0x00b18310`: 0x008657d6 and 0x008658b0 are round
+113's count and step, 0x00872102 a count; 0x00691b8b counts for the console; the
+two above are the only `what == 2`). In the plain game the heap is 0.8 MB and
+the collection is under a millisecond. With Fiend Folio it marks and sweeps 90
+to 110 MB in the frame the room appears in. A real machine pays this too (it is
+the game's code); here it is two to three times dearer.
+
+**The change.** In `isaac_lua_gc`, a `LUA_GCCOLLECT` with more than 4096 KB of
+heap (`ISAAC_GC_FULL_NOW_KB`) is not made in the call. `ISAAC_LUA_GC_ROOM` says
+what is done instead:
+
+- `2`, the default: nothing. Round 113's pacing goes on as it was, and the
+  garbage of the room left goes in the cycle the heap's growth brings next.
+- `1`: a cycle is owed. From the next pass on the game's steps are made without
+  round 113's wait for growth, spread (a 128th of the heap a pass) and time-boxed
+  (2 ms a pass) as before, until a cycle has ended. A cycle already running when
+  the game asks is the one owed; one that had ended since the game's last step,
+  unseen, is counted as ended first and is not. Lua's pause leaves the debt at
+  minus a quarter of the heap after a cycle, so the owed steps first pay that
+  off: with Fiend Folio the cycle begins about half a second after the door.
+- `0`: the collection is made in the call, as the game asks.
+
+At or under 4096 KB the collection is always made as asked, so the plain game
+(a heap of 0.8 MB) is as it was; so it is with round 113's pacing off
+(`ISAAC_LUA_GC=0`).
+
+`1` was written first, as the nearer thing to what the game asks. On the walk
+(a door every two seconds) it and `2` give the same frames, and `1` keeps the
+main thread a tenth busier (0.79 against 0.71 and 0.75 of it), because a cycle
+is then always owed or running; in a fight that is time the game does not have.
+
+What changes for a mod under `1` and `2`: the garbage of the room just left is
+freed, and its finalizers run, seconds after the room appears and not before its
+first frame; `Lua mem usage` reports the heap as it is; the heap is larger
+between cycles (92 to 121 MB with Fiend Folio on the walk, where the collection
+at every door held it at 91 to 111).
+
+The second change is in the path every loaded sheet takes: a texture of 64 KB
+and up is kept coded until it is first used (round 97), and the coder measured
+the code and then wrote it, two passes over the pixels. It now writes into a
+buffer of half the RGBA (a longer code was never kept) in one pass, and stops
+when it would pass the end (`lazy_encode_to`). A code within four bytes of the
+half can now be refused where it was kept.
+
+**Measured** (`rooms_ab.sh`, Fiend Folio, CPU x1, 21 doors a run over seven
+rooms, the variants alternating; no trace running):
+
+| engine, runs | at the door | longest frame at a door | game updates a second |
+|---|---|---|---|
+| n5, 2 | the collection made (`ISAAC_LUA_GC_ROOM=0`) | median 270, 346 ms (the second run on a busy machine) | 23.3, 20.0 |
+| n5, 2 | a cycle owed (`1`) | median 156, 152 ms | 24.4, 25.1 |
+| n7, 2 | a cycle owed (`1`) | median 122, 81 ms (the first run on a busy machine) | 21.4, 25.1 |
+| n7, 2 | left to the collector (`2`) | median 93, 88 ms | 25.4, 25.8 |
+| n8, 2 | the collection made (`0`), rooms seen before | median 226, 198 ms; 14 of 14 over 100 ms | 23.0, 23.4 |
+| n8, 2 | left to the collector (`2`), rooms seen before | median 130, 136 ms; 12 of 14 over 100 ms | 25.0, 25.0 |
+
+The n7 and n8 rows have round 118's image keeping in them (n7) or switched off
+(n8, both rows), so they compare within an engine only. The machine also ran
+another agent's browsers during some runs; a run whose main thread was over 95%
+busy is marked. The plain game takes none of these paths (its heap is under the
+threshold) and its doors are round 118's.
+
+**Correctness.** selftest: the rule (`isaac_lua_gc_full_paced`: over the
+threshold, pacing on, switch on), a small heap collected in the call (a
+finalizer has run when it returns), a big heap not collected in the call and a
+cycle owed, the steps after it made with none deferred and to the cycle's end
+(the finalizer has run, nothing owed, the next step waits again), asked while a
+cycle runs, a cycle that had ended unseen, the switch off; the one-pass coder
+against the two-pass one byte for byte, a buffer one byte short, noise, a sheet
+that codes to between half and the whole. 9 mutants through `mutate.mjs` (the threshold, each of the three conditions, the cycle owed and not owed, the wait skipped, the unseen cycle, mode 2) and 4 of the coder (either bound dropped, never refused, the whole RGBA allowed), all killed by the selftest.
+
+**Not done.** Lua's own steps at an allocation are not time-boxed (only the
+game's are); the atomic phase of a cycle is one piece.
+
+### 21.147 Round 118: a loaded image is kept past its last user; a framebuffer shape GL called complete
+
+Host (`host_img_keep.c`, new; `host_gl_cache.c`, `host_gl_webgl.c`), one wrapper
+in `lift_patches.py`, `selftest.c`. Engine n7.
+
+**What was measured.** With round 117 in, the frame a room appears in was still
+84 to 100 ms in the plain game, 75 ms of it CPU, in a room that had been entered
+before as much as in a new one (the trace's own samples, `perf-rooms.mjs
+trace=1`):
+
+| in that frame, per door | ms |
+|---|---|
+| PNG: inflate (`sub_00ad3b30`, `isaac_fast_inflate_ring`), unfilter, premultiply, adler32 | 30 |
+| the kept-texture code of round 97 (`isaac_lazy_encode`, materialize) and the copies | 18 |
+| `checkFramebufferStatus` (a round trip to the GPU process) | 5 |
+
+The game counts the users of every image and frees an image, texture and all,
+when the last one lets go. Leaving a room lets go of what it used; the next room
+asks for most of it back, and the loader reads the archive, decodes the PNG and
+uploads it again.
+
+**Images.** The game's loader is 0x00a118d0 (`ret 0xc`: result, path, a third
+argument): a lookup of the path's name (0x00a17180), a lookup of the live images
+by that name (0x00a11780: found, it is returned), else an object by the file's
+extension (0x60 bytes, constructor 0x00a69950, the PNG vtable 0x00b9ff84), its
+load (`vtable+0x38`, 0x00a64a50 for a PNG) and registration. `Manager::LoadImage`
+(0x009588a0, the one exact ZHL signature here) is one of its two callers. The
+other creator of image objects, 0x00a11c70, makes procedural ones (the shadow
+ellipse, avatars) and is not touched. The smart pointer is `{image, counter}`;
+0x0040c550 copy-constructs one (it takes a count through the counter's
+`vtable+4`), 0x0040c440 is its destructor (`vtable+0xc`, then the deleter at
+[0x00c7163c] when it was the last).
+
+So nothing is cached. The loader is wrapped (the lifted body runs as it is), and
+after it the host takes one more counted reference of its own to the image it
+returned, into a guest slot the host owns, by calling the game's copy
+constructor; it lets go by calling the game's destructor. While the host holds
+an image the game's own lookup finds it, and the load is not made. The host
+lets go of the least recently asked-for images when what it holds passes 64 MB
+(`ISAAC_IMG_KEEP=<MB>`; an image's size is the RGBA bytes handed to
+`glTexImage2D` while it loaded, 256 KB when none were) or 256 images, and of any
+image nobody has asked for in 180 s (`ISAAC_IMG_KEEP_S`). `ISAAC_IMG_KEEP=0`
+takes none; `ISAAC_IMG_KEEP_LOG=1` names every image loaded or taken.
+
+What changes for the game: an image may outlive its last user. It is the object
+any other user alive at that time would have shared, in the state the game left
+it. The first budget tried, 32 MB, was full at 53 images and the walk's seven
+rooms did not fit (9 ms of PNG a door were left); at 64 MB a door into a room
+seen before has no frame over 34 ms in the plain game.
+
+**The framebuffer.** `host_gl_cache.c` already remembered the status GL gave for
+a framebuffer's attachment configuration (round 37), by object names. Every room
+builds its backdrop into new textures of the sizes the last room had, attaches
+them, and asks. Completeness depends on what is attached, not on which objects:
+per attachment point, a renderbuffer's format, size and samples or a texture
+level's format and size, and whether depth and stencil are one image. A shape GL
+called complete is now answered complete for other objects of that shape: only
+for level 0 of 2D textures whose image the cache saw (`glTexImage2D`), compared
+whole, at most 32 shapes, a COMPLETE answer only. `ISAAC_GL_FBO_SHAPE=0` asks GL.
+On the walk: 8 questions reach GL where one did at every door.
+
+**Measured** (engine n7, CPU x1, 21 doors a run over seven rooms, alternating):
+
+| | this round's switches | longest frame at a door into a room seen before | into a new room | slow doors (seen before) |
+|---|---|---|---|---|
+| plain | `ISAAC_IMG_KEEP=0`, `ISAAC_GL_FBO_SHAPE=0` | median 82, 80 ms | median 93, 91 ms (max 292, 318) | over 34 ms: 14 of 14, 14 of 14 |
+| plain | the defaults | median 29, 28 ms | median 47, 50 ms (max 225, 196) | over 34 ms: 1 of 14, 1 of 14 |
+| Fiend Folio | `ISAAC_IMG_KEEP=0`, `ISAAC_GL_FBO_SHAPE=0` | median 130, 136 ms | median 170, 170 ms | over 100 ms: 12 of 14, 12 of 14 |
+| Fiend Folio | the defaults | median 69, 69 ms | median 102, 123 ms (max 290, 283) | over 100 ms: 0 of 14, 0 of 14 |
+
+With Fiend Folio the game makes 25.6 and 25.5 updates a second over the walk
+where it made 25.0 (the walk's doors hold it under 30; it stood at 23.0 and 23.4
+before round 117). From the start of round 117, a door into a room seen before:
+plain 82 to 29 ms, Fiend Folio 226 and 198 to 69 ms.
+
+What is left in a Fiend Folio door (the trace, a run of its own): the mod's own
+Lua for the new room and the game's set-up of it; in the plain game 20 ms of CPU
+in the five doors of 21 that still had a frame over 34 ms.
+
+**Correctness.** selftest: the table (taken once, least recently asked-for let
+go and not the oldest taken, an exact fit, an image of the whole budget, one
+larger than it, unknown size, a reference that is not taken, 256 slots, a load
+made from inside a let-go, the idle time and an image asked for again at its
+edge) and the shape memo (another framebuffer and texture of the shape, a row
+taller, another level, another attachment point, a texture whose image was not
+seen, colour with a depth-stencil renderbuffer, another format and sample count,
+depth and stencil on one renderbuffer or two, an answer other than complete, the
+switch, a new image, a deleted texture, two names on one table entry).
+26 mutants through `mutate.mjs` (14 of the table, 12 of the shape memo), all killed; three of the memo's survived the first set of checks and are what the level-1, unknown-image and deleted-name cases were added for. The selftest is at 946 checks. In the browser: engine n8, both tours (`drive_stress.mjs phases=tour`, plain and Fiend Folio) with no stop and no Lua error; test_cb 28 0, test_hooks4 23 0, test_hooks3 42 0, test_hooks2 49 0, test_layer 49 0, test_layer2 95 0, test_layer3 53 0, test_layer4 49 0, test_gate 7 0, test_ach 24 0. A Fiend Folio walk of 29 doors stopped by `ISAAC_MAX_FRAMES` reports 120 images held (63.3 MB), 1,262 taken and 9,323 asked for again while held since the boot, 1,142 let go for room, none idle; 836 framebuffer questions answered from 7 shapes.
+
+**Not done.** The size of an image is what it uploaded, not what the GPU holds
+(a kept texture that was never drawn is only its code). On a phone the 64 MB is
+not measured. The loader's wrapper is skipped when the lifted body is re-entered
+mid-way (`g_reentry_eip`); such an image is simply not taken.
+
+### 21.148 Round 119: the parts of a giant function stay functions at the link
+
+One link flag (`build_boot.py`). Engine n7.
+
+**What was measured.** The worst frame of the plain game's walk was not a door:
+440 to 490 ms, once, in the first room with enemies. The browser trace names it:
+`wasm.CompileLazy` on the main thread, `funcIndex 2563`, `bodySize 1828241`,
+440 ms; the next largest, `bodySize 246833`, 77 ms. V8 compiles a wasm function
+whole, on the main thread, the first time it is called (the optimising compile
+comes later, off the thread: 5.6 s for that body). The name section says which
+function: `sub_005d4380__lifted`, the per-effect update, 1.83 MB of wasm, first
+called when the first effect entity of a session updates.
+
+Round 43 cut exactly that function into 13 parts (`split_giants.py`: ten
+functions over 60,000 lines of C, parts of 25,000), and noted "Binaryen's
+link-time inliner puts the `noinline` parts back into their trampoline (the wasm
+has one 1.77 MB `sub_005d4380` again)"; what it measured, V8's memory at the
+first run start, had gone anyway. The compile time of the first call had not.
+Binaryen inlines a function that has one caller whatever its size
+(`--one-caller-inline-max-function-size`, default unlimited), and every part has
+one caller, its trampoline.
+
+**The change.** `-sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=4000`
+at the link (a global option of wasm-opt, so its place in the pass list does not
+matter; the size is Binaryen's own measure, expression nodes). Not passed to the
+`-O0` link of the node harness, which runs no wasm-opt.
+
+| `wasm_funcs.py` on the module | n6 | n7 |
+|---|---|---|
+| function bodies | 26,956 | 27,000 |
+| bodies of 1 MB and more | 2 (1,828,241 and 1,103,949 bytes) | 0 |
+| bodies of 250 KB and more | 12 (6.6 MB) | 3 (0.8 MB) |
+| the largest | `sub_005d4380__lifted` 1,828,241 | `sub_0068cdc0` 301,042 |
+| module | 54,675,640 bytes | 54,631,094 |
+
+**Measured** (`perf-rooms.mjs` on the plain game, CPU x1; the trace's
+`wasm.CompileBaseline` events of 4 ms and more during a 21-door walk):
+
+| | n6 | n7 |
+|---|---|---|
+| compiles of 4 ms and more | 6, 587 ms in all | 15, 243 ms in all |
+| the largest | 434 ms (1,828,241 bytes), 75 ms (246,833), 53 ms (345,584) | 82 ms (246,833), 28 ms (136,065), 19 ms (141,768) |
+| the worst frame of the walk, three runs each | 458, 491, 652 ms | 279, 312, 353 ms (n8: 225, 196) |
+
+The worst frame that is left is the first room with enemies: the archive reads
+for its sheets (the wasm waits on the reader, the thread idle), their decoding,
+and those compiles.
+
+A part is now compiled when it is first reached, and optimised on its own.
+
+**Not done.** The functions round 43 did not cut (under 60,000 lines) are whole:
+`sub_006c4b30__lifted` (246,833 bytes) is the 82 ms that is left, once, at the
+first enemy; nine more are between 180 and 301 KB. Cutting them is
+`SPLIT_MIN_LINES`, and needs round 43's frame-identical check run again. The
+shipped page is the portable one, which compiles the module from bytes
+(`play.mjs`, no `instantiateStreaming`), so V8's code cache holds nothing of it
+and every start compiles again.

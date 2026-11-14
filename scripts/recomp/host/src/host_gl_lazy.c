@@ -108,12 +108,19 @@ static int get_head(const uint8_t *code, size_t len, size_t *p, uint32_t *v) {
     return 0;
 }
 
-/* The code of npix RGBA pixels into out (NULL: only its length). */
-size_t isaac_lazy_encode(const uint8_t *px, uint32_t npix, int gray, uint8_t *out) {
+/* The code of npix RGBA pixels into out (NULL: only its length), as long as
+ * it is at most cap bytes: LAZY_OVER when it would be longer, with nothing
+ * written past cap (a token is taken to need its longest header, 5 bytes,
+ * so a code within 4 bytes of cap can be refused). Round 117: the upload
+ * path codes into a buffer of half the RGBA in one pass; it measured the
+ * code first and then wrote it, two passes over every sheet a room loads. */
+#define LAZY_OVER ((size_t)-1)
+static size_t lazy_encode_to(const uint8_t *px, uint32_t npix, int gray, uint8_t *out, size_t cap) {
     const uint32_t minrun = gray ? 3u : 2u, size = gray ? 1u : 4u, most = 0x7fffffffu;
     size_t o = 0;
     uint32_t i = 0, lit = 0, litlen = 0;
 #define FLUSH() do { if (litlen) { \
+        if (cap - o < 5u || (cap - o - 5u) / size < litlen) return LAZY_OVER; \
         o += put_head(out, o, litlen, 0u); \
         if (out) for (uint32_t k = 0; k < litlen; ++k) { \
             if (gray) out[o + k] = px[(size_t)(lit + k) * 4u + 3u]; \
@@ -124,6 +131,7 @@ size_t isaac_lazy_encode(const uint8_t *px, uint32_t npix, int gray, uint8_t *ou
         while (i + r < npix && r < most && pixel(px, i + r) == v) ++r;
         if (r >= minrun) {
             FLUSH();
+            if (cap - o < 5u + size) return LAZY_OVER;
             o += put_head(out, o, r, 1u);
             if (out) { if (gray) out[o] = (uint8_t)(v >> 24); else put32(out, o, v); }
             o += size;
@@ -139,6 +147,13 @@ size_t isaac_lazy_encode(const uint8_t *px, uint32_t npix, int gray, uint8_t *ou
     FLUSH();
 #undef FLUSH
     return o;
+}
+size_t isaac_lazy_encode(const uint8_t *px, uint32_t npix, int gray, uint8_t *out) {
+    return lazy_encode_to(px, npix, gray, out, (size_t)-1);
+}
+/* the same into at most cap bytes of out: (size_t)-1 if the code would not fit */
+size_t isaac_lazy_encode_cap(const uint8_t *px, uint32_t npix, int gray, uint8_t *out, size_t cap) {
+    return lazy_encode_to(px, npix, gray, out, cap);
 }
 
 /* The next npix pixels of a code, from where the cursor stands (a zeroed
@@ -214,20 +229,23 @@ int isaac_lazy_tex_defer(uint32_t name, uint32_t target, uint32_t level, uint32_
     uint64_t raw = (uint64_t)npix * 4u;
     if (raw < g_lazy_min) return 0;
     int gray = isaac_lazy_gray(px, npix);
-    size_t len = isaac_lazy_encode(px, npix, gray, NULL);
-    if ((uint64_t)len * 2u > raw) { ++g_lazy_refused; return 0; }
+    /* a code of more than half the RGBA is not kept: one pass, into a buffer of that half */
+    const size_t half = (size_t)(raw / 2u);
+    uint8_t *code = (uint8_t *)malloc(half);
+    if (!code) return 0;
+    size_t len = lazy_encode_to(px, npix, gray, code, half);
+    if (len == LAZY_OVER) { free(code); ++g_lazy_refused; return 0; }
+    { uint8_t *fit = (uint8_t *)realloc(code, len ? len : 1); if (fit) code = fit; }
     if (name >= g_lazy_cap) {
         uint32_t cap = g_lazy_cap ? g_lazy_cap : 1024u;
         while (cap <= name) cap *= 2u;
         lazy_tex **grown = (lazy_tex **)realloc(g_lazy, (size_t)cap * sizeof *grown);
-        if (!grown) return 0;
+        if (!grown) { free(code); return 0; }
         memset(grown + g_lazy_cap, 0, (size_t)(cap - g_lazy_cap) * sizeof *grown);
         g_lazy = grown; g_lazy_cap = cap;
     }
     lazy_tex *t = (lazy_tex *)calloc(1, sizeof *t);
-    uint8_t *code = (uint8_t *)malloc(len ? len : 1);
-    if (!t || !code) { free(t); free(code); return 0; }
-    isaac_lazy_encode(px, npix, gray, code);
+    if (!t) { free(code); return 0; }
     isaac_lazy_tex_drop(name);
     t->target = target; t->level = level; t->ifmt = ifmt; t->w = w; t->h = h;
     t->border = border; t->format = format; t->type = type;

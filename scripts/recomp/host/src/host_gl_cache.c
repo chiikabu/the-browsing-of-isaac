@@ -30,6 +30,7 @@
 #include "isaac_host.h"
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static uint32_t g_rb_hit, g_rb_miss, g_fbo_hit, g_fbo_miss, g_loc_hit, g_loc_miss, g_readpixels;
 static uint32_t g_rp_maxw, g_rp_maxh, g_rp_fmt, g_rp_x, g_rp_y;   /* the largest read the game asked for */
@@ -116,13 +117,35 @@ void isaac_glc_tex_active(uint32_t unit) {
 void isaac_glc_tex_bind(uint32_t target, uint32_t name) {
     if (target == 0x0DE1u) g_tex_bound[g_tex_unit] = name;      /* GL_TEXTURE_2D */
 }
+/* round 118: what level 0 of a 2D texture was last given (the framebuffer
+ * shape memo below reads it). Direct-mapped by name; a name that lands on
+ * the entry of another takes it, and the other texture is then not known. */
+#define GLC_TEXSHAPE 4096u
+typedef struct { uint32_t name, ifmt, w, h; } glc_texshape;
+static glc_texshape g_texshape[GLC_TEXSHAPE];
+static void texshape_forget(uint32_t name) {
+    glc_texshape *t = &g_texshape[name & (GLC_TEXSHAPE - 1u)];
+    if (t->name == name) t->name = 0u;
+}
+static const glc_texshape *texshape_get(uint32_t name) {
+    const glc_texshape *t = &g_texshape[name & (GLC_TEXSHAPE - 1u)];
+    return name && t->name == name ? t : NULL;
+}
 void isaac_glc_tex_image(uint32_t target) {
-    if (target == 0x0DE1u) g_tex_forget += fbo_forget_attachment(1, g_tex_bound[g_tex_unit]);
+    if (target == 0x0DE1u) { g_tex_forget += fbo_forget_attachment(1, g_tex_bound[g_tex_unit]); texshape_forget(g_tex_bound[g_tex_unit]); }
     else g_tex_forget += fbo_forget_attachment(1, 0);           /* another target: forget every framebuffer */
+}
+/* after isaac_glc_tex_image, by the one call that says what the image is (glTexImage2D) */
+void isaac_glc_tex_shape(uint32_t target, uint32_t level, uint32_t ifmt, uint32_t w, uint32_t h) {
+    const uint32_t name = g_tex_bound[g_tex_unit];
+    if (target != 0x0DE1u || level || !name) return;
+    glc_texshape *t = &g_texshape[name & (GLC_TEXSHAPE - 1u)];
+    t->name = name; t->ifmt = ifmt; t->w = w; t->h = h;
 }
 void isaac_glc_tex_delete(uint32_t name) {
     for (unsigned u = 0; u < GLC_UNITS; ++u) if (g_tex_bound[u] == name) g_tex_bound[u] = 0;
     g_del_forget += fbo_forget_attachment(1, name);
+    texshape_forget(name);
 }
 
 /* ---- framebuffer status -------------------------------------------------- */
@@ -231,6 +254,59 @@ void isaac_glc_fbo_delete(uint32_t name) {
     if (g_fbo_draw == name) g_fbo_draw = 0;
     if (g_fbo_read == name) g_fbo_read = 0;
 }
+/* Round 118: the shape memo. Completeness does not depend on which objects
+ * are attached, only on what they are: per attachment point, the format,
+ * size and samples of a renderbuffer or the format and size of a texture
+ * level, and whether depth and stencil are the one image. Every room builds
+ * its backdrop into new textures of the sizes the last room had, and asks;
+ * the answer GL gave for that shape is given again without the round trip
+ * to the GPU process (5 ms of the frame a room appears in, perf-rooms.mjs).
+ * Only a COMPLETE answer is remembered, only for level 0 of 2D textures
+ * whose image this cache saw, and the shape is compared whole, not by a
+ * hash. ISAAC_GL_FBO_SHAPE=0 asks GL as before. */
+#define GLC_SHAPES 32
+#define GLC_SHAPE_WORDS (GLC_ATT * 7u + 2u)
+typedef struct { uint32_t n, w[GLC_SHAPE_WORDS]; } glc_shape;
+static glc_shape g_shape[GLC_SHAPES];
+static uint32_t g_shape_next, g_shape_live, g_shape_hit;
+static int g_shape_mode = -1;
+void isaac_glc_fbo_shape_mode(int on) { g_shape_mode = on; }
+static int shape_on(void) {
+    if (g_shape_mode < 0) { const char *e = getenv("ISAAC_GL_FBO_SHAPE"); g_shape_mode = (e && *e == '0') ? 0 : 1; }
+    return g_shape_mode;
+}
+/* 1 and the shape, if everything attached is known */
+static int fbo_shape(const glc_fbo *f, glc_shape *s) {
+    uint32_t n = 0, dk = 2u, dn = 0u, sk = 2u, sn = 0u;
+    if (f->many) return 0;
+    for (unsigned k = 0; k < f->natt; ++k) {
+        if (!f->aname[k]) continue;                              /* detached */
+        uint32_t fmt, w, h, samples = 0u;
+        if (f->akind[k] == 0) {
+            int r = rb_find(f->aname[k]);
+            if (r < 0) return 0;
+            fmt = g_rb[r].fmt; w = g_rb[r].w; h = g_rb[r].h; samples = g_rb[r].samples;
+        } else {
+            const glc_texshape *t = texshape_get(f->aname[k]);
+            if (!t || f->aextra[k] != (0x0DE1u << 8)) return 0;  /* level 0 of a 2D texture only */
+            fmt = t->ifmt; w = t->w; h = t->h;
+        }
+        s->w[n++] = f->apoint[k]; s->w[n++] = f->akind[k]; s->w[n++] = f->aextra[k];
+        s->w[n++] = fmt; s->w[n++] = w; s->w[n++] = h; s->w[n++] = samples;
+        if (f->apoint[k] == 0x8D00u || f->apoint[k] == 0x821Au) { dk = f->akind[k]; dn = f->aname[k]; }   /* DEPTH, DEPTH_STENCIL */
+        if (f->apoint[k] == 0x8D20u || f->apoint[k] == 0x821Au) { sk = f->akind[k]; sn = f->aname[k]; }   /* STENCIL */
+    }
+    if (!n) return 0;
+    s->w[n++] = (uint32_t)(dk != 2u) | ((uint32_t)(sk != 2u) << 1);
+    s->w[n++] = (dk != 2u && sk != 2u) ? (uint32_t)(dk == sk && dn == sn) : 0u;
+    s->n = n;
+    return 1;
+}
+static int shape_known(const glc_shape *s) {
+    for (uint32_t i = 0; i < g_shape_live; ++i)
+        if (g_shape[i].n == s->n && !memcmp(g_shape[i].w, s->w, s->n * sizeof s->w[0])) return 1;
+    return 0;
+}
 int isaac_glc_fbo_status(uint32_t target, uint32_t *status) {
     uint32_t name = fbo_bound(target);
     if (!name) { *status = 0x8CD5u; ++g_fbo_hit; return 1; }     /* the default framebuffer: GL_FRAMEBUFFER_COMPLETE */
@@ -239,6 +315,13 @@ int isaac_glc_fbo_status(uint32_t target, uint32_t *status) {
         uint32_t sig = fbo_sig(&g_fbo[i]);
         for (unsigned m = 0; m < GLC_MEMO; ++m)
             if (g_fbo[i].mlive[m] && g_fbo[i].msig[m] == sig) { *status = g_fbo[i].mstatus[m]; ++g_fbo_hit; return 1; }
+        glc_shape s;
+        if (shape_on() && fbo_shape(&g_fbo[i], &s) && shape_known(&s)) {
+            *status = 0x8CD5u;
+            ++g_shape_hit;
+            isaac_glc_fbo_set_status(target, 0x8CD5u);           /* and under the configuration of this framebuffer */
+            return 1;
+        }
     }
     ++g_fbo_miss;
     return 0;
@@ -254,7 +337,14 @@ void isaac_glc_fbo_set_status(uint32_t target, uint32_t status) {
         if (f->mlive[m] && f->msig[m] == sig) { f->mstatus[m] = status; return; }
     f->msig[f->next] = sig; f->mstatus[f->next] = status; f->mlive[f->next] = 1;   /* round robin */
     f->next = (uint8_t)((f->next + 1u) % GLC_MEMO);
+    glc_shape s;
+    if (status == 0x8CD5u && shape_on() && fbo_shape(f, &s) && !shape_known(&s)) {
+        g_shape[g_shape_next] = s;                                                 /* round robin */
+        g_shape_next = (g_shape_next + 1u) % GLC_SHAPES;
+        if (g_shape_live < GLC_SHAPES) ++g_shape_live;
+    }
 }
+uint32_t isaac_glc_fbo_shape_hits(void) { return g_shape_hit; }
 
 /* ---- program locations --------------------------------------------------- */
 #define GLC_LOC 4096
@@ -311,6 +401,9 @@ void isaac_glc_report(void) {
               g_rb_hit, g_rb_miss, g_fbo_hit, g_fbo_miss, g_att_change, g_sto_change, g_tex_forget, g_del_forget,
               g_att_same, g_sto_same, g_loc_hit, g_loc_miss, g_readpixels,
               g_rp_maxw, g_rp_maxh, g_rp_x, g_rp_y, g_rp_fmt, (unsigned long long)g_rp_bytes);
+    if (g_shape_live)
+        isaac_log("[isaac][gl] host cache: framebuffer status answered %u times from a shape GL had called complete (%u shapes; "
+                  "ISAAC_GL_FBO_SHAPE=0 asks GL)", g_shape_hit, g_shape_live);
 }
 void isaac_glc_reset(void) {                        /* the selftest starts clean */
     memset(g_rb, 0, sizeof g_rb); g_rb_bound = 0;
@@ -319,4 +412,6 @@ void isaac_glc_reset(void) {                        /* the selftest starts clean
     memset(g_tex_bound, 0, sizeof g_tex_bound); g_tex_unit = 0;
     g_rb_hit = g_rb_miss = g_fbo_hit = g_fbo_miss = g_loc_hit = g_loc_miss = g_readpixels = 0;
     g_att_same = g_att_change = g_sto_same = g_sto_change = g_tex_forget = g_del_forget = 0;
+    memset(g_texshape, 0, sizeof g_texshape);
+    memset(g_shape, 0, sizeof g_shape); g_shape_next = g_shape_live = g_shape_hit = 0;
 }
