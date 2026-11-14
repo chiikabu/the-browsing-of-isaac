@@ -12053,5 +12053,7 @@ Measured, the fight, CPU x1, 20 s, three alternating pairs: 33.92, 33.73 and
 34.08 ms of CPU a game update with every block sent to the heap, 34.08, 35.00
 and 34.14 ms with the lists. No difference, so it is not in the tree (the patch
 is `.scratch/r120/round120-not-kept.patch`). Do not re-open on the profile's
-share alone: the time under those two names is the first touch of a block's
-memory, which a list pays as well.
+share alone. Why the share did not turn into time was not measured (the lists'
+own counters were never read: the run meant to stop the engine and print them
+did not reach its frame count); one guess is that the time under those two
+names is the first touch of a block's memory, which a list pays as well.
