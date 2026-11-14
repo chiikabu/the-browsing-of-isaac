@@ -131,7 +131,15 @@ node --test tests/recomp-rgon.test.js
 ```
 
 `?ISAAC_RGON=0` keeps the layer from loading; `?ISAAC_RGON_ALLOW=<folder>,...`
-(or `*`) lets more mods see `REPENTOGON` for a test.
+(or `*`) lets more mods see `REPENTOGON` for a test. Which mods see it is
+otherwise the layer's own decision from the page's reading of each mod's Lua
+(`scripts/recomp/rgon/README.md`, "What a mod sees"; `?ISAAC_RGON_AUTO=0` and
+`?modscan=0` switch that off):
+
+```sh
+node scripts/recomp/rgon/pack.mjs .scratch/rgon/repentogon.zip
+node scripts/recomp/rgon/tools/test_gate_auto.mjs "http://127.0.0.1:8200/play.html" .scratch/rgon/repentogon.zip <fresh out-dir>   # GATEAUTO END 108 0
+```
 
 A mod too large for the page's import (Fiend Folio: 22,858 files, 640 MB) is
 worked on from a dist's own instance tree, where files are read on demand:

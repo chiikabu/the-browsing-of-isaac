@@ -9,6 +9,10 @@ local function T(name, cond, detail)
   if not cond then failed = failed + 1 end
   say("RGON " .. (cond and "ok   " or "FAIL ") .. name .. (detail ~= nil and (" -- " .. tostring(detail)) or ""))
 end
+-- Since round 122 the layer decides by itself, from the names a mod uses. This
+-- mod must be one it hides: it uses a table of REPENTOGON's the layer lacks, in
+-- a branch for REPENTOGON, and runs without it (the page reads this very file).
+if REPENTOGON then ImGui.Show() end
 T("REPENTOGON is nil for a mod the layer does not name", REPENTOGON == nil, type(REPENTOGON))
 T("also through _G and through a function defined here", _G.REPENTOGON == nil and (function() return REPENTOGON end)() == nil)
 T("its presence cannot be seen with rawget either", rawget(_G, "REPENTOGON") == nil)
