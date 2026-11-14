@@ -51,7 +51,7 @@
 // which the engine cannot argue with.
 
 import { unzip, archiveKind } from './zip.mjs';
-import { cleanModName, cleanModText } from './mod_browser.mjs';
+import { cleanModName, cleanModText, EXPERIMENTAL_TAG, EXPERIMENTAL_NOTE } from './mod_browser.mjs';
 
 export const MODS_DB = 'isaac-mods', F_STORE = 'files', M_STORE = 'mods', S_STORE = 'state';
 // The two places the engine looks. `c:/isaac/mods/` is what the resource layer
@@ -2002,6 +2002,8 @@ export function createModsMenu(opts) {
       sizeNote: (have.has(m.id) && (updateNote(m.id) || {}).long) || (isPacked(m) ? ((have.has(m.id) && keptWords(m.id)) || {}).long
         || `${mib((m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0))} NOW, UP TO ${mib(m.bytes || 0)}` : null),
       rowNote: have.has(m.id) ? installedNote(m) : null,
+      // round 123: the catalogue marks a mod that runs here with known gaps (modpack.py --experimental)
+      experimental: m.experimental === true,
       // round 95: what installing it brings along, by name
       requires: (Array.isArray(m.requires) ? m.requires : []).map((r) => (byId.has(r) ? cleanModName(byId.get(r).name) : r)),
     }));
@@ -2098,7 +2100,9 @@ export function createModsMenu(opts) {
               : mib(isPacked(m) ? (m.packed.eagerBytes || 0) + (m.packed.indexBytes || 0) : m.bytes)),
         dim: have.has(m.id) || (!isPacked(m) && m.bytes > SEED_BUDGET) || (isPacked(m) && smallDevice()),
         // what the mod does, under the list, as the game's own mods screen shows it
-        detail: [m.version ? `V${m.version}` : '', have.has(m.id) ? ((updateNote(m.id) || {}).long || '') : '',
+        // round 123: a mod the catalogue marks experimental says so first
+        detail: [m.experimental === true ? `${EXPERIMENTAL_TAG}: ${EXPERIMENTAL_NOTE}` : '',
+          m.version ? `V${m.version}` : '', have.has(m.id) ? ((updateNote(m.id) || {}).long || '') : '',
           have.has(m.id) && isPacked(m) ? ((keptWords(m.id) || {}).long || '') : '',
           m.description || 'NO DESCRIPTION'].filter(Boolean).join(' - '),
         action: () => (have.has(m.id) ? say(`${m.name} is already installed`) : add(m)),

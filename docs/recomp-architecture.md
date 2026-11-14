@@ -12239,3 +12239,32 @@ was run. A method is matched by its name without its class. A mod that uses
 names the layer has and depends on behaviour the layer does not reproduce is
 shown. A mod shown because it cannot run otherwise runs with stand-ins where
 the layer has gaps: it loads, and the features behind the gaps do nothing.
+
+### 21.152 Round 123: a mod the catalogue marks experimental
+
+Page (`web/mod_browser.mjs`, `web/mods.mjs`) and the catalogue builder
+(`assets/modpack.py`). No engine change.
+
+Fiend Folio runs on the REPENTOGON-compatible layer, which lacks part of what
+it uses (21.151: it is shown `REPENTOGON` with stand-ins), and it is the
+heaviest mod of the catalogue. A player could not tell that from the browser.
+Now a catalogue entry may carry `"experimental": true`
+(`modpack.py --experimental <catalogue id or Workshop id>`, repeatable; an
+unknown id is an error; an entry carried over by `--keep` keeps its mark), and
+the browser says so: `EXPERIMENTAL` at the right of the mod's row in the list
+(where no progress or update note is shown), and on the mod's page, above the
+description and the INSTALL button, the word in a frame followed by `MAY BE
+BUGGY AND LAGGY`. Typing three or more letters of the word finds the marked
+mods, ahead of a description that merely has the letters. The paper a build
+without the browser's art shows puts the same words first in the line under
+its list.
+
+The mark is not part of what the updater compares (`entryIdentity`: a packed
+mod's index name, or the sizes of a zipped one), so marking an entry updates
+nobody's installed copy.
+
+Checked: `tests/recomp-mod-browser.test.js` and `tests/recomp-modpack.test.js`
+(eight mutants through `mutate.mjs`, all killed), and by eye on a dist with
+the browser's art and a copy of the catalogue with the mark, at 960x540 and
+at 390x844 with touch. In the list the long name is cut to make room for the
+word ("Damn, Fiend... EXPERIMENTAL"); the mod's page has the whole name.

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanModText, cleanModName, searchMods, wrapText } from '../scripts/recomp/web/mod_browser.mjs';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { cleanModText, cleanModName, searchMods, wrapText, EXPERIMENTAL_TAG, EXPERIMENTAL_NOTE } from '../scripts/recomp/web/mod_browser.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 test('mod descriptions lose Steam BBCode, links and HTML entities', () => {
   assert.equal(cleanModText('[h1] Improved Chargebars! [/h1] This mod changes the UI'), 'Improved Chargebars! This mod changes the UI');
@@ -65,4 +70,28 @@ test('descriptions wrap to the page, cut long words, and end in ... when they ru
   assert.deepEqual(wrapText('one two three four five six', 50, measure, 2), ['one two', 'three...']);
   assert.ok(wrapText('one two three four five six', 50, measure, 2).every((l) => measure(l) <= 50), 'the ... fits the line too');
   assert.deepEqual(wrapText('', 50, measure), []);
+});
+
+// round 123: a mod the catalogue marks experimental (Fiend Folio) says so in the browser
+test('round 123: an experimental mod is tagged in the list and on its page, and the tag can be searched', () => {
+  assert.equal(EXPERIMENTAL_TAG, 'EXPERIMENTAL');
+  assert.equal(EXPERIMENTAL_NOTE, 'MAY BE BUGGY AND LAGGY');
+  const items = [
+    { id: 'a', name: 'An Experience Mod', desc: 'no tag here' },
+    { id: 'b', name: 'Big Mod', desc: 'an experiment in its description' },
+    { id: 'ff', name: 'Fiend Folio', desc: 'monsters', experimental: true },
+    { id: 'z', name: 'Zed', desc: 'nothing', experimental: false },
+  ];
+  assert.deepEqual(searchMods(items, 'experimental').map((m) => m.id), ['ff'], 'the whole word finds the tagged mod only');
+  assert.deepEqual(searchMods(items, 'exper').map((m) => m.id), ['a', 'ff', 'b'], 'a name still comes first; the tag beats a description');
+  assert.deepEqual(searchMods(items, 'ex').map((m) => m.id), ['a', 'b'], 'two letters are not the tag');
+  assert.deepEqual(searchMods(items, 'fiend exp').map((m) => m.id), ['ff'], 'with another word');
+  assert.deepEqual(searchMods(items, 'zed exp').map((m) => m.id), [], 'a mod that is not marked has no tag');
+  const ui = readFileSync(join(here, '..', 'scripts', 'recomp', 'web', 'mod_browser.mjs'), 'utf8');
+  const mods = readFileSync(join(here, '..', 'scripts', 'recomp', 'web', 'mods.mjs'), 'utf8');
+  assert.ok(mods.includes('experimental: m.experimental === true,'), 'the page hands the mark to the browser, and only a true one');
+  assert.ok(ui.includes("const tag = !own && it.experimental ? EXPERIMENTAL_TAG : '';"), 'the list row says it where no progress or update note is');
+  assert.ok(ui.includes('if (it.experimental) {') && ui.includes('text(F10, EXPERIMENTAL_TAG, d.x0 + 4, y + 1);'), 'the page of the mod says it in a frame');
+  assert.ok(ui.indexOf('if (it.experimental) {') < ui.indexOf("const label2 = 'INSTALL'"), 'above the INSTALL button');
+  assert.ok(mods.includes("detail: [m.experimental === true ? `${EXPERIMENTAL_TAG}: ${EXPERIMENTAL_NOTE}` : '',"), 'the paper a build without the art shows says it first');
 });

@@ -35,10 +35,17 @@ as too big and leaves it alone. The output is checked file for file before the
 catalogue is written. Name a folder <dir>_<workshop id> (for example
 repentogon_3127536138) to give a mod without a metadata <id> its Workshop id.
 
+Round 123: --experimental <catalogue id or Workshop id> marks an entry
+"experimental": true: a mod that runs on this port with known gaps (Fiend Folio, on
+the REPENTOGON-compatible layer). The page's browser shows EXPERIMENTAL beside its
+name and a line on its page saying it may be buggy and slow. An entry carried over
+by --keep keeps its mark; an entry this build makes has it only if it is named.
+
 usage:
   modpack.py <mods-dir> <out-dir> [--max-mb 96] [--part-mb 19] [--base URL]
              [--requires FILE] [--select FILE] [--keep DIR]
              [--packed FOLDER ...] [--boot-list FILE] [--pack-mib 4]
+             [--experimental ID ...]
 """
 from __future__ import annotations
 
@@ -414,6 +421,9 @@ def main(argv=None) -> int:
     ap.add_argument("--boot-list", help="JSON list (or lines) of a packed mod's files a measured boot opens: "
                                         "they go in its eager lane (paths relative to the mod, or mods/<dir>/...)")
     ap.add_argument("--pack-mib", type=float, default=4.0, help="a packed mod's pack target, MiB (default 4)")
+    ap.add_argument("--experimental", action="append", default=[],
+                    help="round 123: a catalogue id or Workshop id whose entry is marked \"experimental\": true "
+                         "(the browser warns that it may be buggy and slow). Repeatable")
     args = ap.parse_args(argv)
     packed_names = set(args.packed)
     boot = []
@@ -518,6 +528,14 @@ def main(argv=None) -> int:
 
     entries, stranded = resolve_requires(entries, needs)
     left_out.extend(stranded)
+    # round 123: --experimental marks an entry, by catalogue id or Workshop id; the page's
+    # browser says so in the list and on the mod's page. A kept entry keeps its mark.
+    for name in args.experimental:
+        hit = [e for e in entries if name in (e["id"], e.get("workshop"))]
+        if not hit:
+            raise SystemExit("--experimental %s: no mod of this catalogue has that id or Workshop id" % name)
+        for e in hit:
+            e["experimental"] = True
     pk_biggest = 0
     for e in sorted(entries, key=lambda e: e["id"]):
         mid, n = e["id"], e["parts"]
