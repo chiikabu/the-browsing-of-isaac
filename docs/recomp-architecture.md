@@ -12036,3 +12036,22 @@ first enemy; nine more are between 180 and 301 KB. Cutting them is
 shipped page is the portable one, which compiles the module from bytes
 (`play.mjs`, no `instantiateStreaming`), so V8's code cache holds nothing of it
 and every start compiles again.
+
+### 21.149 Round 120: Lua's small blocks kept by size -- measured, not kept
+
+A Fiend Folio fight on engine n8 spends 7.4% of its busy time in `guest_malloc`
+and `guest_free` (`perf-run-ff.mjs`, the CDP profile: Lua VM 49%, lifted game
+code 20%, host heap 7.5%, dispatch 5%). Lua tells its allocator the size of the
+block it frees, so engine n9 kept blocks of up to 256 bytes on lists by size
+(steps of 8 bytes, the link in the block's first word, 32 MB at most, a resize
+within one list returning the block) and asked the heap only when a list was
+empty; the selftest drove it (10 checks: the kind passed as a new block's old
+size, the list's full size asked of the heap, the cap, both directions of a
+resize across 256 bytes).
+
+Measured, the fight, CPU x1, 20 s, three alternating pairs: 33.92, 33.73 and
+34.08 ms of CPU a game update with every block sent to the heap, 34.08, 35.00
+and 34.14 ms with the lists. No difference, so it is not in the tree (the patch
+is `.scratch/r120/round120-not-kept.patch`). Do not re-open on the profile's
+share alone: the time under those two names is the first touch of a block's
+memory, which a list pays as well.
