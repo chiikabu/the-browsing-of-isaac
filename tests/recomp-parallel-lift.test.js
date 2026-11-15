@@ -746,3 +746,26 @@ test('PE32 lift pipelines deliver recursive jump closure and executable shared f
 function hex(va) {
   return `0x${va.toString(16).padStart(8, '0')}`;
 }
+
+test('the lifter refuses a pypcode other than the one its lift patches match', (t) => {
+  // Issue 21: pypcode 4.x numbers P-code temporaries differently, and the
+  // block patches in lift_patches.py anchor on those names.
+  if (!python) return t.skip('no Python with capstone+pypcode available');
+  const fake = mkdtempSync(join(tmpdir(), 'isaac-pypcode-'));
+  t.after(() => rmSync(fake, { recursive: true, force: true }));
+  writeFileSync(join(fake, 'pypcode.py'), '__version__ = "4.1.0"\n'
+    + 'class _Names(type):\n    def __getattr__(cls, name):\n        return name\n'
+    + 'class OpCode(metaclass=_Names):\n    pass\n');
+  const probe = (dirs, env = {}) => spawnSync(python, ['-B', '-c',
+    'import sys\nfor d in reversed(sys.argv[1:]):\n    sys.path.insert(0, d)\nimport lift\nprint(lift.PYPCODE_VERSION)',
+    ...dirs], { cwd: root, encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', ISAAC_PYPCODE_ANY: '', ...env } });
+  const real = probe([lift]);
+  assert.equal(real.status, 0, real.stderr);
+  assert.equal(real.stdout.trim(), '3.3.3', 'the installed pypcode is the pinned one');
+  const wrong = probe([lift, fake]);
+  assert.notEqual(wrong.status, 0, 'pypcode 4.1.0 is refused');
+  assert.match(wrong.stderr, /pypcode 4\.1\.0 is installed, the lift needs 3\.3\.3/);
+  const forced = probe([lift, fake], { ISAAC_PYPCODE_ANY: '1' });
+  assert.equal(forced.status, 0, forced.stderr);
+});

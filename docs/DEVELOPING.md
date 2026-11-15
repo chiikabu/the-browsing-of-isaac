@@ -158,9 +158,13 @@ that the port loaded them in folder order, see
 ## Requirements
 
 - Your own copy of the game.
-- Python 3.11+ with `pypcode`, and Node.js 20+.
+- Python 3.11+ with `pypcode` 3.3.3 (`pip install pypcode==3.3.3`), and Node.js 20+.
+  Other versions number P-code temporaries differently, so the lift patches stop
+  matching; the lifter refuses them.
 - Emscripten 6.0.5+ with emsdk activated (set `EMSDK` if needed).
-- Ghidra and its Java runtime, for analysis and lifting.
+- Ghidra and its Java runtime, for analysis and lifting (set `GHIDRA_HOME`). The
+  export here was made with Ghidra 12.1.4 on Java 21; Homebrew's Ghidra 12.2 is
+  reported to need Java 25 (issue 21).
 - A C++20 `clang++` for the native decomp checks (`CLANGXX`/`EMXX` override it).
 - Playwright's Chromium for the browser drivers: `npx playwright install chromium`.
 
@@ -173,11 +177,25 @@ Everything generated stays local.
 ```sh
 npm install
 
+# The canonical executable, from a Steamless-unpacked copy of yours
+python scripts/recomp/prepare-input.py --input <unpacked-exe>
+
+# Ghidra's bulk export (about 50 min; scripts/recomp/README-export.md), the
+# import census and the PE index the lifter reads
+node scripts/recomp/export-all.mjs --stage all
+python scripts/recomp/census/run_all.py
+python scripts/decomp/tools/build-pe-index.py
+
 # Tables, memory image and host shims from your executable
 python scripts/recomp/host/boot_tables.py
 python scripts/recomp/host/memimage.py
 python scripts/recomp/host/verify_memimage.py
 python scripts/recomp/host/gen_shims.py
+
+# The lift's start list: Ghidra's functions, the code pointers in data, and the
+# functions only a code pointer reaches (without those, a mod stops on a trap)
+python scripts/recomp/lift/prepare_starts.py
+python scripts/recomp/lift/orphan_starts.py --write
 
 # Lift, then check the host
 python scripts/recomp/lift/lift_parallel.py --jobs 4 \
@@ -188,7 +206,7 @@ python scripts/recomp/lift/lift_parallel.py --jobs 4 \
     --shim-table output/recomp/host/shim-table.json \
     --va-file output/recomp/lift/starts_union.txt \
     --hand-written scripts/recomp/host/src/missing_fns.c \
-    --dispatch auto --max-insns 100000 --split-va 0x30000 --trace-va \
+    --dispatch auto --follow --max-insns 100000 --split-va 0x30000 --trace-va \
     --out output/recomp/lift/gu --module lifted \
     --stats output/recomp/lift/gu/stats.json
 python scripts/recomp/lift/patch_reentry.py --dir output/recomp/lift/gu \

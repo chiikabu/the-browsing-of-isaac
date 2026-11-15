@@ -37,6 +37,19 @@ from pe import PE32                  # noqa: E402
 
 LANG = "x86:LE:32:default"
 
+# The generated C names P-code temporaries by their unique-space offset
+# (u3300_4), and lift_patches.py anchors its block patches on that text.
+# pypcode 4.x numbers the temporaries differently, so its patches stop
+# matching ("block patch 0x00aa27f6: old text not found", issue 21). 3.3.3 is
+# the version the shipped lift was made with and its patches apply to.
+PYPCODE_VERSION = "3.3.3"
+if (getattr(pypcode, "__version__", None) != PYPCODE_VERSION
+        and os.environ.get("ISAAC_PYPCODE_ANY") != "1"):
+    raise SystemExit(
+        "lift.py: pypcode %s is installed, the lift needs %s "
+        "(pip install pypcode==%s); ISAAC_PYPCODE_ANY=1 skips this check"
+        % (getattr(pypcode, "__version__", "?"), PYPCODE_VERSION, PYPCODE_VERSION))
+
 UTYPE = {1: "uint8_t", 2: "uint16_t", 4: "uint32_t", 8: "uint64_t"}
 STYPE = {1: "int8_t", 2: "int16_t", 4: "int32_t", 8: "int64_t"}
 MASK = {1: "0xffu", 2: "0xffffu", 4: "0xffffffffu", 8: "0xffffffffffffffffull"}

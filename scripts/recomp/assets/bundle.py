@@ -27,7 +27,8 @@ the loose extracted tree (gfx/, font/, rooms/, the root xml tables, the resource
 -- the archive index answers before a mount root's loose map, and afterbirthp.a shadows
 the whole tree), repentance.a (this exe never names it), the language packs (a mounted
 pack overwrites equal-hash entries and would shadow English assets), the executables and
-runtime DLLs (the lifted module IS the exe), and run-time state (the game creates
+runtime DLLs (the lifted module IS the exe), a Steam install's modding tools/, changelog.txt
+and libcurl's CA bundle (never opened; libcurl is a stub), and run-time state (the game creates
 Documents/My Games/..., data/ and mods/ itself with CreateDirectoryA and writes its saves
 there).
 
@@ -106,6 +107,11 @@ RULES: tuple[Rule, ...] = (
          "in every traced run -- KAGE resolves a key against the archive index before a mount root's loose map, "
          "and the mounted set holds the Repentance+ files; secret.a is asked for as resources/secret.a (MISS) and "
          "keeper.a never"),
+    Rule("install-extras", DROP, ("tools/*", "changelog.txt", "curl-ca-bundle.crt"), "modding tools, changelog, CA bundle",
+         "part of a Steam install that the exe never opens (issue 21): tools/ holds the separate modding programs and "
+         "their docs (ResourceExtractor, RoomEditor, ModUploader, LuaDocs, ...) and the exe names neither tools/ nor "
+         "changelog.txt (ASCII or UTF-16); curl-ca-bundle.crt is named once (push 0xb7853c at 0x00905d9b) as libcurl's "
+         "CA file, and libcurl.dll is a STUB in the port (gen_shims.py), so nothing reads it"),
 )
 UNCLASSIFIED = Rule("unclassified", DROP, (), "unclassified", "no rule matched -- look at it before shipping")
 

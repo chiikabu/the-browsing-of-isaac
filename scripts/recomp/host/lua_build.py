@@ -35,7 +35,7 @@ inputs, never tracked source (the same rule that keeps the game binary there).
 Run `python scripts/recomp/host/lua_build.py` with no arguments to print the
 exact command line and verify the environment without touching the network.
 After `--build`, run `python scripts/recomp/host/build_selftest.py` with NO
-extra flags: it auto-detects third_party/lua-5.3.3/src/lua.h, adds the include
+extra flags: it auto-detects tools/lua-5.3.3/src/lua.h, adds the include
 path itself, links output/recomp/host/lua/liblua.a, and the selftest then
 executes the 15 Lua runtime checks (ABI round-trips, VM execution, trampolines).
 """
@@ -148,9 +148,18 @@ def main():
     print()
 
     if not SRC_DIR.exists() and TARBALL.exists():
+        # the tarball's top-level directory is lua-5.3.3/, so extracting into
+        # the input root gives SRC_DIR, where build_selftest.py and
+        # build_boot.py look for lua.h (tools/lua-5.3.3/src)
         print("extracting %s ..." % TARBALL.name)
         with tarfile.open(TARBALL) as tf:
-            tf.extractall(THIRD_PARTY)
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(SRC_DIR.parent, filter="data")
+            else:
+                tf.extractall(SRC_DIR.parent)
+        if not SRC_DIR.exists():
+            print("cannot use %s: it has no top-level %s/" % (TARBALL, SRC_DIR.name))
+            return 2
 
     if not args.build:
         print("Dry run. Place the source and re-run with --build.")

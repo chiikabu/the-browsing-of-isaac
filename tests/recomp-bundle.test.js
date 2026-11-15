@@ -67,6 +67,9 @@ const DROPPED = {
   'isaac-ng.exe': 90, 'dbghelp.dll': 91, 'run.bat': 92, 'steam_appid.txt': 6,
   'Documents/My Games/Binding of Isaac Repentance+/persistentgamedata1.dat': 20, 'data/x': 1, 'mods/m/main.lua': 2,
   '.extracted.json': 3, 'v8-stuck.log': 4,
+  // a Steam install's own extras (issue 21): --strict must know them, not refuse them
+  'tools/ResourceExtractor/ResourceExtractor.exe': 13, 'tools/LuaDocs/index.html': 14,
+  'tools/RoomEditor/icons/a.png': 15, 'changelog.txt': 16, 'curl-ca-bundle.crt': 17,
 };
 const UNCLASSIFIED = { 'weird.bin': 11 };
 const EXPECTED_RULE = {
@@ -81,6 +84,9 @@ const EXPECTED_RULE = {
   'gfx/ui/x.png': 'loose-tree', 'resources/players.xml': 'loose-tree', 'players.xml': 'loose-tree', 'keeper.a': 'loose-tree',
   'secret.a': 'loose-tree', 'packed/graphics.a': 'loose-tree', 'resources/gfx/ui/a.anm2': 'loose-tree',
   'scripts/main.lua': 'loose-tree', 'weird.bin': 'unclassified',
+  'tools/ResourceExtractor/ResourceExtractor.exe': 'native-binary', 'tools/LuaDocs/index.html': 'install-extras',
+  'tools/RoomEditor/icons/a.png': 'install-extras', 'changelog.txt': 'install-extras',
+  'curl-ca-bundle.crt': 'install-extras',
 };
 
 function makeTree(dir, files, seed, scale = 1) {

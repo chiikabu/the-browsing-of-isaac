@@ -14,7 +14,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -737,6 +738,46 @@ test('Lua build script encodes the flags, and does not download', () => {
   assert.match(b, /LUA_32BITS/);
   assert.match(b, /LUA_C89_NUMBERS/);
   assert.match(b, /does not download/);
+});
+
+test('Lua build script extracts a placed tarball where the builds look for lua.h', (t) => {
+  // Issue 21: the extraction named an undefined THIRD_PARTY and died with a
+  // NameError; build_selftest.py and build_boot.py read tools/lua-5.3.3/src.
+  const python = [process.env.PYTHON, 'python3', 'python'].find((p) =>
+    p && spawnSync(p, ['-c', 'import sys; print(sys.version_info[0])'],
+      { encoding: 'utf8', timeout: 10000 }).stdout?.trim() === '3');
+  if (!python) return t.skip('no Python 3 available');
+  const tmp = mkdtempSync(join(tmpdir(), 'lua-build-'));
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  const code = [
+    'import io, json, sys, tarfile',
+    'from pathlib import Path',
+    'sys.path.insert(0, sys.argv[1])',
+    'import lua_build as lb',
+    'tmp = Path(sys.argv[2])',
+    'with tarfile.open(tmp / "lua-5.3.3.tar.gz", "w:gz") as tf:',
+    '    data = b"#define LUA_VERSION_NUM 503"',
+    '    info = tarfile.TarInfo("lua-5.3.3/src/lua.h")',
+    '    info.size = len(data)',
+    '    tf.addfile(info, io.BytesIO(data))',
+    'lb.INPUT_DIR = tmp',
+    'lb.SRC_DIR = tmp / "lua-5.3.3"',
+    'lb.TARBALL = tmp / "lua-5.3.3.tar.gz"',
+    'sys.argv = ["lua_build.py"]',
+    'out = io.StringIO()',
+    'real, sys.stdout = sys.stdout, out',
+    'try:',
+    '    rc = lb.main()',
+    'finally:',
+    '    sys.stdout = real',
+    'print(json.dumps({"rc": rc, "header": (lb.SRC_DIR / "src" / "lua.h").is_file()}))',
+  ].join('\n');
+  const run = spawnSync(python, ['-c', code, src, tmp],
+    { cwd: root, encoding: 'utf8', timeout: 30000 });
+  assert.equal(run.status, 0, run.stderr || run.stdout);
+  const res = JSON.parse(run.stdout.trim().split('\n').pop());
+  assert.equal(res.rc, 0, 'dry run after extraction');
+  assert.equal(res.header, true, 'lua.h extracted to <input root>/lua-5.3.3/src');
 });
 
 test('client-array emulation documents what it cannot derive', () => {
