@@ -131,6 +131,60 @@ static const glc_texshape *texshape_get(uint32_t name) {
     const glc_texshape *t = &g_texshape[name & (GLC_TEXSHAPE - 1u)];
     return name && t->name == name ? t : NULL;
 }
+/* Round 124 (issue 18, "endings play audio but video remains black"): the
+ * internal format level 0 of every 2D texture was given, exact per name (the
+ * shape table above may lose an entry to a collision, this one may not).
+ * Desktop GL converts a glTexSubImage2D whose format differs from the
+ * texture's; WebGL2 (GLES3) refuses it with GL_INVALID_OPERATION and uploads
+ * nothing. The theoraplayer frame path does exactly that: its 1024x1024 frame
+ * texture is made GL_RGBA (with pixels) and every decoded frame is written
+ * into it as GL_RGB rows, so on the page every ending video stayed the
+ * texture's first contents -- black -- while its audio played. The web
+ * glTexSubImage2D asks this table and widens such rows to RGBA itself.
+ * Names are WebGL's sequential ids (small, never reused); the table grows to
+ * the largest name seen, up to GLC_IFMT_MAX, past which a name is unknown. */
+#define GLC_IFMT_MAX (1u << 20)
+static uint32_t *g_tex_ifmt;
+static uint32_t g_tex_ifmt_cap;
+static void tex_ifmt_put(uint32_t name, uint32_t ifmt) {
+    if (!name || name >= GLC_IFMT_MAX) return;
+    if (name >= g_tex_ifmt_cap) {
+        if (!ifmt) return;                                      /* forgetting a name never stored */
+        uint32_t cap = g_tex_ifmt_cap ? g_tex_ifmt_cap : 1024u;
+        while (cap <= name) cap *= 2u;
+        uint32_t *grown = (uint32_t *)realloc(g_tex_ifmt, (size_t)cap * sizeof *grown);
+        if (!grown) return;
+        memset(grown + g_tex_ifmt_cap, 0, (size_t)(cap - g_tex_ifmt_cap) * sizeof *grown);
+        g_tex_ifmt = grown; g_tex_ifmt_cap = cap;
+    }
+    g_tex_ifmt[name] = ifmt;
+}
+/* the internal format of 2D texture `name`'s level 0, 0 when not known */
+uint32_t isaac_glc_tex_ifmt(uint32_t name) {
+    return name && name < g_tex_ifmt_cap ? g_tex_ifmt[name] : 0u;
+}
+/* 1 when GLES3 refuses this glTexSubImage2D into an image of internal format
+ * `ifmt` but desktop GL takes it as RGB rows into RGBA texels (alpha 1): the
+ * one mismatch the engine makes (unsized GL_RGBA or sized GL_RGBA8 texture,
+ * GL_RGB / GL_UNSIGNED_BYTE rows). Formats taken as they are passed: wide. */
+int isaac_gl_sub_rgb_into_rgba(uint32_t ifmt, uint32_t format, uint32_t type) {
+    return (ifmt == 0x1908u || ifmt == 0x8058u) && format == 0x1907u && type == 0x1401u;
+}
+/* `rows` rows of `w` RGB bytes, each source row padded to `align` bytes (the
+ * unpack alignment, 1/2/4/8), as tightly packed RGBA with alpha 0xff. Returns
+ * the bytes written (w * 4 * rows). */
+size_t isaac_gl_rgb_rows_to_rgba(const uint8_t *src, uint32_t w, uint32_t rows, uint32_t align, uint8_t *dst) {
+    const size_t a = align ? align : 1u;
+    const size_t stride = ((size_t)w * 3u + a - 1u) / a * a;
+    uint8_t *out = dst;
+    for (uint32_t y = 0; y < rows; ++y) {
+        const uint8_t *in = src + (size_t)y * stride;
+        for (uint32_t x = 0; x < w; ++x, in += 3, out += 4) {
+            out[0] = in[0]; out[1] = in[1]; out[2] = in[2]; out[3] = 0xffu;
+        }
+    }
+    return (size_t)(out - dst);
+}
 void isaac_glc_tex_image(uint32_t target) {
     if (target == 0x0DE1u) { g_tex_forget += fbo_forget_attachment(1, g_tex_bound[g_tex_unit]); texshape_forget(g_tex_bound[g_tex_unit]); }
     else g_tex_forget += fbo_forget_attachment(1, 0);           /* another target: forget every framebuffer */
@@ -141,11 +195,13 @@ void isaac_glc_tex_shape(uint32_t target, uint32_t level, uint32_t ifmt, uint32_
     if (target != 0x0DE1u || level || !name) return;
     glc_texshape *t = &g_texshape[name & (GLC_TEXSHAPE - 1u)];
     t->name = name; t->ifmt = ifmt; t->w = w; t->h = h;
+    tex_ifmt_put(name, ifmt);
 }
 void isaac_glc_tex_delete(uint32_t name) {
     for (unsigned u = 0; u < GLC_UNITS; ++u) if (g_tex_bound[u] == name) g_tex_bound[u] = 0;
     g_del_forget += fbo_forget_attachment(1, name);
     texshape_forget(name);
+    tex_ifmt_put(name, 0u);
 }
 
 /* ---- framebuffer status -------------------------------------------------- */
@@ -413,5 +469,6 @@ void isaac_glc_reset(void) {                        /* the selftest starts clean
     g_rb_hit = g_rb_miss = g_fbo_hit = g_fbo_miss = g_loc_hit = g_loc_miss = g_readpixels = 0;
     g_att_same = g_att_change = g_sto_same = g_sto_change = g_tex_forget = g_del_forget = 0;
     memset(g_texshape, 0, sizeof g_texshape);
+    if (g_tex_ifmt) memset(g_tex_ifmt, 0, (size_t)g_tex_ifmt_cap * sizeof *g_tex_ifmt);
     memset(g_shape, 0, sizeof g_shape); g_shape_next = g_shape_live = g_shape_hit = 0;
 }

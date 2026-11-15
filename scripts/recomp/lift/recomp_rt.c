@@ -95,11 +95,11 @@ __attribute__((weak)) void recomp_jump_indirect(CpuState *s, uint32_t t) {
 /* lift.  Two known limitations, both tracked:                         */
 /*  1. MMX ops here take the pypcode-truncated 32-bit halves.  The     */
 /*     real instructions are 64-bit (4 x 16-bit lanes); lane N of the  */
-/*     low 32 bits is correct, lanes above are lost.  Sites that use   */
-/*     these (UCRT _libm_sse2_* polynomial kernels) are platform       */
-/*     primitives, but an exact port must re-lift with size-aware      */
-/*     CALLOTHER signatures (uint64_t) and real 4-lane bodies.  The    */
-/*     2-lane bodies below are the exact low-half semantics.           */
+/*     low 32 bits is correct, lanes above are lost.  Round 124: the   */
+/*     census found every 64-bit site in libtheora's MMX kernels (the  */
+/*     ending videos), none in the CRT; lift_patches.py (mmx64) now    */
+/*     points them all at the recomp_other64_* bodies below.  The      */
+/*     2-lane bodies stay for any 32-bit site a future lift emits.     */
 /*  2. in/out return 0 / drop the write.  The boot path performs no    */
 /*     device I/O; any real port I/O must be modelled deliberately.    */
 /* ------------------------------------------------------------------ */
@@ -313,6 +313,61 @@ uint32_t recomp_other_packsswb(CpuState *s, uint32_t a,
   return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8)
        | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
+
+/* Round 124 (issue 18): the same MMX ops at their real width, 64-bit
+ * operands and result, a = the old destination, b = the source (or the
+ * count). lift_patches.py (mmx64) points every 64-bit-result site of the
+ * lift at these; the census put all 200 of them in libtheora's MMX kernels
+ * (frag recon, iDCT, loop filter), not in the CRT as the note above
+ * assumed, so the truncated view zeroed half of every decoded video plane. */
+#define RC_W16(v, k) ((int16_t)(uint16_t)((v) >> (16 * (k))))
+#define RC_U8(v, k)  ((int32_t)(((v) >> (8 * (k))) & 0xffu))
+uint64_t recomp_other64_paddsw(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  for (int k = 0; k < 4; k++)
+    r |= (uint64_t)(uint16_t)rc_sat16((int32_t)RC_W16(a, k) + RC_W16(b, k)) << (16 * k);
+  return r;
+}
+uint64_t recomp_other64_pmulhw(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  for (int k = 0; k < 4; k++)
+    r |= (uint64_t)(uint16_t)(((int32_t)RC_W16(a, k) * RC_W16(b, k)) >> 16) << (16 * k);
+  return r;
+}
+uint64_t recomp_other64_psraw(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  unsigned c = b > 15u ? 15u : (unsigned)b;      /* the whole 64-bit count; past 15 the sign fills */
+  for (int k = 0; k < 4; k++)
+    r |= (uint64_t)(uint16_t)(RC_W16(a, k) >> c) << (16 * k);
+  return r;
+}
+uint64_t recomp_other64_psllw(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  if (b > 15u) return 0;                         /* past 15 every lane is zero */
+  for (int k = 0; k < 4; k++)
+    r |= (uint64_t)(uint16_t)((uint16_t)RC_W16(a, k) << (unsigned)b) << (16 * k);
+  return r;
+}
+uint64_t recomp_other64_paddusb(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  for (int k = 0; k < 8; k++) r |= (uint64_t)rc_satu8(RC_U8(a, k) + RC_U8(b, k)) << (8 * k);
+  return r;
+}
+uint64_t recomp_other64_psubusb(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;
+  for (int k = 0; k < 8; k++) r |= (uint64_t)rc_satu8(RC_U8(a, k) - RC_U8(b, k)) << (8 * k);
+  return r;
+}
+uint64_t recomp_other64_packsswb(CpuState *s, uint64_t a, uint64_t b) {
+  uint64_t r = 0; (void)s;                       /* a's four words -> bytes 0..3, b's -> bytes 4..7 */
+  for (int k = 0; k < 8; k++) {
+    int32_t v = RC_W16(k < 4 ? a : b, k & 3);
+    r |= (uint64_t)(uint8_t)(v > 127 ? 127 : (v < -128 ? -128 : v)) << (8 * k);
+  }
+  return r;
+}
+#undef RC_W16
+#undef RC_U8
 
 /* ------------------------------------------------------------------ */
 /* Wide CALLOTHER intrinsics (recomp_otherw_*).                        */

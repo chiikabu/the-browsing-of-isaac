@@ -106,10 +106,14 @@ void isaac_glc_loc_put(uint32_t prog, uint8_t kind, const char *name, int32_t lo
 void isaac_glc_loc_flush(uint32_t prog);
 void isaac_glc_count_readpixels(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t fmt, uint32_t bpp);
 void isaac_glc_report(void);
+uint32_t isaac_glc_tex_ifmt(uint32_t name);                                    /* round 124 */
+int isaac_gl_sub_rgb_into_rgba(uint32_t ifmt, uint32_t format, uint32_t type);
+size_t isaac_gl_rgb_rows_to_rgba(const uint8_t *src, uint32_t w, uint32_t rows, uint32_t align, uint8_t *dst);
 
 static uint32_t g_gl_calls, g_gl_errors;
 static uint32_t g_present_count;
 static uint32_t g_lazy_at_draw, g_lazy_at_write, g_lazy_at_attach;   /* round 97: where kept textures got their pixels */
+static uint32_t g_rgb_widened;                                        /* round 124: RGB rows widened for an RGBA texture */
 
 /* Round 44: redundant state calls are not forwarded. The engine re-issues
  * the same glUseProgram (73 a frame), glActiveTexture(GL_TEXTURE0) (30),
@@ -253,6 +257,8 @@ void isaac_web_gl_report(void) {
     isaac_log("[isaac][gl] redundant state calls skipped: useProgram %u, activeTexture %u, bindTexture %u, blend %u, viewport %u, "
               "attrib enables %u, uniforms %u",
               gls_skip_prog, gls_skip_unit, gls_skip_tex, gls_skip_blend, gls_skip_vp, gls_skip_attrib, gls_skip_uniform);
+    if (g_rgb_widened)
+        isaac_log("[isaac][gl] RGB rows widened to RGBA for an RGBA texture: %u glTexSubImage2D call(s)", g_rgb_widened);
     isaac_lazy_tex_report();
     isaac_img_keep_report();
     if (g_lazy_at_draw + g_lazy_at_write + g_lazy_at_attach)
@@ -331,6 +337,51 @@ static void lazy_materialize_unbound(uint32_t name) {
     if (prev != name) glBindTexture(GL_TEXTURE_2D, name);
     isaac_lazy_tex_materialize(name, lazy_upload);
     if (prev != name) glBindTexture(GL_TEXTURE_2D, prev);
+}
+
+/* ---- RGB rows into an RGBA texture (round 124, issue 18) --------------------
+ * Desktop GL takes a glTexSubImage2D whose format is not the texture's and
+ * converts; WebGL2 refuses it (GL_INVALID_OPERATION, "Invalid combination of
+ * format, type and internalFormat") and uploads nothing. The theoraplayer
+ * frame path makes its 1024x1024 frame texture GL_RGBA and writes each decoded
+ * 960x544 frame into it as GL_RGB rows, so on the page the ending videos were
+ * black while their audio played, on every GPU and in software GL alike. The
+ * rows are widened here, alpha 0xff as desktop GL fills it, a band of at most
+ * TEX_BAND_BYTES at a time. The unpack alignment is GL's default 4: the
+ * engine never sets it (no glPixelStorei is resolved). ISAAC_GL_RGB_WIDEN=0
+ * forwards the rows as they are (the A/B: black video, one GL error a frame). */
+static int g_rgb_widen_mode = -1;
+static uint32_t g_rgb_widen_logged;
+static uint8_t *g_rgb_widen_buf;
+static size_t g_rgb_widen_cap;
+static int rgb_widen_mode(void) {
+    if (g_rgb_widen_mode < 0) { const char *e = getenv("ISAAC_GL_RGB_WIDEN"); g_rgb_widen_mode = (e && *e == '0') ? 0 : 1; }
+    return g_rgb_widen_mode;
+}
+static void tex_sub_rgb_as_rgba(uint32_t name, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint8_t *px) {
+    const uint32_t align = 4u;
+    const size_t src_row = ((size_t)w * 3u + align - 1u) / align * align;
+    const size_t dst_row = (size_t)w * 4u;
+    uint32_t band = dst_row ? (uint32_t)(TEX_BAND_BYTES / dst_row) : 1u;
+    if (band < 1u) band = 1u;
+    if (band > h) band = h;
+    if (!w || !h) return;
+    if (dst_row * band > g_rgb_widen_cap) {
+        uint8_t *grown = (uint8_t *)realloc(g_rgb_widen_buf, dst_row * band);
+        if (!grown) return;
+        g_rgb_widen_buf = grown; g_rgb_widen_cap = dst_row * band;
+    }
+    for (uint32_t r = 0; r < h; r += band) {
+        uint32_t n = (h - r) < band ? (h - r) : band;
+        isaac_gl_rgb_rows_to_rgba(px + (size_t)r * src_row, w, n, align, g_rgb_widen_buf);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, (GLint)x, (GLint)(y + r), (GLsizei)w, (GLsizei)n, GL_RGBA, GL_UNSIGNED_BYTE, g_rgb_widen_buf);
+    }
+    ++g_rgb_widened;
+    if (!g_rgb_widen_logged) {
+        g_rgb_widen_logged = 1;
+        isaac_log("[isaac][gl] glTexSubImage2D: GL_RGB rows into RGBA texture %u (%ux%u at %u,%u) widened to RGBA "
+                  "(WebGL2 wants the texture's format; ISAAC_GL_RGB_WIDEN=0 forwards them)", name, w, h, x, y);
+    }
 }
 
 /* ---- the entry points ------------------------------------------------------ */
@@ -455,7 +506,9 @@ GLFN(glDeleteTextures) {
     RET0;
 }
 GLFN(glDepthFunc)            { ENTER; glDepthFunc(A(0)); RET0; }
-GLFN(glDisable)              { ENTER; glDisable(A(0)); RET0; }
+/* round 124: GL_TEXTURE_2D (0x0DE1) is a fixed-function cap -- with shaders bound it changes nothing on
+ * desktop GL, and WebGL2 has no such cap (GL_INVALID_ENUM; the video path enables it every frame) */
+GLFN(glDisable)              { ENTER; if (A(0) == 0x0DE1u) RET0; glDisable(A(0)); RET0; }
 GLFN(glDisableVertexAttribArray) {
     ENTER;
     isaac_gl_disable_vertex_attrib_array(A(0));
@@ -479,7 +532,7 @@ GLFN(glDrawElements) {
     isaac_gl_draw_elements(A(0), (GLsizei)A(1), A(2), A(3));
     RET0;
 }
-GLFN(glEnable)               { ENTER; glEnable(A(0)); RET0; }
+GLFN(glEnable)               { ENTER; if (A(0) == 0x0DE1u) RET0; glEnable(A(0)); RET0; }
 GLFN(glEnableVertexAttribArray) {
     ENTER;
     isaac_gl_enable_vertex_attrib_array(A(0));
@@ -736,6 +789,11 @@ GLFN(glTexSubImage2D) {
     if (A(0) == GL_TEXTURE_2D) {                       /* round 97: written into: it needs its pixels first */
         uint32_t name = tex2d_bound();
         if (name && isaac_lazy_tex_materialize(name, lazy_upload)) ++g_lazy_at_write;
+        /* round 124 (issue 18): RGB rows into an RGBA texture (every ending video's frames) go up as RGBA */
+        if (name && A(1) == 0u && AP(8) && rgb_widen_mode() && isaac_gl_sub_rgb_into_rgba(isaac_glc_tex_ifmt(name), A(6), A(7))) {
+            tex_sub_rgb_as_rgba(name, A(2), A(3), A(4), A(5), (const uint8_t *)AP(8));
+            RET0;
+        }
     }
     glTexSubImage2D(A(0), (GLint)A(1), (GLint)A(2), (GLint)A(3), (GLsizei)A(4), (GLsizei)A(5),
                     A(6), A(7), AP(8));

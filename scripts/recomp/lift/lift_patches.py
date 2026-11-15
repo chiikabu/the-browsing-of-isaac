@@ -229,6 +229,10 @@ L_00a678d1: ;
     ("0x009299e4",
      '  RECOMP_VA(0x9299e4u);\n  u3300_4 = (uint32_t)(EBP + ((uint32_t)0x8u));\n  ub900_1 = MEMR8(u3300_4);\n',
      '  RECOMP_VA(0x9299e4u);\n  /* LIFT-PATCH 0x009299e4 (round 81): PersistentGameData::SetReadOnly reads its\n     argument here and stores it at [this+1]. That byte is the whole achievement\n     gate: TryUnlock (0x00929a20) tests it first and returns, and past it the\n     next thing it does is record the unlock. The game sets it while mods are\n     loaded, which is why a modded run earns nothing. Read the argument as\n     false: the flag is recorded, the log line still says what happened, and\n     nothing else about the save changes. */\n  u3300_4 = (uint32_t)(EBP + ((uint32_t)0x8u));\n  ub900_1 = ((uint8_t)0x0u);\n'),
+    # Round 124: mods and the debug console do not make a new save read-only (see the marker text).
+    ("0x00959618",
+     '  RECOMP_VA(0x959618u);\n  ubf00_1 = (uint8_t)(!ZF);\n  if (ubf00_1) {\n    goto L_00959622;\n  }\n',
+     '  RECOMP_VA(0x959618u);\n  /* LIFT-PATCH 0x00959618 (round 124): this is the game\'s "achievement unlocks\n     are disallowed" (0x009595e0, 17 direct callers, no other call form). Offline\n     it answers yes when a mod is enabled (the call just made, 0x008f8cd0) or the\n     debug console is (Options+0x5c, the byte tested next), unless achievement 4\n     is on the save -- and Game::Start and the other run starts store that answer\n     into the save\'s read-only flag INLINE (0x006f5544 and four more), not through\n     SetReadOnly, so the round-81 patch at 0x009299e4 never saw it. Measured on a\n     new save: the flag is 0 in a plain run and 1 with one mod enabled or with the\n     console enabled, and with it 1 nothing is ever unlocked, counted or recorded,\n     achievement 4 included, so such a save can never leave that state. This port\n     keeps achievements with mods (round 81); the same now holds here, and for\n     the console the page can switch on. The offline answer is no: the exit the\n     function takes when neither is enabled. The netplay branch (0x0095965b) is\n     not touched, and a seeded run or a debug start still makes the save read-only\n     through the other terms of the callers\' test. */\n  goto L_00959652;\n'),
     # Round 52: the save-select screen's EDIT FILE menu (see the marker text).
     ("0x009d9d59",
      '  RECOMP_VA(0x9d9d59u);\n  u43f80_4 = ((uint32_t)0x0u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u43f80_4);\n  RECOMP_VA(0x9d9d5bu);\n  u44180_4 = ((uint32_t)0xb7fb20u);\n  ESP = (uint32_t)(ESP - ((uint32_t)0x4u));\n  MEMW32(ESP, u44180_4);\n  RECOMP_VA(0x9d9d60u);\n  u5280_4 = ((uint32_t)0x2u);\n  MEMW32(EDI, u5280_4);\n',
@@ -2215,6 +2219,81 @@ def apply_ret_eip(lift_dir: Path, check_only: bool = False) -> list[Path]:
     return touched
 
 
+# --- round 124 (issue 18): MMX intrinsics at their real width -------------
+# The lifter's by-value CALLOTHER path is uint32_t-shaped: an MMX op with
+# 64-bit operands is emitted as
+#     recomp_wr64(&s->ST4[0], (uint64_t)recomp_other_paddsw(s, (uint32_t)(A), (uint32_t)(B)));
+# so lanes 2..3 (bytes 4..7) of every such op are lost (recomp_rt.c's header
+# note 1). The census of the lift says where that matters: every one of the
+# 200 sites of these seven names is in libtheora's MMX kernels -- frag recon
+# 0x00ae4630 / 0x00ae46e0 / 0x00ae4750, the iDCTs 0x00ae4830 / 0x00ae4bf0 and
+# the loop filter 0x00ae53b0 -- so every decoded Theora plane came out with
+# the upper half of each dword zero (2 of every 4 bytes), and every ending
+# video was green stripes once its frames reached the screen. Each site is
+# rewritten to the 64-bit helper (recomp_rt.c recomp_other64_*): same
+# operands, uint64_t casts. Idempotent: a rewritten site no longer matches.
+MMX64_OPS = ("paddsw", "pmulhw", "psraw", "psllw", "paddusb", "psubusb", "packsswb")
+MMX64_SITE = re.compile(r"\(uint64_t\)recomp_other_(%s)\(s, " % "|".join(MMX64_OPS))
+MMX64_DECLS_MARK = "/* LIFT-PATCH mmx64: the 64-bit MMX helpers (recomp_rt.c) */"
+MMX64_DECLS = MMX64_DECLS_MARK + "\n" + "".join(
+    "uint64_t recomp_other64_%s(CpuState *restrict s, uint64_t a, uint64_t b);\n" % op for op in MMX64_OPS)
+
+
+def mmx64_text(text: str) -> tuple[str, int]:
+    """Rewrite every 64-bit-result MMX CALLOTHER site in one TU's text."""
+    out, pos, n = [], 0, 0
+    for m in MMX64_SITE.finditer(text):
+        if m.start() < pos:
+            continue
+        i, depth, args, cur = m.end(), 1, [], m.end()
+        while depth:                                   # the argument list, to its closing parenthesis
+            c = text[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            elif c == "," and depth == 1:
+                args.append(text[cur:i]); cur = i + 1
+            i += 1
+        args.append(text[cur:i - 1])
+        args = [a.strip() for a in args]
+        if len(args) != 2 or not all(a.startswith("(uint32_t)(") for a in args):
+            raise SystemExit("mmx64: unexpected site shape at offset %d: %s" % (m.start(), text[m.start():i][:200]))
+        out.append(text[pos:m.start()])
+        out.append("(uint64_t)recomp_other64_%s(s, %s)" % (m.group(1), ", ".join("(uint64_t)" + a[len("(uint32_t)"):] for a in args)))
+        pos, n = i, n + 1
+    out.append(text[pos:])
+    return "".join(out), n
+
+
+def apply_mmx64(lift_dir: Path, check_only: bool = False) -> list[Path]:
+    """Every 64-bit MMX CALLOTHER site calls the 64-bit helper. Returns the TUs modified."""
+    touched: list[Path] = []
+    total = 0
+    for tu in sorted(lift_dir.glob("lifted_*.c")):
+        text = _read_tu(tu)
+        new, n = mmx64_text(text)
+        if not n:
+            continue
+        total += n
+        touched.append(tu)
+        if check_only:
+            continue
+        if MMX64_DECLS_MARK not in new:
+            inc = '#include "lifted_decls.h"'
+            at = new.find(inc)
+            if at < 0:
+                raise SystemExit("mmx64: %s has no %s line to put the declarations after" % (tu.name, inc))
+            eol = new.find("\n", at) + 1
+            nl = "\r\n" if new[eol - 2:eol] == "\r\n" else "\n"
+            new = new[:eol] + MMX64_DECLS.replace("\n", nl) + new[eol:]
+        _write_tu(tu, new)
+        _drop_objects(tu)
+    print("mmx64: %d MMX site(s) %s the 64-bit helpers in %d TU(s)"
+          % (total, "do not call" if check_only else "now call", len(touched)))
+    return touched
+
+
 def find_function(text: str, name: str, split_too: bool = False) -> tuple[int, int] | None:
     """Return (start, end) of `void <name>(CpuState *restrict s) { ... }` at
     column 0, matching the closing brace at column 0 (the lifter's layout).
@@ -2275,6 +2354,8 @@ def apply_lift_patches(lift_dir: Path, check_only: bool = False) -> list[Path]:
     # text along (a wrapped body is renamed, a split one cut at labels), and on a
     # tree already wrapped or split the pass finds the body under its new name.
     touched += [tu for tu in apply_insn_hooks(lift_dir, check_only=check_only) if tu not in touched]
+    # round 124: MMX ops at 64 bits (the Theora decoder's kernels)
+    touched += [tu for tu in apply_mmx64(lift_dir, check_only=check_only) if tu not in touched]
     return touched
 
 

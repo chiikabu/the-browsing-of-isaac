@@ -423,6 +423,49 @@ static void test_eh(void) {
     }
 }
 
+/* Round 124 (issue 18): the ending videos' frames are GL_RGB rows written into
+ * a GL_RGBA texture, which WebGL2 refuses; the web glTexSubImage2D widens them.
+ * What it decides from: the level-0 internal format per texture name (exact,
+ * forgotten on delete), the one mismatch it widens, and the widening itself
+ * (source rows padded to the unpack alignment, alpha 0xff). */
+uint32_t isaac_glc_tex_ifmt(uint32_t name);
+int isaac_gl_sub_rgb_into_rgba(uint32_t ifmt, uint32_t format, uint32_t type);
+size_t isaac_gl_rgb_rows_to_rgba(const uint8_t *src, uint32_t w, uint32_t rows, uint32_t align, uint8_t *dst);
+static void test_gl_rgb_widen(void) {
+    isaac_glc_reset();
+    isaac_glc_tex_active(0x84C0u);
+    isaac_glc_tex_bind(0x0DE1u, 9); isaac_glc_tex_image(0x0DE1u); isaac_glc_tex_shape(0x0DE1u, 0, 0x1908u, 1024, 1024);
+    isaac_glc_tex_bind(0x0DE1u, 4105); isaac_glc_tex_image(0x0DE1u); isaac_glc_tex_shape(0x0DE1u, 0, 0x1907u, 64, 64);   /* 9 + 4096: the shape table's same slot */
+    isaac_glc_tex_bind(0x0DE1u, 9); isaac_glc_tex_image(0x0DE1u); isaac_glc_tex_shape(0x0DE1u, 1, 0x1907u, 512, 512);   /* level 1 says nothing about level 0 */
+    check(isaac_glc_tex_ifmt(9) == 0x1908u && isaac_glc_tex_ifmt(4105) == 0x1907u,
+          "rgb widen: each texture's level-0 internal format is kept by name, a colliding name included");
+    check(isaac_glc_tex_ifmt(10) == 0u && isaac_glc_tex_ifmt(0) == 0u && isaac_glc_tex_ifmt(0x7fffffffu) == 0u,
+          "rgb widen: a name never given an image is not known");
+    isaac_glc_tex_delete(9);
+    check(isaac_glc_tex_ifmt(9) == 0u && isaac_glc_tex_ifmt(4105) == 0x1907u, "rgb widen: a deleted texture is forgotten, the other kept");
+    check(isaac_gl_sub_rgb_into_rgba(0x1908u, 0x1907u, 0x1401u) && isaac_gl_sub_rgb_into_rgba(0x8058u, 0x1907u, 0x1401u),
+          "rgb widen: GL_RGB / UNSIGNED_BYTE rows into an RGBA or RGBA8 texture are widened (the video frame upload)");
+    check(!isaac_gl_sub_rgb_into_rgba(0x1908u, 0x1908u, 0x1401u) && !isaac_gl_sub_rgb_into_rgba(0x1907u, 0x1907u, 0x1401u)
+          && !isaac_gl_sub_rgb_into_rgba(0u, 0x1907u, 0x1401u) && !isaac_gl_sub_rgb_into_rgba(0x1908u, 0x1907u, 0x1406u)
+          && !isaac_gl_sub_rgb_into_rgba(0x1908u, 0x11907u, 0x1401u),
+          "rgb widen: matching formats, an unknown texture, another type or a wide format word are forwarded as they are");
+    {
+        /* 3x2 RGB, rows of 9 bytes padded to 12 at alignment 4; the pad bytes must not leak */
+        const uint8_t src[24] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xee, 0xee, 0xee,  10, 11, 12, 13, 14, 15, 16, 17, 18, 0xee, 0xee, 0xee };
+        uint8_t dst[26];
+        memset(dst, 0x55, sizeof dst);
+        size_t n = isaac_gl_rgb_rows_to_rgba(src, 3, 2, 4, dst);
+        const uint8_t want[24] = { 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255,  10, 11, 12, 255, 13, 14, 15, 255, 16, 17, 18, 255 };
+        check(n == 24u && !memcmp(dst, want, 24) && dst[24] == 0x55 && dst[25] == 0x55,
+              "rgb widen: RGB rows padded to the unpack alignment come out as packed RGBA with alpha 255, nothing written past");
+        uint8_t two[16];
+        n = isaac_gl_rgb_rows_to_rgba(src, 2, 2, 1, two);   /* alignment 1: rows of 6 bytes back to back */
+        check(n == 16u && two[0] == 1 && two[4] == 4 && two[7] == 255 && two[8] == 7 && two[9] == 8 && two[10] == 9 && two[12] == 0xee,
+              "rgb widen: at alignment 1 the second row starts at byte 6");
+    }
+    isaac_glc_reset();
+}
+
 /* Round 94: a sliced job asleep until wake_ms sits out a frame at now_ms. */
 int isaac_threads_napping(double wake_ms, double now_ms);
 /* Round 97: textures that reach the GPU when first used (host_gl_lazy.c). The
@@ -1180,6 +1223,7 @@ int main(int argc, char **argv) {
     test_input_edges();
     test_thread_naps();
     test_lazy_textures();
+    test_gl_rgb_widen();
     test_img_keep();
     test_lazy_sound();
     test_eh();
