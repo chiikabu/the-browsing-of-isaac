@@ -55,6 +55,12 @@ Vibration follows the game's Rumble option.
 | <kbd>Tab</kbd> | Map |
 | <kbd>Esc</kbd> | Pause |
 | <kbd>F</kbd> | Fullscreen |
+| <kbd>&#96;</kbd> | Debug console, in a run (the key left of <kbd>1</kbd>), once it is switched on |
+
+The debug console is the game's own (`stage 5`, `giveitem c1`, `debug 3`...). It is
+off until you ask for it: on the game's **Options** screen, press <kbd>C</kbd> (or
+click the paper that says so) to switch it on or off. With it on your save still
+earns its achievements; a run in which you use it is the game's to judge, as on PC.
 
 ## On a controller
 

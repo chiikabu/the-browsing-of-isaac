@@ -689,3 +689,49 @@ export function readoutText(fps, speed) {
   const n = `${Math.round(fps)}`;
   return speed == null ? n : `${n} ${Math.round(speed * 100)}%`;
 }
+
+// ---- the files the page keeps for the game: two small readers -------------------
+//
+// What a file handed to IMPORT FILE is, by its first bytes and not by its name
+// (a phone's picker lets any file through, and may rename what it hands over):
+// the game's saved progress begins "ISAACNGSAVE0" (0x00b7ab6c "ISAACNGSAVE09R  "
+// and the older versions its loader still reads), a saved run "ISAACNG_GSR"
+// (0x00b7f218). Anything else is not a save, and is not written over one.
+const startsWith = (bytes, text) => {
+  if (!bytes) return false;
+  for (let i = 0; i < text.length; i++) if (bytes[i] !== text.charCodeAt(i)) return false;   // past a short file's end: undefined, no match
+  return true;
+};
+export function saveFileKind(bytes) {
+  if (startsWith(bytes, 'ISAACNGSAVE0')) return 'persistentgamedata';
+  if (startsWith(bytes, 'ISAACNG_GSR')) return 'gamestate';
+  return null;
+}
+
+// options.ini, one option: its value as the file has it (the last line that sets
+// it, as a reader that takes each line in turn ends up with), or null.
+const iniLine = (name) => new RegExp(`^[ \\t]*${name}[ \\t]*=[ \\t]*([^\\r\\n]*?)[ \\t]*$`, 'gm');
+export function getIniOption(text, name) {
+  let value = null;
+  for (const m of String(text || '').matchAll(iniLine(name))) value = m[1];
+  return value;
+}
+// ...and the file with that option set: every line that sets it is rewritten (a
+// file with the line twice must not keep an old value in the second), a file
+// without it gains the line right under [Options] (or at its end when it has no
+// such header), and the line endings the file uses are kept. The same string
+// comes back when nothing changes, so a caller can tell there is nothing to write.
+export function setIniOption(text, name, value) {
+  const src = String(text || ''), line = `${name}=${value}`;
+  if (iniLine(name).test(src)) {
+    const out = src.replace(iniLine(name), line);
+    return out === src ? src : out;
+  }
+  const nl = src.includes('\r\n') ? '\r\n' : '\n';
+  const head = /^﻿?[ \t]*\[Options\][^\r\n]*(?:\r\n|\n|$)/im.exec(src);
+  if (head) {
+    const at = head.index + head[0].length, before = src.slice(0, at);
+    return `${before}${/\n$/.test(before) ? '' : nl}${line}${nl}${src.slice(at)}`;
+  }
+  return `${src}${src && !/\n$/.test(src) ? nl : ''}${line}${nl}`;
+}

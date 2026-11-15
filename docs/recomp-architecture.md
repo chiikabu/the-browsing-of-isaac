@@ -12268,3 +12268,151 @@ Checked: `tests/recomp-mod-browser.test.js` and `tests/recomp-modpack.test.js`
 the browser's art and a copy of the catalogue with the mark, at 960x540 and
 at 390x844 with touch. In the list the long name is cut to make room for the
 word ("Damn, Fiend... EXPERIMENTAL"); the mod's page has the whole name.
+
+### 21.153 Round 124: the debug console as a switch, and a new save that stays writable
+
+Page (`web/play.mjs`, `web/boot_web.mjs`, `web/menu_overlay.mjs`,
+`web/play.html`), one block patch (`lift/lift_patches.py`, 0x00959618), a
+driver (`web/drive_console.mjs`).
+
+**Where it came from.** A pull request (19) turned the game's debug console on
+for every player by rewriting `EnableDebugConsole=1` into the stored
+`options.ini` at every start, and moved the console key from the backquote to
+F2. Its aim, a console a player can reach without editing a file they cannot
+reach, is kept. Its means are not, for what the binary says the option does.
+
+**What the option does besides opening the console.** 0x009595e0 is the game's
+"achievement unlocks are disallowed" (REPENTOGON's
+`Manager::AchievementUnlocksDisallowed`; `ret 4`, its argument never read; 17
+direct callers and no other call form: `xrefs-to` = 17, the bytes `e0 95 95 00`
+occur nowhere in the file; decode config linear+skipdata+jtab-mask v2). Offline
+it is
+
+    if (!anyModEnabled(Manager+0x2a6c0) && !Options.EnableDebugConsole) return 0;
+    return !Unlocked(4);
+
+so an enabled console counts exactly as an enabled mod, until achievement 4 is
+on the save. Five run starts (Game::Start 0x006f5320 and the daily, rerun,
+debug and continue starts) store that answer, or-ed with the seed and debug
+terms, into the save's read-only flag (PGD+1 = Manager+0x15) **inline**
+(0x006f5544, 0x006f5c9c, 0x006f747d, 0x006f783b, 0x006f86e2), not through
+`SetReadOnly` (0x009299e0). TryUnlock, IncreaseEventCounter, AddChallenge and
+AddBestiaryKill each return at once on that flag. Achievement 4 is itself
+behind TryUnlock, so a save in that state cannot leave it.
+
+**That corrects round 81** (above, "Achievements with mods on": "one function
+writes that byte"). The block patch at 0x009299e4 covers `SetReadOnly` alone;
+the log line it watched has 26 references, 25 of them beside inline stores.
+Measured on engine n13 with a fresh profile and a run started by keys
+(`.scratch/r124/ro_probe.mjs`): the flag is 0 in a plain run, **1 with one
+empty mod enabled** and 1 with the console enabled, the game logging `Setting
+PersistentGameData ReadOnly to True` both times. A player who installed a mod
+before ever beating Mom has earned nothing since round 81 said they would.
+
+**The patch.** In 0x009595e0, after the call that asks whether a mod is
+enabled, the offline path takes the exit that answers no (0x00959652), the one
+it takes when neither a mod nor the console is enabled. The netplay branch
+(0x0095965b) is untouched; a seeded run and a debug start still set the flag
+through the other terms of the callers' test; the HUD's "no achievements" icon
+(0x009a3eb0, the same answer) follows.
+
+**The switch.** The game's OPTIONS screen (10) has no entry for the console,
+so the page hangs a hint paper beside it, as on the MODS screen: C, or a
+click, flips `Options.EnableDebugConsole` in the game's memory (Manager+0x2a398:
+the byte the game's own Lua property `Options.DebugConsoleEnabled` reads at
+0x00897360 and writes at 0x00897370), which Console::Update tests every frame,
+and rewrites that one line of the stored `options.ini` (`setIniOption`), so
+the choice survives a reload whether or not the game saved its options. Off by
+default, as the game ships it: nobody's options are changed unasked, a stray
+press of the key beside Esc and Tab does nothing, and an open console (which
+redraws its backlog every frame, 34% of the samples in round 90b's profile)
+is something a player chose. Not offered on a touch-only device, which has no
+keys to type with.
+
+**The key stays the backquote** (GLFW 0x60 by scancode 0x29, the position left
+of 1 on every layout): the game reads that key and no other, and F2 is a key
+mods bind. While the console is open the page's own keys stand aside: F and N
+are letters of a command then (`goto s.default.1` asked for fullscreen).
+
+**The save import (issue 17)** was in the same files: EDIT FILE's IMPORT FILE
+takes a bare `persistentgamedata.dat`, but the picker's `accept` list named
+`.zip` and `.json` only, and an iPhone greys out what an accept list does not
+name. The list is gone, and since any file can now be chosen, a bare file is
+told by its first bytes (`ISAACNGSAVE0...`, `ISAACNG_GSR...`: `saveFileKind`)
+and refused when it is not a save, instead of being written over one by name.
+
+**Measured.** Engine n14 (this patch and 21.154's fixes), a fresh profile, a
+run started by keys: the read-only flag is 0 in a plain run, with the console
+switched on and with one mod enabled, the game logging `ReadOnly to False`
+each time (n13: 0, 1, 1). `drive_console.mjs` (27 checks: off by default and
+the key opens nothing; the paper on the OPTIONS screen, C on, C off, a click
+on, the stored `options.ini` following each time; in a run the key opens the
+console, `goto fnfn` typed into it is its line with no fullscreen request and
+no FPS flip, a held Backspace erases more than one character, Enter on the
+empty line closes it; F and N are the page's again; the switch survives a
+reload): 27 of 27 on n13's page and on n14. `tests/recomp-console-switch.test.js`
+(8 tests); 11 mutants of the page helpers through `mutate.mjs`, 10 killed and
+one equivalent (a length test before a compare that already fails past a short
+file's end; the test was removed).
+
+**Not measured.** An iPhone's picker (issue 17): the cause is read from the
+markup and the fix is the absence of the list. What the game does to a run in
+which console commands were used is the game's own and was not changed or
+censused beyond the terms named above.
+
+### 21.154 Round 124b: the ending videos (issue 18)
+
+Host (`host_gl_cache.c`, `host_gl_webgl.c`, `selftest.c`), the lift runtime
+(`lift/recomp_rt.c`) and one new lift pass (`lift_patches.py` `apply_mmx64`).
+Engine n14.
+
+**The report.** An ending plays its sound over a black screen. It reproduces
+on n13 with `?ISAAC_CUTSCENE=400:3` (the Epilogue) and `400:4` (the Womb
+ending): the anm2 part shows, the Theora part is black (screenshot mean 0.0),
+the credits show; the same under hardware ANGLE and SwiftShader. Round 14's
+"the Epilogue plays through" was a node run that counted decoded frames and
+never looked at one.
+
+**Two causes, one behind the other.**
+
+1. *The frames never reached the texture.* theoraplayer creates its frame
+   texture as RGBA (`texImage2D(RGBA, 1024x1024, RGBA, UNSIGNED_BYTE)`) and
+   writes every frame with `texSubImage2D(960x544, GL_RGB, UNSIGNED_BYTE)`.
+   Desktop GL converts; WebGL2 answers `INVALID_OPERATION` and uploads nothing
+   (Chrome says so itself, 73 to 101 times a run; `ISAAC_GL_CHECK=1` shows
+   error 0x502 on every video frame and no GL error before the video). The
+   host now keeps each texture's level-0 internal format by name
+   (`isaac_glc_tex_ifmt`) and widens GL_RGB rows bound for an RGBA texture to
+   RGBA with alpha 255, in bands of at most 4 MB (`ISAAC_GL_RGB_WIDEN=0` for
+   an A/B: black again). `glEnable/glDisable(GL_TEXTURE_2D)`, which WebGL2
+   rejected with 0x500, are no longer forwarded.
+2. *The frames were wrong.* With the upload fixed the picture was green
+   vertical stripes: in every 8 pixels 2 right, 2 black, 2 (0,Y,0), 2
+   (0,135,0), which as YUV is the upper 16 bits of every 32-bit group of each
+   plane being zero. The lifter's by-value CALLOTHER path passes an MMX
+   operand as `(uint32_t)`, so lanes 2 and 3 of `paddsw`, `pmulhw`, `psraw`,
+   `psllw`, `paddusb`, `psubusb` and `packsswb` were lost. All 200 such sites
+   are in one translation unit and all in libtheora's MMX kernels (fragment
+   reconstruction 0x00ae4630 / 0x00ae46e0 / 0x00ae4750, the iDCTs 0x00ae4830 /
+   0x00ae4bf0, the loop filter 0x00ae53b0); the note in `recomp_rt.c` that put
+   them in the CRT was wrong. `apply_mmx64` rewrites each site to a 64-bit
+   helper with `(uint64_t)` operands at every build (idempotent; an
+   unrecognised site shape stops the build), and `recomp_rt.c` has real 4- and
+   8-lane bodies for the seven. libyuv's SSSE3 row converter (0x00acdcb0) was
+   ruled out first: lifted against Unicorn on 50 random rows, 0 mismatches.
+
+**Measured.** Whole functions, lifted against Unicorn (`.scratch/issue18/
+funcdiff.py`): before, every reconstruction and iDCT kernel differs in 5 of 5
+runs with exactly that pattern; after, 0 of 5. Each of the seven ops alone, 11
+forms, 40 vectors each: all pass. In the browser on n14: the Womb ending and
+the Epilogue show their pictures, 0 GL errors and 0 ANGLE warnings, both log
+"finished playing" and the credits follow; under SwiftShader the Womb ending
+is lit. Selftest 983 checks (7 new, 4 mutants killed); `tests/recomp-mmx64.test.js`
+(3 tests: the pass's text, idempotence and refusal; apply and check on a lift
+directory; the helpers compiled natively against vectors worked out from the
+instruction reference; 4 mutants killed).
+
+**Not measured.** The reporter's GPU (neither cause depends on one); endings
+other than 3 and 4; the cost of widening about half a megapixel a frame. The
+root fix belongs in `lift.py` (a CALLOTHER with 8-byte operands through the
+wide path), after which the pass finds nothing to do.

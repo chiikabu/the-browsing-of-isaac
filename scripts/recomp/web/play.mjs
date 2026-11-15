@@ -20,7 +20,7 @@
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
-import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout } from './menu_overlay.mjs';
+import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout, saveFileKind, setIniOption } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
 import { createPackStore, createPackDownloader, createModUpdater } from './mods.mjs';
@@ -79,8 +79,21 @@ document.addEventListener('fullscreenchange', () => {
   if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
   else try { kb.unlock(); } catch { /* not held */ }
 });
+// The game's debug console, when it is open, takes every key as text: the page's own
+// keys (F, N) must not act on a letter of a command (`goto s.default.1` has an f).
+// Console is Game+0x68d78 and its state its first dword -- 0 closed, 1 opening, 2 open,
+// 4 closing (docs/recomp-architecture.md, "The way in without WM_CHAR"; the same
+// offsets explore.mjs drives it by). Two reads of guest memory, on an F or N press only.
+const GAME_PTR = 0x00c71678, CONSOLE_OFF = 0x68d78;
+const consoleOpen = () => {
+  const G = window.isaacGuest;
+  if (!G) return false;
+  try { const game = G.u32(GAME_PTR); return !!game && G.u32(game + CONSOLE_OFF) !== 0; } catch { return false; }
+};
+window.isaacConsoleOpen = consoleOpen;                    // the drivers look at it
 window.addEventListener('keydown', (ev) => {
   if (pageInputTarget(ev.target)) return;
+  if ((ev.code === 'KeyF' || ev.code === 'KeyN') && consoleOpen()) return;
   if (ev.code === 'KeyF' && !ev.repeat && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !$('saves').open && !(window.isaacEditFileMenu && window.isaacEditFileMenu.isOpen())
     && !(window.isaacModsMenu && window.isaacModsMenu.isOpen())) toggleFullscreen().catch(() => {});
   // N flips the FPS readout (round 52c-e; unbound in the game's default keys); the key still reaches the game
@@ -714,6 +727,7 @@ const watchScreen = () => setInterval(() => {
   lastView = view;
   editMenu.setScreen(screen);
   modsTag.setShown(screen === MODS_SCREEN && still && !modsMenu.isOpen() && gameReady && modsBrowsable());
+  consoleTag.setShown(screen === OPTIONS_SCREEN && still && consoleUsable && gameReady && !modsMenu.isOpen() && !editMenu.isOpen());
   if (screen === MODS_SCREEN && gameReady) syncGameMods();
 }, 200);
 
@@ -933,8 +947,11 @@ async function importSlot(slot) {
       items.push({ key: renumber(f && f.key ? f.key : e.name, slot), src: renumber(f && f.src ? f.src : e.name, slot), bytes: e.bytes });
     }
   } else {
-    // a bare .dat: this file's persistentgamedata (or gamestate, by its name)
-    const kind = /gamestate/i.test(file.name) ? 'gamestate' : 'persistentgamedata';
+    // a bare .dat: this file's persistentgamedata (or gamestate), told by its first
+    // bytes. The picker has no accept list (an iPhone's would grey a .dat out), so
+    // whatever else is chosen stops here instead of being written over a save.
+    const kind = saveFileKind(buf);
+    if (!kind) throw new Error('NOT A SAVE FILE');
     const hit = existing.find((it) => new RegExp(`${kind}${slot + 1}\\.dat$`, 'i').test(entryName(it.key, it.src)));
     items.push({ key: hit ? hit.key : `c:/isaac/documents/my games/binding of isaac repentance+/${kind}${slot + 1}.dat`, src: hit ? hit.src : '', bytes: buf });
   }
@@ -958,6 +975,11 @@ window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;
 window.isaacKeyCapture = (ev, down) => {
   if (modsMenu.isOpen()) return modsMenu.onKey(ev, down);
+  // C on the game's OPTIONS screen: the debug console's switch, as its paper says
+  if (ev.code === 'KeyC' && !ev.ctrlKey && !ev.altKey && !ev.metaKey && consoleTagUp()) {
+    if (down && !ev.repeat) toggleConsole();
+    return true;
+  }
   // B on the game's MODS screen: the browser, as its paper says (the game has no B there)
   if (ev.code === 'KeyB' && readMenuId() === MODS_SCREEN && modsBrowsable()) {
     if (down && !ev.repeat) openModBrowser();
@@ -1049,6 +1071,52 @@ const modsTag = createMenuTag({
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
 
+// ---- the game's debug console: a switch on its OPTIONS screen (round 124) ----------------
+// The console is the game's own (the key left of 1, in a run) and the game keeps it off:
+// EnableDebugConsole in options.ini, which a player of the desktop game edits by hand and
+// a player here cannot. The game's OPTIONS screen (10, MenuManager+0x40) has no entry for
+// it, so the page hangs a hint paper beside that screen, as it does on the MODS screen:
+// C, or a click on it, flips the game's own switch (boot_web.mjs isaacDebugConsole: the
+// byte the game's Lua setter writes), which the game obeys from the next frame, and the
+// stored options.ini is rewritten so the choice is there after a reload whether or not the
+// game saves its options before then.
+// It stays off until asked for. With it on the game answers "achievement unlocks are
+// disallowed" (0x009595e0) as it does with a mod enabled, and an open console redraws its
+// whole backlog every frame; neither is something to hand a player who never asked.
+// Typing needs keys, so a touch-only device is not offered it.
+const OPTIONS_SCREEN = 10;
+const consoleUsable = !(coarsePointer || params.get('touch') === '1');
+const consoleOn = () => !!(window.isaacDebugConsole && window.isaacDebugConsole.get());
+const consoleTag = createMenuTag({
+  stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'console-tag', at: [336, 150],
+  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
+  lines: () => (consoleOn() ? ['DEBUG CONSOLE ON', 'PRESS C: OFF'] : ['DEBUG CONSOLE OFF', 'PRESS C: ON']),
+});
+async function storeConsoleOption(on) {
+  const db = await openStore();
+  if (!db) return 'no store';
+  const cur = await new Promise((resolve) => {
+    try { const req = db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).get(OPTIONS_KEY); req.onsuccess = () => resolve(req.result || null); req.onerror = () => resolve(null); }
+    catch { resolve(null); }
+  });
+  if (!cur || !cur.bytes) return 'no options yet';
+  const text = new TextDecoder().decode(cur.bytes), next = setIniOption(text, 'EnableDebugConsole', on ? 1 : 0);
+  if (next === text) return 'kept';
+  await writeSaves(db, [{ key: OPTIONS_KEY, src: cur.src || null, bytes: new TextEncoder().encode(next) }], false);
+  return 'written';
+}
+const consoleTagUp = () => consoleUsable && gameReady && readMenuId() === OPTIONS_SCREEN && !editMenu.isOpen() && !modsMenu.isOpen();
+function toggleConsole() {
+  const next = !consoleOn();
+  if (!window.isaacDebugConsole || !window.isaacDebugConsole.set(next)) return false;
+  consoleTag.setShown(true);                               // the paper says the new state now, not at the next poll
+  console.log(`[isaac] debug console ${next ? 'on: the key left of 1 opens it in a run' : 'off'}`);
+  storeConsoleOption(next).then((r) => { if (r !== 'written' && r !== 'kept') console.warn(`[isaac] the debug console choice was not stored (${r})`); })
+    .catch((e) => console.warn('[isaac] the debug console choice was not stored:', e.message));
+  return true;
+}
+window.isaacConsoleTag = { up: consoleTagUp, toggle: toggleConsole, on: consoleOn };   // the drivers look at it
+
 // ---- a controller in the page's own menus ------------------------------------------------
 // The game reads the pad itself (XInput, boot_web.mjs). The page's own papers --
 // EDIT FILE, the mods menus, the mod browser -- read keys: while one is open the
@@ -1116,6 +1184,7 @@ window.addEventListener('pointerdown', (ev) => {
     if (typeof at === 'number' && at >= 0) { editMenu.tapRow(at); ev.preventDefault(); }
     return;
   }
+  if (consoleTagUp() && consoleTag.hit(gx, gy)) { toggleConsole(); ev.preventDefault(); return; }
   if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
   if (modsTag.hit(gx, gy)) { openModBrowser(); ev.preventDefault(); }
 }, true);

@@ -1131,6 +1131,23 @@ window.isaacGuest = {
     return (H[va] | (H[va + 1] << 8) | (H[va + 2] << 16) | (H[va + 3] << 24)) >>> 0;
   },
 };
+// The game's own switch for its debug console: one byte, Options.EnableDebugConsole,
+// at Manager+0x2a398 (the Manager at [0x00c7169c]). The game's Lua property
+// Options.DebugConsoleEnabled is this byte and nothing else -- its getter 0x00897360
+// is `mov eax,[0xc7169c]; mov al,[eax+0x2a398]; ret`, its setter 0x00897370 stores
+// the argument's low byte there -- and Console::Update (0x0068b260) reads it every
+// frame, so the switch takes effect at once; OptionsConfig::Save (0x00924d10) writes
+// it back as EnableDebugConsole=%d. The page's OPTIONS tag (play.mjs) is the only
+// caller. null: the game is not up yet.
+const MANAGER_PTR = 0x00c7169c, OPT_DEBUG_CONSOLE = 0x2a398;
+const optionByte = () => {
+  const H = m && m.HEAPU8, mgr = H ? window.isaacGuest.u32(MANAGER_PTR) : 0;
+  return mgr && mgr + OPT_DEBUG_CONSOLE < H.length ? mgr + OPT_DEBUG_CONSOLE : 0;
+};
+window.isaacDebugConsole = {
+  get: () => { const at = optionByte(); return at ? m.HEAPU8[at] !== 0 : null; },
+  set: (on) => { const at = optionByte(); if (!at) return false; m.HEAPU8[at] = on ? 1 : 0; return true; },
+};
 // The guest heap's high-water report on demand, into the log like the one at
 // exit: a long session's peak against the arena without ending the session.
 window.isaacHeapReport = () => { try { m._isaac_heap_report(); return true; } catch (e) { return false; } };
