@@ -1131,22 +1131,46 @@ window.isaacGuest = {
     return (H[va] | (H[va + 1] << 8) | (H[va + 2] << 16) | (H[va + 3] << 24)) >>> 0;
   },
 };
-// The game's own switch for its debug console: one byte, Options.EnableDebugConsole,
-// at Manager+0x2a398 (the Manager at [0x00c7169c]). The game's Lua property
-// Options.DebugConsoleEnabled is this byte and nothing else -- its getter 0x00897360
-// is `mov eax,[0xc7169c]; mov al,[eax+0x2a398]; ret`, its setter 0x00897370 stores
-// the argument's low byte there -- and Console::Update (0x0068b260) reads it every
-// frame, so the switch takes effect at once; OptionsConfig::Save (0x00924d10) writes
-// it back as EnableDebugConsole=%d. The page's OPTIONS tag (play.mjs) is the only
-// caller. null: the game is not up yet.
-const MANAGER_PTR = 0x00c7169c, OPT_DEBUG_CONSOLE = 0x2a398;
-const optionByte = () => {
-  const H = m && m.HEAPU8, mgr = H ? window.isaacGuest.u32(MANAGER_PTR) : 0;
-  return mgr && mgr + OPT_DEBUG_CONSOLE < H.length ? mgr + OPT_DEBUG_CONSOLE : 0;
+// Two of the game's option bytes, for the CONSOLE row of its OPTIONS screen (play.mjs,
+// round 125). Both live in the Options block inside the Manager (at [0x00c7169c]):
+//   console   Manager+0x2a398  Options.EnableDebugConsole. The game's Lua property
+//             Options.DebugConsoleEnabled is this byte and nothing else (getter 0x00897360:
+//             `mov eax,[0xc7169c]; mov al,[eax+0x2a398]; ret`; setter 0x00897370 stores the
+//             argument's low byte there), and Console::Update (0x0068b260) reads it every
+//             frame, so a change takes effect at once.
+//   streamer  Manager+0x2a3e0  Options.StreamerMode: what the OPTIONS row with id 22 toggles
+//             (0x009b2f07 / 0x009b2f11 in the menu's Update) and shows (0x009b42c5 in its
+//             Render). Its one other reader, 0x0090f700, masks a player's name in online play.
+// OptionsConfig::Save (0x00924d10) writes both back. Only these two can be asked for.
+// null / false: the game is not up yet.
+const MANAGER_PTR = 0x00c7169c;
+const OPTION_BYTES = { console: 0x2a398, streamer: 0x2a3e0 };
+const optionByte = (name) => {
+  const off = Object.prototype.hasOwnProperty.call(OPTION_BYTES, name) ? OPTION_BYTES[name] : 0;
+  const H = m && m.HEAPU8, mgr = H && off ? window.isaacGuest.u32(MANAGER_PTR) : 0;
+  return mgr && mgr + off < H.length ? mgr + off : 0;
 };
-window.isaacDebugConsole = {
-  get: () => { const at = optionByte(); return at ? m.HEAPU8[at] !== 0 : null; },
-  set: (on) => { const at = optionByte(); if (!at) return false; m.HEAPU8[at] = on ? 1 : 0; return true; },
+window.isaacOption = {
+  get: (name) => { const at = optionByte(name); return at ? m.HEAPU8[at] !== 0 : null; },
+  set: (name, on) => { const at = optionByte(name); if (!at) return false; m.HEAPU8[at] = on ? 1 : 0; return true; },
+};
+// the console's switch by itself, as the drivers and the round-124 page knew it
+window.isaacDebugConsole = { get: () => window.isaacOption.get('console'), set: (on) => window.isaacOption.set('console', on) };
+// Guest memory is otherwise read-only to the page. This is the one way to write it: a
+// run of 32-bit floats is replaced only if every one of them holds the value the caller
+// expects (or already holds the new one), so a page that has the wrong address, or a game
+// build laid out differently, changes nothing. 'swapped' | 'already' | 'differs' | 'unmapped'.
+window.isaacGuest.swapFloats = (va, expect, next) => {
+  const H = m && m.HEAPU8;
+  va >>>= 0;
+  if (!H || !Array.isArray(expect) || !Array.isArray(next) || expect.length !== next.length || !expect.length || expect.length > 16
+    || va < 0x10000 || va + expect.length * 4 > H.length) return 'unmapped';
+  const view = new DataView(H.buffer, H.byteOffset + va, expect.length * 4);
+  const have = expect.map((_, i) => view.getFloat32(i * 4, true));
+  if (have.every((v, i) => v === Math.fround(next[i]))) return 'already';
+  if (!have.every((v, i) => v === Math.fround(expect[i]))) return 'differs';
+  next.forEach((v, i) => view.setFloat32(i * 4, v, true));
+  return 'swapped';
 };
 // The guest heap's high-water report on demand, into the log like the one at
 // exit: a long session's peak against the arena without ending the session.

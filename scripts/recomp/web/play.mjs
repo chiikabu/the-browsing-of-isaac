@@ -20,7 +20,7 @@
 // frames (the drivers), ?autoplay=1 skips the Play button (headless runs),
 // ?persist=0 turns the save store off, ISAAC_*=... goes into the module's ENV.
 const $ = (id) => document.getElementById(id);
-import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout, saveFileKind, setIniOption } from './menu_overlay.mjs';
+import { createEditFileMenu, createPaperMenu, createMenuTag, sampleReadout, saveFileKind, setIniOption, consoleRowStep, rowFramesState } from './menu_overlay.mjs';
 import { zipStore, unzip } from './zip.mjs';
 import { createModsMenu, openModDb, listMods, setModEnabled, MODS_DB } from './mods.mjs';
 import { createPackStore, createPackDownloader, createModUpdater } from './mods.mjs';
@@ -727,7 +727,7 @@ const watchScreen = () => setInterval(() => {
   lastView = view;
   editMenu.setScreen(screen);
   modsTag.setShown(screen === MODS_SCREEN && still && !modsMenu.isOpen() && gameReady && modsBrowsable());
-  consoleTag.setShown(screen === OPTIONS_SCREEN && still && consoleUsable && gameReady && !modsMenu.isOpen() && !editMenu.isOpen());
+  tendConsoleRow();
   if (screen === MODS_SCREEN && gameReady) syncGameMods();
 }, 200);
 
@@ -975,11 +975,6 @@ window.isaacEditFile = (slot) => { editMenu.open(slot); };
 window.isaacEditFileDelete = -1;
 window.isaacKeyCapture = (ev, down) => {
   if (modsMenu.isOpen()) return modsMenu.onKey(ev, down);
-  // C on the game's OPTIONS screen: the debug console's switch, as its paper says
-  if (ev.code === 'KeyC' && !ev.ctrlKey && !ev.altKey && !ev.metaKey && consoleTagUp()) {
-    if (down && !ev.repeat) toggleConsole();
-    return true;
-  }
   // B on the game's MODS screen: the browser, as its paper says (the game has no B there)
   if (ev.code === 'KeyB' && readMenuId() === MODS_SCREEN && modsBrowsable()) {
     if (down && !ev.repeat) openModBrowser();
@@ -1071,27 +1066,46 @@ const modsTag = createMenuTag({
 const modsBrowsable = () => !!(params.get('catalogue') || (typeof window !== 'undefined' && window.isaacModCatalogue));
 const openModBrowser = () => { modsTag.setShown(false); modsMenu.open('browse'); };
 
-// ---- the game's debug console: a switch on its OPTIONS screen (round 124) ----------------
+// ---- the game's debug console: a row of its OPTIONS list (rounds 124, 125) ----------------
 // The console is the game's own (the key left of 1, in a run) and the game keeps it off:
 // EnableDebugConsole in options.ini, which a player of the desktop game edits by hand and
-// a player here cannot. The game's OPTIONS screen (10, MenuManager+0x40) has no entry for
-// it, so the page hangs a hint paper beside that screen, as it does on the MODS screen:
-// C, or a click on it, flips the game's own switch (boot_web.mjs isaacDebugConsole: the
-// byte the game's Lua setter writes), which the game obeys from the next frame, and the
-// stored options.ini is rewritten so the choice is there after a reload whether or not the
-// game saves its options before then.
-// It stays off until asked for. With it on the game answers "achievement unlocks are
-// disallowed" (0x009595e0) as it does with a mod enabled, and an open console redraws its
-// whole backlog every frame; neither is something to hand a player who never asked.
-// Typing needs keys, so a touch-only device is not offered it.
+// a player here cannot. The OPTIONS list has no row for it -- but the game's own options
+// art has the word (OptionsExtra.png: a hand-lettered CONSOLE at 0,160, which no animation
+// of OptionsMenu.anm2 draws), and the list has a row that means nothing here: STREAMER MODE
+// (row id 22), which masks other players' names in online play. So that row becomes the
+// console's, natively:
+//   its name   The menu draws a row by playing the animation of that name in its sprite
+//              (Render 0x009b31c0). The page rewrites two frames of the loaded "StreamerMode"
+//              animation, in the game's memory: the name layer's crop moves from the words
+//              STREAMER MODE to the word CONSOLE, and the cursor moves in beside the shorter
+//              word. The game then draws the row itself -- its lettering, its ON/OFF, its
+//              cursor, its filter -- and scrolls, selects and toggles it as any other row.
+//   its value  The row toggles Options.StreamerMode; the page keeps Options.EnableDebugConsole
+//              equal to it (boot_web.mjs isaacOption), the console's byte being the one that
+//              counts at a start. Console::Update reads that byte every frame, so the row
+//              takes effect at once, and the stored options.ini line is rewritten so the
+//              choice survives a reload whether or not the game saved its options.
+// Off until asked for: an open console redraws its whole backlog every frame. A new save
+// keeps earning with it on (the lift patch at 0x00959618). Typing needs keys, so on a
+// touch-only device the row is left as the game has it.
+// Round 124 had a hint paper beside the screen and the C key instead; the row replaces both.
+//
+// Where things are (each read from the binary and then from the running game): the main
+// menu's options object is MenuManager+0xcecc, its selected row +0x8, its sprite (an ANM2)
+// +0x24; a sprite's animation table is at +0x74 and its count at +0x78; an animation is
+// 0x13c bytes -- its name (a std::string) first, its layer array at +0x18, the layer count
+// at +0x1c; a layer is 0x10 bytes -- its id, its frame array at +4, the frame count at +8;
+// a frame begins with ten floats: crop x, crop y, width, height, x, y, scale x, scale y,
+// pivot x, pivot y. The values below are OptionsMenu.anm2's own, as they stand in memory.
 const OPTIONS_SCREEN = 10;
+const MENU_OPTIONS_OFF = 0xcecc, OPTIONS_SPRITE_OFF = 0x24;
+const CONSOLE_ROW_ANIM = 'StreamerMode';
+const CONSOLE_ROW_FRAMES = [
+  { layer: 13, was: [128, 64, 112, 16, -54, 19, 1, 1, 16, 16], now: [0, 160, 96, 32, -38, 12, 1, 1, 16, 16] },   // the name
+  { layer: 5, was: [235, 24, 18, 22, -69, 18, 1, 1, 16, 16], now: [235, 24, 18, 22, -57, 17, 1, 1, 16, 16] },     // the cursor
+];
 const consoleUsable = !(coarsePointer || params.get('touch') === '1');
-const consoleOn = () => !!(window.isaacDebugConsole && window.isaacDebugConsole.get());
-const consoleTag = createMenuTag({
-  stage: $('stage'), assetsUrl: `${ROOT}/instance/page-assets`, id: 'console-tag', at: [336, 150],
-  readAsset: portable ? (name) => portable.bytesFor(`page-assets/${name}`, 0, 0) : null,
-  lines: () => (consoleOn() ? ['DEBUG CONSOLE ON', 'PRESS C: OFF'] : ['DEBUG CONSOLE OFF', 'PRESS C: ON']),
-});
+const consoleOn = () => !!(window.isaacOption && window.isaacOption.get('console'));
 async function storeConsoleOption(on) {
   const db = await openStore();
   if (!db) return 'no store';
@@ -1105,17 +1119,60 @@ async function storeConsoleOption(on) {
   await writeSaves(db, [{ key: OPTIONS_KEY, src: cur.src || null, bytes: new TextEncoder().encode(next) }], false);
   return 'written';
 }
-const consoleTagUp = () => consoleUsable && gameReady && readMenuId() === OPTIONS_SCREEN && !editMenu.isOpen() && !modsMenu.isOpen();
-function toggleConsole() {
-  const next = !consoleOn();
-  if (!window.isaacDebugConsole || !window.isaacDebugConsole.set(next)) return false;
-  consoleTag.setShown(true);                               // the paper says the new state now, not at the next poll
-  console.log(`[isaac] debug console ${next ? 'on: the key left of 1 opens it in a run' : 'off'}`);
-  storeConsoleOption(next).then((r) => { if (r !== 'written' && r !== 'kept') console.warn(`[isaac] the debug console choice was not stored (${r})`); })
-    .catch((e) => console.warn('[isaac] the debug console choice was not stored:', e.message));
-  return true;
+const guestFloats = (G, va, n) => { const u = new Uint32Array(n); for (let i = 0; i < n; i++) u[i] = G.u32(va + i * 4); return Array.from(new Float32Array(u.buffer)); };
+// The row's name, in the sprite the menu has loaded now. The table's address is remembered:
+// a menu built again (after a run) loads its sprite again, and is looked at again. Nothing
+// is written unless both frames hold exactly the game's own values (or already the new ones).
+let rowTable = 0, rowState = 'waiting';
+function relabelConsoleRow() {
+  const G = window.isaacGuest;
+  if (!G || typeof G.swapFloats !== 'function') return rowState;
+  let mgr = 0;
+  try { mgr = G.u32(MENU_MGR_PTR); } catch { return rowState; }
+  if (!mgr) return rowState;
+  const sprite = mgr + MENU_OPTIONS_OFF + OPTIONS_SPRITE_OFF;
+  const table = G.u32(sprite + 0x74), count = G.u32(sprite + 0x78);
+  if (!table || table === rowTable || count < 1 || count > 256) return rowState;
+  rowTable = table;
+  rowState = 'no such row';
+  for (let i = 0; i < count; i++) {
+    const anim = table + i * 0x13c;
+    if (guestString(G, anim) !== CONSOLE_ROW_ANIM) continue;
+    const layers = G.u32(anim + 0x18), n = Math.min(G.u32(anim + 0x1c), 64);
+    const found = CONSOLE_ROW_FRAMES.map((f) => {
+      for (let k = 0; k < n; k++) {
+        const layer = layers + k * 0x10;
+        if (G.u32(layer) === f.layer && G.u32(layer + 8) >= 1) return G.u32(layer + 4);
+      }
+      return 0;
+    });
+    const have = found.map((va) => (va ? guestFloats(G, va, 10) : null));
+    const plan = rowFramesState(have, CONSOLE_ROW_FRAMES);
+    if (plan === 'differs') { rowState = 'not the frames expected'; break; }
+    const done = CONSOLE_ROW_FRAMES.map((f, k) => G.swapFloats(found[k], f.was, f.now));
+    rowState = done.every((r) => r === 'swapped' || r === 'already') ? 'console' : 'not the frames expected';
+    break;
+  }
+  if (rowState === 'console') console.log('[isaac] OPTIONS: the STREAMER MODE row is the debug console\'s (CONSOLE), in the game\'s own lettering');
+  else console.warn(`[isaac] OPTIONS: the console row was not set up (${rowState}); the list is left as the game has it`);
+  return rowState;
 }
-window.isaacConsoleTag = { up: consoleTagUp, toggle: toggleConsole, on: consoleOn };   // the drivers look at it
+// The row's value and the console's switch, kept equal (menu_overlay.mjs consoleRowStep
+// decides: the row at first sight takes the console's value; afterwards whichever of the
+// two changed is followed, and a change made on the row is stored).
+const rowSeen = { seen: false, console: false, row: false };
+function syncConsoleRow() {
+  const O = window.isaacOption;
+  if (!O) return;
+  const step = consoleRowStep(rowSeen, O.get('console'), O.get('streamer'));
+  if (step.write) O.set(step.write.name, step.write.value);
+  if (step.store === null) return;
+  console.log(`[isaac] debug console ${step.store ? 'on: the key left of 1 opens it in a run' : 'off'}`);
+  storeConsoleOption(step.store).then((r) => { if (r !== 'written' && r !== 'kept') console.warn(`[isaac] the debug console choice was not stored (${r})`); })
+    .catch((e) => console.warn('[isaac] the debug console choice was not stored:', e.message));
+}
+const tendConsoleRow = () => { if (consoleUsable && gameReady && relabelConsoleRow() === 'console') syncConsoleRow(); };
+window.isaacConsoleRow = { state: () => rowState, on: consoleOn, tend: tendConsoleRow };   // the drivers look at it
 
 // ---- a controller in the page's own menus ------------------------------------------------
 // The game reads the pad itself (XInput, boot_web.mjs). The page's own papers --
@@ -1184,7 +1241,6 @@ window.addEventListener('pointerdown', (ev) => {
     if (typeof at === 'number' && at >= 0) { editMenu.tapRow(at); ev.preventDefault(); }
     return;
   }
-  if (consoleTagUp() && consoleTag.hit(gx, gy)) { toggleConsole(); ev.preventDefault(); return; }
   if (modsMenu.isOpen() || readMenuId() !== MODS_SCREEN || !modsBrowsable()) return;
   if (modsTag.hit(gx, gy)) { openModBrowser(); ev.preventDefault(); }
 }, true);

@@ -1,4 +1,4 @@
-// Round 124: the debug console's switch on the game's OPTIONS screen, the options.ini
+// Rounds 124 and 125: the debug console's row in the game's OPTIONS list, the options.ini
 // line behind it, and what IMPORT FILE takes (menu_overlay.mjs getIniOption / setIniOption /
 // saveFileKind; play.mjs; boot_web.mjs; the lift patch that keeps a new save writable).
 import test from 'node:test';
@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getIniOption, setIniOption, saveFileKind } from '../scripts/recomp/web/menu_overlay.mjs';
+import { getIniOption, setIniOption, saveFileKind, consoleRowStep, rowFramesState } from '../scripts/recomp/web/menu_overlay.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = (...p) => readFileSync(join(root, 'scripts', 'recomp', ...p), 'utf8');
@@ -73,17 +73,75 @@ test('the page: the console is off until asked for, and its switch is the game\'
   const page = src('web', 'play.mjs'), boot = src('web', 'boot_web.mjs');
   assert.match(page, /'EnableDebugConsole=0', 'MaxScale=99'/, 'a first visit gets it off, as the game ships it');
   assert.ok(!/EnableDebugConsole=1/.test(page), 'nothing on the page turns it on unasked');
-  assert.match(page, /const OPTIONS_SCREEN = 10;/);
-  assert.ok(page.includes("if (ev.code === 'KeyC' && !ev.ctrlKey && !ev.altKey && !ev.metaKey && consoleTagUp()) {"), 'C, on the OPTIONS screen only');
   assert.ok(page.includes('const consoleUsable = !(coarsePointer || params.get(\'touch\') === \'1\');'), 'not offered where there are no keys to type with');
-  assert.ok(page.includes("setIniOption(text, 'EnableDebugConsole', on ? 1 : 0)"), 'the stored options.ini follows the switch');
-  // the byte: the Manager at [0x00c7169c], Options.EnableDebugConsole at +0x2a398 (the game's Lua setter 0x00897370)
-  assert.match(boot, /const MANAGER_PTR = 0x00c7169c, OPT_DEBUG_CONSOLE = 0x2a398;/);
-  assert.ok(boot.includes('set: (on) => { const at = optionByte(); if (!at) return false; m.HEAPU8[at] = on ? 1 : 0; return true; },'));
-  assert.ok(boot.includes('return mgr && mgr + OPT_DEBUG_CONSOLE < H.length ? mgr + OPT_DEBUG_CONSOLE : 0;'), 'never before the game has a Manager');
+  assert.ok(page.includes("setIniOption(text, 'EnableDebugConsole', on ? 1 : 0)"), 'the stored options.ini follows the row');
+  // the two bytes: the Manager at [0x00c7169c]; Options.EnableDebugConsole +0x2a398 (the game's Lua setter 0x00897370),
+  // Options.StreamerMode +0x2a3e0 (what the row with id 22 toggles, 0x009b2f11)
+  assert.match(boot, /const MANAGER_PTR = 0x00c7169c;/);
+  assert.match(boot, /const OPTION_BYTES = \{ console: 0x2a398, streamer: 0x2a3e0 \};/);
+  assert.ok(boot.includes("const off = Object.prototype.hasOwnProperty.call(OPTION_BYTES, name) ? OPTION_BYTES[name] : 0;"), 'only the two it names');
+  assert.ok(boot.includes('return mgr && mgr + off < H.length ? mgr + off : 0;'), 'never before the game has a Manager');
   // the console key is still the game's own, where the game put it
   assert.ok(boot.includes("Backquote: 'grave',"), 'the key left of 1');
   assert.ok(!/F2: 'grave'/.test(boot), 'F2 stays F2: mods bind it');
+});
+
+test('the page: the console is a row of the OPTIONS list, not a paper of its own (round 125)', () => {
+  const page = src('web', 'play.mjs'), boot = src('web', 'boot_web.mjs');
+  assert.ok(!/consoleTag|console-tag|toggleConsole/.test(page), 'the hint paper of round 124 is gone');
+  assert.ok(!/ev\.code === 'KeyC'/.test(page), 'and its C key');
+  // where the row is: the main menu's options object, its sprite, the animation of the row with id 22
+  assert.match(page, /const MENU_OPTIONS_OFF = 0xcecc, OPTIONS_SPRITE_OFF = 0x24;/);
+  assert.match(page, /const CONSOLE_ROW_ANIM = 'StreamerMode';/);
+  // the two frames, as OptionsMenu.anm2 has them and as they become: the name's crop goes to the
+  // word CONSOLE of the game's own sheet (0,160 96x32), the cursor moves in beside it
+  assert.ok(page.includes('{ layer: 13, was: [128, 64, 112, 16, -54, 19, 1, 1, 16, 16], now: [0, 160, 96, 32, -38, 12, 1, 1, 16, 16] },'));
+  assert.ok(page.includes('{ layer: 5, was: [235, 24, 18, 22, -69, 18, 1, 1, 16, 16], now: [235, 24, 18, 22, -57, 17, 1, 1, 16, 16] },'));
+  assert.ok(page.includes("if (plan === 'differs') { rowState = 'not the frames expected'; break; }"), 'nothing is written into a sprite that is not the one expected');
+  assert.ok(page.indexOf("if (plan === 'differs')") < page.indexOf('G.swapFloats(found[k], f.was, f.now)'), 'the look comes before the write');
+  assert.ok(page.includes("const tendConsoleRow = () => { if (consoleUsable && gameReady && relabelConsoleRow() === 'console') syncConsoleRow(); };"),
+    'the row is tied to the console only once it says CONSOLE');
+  // the one write the page can make into the game: floats, and only over the values it expects
+  assert.ok(boot.includes("if (!have.every((v, i) => v === Math.fround(expect[i]))) return 'differs';"));
+  assert.ok(boot.indexOf("return 'differs';") < boot.indexOf('next.forEach((v, i) => view.setFloat32(i * 4, v, true));'), 'compared first');
+  assert.ok(boot.includes('|| va < 0x10000 || va + expect.length * 4 > H.length) return \'unmapped\';'), 'inside the heap');
+});
+
+test('the row and the console\'s switch: who follows whom', () => {
+  const st = { seen: false, console: false, row: false };
+  // first sight: the row takes the console's value, whatever it was, and nothing is stored
+  assert.deepEqual(consoleRowStep(st, true, false), { write: { name: 'streamer', value: true }, store: null });
+  assert.deepEqual(st, { seen: true, console: true, row: true });
+  assert.deepEqual(consoleRowStep(st, true, true), { write: null, store: null }, 'nothing changed');
+  // the player turns the row off: the console follows and the choice is stored
+  assert.deepEqual(consoleRowStep(st, true, false), { write: { name: 'console', value: false }, store: false });
+  assert.deepEqual(consoleRowStep(st, false, false), { write: null, store: null });
+  // and on
+  assert.deepEqual(consoleRowStep(st, false, true), { write: { name: 'console', value: true }, store: true });
+  // a mod sets the console's switch: the row follows, nothing is stored
+  assert.deepEqual(consoleRowStep(st, false, true), { write: { name: 'streamer', value: false }, store: null });
+  assert.deepEqual(st, { seen: true, console: false, row: false });
+  // both moved between two looks: the row is the player's hand
+  assert.deepEqual(consoleRowStep(st, true, true), { write: null, store: true }, 'they already agree: only the store is owed');
+  // first sight with the two equal: nothing to write
+  assert.deepEqual(consoleRowStep({ seen: false, console: false, row: false }, false, false), { write: null, store: null });
+  assert.deepEqual(consoleRowStep({ seen: false, console: false, row: false }, false, true), { write: { name: 'streamer', value: false }, store: null },
+    'a row left on by an earlier build does not turn the console on');
+  // the game is not up: nothing
+  const cold = { seen: false, console: false, row: false };
+  assert.deepEqual(consoleRowStep(cold, null, null), { write: null, store: null });
+  assert.equal(cold.seen, false);
+});
+
+test('the row\'s frames: written only over the game\'s own values', () => {
+  const frames = [{ was: [1, 2, 3], now: [4, 5, 6] }, { was: [7, 8], now: [9, 8] }];
+  assert.equal(rowFramesState([[1, 2, 3], [7, 8]], frames), 'swap', 'as the game loaded them');
+  assert.equal(rowFramesState([[4, 5, 6], [9, 8]], frames), 'done', 'already the new ones');
+  assert.equal(rowFramesState([[4, 5, 6], [7, 8]], frames), 'swap', 'one of each: finish it');
+  assert.equal(rowFramesState([[1, 2, 3], [7, 9]], frames), 'differs', 'one value off: another sprite');
+  assert.equal(rowFramesState([[1, 2, 3], null], frames), 'differs', 'a layer that is not there');
+  assert.equal(rowFramesState([[1, 2], [7, 8]], frames), 'differs', 'a shorter read');
+  assert.equal(rowFramesState([[1, 2, 3, 0], [7, 8]], frames), 'differs');
 });
 
 test('the page: its own keys stand aside while the console is open', () => {

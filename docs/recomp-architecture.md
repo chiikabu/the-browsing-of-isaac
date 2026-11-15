@@ -12416,3 +12416,75 @@ instruction reference; 4 mutants killed).
 other than 3 and 4; the cost of widening about half a megapixel a frame. The
 root fix belongs in `lift.py` (a CALLOTHER with 8-byte operands through the
 wide path), after which the pass finds nothing to do.
+
+### 21.155 Round 125: the console is a row of the OPTIONS list
+
+Page only (`web/play.mjs`, `web/boot_web.mjs`, `web/menu_overlay.mjs`,
+`web/drive_console.mjs`). No engine change: engine n14.
+
+**What was asked.** Round 124's switch was a hint paper beside the OPTIONS
+screen and the C key. The owner's word on it, the hour it went live: it should
+not be a paper of its own, it should be something one enables in the settings
+list.
+
+**How the list is made** (0x009b23a0 Update, 0x009b31c0 Render, 0x009b4810
+the builder; decode config linear+skipdata+jtab-mask v2). The main menu's
+options object is MenuManager+0xcecc (screen 10; a second one at +0xeb50 for
+screen 20 and a third in the pause screen share the code, told apart by the
+mode dword at +0). It holds a `std::vector<int>` of row ids at +0x27c, built
+per mode, and its selected row at +0x8 (measured: 23 rows on the main menu,
+Down from the last wraps to the first). Render walks the vector, and for each
+id plays the animation of that row's name in the options sprite
+(`OptionsMenu.anm2`: "SFX", "Fullscreen", ... one animation a row, with a name
+layer, an ON/OFF or bars layer and a cursor layer) at a pitch it derives from
+the row count, the paper growing with it; Update's switch on the id changes
+that row's option. So a row's words are art, not text, and a row is whatever
+its animation draws.
+
+**Two finds.** The game's own sheet has the word: `OptionsExtra.png` carries
+a hand-lettered CONSOLE at (0,160), 96 by 32, which no animation draws. And
+the list has a row that means nothing here: STREAMER MODE (id 22, pushed for
+every mode but the pause menu's), which toggles Options.StreamerMode
+(Manager+0x2a3e0; 4 references in `.text`: the menu's read, write and draw,
+and 0x0090f700, which masks a player's name for the ten callers that draw
+names in online play).
+
+**What the page does.** Nothing is drawn by the page. (1) It rewrites two
+frames of the loaded "StreamerMode" animation in the game's memory: the name
+layer's first frame from crop (128,64) 112x16 at (-54,19) to crop (0,160)
+96x32 at (-38,12), and the cursor's from x -69, y 18 to x -57, y 17, beside
+the shorter word. The game then draws CONSOLE ON / OFF itself, in its own
+lettering, with its own cursor, scroll, sounds and filter. The frames are
+found by walking the sprite (animation table at sprite+0x74, 0x13c a record,
+name first; layers at +0x18; a frame's first ten floats), and written through
+the one write the page has, `isaacGuest.swapFloats`, which replaces a run of
+floats only where every one holds the value expected: a sprite that is not
+the one read here is left alone and the row stays STREAMER MODE. The table's
+address is remembered, so a menu built again after a run is relabelled again.
+(2) It keeps Options.EnableDebugConsole equal to the row's byte
+(`consoleRowStep`, five looks a second): at first sight the row takes the
+console's value; a change of the row is the player's, the console follows and
+the options.ini line is stored; a change of the console's byte from elsewhere
+(a mod's `Options.DebugConsoleEnabled`) shows on the row. The hint paper and
+the C key are gone. A touch-only device, which cannot type into a console, is
+left with the list as the game has it.
+
+**Measured.** The layout was read from the running game before anything was
+written: the "StreamerMode" animation's layer 13 frame is
+[128,64,112,16,-54,19,1,1,16,16] and its layer 5 frame
+[235,24,18,22,-69,18,1,1,16,16] in memory, the anm2's own values; Right on row
+17 flips Manager+0x2a3e0 and nothing else in the options block.
+`drive_console.mjs` on n14 (a fresh profile): 33 of 33 -- the row is the
+console's and the list still has 23 rows; Down reaches it; Right on, Right
+off, Enter on, the stored options.ini following each time; the console's byte
+set from elsewhere shows on the row; in a run the key opens nothing while off
+and the console while on; the round-124 checks of typing, F and N; a change
+in a run is stored; after a reload the console is on and the row says so.
+`tests/recomp-console-switch.test.js` (11 tests); 13 mutants of the row's
+logic and of the write through `mutate.mjs`, all killed.
+
+**Not measured, and what is given up.** The pause menu's options have no
+such row (the game does not list STREAMER MODE there): the console is
+switched from the main menu. Streamer Mode itself is no longer switchable
+here; its one consumer is online. A row left ON by a player before this round
+is set to the console's value at first sight, not the other way round.

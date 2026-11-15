@@ -1,17 +1,20 @@
-// drive_console.mjs -- the debug console's switch on the game's OPTIONS screen, and the
-// console itself, the way a player meets them (round 124).
+// drive_console.mjs -- the debug console's row in the game's OPTIONS list, and the console
+// itself, the way a player meets them (rounds 124, 125).
 //
 //   node scripts/recomp/web/drive_console.mjs <play.html url> <fresh out-dir> [gl=hw|sw]
 //
 // A fresh browser profile. What is checked, in order:
-//   1. off by default: the game's switch reads off; in the first run the console key opens nothing
-//   2. on the OPTIONS screen the page's paper is up; C turns the switch on, C again off, a
-//      click on the paper on again; each time the stored options.ini says the same
-//   3. in a run the console key opens the console; the letters f and n typed into it are text
-//      (no fullscreen request, the FPS readout does not flip) and the line holds what was typed;
-//      a held Backspace erases more than one character; Enter on the empty line closes it
+//   1. off by default: the game's switch reads off; the page has made the STREAMER MODE row
+//      the console's, and the list still has its 23 rows
+//   2. on the OPTIONS screen the row is reached with Down like any other; Right turns the
+//      console on, Right again off, Enter on again; each time the stored options.ini says
+//      the same; a change of the console's switch from elsewhere (a mod) shows on the row
+//   3. in a run the console key opens nothing while it is off and the console while it is on;
+//      the letters f and n typed into it are text (no fullscreen request, the FPS readout
+//      does not flip) and the line holds what was typed; a held Backspace erases more than
+//      one character; Enter on the empty line closes it
 //   4. with the console closed F and N are the page's keys again
-//   5. after a reload the switch is still on
+//   5. after a reload the switch is still on, and so is the row
 // Screenshots and logs go to the out-dir. Exit code 1 when a check fails.
 import { chromium } from 'playwright';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -45,7 +48,9 @@ await page.addInitScript(() => {
 });
 
 // the game's state, read where the page reads it: the menu screen (MenuManager+0x40), the
-// console (Game+0x68d78: state, and the line it is editing, an MSVC std::string at +0x1c)
+// options list (MenuManager+0xcecc: the selected row +0x8, the vector of row ids +0x27c/+0x280;
+// the console's row is the one with id 22), the console (Game+0x68d78: its state, and the line
+// it is editing, an MSVC std::string at +0x1c)
 const state = () => page.evaluate(() => {
   const G = window.isaacGuest;
   if (!G) return { frame: 0, menu: -1, console: -1, line: '' };
@@ -56,10 +61,13 @@ const state = () => page.evaluate(() => {
     const at = cap >= 16 ? G.u32(s) : s;
     for (let i = 0; i < Math.min(size, 200); i++) line += String.fromCharCode(G.u8(at + i));
   }
+  const rows = [];
+  if (mgr) { const b = G.u32(mgr + 0xcecc + 0x27c), e = G.u32(mgr + 0xcecc + 0x280); for (let p = b; p < e && rows.length < 64; p += 4) rows.push(G.u32(p)); }
   return { frame: window.isaacFrame | 0, menu: mgr ? G.u32(mgr + 0x40) : -1, console: game ? G.u32(game + 0x68d78) : -1, line,
-    on: window.isaacDebugConsole ? window.isaacDebugConsole.get() : null,
-    tagUp: window.isaacConsoleTag ? window.isaacConsoleTag.up() : null,
-    tagShown: !!(document.getElementById('console-tag') && !document.getElementById('console-tag').hidden),
+    on: window.isaacOption ? window.isaacOption.get('console') : null,
+    row: window.isaacOption ? window.isaacOption.get('streamer') : null,
+    rowState: window.isaacConsoleRow ? window.isaacConsoleRow.state() : null,
+    selected: mgr ? G.u32(mgr + 0xcecc + 0x8) : -1, rows: rows.length, rowAt: rows.indexOf(22),
     fs: window.__fsAsked | 0, fps: !!(document.getElementById('fps-viewer') && !document.getElementById('fps-viewer').hidden) };
 });
 const stored = () => page.evaluate(async () => {
@@ -82,6 +90,7 @@ const press = async (code, ms = 110, after = 450) => { await page.keyboard.down(
 const shot = (name) => page.screenshot({ path: join(OUT, `${name}.png`) });
 const until = async (fn, ms, step = 250) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) return null; await sleep(step); } };
 const logHas = (re) => page.evaluate((src) => (window.isaacLog || []).some((l) => new RegExp(src).test(String(l))), re.source);
+const settled = (want) => until(async () => { const v = await state(); return v.on === want && v.row === want ? v : null; }, 4000);
 
 async function boot() {
   await page.goto(URL0, { waitUntil: 'domcontentloaded' });
@@ -125,46 +134,51 @@ try {
   let s = await state();
   T('a fresh profile: the game\'s console switch is off', s.on === false, JSON.stringify(s));
   T('the game reached its menus', await toGameMenu(), JSON.stringify(await state()));
+  s = await until(async () => { const v = await state(); return v.rowState === 'console' ? v : null; }, 6000) || await state();
+  T('the page made the STREAMER MODE row the console\'s', s.rowState === 'console', JSON.stringify(s));
+  T('the list has its 23 rows, the console\'s among them', s.rows === 23 && s.rowAt >= 0, JSON.stringify(s));
+  T('the row is off, as the console is', s.row === false && s.on === false, JSON.stringify(s));
 
   // ---- 2. the OPTIONS screen
   T('OPTIONS is screen 10', await toOptions(), JSON.stringify(await state()));
   await sleep(1200);
-  s = await until(async () => { const v = await state(); return v.tagShown ? v : null; }, 6000) || await state();
-  T('the page\'s paper is up on the OPTIONS screen', s.tagUp === true && s.tagShown === true, JSON.stringify(s));
-  await shot('1-options-off');
-  await press('KeyC');
   s = await state();
-  T('C turns the switch on', s.on === true && s.menu === 10, JSON.stringify(s));
+  for (let i = 0; i < 30 && s.selected !== s.rowAt; i++) { await press('ArrowDown', 90, 260); s = await state(); }
+  T('Down reaches the row like any other', s.selected === s.rowAt, JSON.stringify(s));
+  await sleep(700);
+  await shot('1-options-row-off');
+  await press('ArrowRight');
+  s = await settled(true) || await state();
+  T('Right on the row turns the console on', s.on === true && s.row === true && s.menu === 10, JSON.stringify(s));
   T('and the stored options.ini says 1', await until(async () => (await stored()) === '1', 4000), await stored());
   await sleep(500);
-  await shot('2-options-on');
-  await press('KeyC');
-  s = await state();
-  T('C again turns it off', s.on === false, JSON.stringify(s));
+  await shot('2-options-row-on');
+  await press('ArrowRight');
+  s = await settled(false) || await state();
+  T('Right again turns it off', s.on === false && s.row === false, JSON.stringify(s));
   T('and the stored options.ini says 0', await until(async () => (await stored()) === '0', 4000), await stored());
-  // a click on the paper: its face is about (69, 39) into the widget at (336, 150), in a 480x270 game
-  const box = await page.evaluate(() => { const r = document.getElementById('stage').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
-  await page.mouse.click(box.x + (336 + 69) / 480 * box.w, box.y + (150 + 39) / 270 * box.h);
-  await sleep(500);
-  s = await state();
-  T('a click on the paper turns it on', s.on === true, JSON.stringify(s));
+  await press('Enter');
+  s = await settled(true) || await state();
+  T('Enter on the row turns it on, and the game stays on its OPTIONS screen', s.on === true && s.row === true && s.menu === 10, JSON.stringify(s));
   T('and the stored options.ini says 1 again', await until(async () => (await stored()) === '1', 4000), await stored());
+  // the console's switch set from elsewhere, as a mod's Options.DebugConsoleEnabled does: the row follows
+  await page.evaluate(() => window.isaacOption.set('console', false));
+  s = await settled(false) || await state();
+  T('the console switched off from elsewhere: the row shows off', s.on === false && s.row === false, JSON.stringify(s));
+  await press('ArrowUp', 90, 300);
+  await press('ArrowDown', 90, 300);
+  T('the rows around it are reached as before', (await state()).selected === s.rowAt, JSON.stringify(await state()));
 
-  // ---- 1b and 3. a run
-  // (the switch is turned off for the first half of the run, to see the key do nothing)
-  await press('KeyC');
-  T('off again for the first half of the run', (await state()).on === false);
+  // ---- 3. a run
   T('a run begins', await startRun());
   s = await state();
-  T('in a run the paper is gone', s.tagShown === false && s.tagUp === false, JSON.stringify(s));
   await press('Backquote', 110, 900);
   s = await state();
-  T('with the switch off the console key opens nothing', s.console === 0, JSON.stringify(s));
-  // on, from here: the game's own switch, as the paper sets it
-  await page.evaluate(() => window.isaacDebugConsole.set(true));
+  T('with the console off its key opens nothing', s.console === 0, JSON.stringify(s));
+  await page.evaluate(() => window.isaacOption.set('console', true));
   await press('Backquote', 110, 1200);
   s = await until(async () => { const v = await state(); return v.console === 2 ? v : null; }, 5000) || await state();
-  T('with the switch on the console key opens the console', s.console === 2, JSON.stringify(s));
+  T('with the console on its key opens the console', s.console === 2, JSON.stringify(s));
   T('the page says the console is open', await page.evaluate(() => window.isaacConsoleOpen()) === true);
   const fs0 = s.fs, fps0 = s.fps;
   for (const code of ['KeyG', 'KeyO', 'KeyT', 'KeyO', 'Space', 'KeyF', 'KeyN', 'KeyF', 'KeyN']) await press(code, 70, 160);
@@ -196,14 +210,21 @@ try {
   await page.evaluate(() => { if (document.fullscreenElement) return document.exitFullscreen(); return null; }).catch(() => {});
 
   // ---- 5. after a reload
-  // the choice as the paper stores it (the run above set the game's switch directly)
-  await page.evaluate(() => window.isaacConsoleTag.toggle());       // on -> off
-  await page.evaluate(() => window.isaacConsoleTag.toggle());       // off -> on, stored
-  T('the stored options.ini says 1 before the reload', await until(async () => (await stored()) === '1', 4000), await stored());
+  // the choice as the row stores it: the row's own byte turned, as Right on it does
+  // (each change is waited for: the page looks five times a second)
+  await page.evaluate(() => window.isaacOption.set('streamer', false));
+  s = await settled(false) || await state();
+  T('the row turned off in a run turns the console off', s.on === false && s.row === false, JSON.stringify(s));
+  T('and stores 0', await until(async () => (await stored()) === '0', 4000), await stored());
+  await page.evaluate(() => window.isaacOption.set('streamer', true));
+  s = await settled(true) || await state();
+  T('the row turned on turns the console on', s.on === true && s.row === true, JSON.stringify(s));
+  T('and stores 1', await until(async () => (await stored()) === '1', 4000), await stored());
   writeFileSync(join(OUT, 'first.console.log'), con.join('\n') + '\n');
   await boot();
-  s = await state();
-  T('after a reload the switch is still on', s.on === true, JSON.stringify(s));
+  await toGameMenu();
+  s = await until(async () => { const v = await state(); return v.rowState === 'console' && v.row === true ? v : null; }, 8000) || await state();
+  T('after a reload the console is still on, and the row says so', s.on === true && s.row === true && s.rowState === 'console', JSON.stringify(s));
   T('no page error', !con.some((l) => /PAGEERROR/.test(l)), con.filter((l) => /PAGEERROR/.test(l)).slice(0, 2).join(' | '));
 } catch (e) {
   T('the drive ran', false, e && e.stack || e);

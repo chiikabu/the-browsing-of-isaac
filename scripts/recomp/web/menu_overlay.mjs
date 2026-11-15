@@ -690,6 +690,48 @@ export function readoutText(fps, speed) {
   return speed == null ? n : `${n} ${Math.round(speed * 100)}%`;
 }
 
+// ---- the OPTIONS list's console row: its two decisions, apart from the game (round 125) ----
+//
+// The row's value (the game's StreamerMode byte, which the row toggles) and the console's
+// switch (EnableDebugConsole) are kept equal by play.mjs, which looks at both five times a
+// second and asks here what to do. `st` is what was seen last: { seen, console, row }.
+//   first sight            the row takes the console's value (options.ini is trusted for the
+//                          console's), nothing is stored
+//   the row changed        the player turned it: the console follows, and the choice is stored
+//   the console changed    something else set it (a mod's Options.DebugConsoleEnabled): the
+//                          row follows, nothing is stored
+// Both changed at once: the row wins (it is the one a player's hand is on).
+// Returns { write: null | { name: 'streamer' | 'console', value }, store: null | boolean }.
+export function consoleRowStep(st, con, row) {
+  if (typeof con !== 'boolean' || typeof row !== 'boolean') return { write: null, store: null };
+  if (!st.seen) {
+    st.seen = true; st.console = con; st.row = con;
+    return { write: row !== con ? { name: 'streamer', value: con } : null, store: null };
+  }
+  if (row !== st.row) {
+    st.row = row; st.console = row;
+    return { write: con !== row ? { name: 'console', value: row } : null, store: row };
+  }
+  if (con !== st.console) {
+    st.console = con; st.row = con;
+    return { write: { name: 'streamer', value: con }, store: null };
+  }
+  return { write: null, store: null };
+}
+// The frames of the row's animation, as read from the game, against what they are expected
+// to be: 'swap' when every one holds the game's own values or already the new ones and at
+// least one is still the game's, 'done' when all are the new ones, 'differs' otherwise
+// (another build, another sprite: nothing is to be written).
+export function rowFramesState(have, frames) {
+  const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
+  let old = 0;
+  for (let i = 0; i < frames.length; i++) {
+    if (same(have[i], frames[i].was)) old++;
+    else if (!same(have[i], frames[i].now)) return 'differs';
+  }
+  return old ? 'swap' : 'done';
+}
+
 // ---- the files the page keeps for the game: two small readers -------------------
 //
 // What a file handed to IMPORT FILE is, by its first bytes and not by its name
