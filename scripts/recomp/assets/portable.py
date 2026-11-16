@@ -34,6 +34,7 @@ usage:
   portable.py chunks  <dist> <out-dir> [--base URL] [--chunks 12] [--skip videos.a]
   portable.py offline <dist> <out.html>             [--piece-mib 8] [--skip videos.a]
   portable.py svg     <dist> <out.svg>              [--piece-mib 4] [--skip videos.a]
+  portable.py svg-wrap <chunked page.html> <out.svg>  (a half-megabyte .svg that fetches the chunks)
 """
 from __future__ import annotations
 
@@ -1357,6 +1358,23 @@ def svg_page(dist: str, args) -> str:
     return inject_at_end(html, tail)
 
 
+def svg_head(page: str) -> str:
+    """The .svg's opening: its title (the page's), the loading line, and the iframe the page goes into."""
+    m = re.search(r"<title>(.*?)</title>", page, re.S)
+    title = (m.group(1).strip() if m else "") or "The Binding of Isaac"
+    title = title.replace("&", "&amp;").replace("<", "&lt;")
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">\n'
+            "<title>" + title + "</title>\n"
+            "<style>:root { background: #000; } svg { display: block; }</style>\n"
+            '<text id="wait" x="50%" y="50%" fill="#ccc" text-anchor="middle" font-family="sans-serif" font-size="16">'
+            "Loading the game into this page...</text>\n"
+            '<foreignObject x="0" y="0" width="100%" height="100%">'
+            '<iframe xmlns="http://www.w3.org/1999/xhtml" id="game" title="game" allow="fullscreen; autoplay; gamepad" '
+            'allowfullscreen="" style="border:0;width:100%;height:100%;display:block;background:#000"></iframe>'
+            "</foreignObject>\n")
+
+
 def cmd_svg(args) -> int:
     files = plan(args.dist, set(args.skip or []))
     whole, windowed = split_parts(files)
@@ -1367,23 +1385,11 @@ def cmd_svg(args) -> int:
     if (piece + 2) // 3 * 4 + 64 > SVG_TEXT_MAX:
         raise SystemExit("svg: --piece-mib %d makes scripts over the XML parser's text limit; 6 is the most" % args.piece_mib)
     page = svg_page(args.dist, args)
-    m = re.search(r"<title>(.*?)</title>", page, re.S)
-    title = (m.group(1).strip() if m else "") or "The Binding of Isaac"
-    title = title.replace("&", "&amp;").replace("<", "&lt;")
     out = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     stored = []
     with open(out, "w", encoding="utf-8", newline="\n") as f:
-        f.write('<?xml version="1.0" encoding="UTF-8"?>\n'
-                '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">\n'
-                "<title>" + title + "</title>\n"
-                "<style>:root { background: #000; } svg { display: block; }</style>\n"
-                '<text id="wait" x="50%" y="50%" fill="#ccc" text-anchor="middle" font-family="sans-serif" font-size="16">'
-                "Loading the game into this page...</text>\n"
-                '<foreignObject x="0" y="0" width="100%" height="100%">'
-                '<iframe xmlns="http://www.w3.org/1999/xhtml" id="game" title="game" allow="fullscreen; autoplay; gamepad" '
-                'allowfullscreen="" style="border:0;width:100%;height:100%;display:block;background:#000"></iframe>'
-                "</foreignObject>\n")
+        f.write(svg_head(page))
         f.write(svg_script("window.__isaacPortableData = { blobs: [] };"))
 
         def emit(_i, b):
@@ -1405,6 +1411,54 @@ def cmd_svg(args) -> int:
         f.write("</svg>\n")
     print("svg: %s (%s), %s of payload in %d pieces, one script each"
           % (out, human(os.path.getsize(out)), human(a_len + b_len), n_a + n_b))
+    return 0
+
+
+# ---- svg-wrap: a chunked page as a small .svg ---------------------------------------
+# The chunked build's page (cmd_chunks, or a release's GitHub Pages page) carries no
+# payload: it fetches its chunks from absolute URLs (jsDelivr). Wrapped the same way as
+# cmd_svg wraps its page, it is an .svg of half a megabyte that plays from a disk or from
+# any host that serves an .svg, fetching the game as the page does. What it needs of the
+# page: a payload that lives at absolute URLs (an srcdoc has no folder of its own to fetch
+# a relative one from), and modules from round 126 on (they resolve their own URLs against
+# document.baseURI; older ones throw on about:srcdoc in their first line).
+SVG_WRAP_NEEDS = "document.baseURI"
+
+
+def svg_wrap_page(html: str) -> str:
+    """Check that a built page can run as an srcdoc, and return it."""
+    m = re.search(r"window\.__isaacPortableData\s*=\s*", html)
+    if not m:
+        raise SystemExit("svg-wrap: the page carries no portable data (window.__isaacPortableData)")
+    data, _ = json.JSONDecoder().raw_decode(html, m.end())
+    if data.get("blobs") is not None or html.find("__isaacPortableData.blobs.push(") >= 0:
+        raise SystemExit("svg-wrap: this is an offline page (the payload is inline); build it with `svg` instead")
+    bases = [s.get("base") for s in data.get("streams", [])] + [data.get("base")]
+    for b in bases:
+        if b is not None and not re.match(r"https?://", b):
+            raise SystemExit("svg-wrap: the payload is at %r, relative to the page; an .svg has no folder of its own "
+                             "to fetch it from (build the page with an absolute --base)" % b)
+    i = html.find("window.__isaacModules = ")
+    if i < 0:
+        raise SystemExit("svg-wrap: the page carries no modules (window.__isaacModules)")
+    mods, _ = json.JSONDecoder().raw_decode(html, i + len("window.__isaacModules = "))
+    for name in ("play.mjs", "boot_web.mjs"):
+        if SVG_WRAP_NEEDS not in mods.get(name, ""):
+            raise SystemExit("svg-wrap: the page's %s predates round 126 (no %s): in an srcdoc its first relative "
+                             "URL throws; build the page from round 126's modules" % (name, SVG_WRAP_NEEDS))
+    return html
+
+
+def cmd_svg_wrap(args) -> int:
+    page = svg_wrap_page(read(args.page).decode("utf-8"))
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        f.write(svg_head(page))
+        f.write(svg_script("window.__isaacSvgPage = " + json.dumps(page) + ";"))
+        f.write(svg_script(SVG_FRAME_JS))
+        f.write("</svg>\n")
+    print("svg-wrap: %s (%s) from %s" % (out, human(os.path.getsize(out)), args.page))
     return 0
 
 
@@ -1461,6 +1515,10 @@ def main(argv=None) -> int:
     p.add_argument("--catalogue", help="where modpack.py's catalogue is served from; without one the "
                                        "page offers no MOD BROWSER row")
     p.set_defaults(fn=cmd_svg)
+    p = sub.add_parser("svg-wrap")
+    p.add_argument("page", help="a chunked build's page (index.html) whose payload is at absolute URLs")
+    p.add_argument("out")
+    p.set_defaults(fn=cmd_svg_wrap)
     args = ap.parse_args(argv)
     if getattr(args, "key_of", None) and not args.key_b64:
         page = read(args.key_of).decode("utf-8", "replace")

@@ -1431,3 +1431,63 @@ test('the page resolves its URLs against document.baseURI: the .svg build runs i
   assert.equal((boot.match(/new URL\(url, pageBase\(\)\)\.href/g) || []).length, 2);
   assert.ok(!/new URL\(url, location\.href\)/.test(boot), 'nothing resolved against location.href');
 });
+
+// svg-wrap: a chunked page (payload on a CDN) as a small .svg. It must keep the page
+// whole, refuse a page that cannot run as an srcdoc, and parse as XML.
+test('portable svg-wrap: a chunked page whole in a small .svg, and the pages it refuses', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const result = JSON.parse(runPy(String.raw`
+import sys, json, tempfile, pathlib, contextlib, io, re
+import xml.etree.ElementTree as ET
+sys.path.insert(0, "scripts/recomp/assets")
+import portable as P
+def page(base, play, inline=False):
+    data = {"streams": [{"tag": "a", "base": base}, {"tag": "b"}], "base": "https://cdn.example/b", "files": {}}
+    if inline:
+        data["blobs"] = []
+    mods = {"boot.mjs": "x", "play.mjs": play, "boot_web.mjs": "const pageBase = () => document.baseURI; // ]]> \x02"}
+    return ("<html><head><title>T</title></head><body><p>]]></p>"
+            "<script>window.__isaacPortableData = " + json.dumps(data) + ";</script>"
+            "<script>window.__isaacModules = " + json.dumps(mods) + ";</script></body></html>")
+good = page("https://cdn.example/a", "new URL('.', document.baseURI)")
+out = {}
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    (root / "page.html").write_text(good)
+    with contextlib.redirect_stdout(io.StringIO()):
+        P.main(["svg-wrap", str(root / "page.html"), str(root / "light.svg")])
+    raw = (root / "light.svg").read_bytes()
+    doc = ET.fromstring(raw)
+    ns = "{http://www.w3.org/2000/svg}"
+    scripts = [s.text or "" for s in doc.iter(ns + "script")]
+    inner = json.loads(re.fullmatch(r"window\.__isaacSvgPage = (.*);", scripts[0], re.S).group(1))
+    out["roundTrip"] = inner == good
+    out["nScripts"] = len(scripts)
+    out["frameLast"] = "f.srcdoc = window.__isaacSvgPage;" in scripts[-1]
+    out["frames"] = [el.get("id") for el in doc.iter() if el.tag.endswith("}iframe")]
+    out["small"] = len(raw) < len(good) * 2 + 4096
+    refusals = {}
+    for name, html in [("relative", page("/payload/x/c", "document.baseURI")),
+                       ("old modules", page("https://cdn.example/a", "new URL('.', location.href)")),
+                       ("offline", page("https://cdn.example/a", "document.baseURI", inline=True)),
+                       ("no data", "<html><body></body></html>")]:
+        (root / "bad.html").write_text(html)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                P.main(["svg-wrap", str(root / "bad.html"), str(root / "bad.svg")])
+            refusals[name] = "accepted"
+        except SystemExit as e:
+            refusals[name] = str(e)
+    out["refusals"] = refusals
+print(json.dumps(out))
+`));
+  assert.equal(result.roundTrip, true, 'the page the iframe gets is the page given, byte for byte ("]]>" and control characters included)');
+  assert.equal(result.nScripts, 2, 'the page and the hand-over, nothing else');
+  assert.equal(result.frameLast, true);
+  assert.deepEqual(result.frames, ['game']);
+  assert.equal(result.small, true, 'no payload in it');
+  assert.match(result.refusals.relative, /relative to the page; an \.svg has no folder of its own/);
+  assert.match(result.refusals['old modules'], /play\.mjs predates round 126/);
+  assert.match(result.refusals.offline, /an offline page \(the payload is inline\)/);
+  assert.match(result.refusals['no data'], /carries no portable data/);
+});

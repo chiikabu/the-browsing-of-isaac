@@ -12533,3 +12533,21 @@ refusal of an over-long script; the page's URL bases); 9 mutants, all killed.
 **Not measured.** Firefox and Safari (Firefox parses XML with expat, whose
 limits differ); a phone. An `.svg` used as an image (`<img>`, a CSS
 background, an upload preview) runs no script and shows only its loading line.
+
+**The light `.svg` (`portable.py svg-wrap`).** The same wrapper around a
+chunked page instead of an offline one: the `.svg` holds only the page (about
+half a megabyte) and the page fetches its chunks from jsDelivr as the GitHub
+Pages page does. The wrapper refuses a page it cannot run: one whose payload
+is at a relative URL (an srcdoc has no folder of its own), an offline page,
+and one whose `play.mjs` or `boot_web.mjs` predates this round (no
+`document.baseURI`; release 27's pages are such, so the first light `.svg`
+was made from release 27's GitHub Pages page with those two modules swapped
+for this round's, everything else checked equal, `.scratch/offline27/light_page.py`;
+from the next release on, the GitHub Pages page itself can be wrapped).
+Measured (Chromium headless, network on): opened from disk and served by a
+plain web server as `image/svg+xml`, the 535 KB `.svg` drew its 300th frame
+at 22-24 s, started a run with keys, read the mod catalogue (206 mods), kept
+its saves in IndexedDB; every request but the `.svg` itself went to
+cdn.jsdelivr.net, none failed. `tests/recomp-portable.test.js`: 1 more test
+(the page round-trips byte for byte through the XML, the four refusals); 4
+mutants, all killed.

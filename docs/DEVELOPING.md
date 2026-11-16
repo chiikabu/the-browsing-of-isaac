@@ -381,6 +381,10 @@ python scripts/recomp/assets/portable.py offline .scratch/game-dist .scratch/isa
 # The same as one .svg file (opened directly in a browser; the page runs in an iframe inside it)
 python scripts/recomp/assets/portable.py svg .scratch/game-dist .scratch/isaac.svg
 
+# A small .svg (about 0.5 MB) that fetches the game from the CDN, as the GitHub Pages page does:
+# wrap a chunked page whose payload is at absolute URLs (from round 126's modules on)
+python scripts/recomp/assets/portable.py svg-wrap index.html .scratch/isaac-light.svg
+
 # A page plus payload chunks for a static host
 python scripts/recomp/assets/portable.py chunks .scratch/game-dist .scratch/portable-local --chunks 33 \
     --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c
