@@ -378,6 +378,9 @@ More drivers (saves, mods, floors, stress) are in
 # One HTML file with everything inside; works offline
 python scripts/recomp/assets/portable.py offline .scratch/game-dist .scratch/isaac.html
 
+# The same as one .svg file (opened directly in a browser; the page runs in an iframe inside it)
+python scripts/recomp/assets/portable.py svg .scratch/game-dist .scratch/isaac.svg
+
 # A page plus payload chunks for a static host
 python scripts/recomp/assets/portable.py chunks .scratch/game-dist .scratch/portable-local --chunks 33 \
     --base https://cdn.jsdelivr.net/gh/chiikabu/boi-portable@main/c

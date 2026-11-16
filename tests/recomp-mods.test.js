@@ -296,9 +296,9 @@ test('round 81: the MOD BROWSER row needs a catalogue the build carries', () => 
   assert.match(portable, /def catalogue_script\(args\) -> str:/);
   assert.match(portable, /window\.isaacModCatalogue = %s;/, 'the build writes the base into the page');
   assert.match(portable, /p\.add_argument\("--catalogue"/);
-  // both shapes, because the single-file build has the same row
-  assert.equal((portable.match(/catalogue_script\(args\)/g) || []).length, 3,
-    'the definition and both call sites: the chunked page and the offline page');
+  // every shape, because the single-file builds have the same row
+  assert.equal((portable.match(/catalogue_script\(args\)/g) || []).length, 4,
+    'the definition and its three call sites: the chunked page, the offline page and the page of the .svg');
 });
 
 test('round 81: the driver presses the keys a player would to reach the browser', () => {

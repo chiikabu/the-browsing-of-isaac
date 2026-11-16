@@ -27,7 +27,10 @@ import { createPackStore, createPackDownloader, createModUpdater } from './mods.
 import { createModBrowser } from './mod_browser.mjs';
 import { createPadKeys } from './gamepad.mjs';
 import { createTouchControls } from './touch_controls.mjs';
-const ROOT = new URL('.', location.href).pathname.replace(/\/$/, '');
+// The page's own folder. Relative to document.baseURI, not location.href: inside the
+// .svg build the page is an iframe's srcdoc, whose location is about:srcdoc (not a
+// base any URL can be resolved against) and whose base URL is the .svg's.
+const ROOT = new URL('.', document.baseURI).pathname.replace(/\/$/, '');
 const params = new URLSearchParams(location.search);
 // The pipeline's defaults: ISAAC_YIELD=1 selects the live page and, with no
 // frames=, an unlimited budget. Applied through hooks.params (round 76) rather
@@ -674,6 +677,8 @@ if (!$('nomods-btn')) {
 $('nomods-btn').addEventListener('click', async () => {
   $('nomods-btn').disabled = true;
   try { await turnModsOff(); } catch (e) { console.warn('[mods] could not turn the mods off:', e.message); }
+  // the .svg build's page is an srcdoc (about:srcdoc): it has no query to clear, so a reload does
+  if (location.protocol === 'about:') { location.reload(); return; }
   const u = new URL(location.href);
   u.searchParams.delete('mods');
   location.replace(u.href);

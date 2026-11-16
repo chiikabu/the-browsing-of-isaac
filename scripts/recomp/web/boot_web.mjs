@@ -633,12 +633,16 @@ const armTrail = (jobs) => {
 const pendingReads = new Map();                           // id -> { src, off, len, dst, resolve, t0 }
 const lazySizes = new Map();                              // src -> bytes (the instance index): read-ahead stops at a file's end
 const lastRead = new Map();                               // src -> the last window offset: read-ahead follows a sequential file
+// What a relative URL is resolved against: the document's base URL, which is the page's
+// own URL on a served page and the .svg's in the .svg build, whose page is an iframe's
+// srcdoc (location about:srcdoc, against which nothing resolves).
+const pageBase = () => document.baseURI;
 const windowUrl = (src, off, len) => {
   let url = `/instance/${src}?off=${off}&len=${len}`;
   if (hooks.url) url = hooks.url(url);
   // round 70: a portable build answers null when it has no URL for a window -- the
   // caller reads the bytes instead of asking a server that is not there
-  return url === null ? null : new URL(url, location.href).href;
+  return url === null ? null : new URL(url, pageBase()).href;
 };
 function finishRead(src, off, dst, bytes) {
   m.HEAPU8.set(bytes, dst);
@@ -716,7 +720,7 @@ function startReader() {
       armTrail(jobs);
       return;
     }
-    fetch(new URL(url, location.href).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {
+    fetch(new URL(url, pageBase()).href).then((r) => (r.ok ? r.json() : null)).then((shipped) => {
       if (!Array.isArray(shipped) || !shipped.length || reader !== w) return;
       trailKept = shipped.length; trailShipped = true;
       armTrail(shipped.map(([src, off, len]) => [`${src}@${off}@${len}`, windowUrl(src, off, len), len]));

@@ -1320,3 +1320,114 @@ test('round 77: the minifier walks the source rather than pattern-matching it', 
   assert.ok(kept[2].includes('`a ${x} // b`'), 'a template literal is passed through whole');
   assert.ok(kept[3].includes('a/b') && !kept[3].includes('gone'), 'division is division, and the comment goes');
 });
+
+// The .svg build (portable.py svg): the offline page as one SVG document. It must be
+// well-formed XML whatever the modules hold, keep every script under the XML parser's
+// text limit, carry the payload byte for byte, and hand the iframe a page that reads
+// the payload from its parent.
+test('portable svg: well-formed XML, the exact payload, and a page that reads it from its parent', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const result = JSON.parse(runPy(String.raw`
+import sys, json, tempfile, pathlib, contextlib, io, re, base64
+import xml.etree.ElementTree as ET
+sys.path.insert(0, "scripts/recomp/assets")
+import portable as P
+with tempfile.TemporaryDirectory() as tmp:
+    root = pathlib.Path(tmp)
+    dist = root / "dist"
+    (dist / "instance/resources/packed").mkdir(parents=True)
+    engine = bytes(range(256)) * 9000
+    archive = b"a" * P.MIB + bytes(range(251)) * 3
+    (dist / "boot.wasm").write_bytes(engine)
+    (dist / "instance/resources/packed/music.a").write_bytes(archive)
+    (dist / "instance_index.json").write_text(json.dumps([{"p": "resources/packed/music.a"}]))
+    (dist / "play.html").write_text('<html><head><title>T & <x></title></head><body><script type="module" src="./play.mjs"></script></body></html>')
+    for module in P.MODULES:
+        # a module may hold the one sequence CDATA cannot, and characters XML forbids raw
+        (dist / module).write_text("export const a = [[1]]>0; const b = '\x01\x1f'; // ]]>")
+    with contextlib.redirect_stdout(io.StringIO()):
+        P.main(["svg", str(dist), str(root / "g.svg"), "--piece-mib", "1", "--catalogue", "https://x/mods"])
+    raw = (root / "g.svg").read_bytes()
+    doc = ET.fromstring(raw)
+    ns = "{http://www.w3.org/2000/svg}"
+    scripts = [s.text or "" for s in doc.iter(ns + "script")]
+    blobs = []
+    for s in scripts:
+        m = re.fullmatch(r'window\.__isaacPortableData\.blobs\.push\("([A-Za-z0-9+/=]*)"\);', s)
+        if m:
+            blobs.append(base64.b64decode(m.group(1)))
+    data = json.loads(next(re.fullmatch(r"Object\.assign\(window\.__isaacPortableData, (\{.*\})\);", s, re.S).group(1)
+                           for s in scripts if s.startswith("Object.assign(")))
+    page = json.loads(next(re.fullmatch(r"window\.__isaacSvgPage = (.*);", s, re.S).group(1)
+                           for s in scripts if s.startswith("window.__isaacSvgPage = ")))
+    streams = data["streams"]
+    a = b"".join(blobs[streams[0]["first"]:streams[0]["first"] + streams[0]["n"]])
+    b = b"".join(blobs[streams[1]["first"]:streams[1]["first"] + streams[1]["n"]])
+    files = data["files"]
+    def slice_of(rel, stream):
+        f = files[rel]
+        return stream[f["o"]:f["o"] + f["n"]] if "o" in f else None
+    frame = [el for el in doc.iter() if el.tag.endswith("}iframe")]
+    title = doc.find(ns + "title").text
+    biggest = max(len(s) for s in scripts)
+    mods_json = re.search(r"window\.__isaacModules = (\{.*?\});</script>", page, re.S)
+    print(json.dumps({
+        "xmlDecl": raw.startswith(b'<?xml version="1.0" encoding="UTF-8"?>'), "root": doc.tag,
+        "frames": [(el.get("id"), el.tag, el.get("allow")) for el in frame], "title": title,
+        "nBlobs": len(blobs), "nPieces": streams[0]["n"] + streams[1]["n"],
+        "stored": [s["stored"] for s in streams], "actual": [[len(x) for x in blobs[s["first"]:s["first"] + s["n"]]] for s in streams],
+        "payload": a + b == engine + archive or (engine in a and archive in b),
+        "biggest": biggest, "limit": P.SVG_TEXT_MAX,
+        "parentHookFirst": page.index("window.__isaacPortableData = parent.__isaacPortableData;") < page.index("window.__isaacModules"),
+        "noModuleTag": '<script type="module" src="./play.mjs">' not in page,
+        "catalogue": 'window.isaacModCatalogue = "https://x/mods";' in page,
+        "loader": "document.body.appendChild(s);" in page,
+        "modulesIntact": bool(mods_json) and all(v == "export const a = [[1]]>0; const b = '\x01\x1f'; // ]]>" for v in json.loads(mods_json.group(1)).values()),
+        "frameScriptLast": scripts[-1].strip().startswith("(function () {") and "f.srcdoc = window.__isaacSvgPage;" in scripts[-1],
+    }))
+`));
+  assert.equal(result.xmlDecl, true);
+  assert.equal(result.root, '{http://www.w3.org/2000/svg}svg', 'an SVG document');
+  assert.deepEqual(result.frames, [['game', '{http://www.w3.org/1999/xhtml}iframe', 'fullscreen; autoplay; gamepad']], 'one XHTML iframe, allowed fullscreen, sound and pads');
+  assert.equal(result.title, 'T & <x>', 'the page title, escaped for XML');
+  assert.equal(result.nBlobs, result.nPieces, 'one script a piece');
+  assert.deepEqual(result.stored, result.actual, 'the sizes the page is told are the sizes it gets');
+  assert.equal(result.payload, true, 'the payload byte for byte');
+  assert.ok(result.biggest < result.limit, `every script under the XML text limit (${result.biggest})`);
+  assert.equal(result.parentHookFirst, true, 'the page takes its parent\'s payload before anything reads it');
+  assert.equal(result.noModuleTag, true);
+  assert.equal(result.catalogue, true);
+  assert.equal(result.loader, true);
+  assert.equal(result.modulesIntact, true, 'a "]]>" and control characters in a module survive the XML round trip');
+  assert.equal(result.frameScriptLast, true, 'the iframe is handed the page after the payload is in');
+});
+
+test('portable svg refuses pieces whose scripts the XML parser would cut', (t) => {
+  if (!python) { t.skip('no python 3 on PATH'); return; }
+  const r = spawnSync(python, ['-c', String.raw`
+import sys
+sys.path.insert(0, "scripts/recomp/assets")
+import portable as P
+try:
+    P.svg_script("x" * (P.SVG_TEXT_MAX + 1))
+    print("accepted")
+except SystemExit as e:
+    print("refused: " + str(e))
+print(P.cdata("a]]>b"))
+`], { encoding: 'utf8', cwd: root });
+  assert.equal(r.status, 0, r.stderr);
+  const [first, second] = r.stdout.trim().split(/\r?\n/);
+  assert.match(first, /^refused: svg: a script of \d+ bytes is over the XML parser's 10000000-byte text limit/);
+  assert.equal(second, '<![CDATA[a]]]]><![CDATA[>b]]>');
+});
+
+test('the page resolves its URLs against document.baseURI: the .svg build runs it as an srcdoc', () => {
+  const play = readFileSync(join(root, 'scripts', 'recomp', 'web', 'play.mjs'), 'utf8');
+  const boot = readFileSync(join(root, 'scripts', 'recomp', 'web', 'boot_web.mjs'), 'utf8');
+  assert.ok(play.includes("const ROOT = new URL('.', document.baseURI).pathname.replace(/\\/$/, '');"));
+  assert.ok(!/new URL\([^)]*location\.href\)\.pathname/.test(play), 'no folder taken from location.href');
+  assert.ok(play.includes("if (location.protocol === 'about:') { location.reload(); return; }"), 'reload without mods in an srcdoc');
+  assert.ok(boot.includes('const pageBase = () => document.baseURI;'));
+  assert.equal((boot.match(/new URL\(url, pageBase\(\)\)\.href/g) || []).length, 2);
+  assert.ok(!/new URL\(url, location\.href\)/.test(boot), 'nothing resolved against location.href');
+});

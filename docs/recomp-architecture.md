@@ -12488,3 +12488,48 @@ such row (the game does not list STREAMER MODE there): the console is
 switched from the main menu. Streamer Mode itself is no longer switchable
 here; its one consumer is online. A row left ON by a player before this round
 is set to the console's value at first sight, not the other way round.
+
+### 21.156 Round 126: the offline build as an .svg
+
+`assets/portable.py svg`, and two page changes (`web/play.mjs`,
+`web/boot_web.mjs`). No engine change.
+
+**Why it is not the .html renamed.** A browser opens an `.svg` as an SVG
+document: parsed as XML, `<script>` run, but the DOM is not an HTML document's
+-- `document.createElement` makes null-namespace elements (a `canvas` that is
+no canvas), there is no `document.body`, `innerHTML` parses as XML. The page
+uses all three. So the `.svg` carries the payload in its own scripts and one
+XHTML `<iframe>` in a full-size `<foreignObject>`, and its last script hands
+the iframe the page as `srcdoc`. An srcdoc document is a real HTML document with
+its parent's origin: the page runs unchanged, its first script takes the
+parent's payload object (`parent.__isaacPortableData`, shared, not copied),
+and its IndexedDB and localStorage are the `.svg`'s.
+
+**The XML rules the writer keeps.** No "]]>" inside a CDATA section (split
+into two where a module holds one); no raw control characters (`json.dumps`
+escapes them); every script under libxml2's 10,000,000-byte text-node limit,
+so the payload goes in 4 MiB pieces, one script each (271 for the full game).
+
+**The page changes.** An srcdoc's location is `about:srcdoc`, which no relative
+URL resolves against: `new URL('.', location.href)` throws, and it is the
+page's first statement. The page's folder and its two other relative URLs
+are now resolved against `document.baseURI` -- the page's own URL on a served
+page, so nothing changes there, and the `.svg`'s in the iframe. "Reload
+without mods" reloads an srcdoc instead of rewriting its query. The srcdoc page
+has no query string: `?touch=1` and the like do nothing in the `.svg` build.
+
+**Measured** (release 27's dist, Chromium headless, the network switched off):
+the `.svg` is 1.45 GB like the `.html`; parsed in 25 s, the game drew its 300th
+frame at 34 s, a run started with keys sent to the top document (the iframe
+takes the keyboard on load and on a click), no stop, no page error, no network
+request, its saves in IndexedDB; in a persistent profile the saves and a
+localStorage key were there after the browser was closed and opened again.
+The `.html` rebuilt with the page change: the same. `tests/recomp-portable.test.js`
+(3 new tests: the XML parses, one iframe with its allowances, the payload byte
+for byte from the parsed scripts, the sizes the page is told, a module holding
+"]]>" and control characters intact, every script under the limit; the
+refusal of an over-long script; the page's URL bases); 9 mutants, all killed.
+
+**Not measured.** Firefox and Safari (Firefox parses XML with expat, whose
+limits differ); a phone. An `.svg` used as an image (`<img>`, a CSS
+background, an upload preview) runs no script and shows only its loading line.

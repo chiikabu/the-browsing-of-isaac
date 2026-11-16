@@ -405,6 +405,8 @@ async function loadingPage(search = '', {
   if (!holdCompilation) finishCompilation();
   const document = {
     hidden: false,
+    // a real document always has one; the page resolves its folder against it (round 126)
+    baseURI: `https://game.invalid/play.html${search}`,
     getElementById: (id) => elements.get(id),
     createElement: () => ({ getContext: (kind) => kind === 'webgl2' ? { getExtension: () => null } : null }),
     addEventListener() {},
