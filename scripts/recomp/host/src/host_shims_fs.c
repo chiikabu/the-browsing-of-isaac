@@ -87,7 +87,8 @@ static fs_entry g_fs[FS_SLOTS];
 
 /* Round 12f: key -> slot hash index (open addressing, FNV-1a). fs_find was a
  * strcmp over all 16384 slots per lookup -- 1 s of a 12 s boot once the
- * allocator stopped hiding it. Deletes rebuild the index (rare). */
+ * allocator stopped hiding it. A delete takes its own entry out
+ * (fs_hash_remove). */
 #define FS_HASH 262144u                      /* round 95: 4x FS_SLOTS, as before */
 static uint32_t g_fs_hash[FS_HASH];          /* slot index + 1, 0 = empty */
 static uint32_t fs_hash_key(const char *k) {
@@ -100,9 +101,23 @@ static void fs_hash_insert(uint32_t slot) {
     while (g_fs_hash[h]) h = (h + 1u) & (FS_HASH - 1u);
     g_fs_hash[h] = slot + 1u;
 }
-static void fs_hash_rebuild(void) {
-    memset(g_fs_hash, 0, sizeof g_fs_hash);
-    for (uint32_t i = 0; i < FS_SLOTS; ++i) if (g_fs[i].live) fs_hash_insert(i);
+/* Take one live slot out of the open-addressing table (backward-shift delete:
+ * the table stays exactly what inserting the remaining entries would give a
+ * lookup). Called before the slot's key is cleared. Replaces a full rebuild per
+ * delete, which made a boot that deletes thousands of files with a large mod
+ * installed take minutes (61k entries x every DeleteFileA/RemoveDirectoryA). */
+static void fs_hash_remove(uint32_t slot) {
+    const uint32_t M = FS_HASH - 1u;
+    uint32_t i = fs_hash_key(g_fs[slot].key) & M;
+    while (g_fs_hash[i] && g_fs_hash[i] != slot + 1u) i = (i + 1u) & M;
+    if (!g_fs_hash[i]) return;                       /* not indexed */
+    for (uint32_t j = (i + 1u) & M; g_fs_hash[j]; j = (j + 1u) & M) {
+        uint32_t home = fs_hash_key(g_fs[g_fs_hash[j] - 1u].key) & M;
+        /* move j back into the hole at i unless its home lies cyclically in (i, j] */
+        int stays = (i <= j) ? (home > i && home <= j) : (home > i || home <= j);
+        if (!stays) { g_fs_hash[i] = g_fs_hash[j]; i = j; }
+    }
+    g_fs_hash[i] = 0;
 }
 static uint32_t g_file_used[FS_FILE_RG];       /* 0 = free */
 /* open-file registry: guest FILE* -> token -> file index */
@@ -208,6 +223,14 @@ static fs_entry *fs_find(const char *key) {
     return NULL;
 }
 
+/* Directory listing index: parent dir slot -> its direct children, as linked
+ * lists in increasing slot order (the order the old full scan produced).
+ * Built lazily on the first listing after a create or rename (g_fs_gen);
+ * deletes only clear `live`, which a listing checks. */
+static uint32_t g_fs_gen = 1u;
+static uint32_t g_kid_gen;                   /* generation the index was built for */
+static uint32_t g_kid_head[FS_SLOTS], g_kid_tail[FS_SLOTS], g_kid_next[FS_SLOTS];   /* slot + 1, 0 = none */
+
 static uint32_t g_fs_next_free;              /* rotating hint for fs_new */
 static uint32_t g_fs_high;                   /* round 95: one past the highest slot ever used; scans stop there */
 static fs_entry *fs_new(const char *key, int is_dir) {
@@ -221,6 +244,7 @@ static fs_entry *fs_new(const char *key, int is_dir) {
             g_fs[i].is_dir = (uint8_t)is_dir;
             g_fs[i].live = 1;
             fs_hash_insert(i);
+            ++g_fs_gen;
             g_fs_next_free = (i + 1u) % FS_SLOTS;
             if (i + 1u > g_fs_high) g_fs_high = i + 1u;
             return &g_fs[i];
@@ -234,8 +258,10 @@ static void fs_free_entry(fs_entry *e) {
     if (e->data) free(e->data);
     if (e->src) free(e->src);
     if (e->wc) fs_window_drop(e);
+    fs_hash_remove((uint32_t)(e - g_fs));    /* needs the key: before the memset */
     memset(e, 0, sizeof *e);
-    fs_hash_rebuild();                        /* deletes are rare; keep the index exact */
+    /* No g_fs_gen bump: a listing skips slots that are no longer live, and a
+     * slot that is reused gets a new key through fs_new, which does bump it. */
 }
 
 /* ---- lazy bytes (round 12f) -------------------------------------------- */
@@ -961,6 +987,27 @@ static void fs_strip_wildcard(char *p) {
         p[n - 2] = 0;
 }
 
+static void fs_kids_build(void) {
+    memset(g_kid_head, 0, sizeof g_kid_head);
+    memset(g_kid_tail, 0, sizeof g_kid_tail);
+    for (unsigned i = 0; i < g_fs_high; ++i) {
+        if (!g_fs[i].live) continue;
+        const char *k = g_fs[i].key;
+        const char *sl = strrchr(k, '/');
+        if (!sl) continue;
+        char pk[256];
+        size_t n = (size_t)(sl - k);
+        memcpy(pk, k, n); pk[n] = 0;
+        fs_entry *p = fs_find(pk);
+        if (!p) continue;
+        uint32_t ps = (uint32_t)(p - g_fs);
+        g_kid_next[i] = 0;
+        if (g_kid_tail[ps]) g_kid_next[g_kid_tail[ps] - 1u] = i + 1u; else g_kid_head[ps] = i + 1u;
+        g_kid_tail[ps] = i + 1u;
+    }
+    g_kid_gen = g_fs_gen;
+}
+
 /* Open a directory snapshot for `key` (children only, one level).
  * Returns the snapshot id, or -1 when the key is not a directory (caller
  * sets ERROR_FILE_NOT_FOUND) / -2 when the directory has no entries or the
@@ -972,15 +1019,10 @@ static int fs_find_open(const char *key) {
     uint32_t sid = 0xFFFFFFFFu;
     for (unsigned s = 0; s < FS_FIND_RG; ++s) if (!g_find_used[s]) { sid = s; break; }
     if (sid == 0xFFFFFFFFu) return -2;
-    size_t pref = strlen(key);
+    if (g_kid_gen != g_fs_gen) fs_kids_build();
     uint32_t cnt = 0;
-    for (unsigned i = 0; i < g_fs_high && cnt < FS_FIND_MAX; ++i) {
-        if (!g_fs[i].live) continue;
-        const char *k = g_fs[i].key;
-        if (strncmp(k, key, pref) == 0 && k[pref] == '/' &&
-            !strchr(k + pref + 1, '/'))
-            g_find_ids[sid][cnt++] = i;
-    }
+    for (uint32_t j = g_kid_head[dir - g_fs]; j && cnt < FS_FIND_MAX; j = g_kid_next[j - 1u])
+        if (g_fs[j - 1u].live) g_find_ids[sid][cnt++] = j - 1u;   /* deleted since the build */
     if (!cnt) return -2;
     if (cnt == FS_FIND_MAX)
         isaac_log("[isaac][fs] the listing of '%s' stopped at %u entries (FS_FIND_MAX); the rest are not listed", key, cnt);
@@ -1422,9 +1464,13 @@ void imp_kernel32__MoveFileExA(CpuState *restrict cpu) {
     fs_entry *e = fs_find(ka);
     if (!e) { fs_err_set(2u); cpu->EAX = 0; return; }
     fs_entry *d = fs_find(kb);
+    if (d == e) { fs_err_set(0); cpu->EAX = 1; return; }   /* same file */
     if (d) fs_free_entry(d);
+    fs_hash_remove((uint32_t)(e - g_fs));    /* re-index under the new key */
     strncpy(e->key, kb, sizeof e->key - 1);
     e->key[sizeof e->key - 1] = 0;
+    fs_hash_insert((uint32_t)(e - g_fs));
+    ++g_fs_gen;
     fs_err_set(0);
     cpu->EAX = 1;
 }

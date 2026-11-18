@@ -4506,6 +4506,79 @@ int main(int argc, char **argv) {
             imp_kernel32__GetFileAttributesA(&cpu);
             check(cpu.EAX != 0xFFFFFFFFu, "and is found again");
 
+            /* Deletes and renames keep the key index and the directory listing
+             * exact (a delete used to rebuild the whole index; a rename never
+             * re-indexed). Two keys with the same home slot make the delete
+             * shift its neighbour back, which a lookup must survive. */
+            {
+                #define FS_PROBE(path, out) do { FS_ATTR(path); imp_kernel32__GetFileAttributesA(&cpu); (out) = (cpu.EAX != 0xFFFFFFFFu); } while (0)
+                char pa[64], pb[64];
+                int e1, e2, e3, e4;
+                int have_pair = 0;
+                {
+                    static uint32_t home[8000];
+                    for (unsigned i = 0; i < 8000u && !have_pair; ++i) {
+                        char k[64]; uint32_t h = 2166136261u;
+                        snprintf(k, sizeof k, "c:/isaac/data/col/f%u", i);
+                        for (const char *c = k; *c; ++c) { h ^= (uint8_t)*c; h *= 16777619u; }
+                        home[i] = h & 262143u;                    /* FS_HASH - 1 */
+                        for (unsigned j = 0; j < i; ++j)
+                            if (home[j] == home[i]) {
+                                snprintf(pa, sizeof pa, "data/col/f%u", j); snprintf(pb, sizeof pb, "data/col/f%u", i);
+                                have_pair = 1; break;
+                            }
+                    }
+                }
+                check(have_pair, "two seeded keys share a hash home slot");
+                check(isaac_fs_seed(pa, one, 1) == 1 && isaac_fs_seed(pb, one, 1) == 1, "the colliding pair seeds");
+                FS_ATTR(pa); imp_kernel32__DeleteFileA(&cpu);
+                int del_ok = (cpu.EAX == 1u);
+                FS_PROBE(pa, e1); FS_PROBE(pb, e2);
+                check(del_ok && !e1 && e2,
+                      "deleting the first of a colliding pair leaves the second findable");
+
+                char got[128]; uint32_t fd = dbuf + 0x1000u;
+                #define FS_LIST(dir) do { \
+                    FS_ATTR(dir "/*"); isaac_w32(cpu.ESP + 8, fd); \
+                    imp_kernel32__FindFirstFileA(&cpu); \
+                    uint32_t lh_ = cpu.EAX; size_t at_ = 0; got[0] = 0; \
+                    while (lh_ != 0xFFFFFFFFu) { \
+                        for (const uint8_t *s_ = (const uint8_t *)isaac_g(fd + 0x2cu); *s_ && at_ + 2 < sizeof got; ++s_) got[at_++] = (char)*s_; \
+                        got[at_++] = ','; got[at_] = 0; \
+                        FS_ATTR("x"); isaac_w32(cpu.ESP + 4, lh_); isaac_w32(cpu.ESP + 8, fd); \
+                        imp_kernel32__FindNextFileA(&cpu); \
+                        if (!cpu.EAX) break; \
+                    } \
+                    if (lh_ != 0xFFFFFFFFu) { FS_ATTR("x"); isaac_w32(cpu.ESP + 4, lh_); imp_kernel32__FindClose(&cpu); } \
+                } while (0)
+                char nm[32];
+                for (unsigned i = 0; i < 8u; ++i) { snprintf(nm, sizeof nm, "data/lst/r%u", i); isaac_fs_seed(nm, one, 1); }
+                FS_LIST("data/lst");
+                check(strcmp(got, "r0,r1,r2,r3,r4,r5,r6,r7,") == 0, "a directory lists its children in creation order");
+                FS_ATTR("data/lst/r1"); imp_kernel32__DeleteFileA(&cpu);
+                FS_ATTR("data/lst/r3"); imp_kernel32__DeleteFileA(&cpu);
+                FS_LIST("data/lst");
+                check(strcmp(got, "r0,r2,r4,r5,r6,r7,") == 0, "a listing after deletes holds exactly the remaining children");
+                {   /* rename r5 -> rn: MoveFileExA(a, b, 0) */
+                    const char *src = "data/lst/r5", *dst = "data/lst/rn";
+                    uint32_t sbuf = dbuf + 0x400u, tbuf = dbuf + 0x500u;
+                    for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(sbuf + i) = (uint8_t)src[i]; if (!src[i]) break; }
+                    for (unsigned i = 0; ; ++i) { *(uint8_t *)isaac_g(tbuf + i) = (uint8_t)dst[i]; if (!dst[i]) break; }
+                    memset(&cpu, 0, sizeof cpu); cpu.ESP = ISAAC_STACK_TOP_VA - 0x1000;
+                    isaac_w32(cpu.ESP, 0xDEADBEEF); isaac_w32(cpu.ESP + 4, sbuf); isaac_w32(cpu.ESP + 8, tbuf); isaac_w32(cpu.ESP + 12, 0);
+                    imp_kernel32__MoveFileExA(&cpu);
+                    check(cpu.EAX == 1u, "MoveFileExA renames a file");
+                }
+                FS_PROBE("data/lst/rn", e1); FS_PROBE("data/lst/r5", e2); FS_PROBE("data/lst/r4", e3); FS_PROBE("data/lst/r6", e4);
+                check(e1 && !e2 && e3 && e4,
+                      "after a rename the new name is findable and the old one is not");
+                isaac_fs_seed("data/lst/rz", one, 1);
+                FS_LIST("data/lst");
+                check(strcmp(got, "r0,r2,r4,rn,r6,r7,rz,") == 0, "a renamed entry keeps its place in the listing; a new file lists last");
+                #undef FS_LIST
+                #undef FS_PROBE
+            }
+
             /* An owned seed keeps its allocation until replacement/deletion;
              * rejected input stays entirely with the caller. */
             {
