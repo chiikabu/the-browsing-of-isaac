@@ -907,6 +907,16 @@ if ALLOW ~= true and B.env("ISAAC_RGON_AUTO") ~= "0" then
     log("gate: no scan of the installed mods (modscan.lua): REPENTOGON is shown to the mods of the layer's own list only")
   end
 end
+-- The host looks a mod up by its folder name, lowercased. A Steam Workshop
+-- folder carries the item's id ("fiendfolio-reloaded_3778123093") where the
+-- list above names the mod's directory alone, so a miss is tried again without
+-- a trailing "_<digits>". The host's lua_getfield honours __index.
+if type(ALLOW) == "table" then
+  setmetatable(ALLOW, { __index = function(t, k)
+    local base = type(k) == "string" and k:match("^(.-)_%d+$")
+    if base and base ~= "" then return rawget(t, base) end
+  end })
+end
 R.Allowed = ALLOW
 B.gate(R, ALLOW)
 

@@ -104,6 +104,11 @@ test('the layer never takes the bridge as a global, and gates REPENTOGON last', 
   assert.ok(gate > 0 && gate > layer.lastIndexOf('method('), 'the gate comes after every method is in');
   // a mod is let in by name only; the list starts with the layer itself
   assert.match(layer, /local ALLOW = \{\s*\["repentogon"\] = true,/);
+  // a Steam Workshop folder carries the item id ("<directory>_<id>"); the list names the directory
+  const meta = layer.indexOf('setmetatable(ALLOW');
+  assert.ok(meta > 0 && meta < gate, 'the list answers a Workshop folder name before the gate takes it');
+  assert.ok(layer.slice(meta, gate).includes('k:match("^(.-)_%d+$")') && layer.slice(meta, gate).includes('rawget(t, base)'),
+    'a miss is retried without a trailing _<digits>');
 });
 
 test('the bridge refuses what is not guest memory and what is not in the image', () => {
