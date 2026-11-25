@@ -12551,3 +12551,84 @@ its saves in IndexedDB; every request but the `.svg` itself went to
 cdn.jsdelivr.net, none failed. `tests/recomp-portable.test.js`: 1 more test
 (the page round-trips byte for byte through the XML, the four refusals); 4
 mutants, all killed.
+
+### 21.157 Round 127: the sound catalogue gives its heap back (issue 27, Mother and Delirium)
+
+`host/src/host_snd_lazy.c`, `host/src/host_shims_heap.c`, `host/src/host_shims_al.c`;
+a stress walk `web/mother.lua` and a memory cap for `web/drive_stress.mjs`.
+Engine n17.
+
+**The reports.** GitHub issue 27 and two screenshots: the Mother fight stops with
+`TRAP in main @ 0x00931050: memory access out of bounds` (during her knife throws
+in phase 1, her spin in phase 2), and Delirium in The Void with `Program terminated
+with exit(1)`. The reporters are on school Chromebooks.
+
+**Reproduced.** Not on a desktop as such: release 28's engine (n15) went through
+the fight with no items, with four item loadouts (8-28 knife throws, 8-10 spins
+each) and a 24-floor run into Delirium, every time. What the long runs did show:
+some 380 MB live in the 384 MiB arena late in a run, and the heap took an overflow
+segment (wasm memory 640 -> 736 MB). A machine that refuses that growth is what
+the reports describe. `drive_stress.mjs memcap=<MiB>` now refuses
+`WebAssembly.Memory.prototype.grow` past a cap (and reports grows and refusals with
+`heap=`), and `mother.lua` walks a run into a boss (`set=floors:,items:,stage:,boss:,
+phase1:,phase2:`; Mother on 8c by default, spawned if she does not rise). With 100
+items, 30 floors and `memcap=660`, n15 failed at Mother's floor:
+`OUT OF MEMORY: malloc(8388612) failed with 394688184 bytes live, a 384 MiB arena
+and 0 MiB of overflow`, then the trap at `0x00931050` of the screenshot. The game
+does not check that allocation. Delirium's `exit(1)` is the same shortage met by an
+allocation that throws: the throw has no catch this host can carry out (21.131).
+
+**Where the arena went.** Round 98 leaves the sound catalogue's PCM unwritten until
+a sound is first played, which keeps those pages out of a phone's RAM. But each
+unwritten buffer is still a block of the arena: 1,538 of them, 261.8 MB, allocated
+at boot and held to the end. After 30 floors 1,357 were still unwritten (242 MB),
+two thirds of everything live.
+
+**The change.** A recorded buffer is detached: its heap block is cut down to a stub
+at the same address (`isaac_guest_shrink`), and the rest of the block is free and
+joins its free neighbour. At its first upload the PCM is read, by the game's own
+loader as in round 98, into a block of its own. Every `alBufferData` whose data
+starts in the stub is given that block (`isaac_snd_lazy_source`). The game frees
+the stub as before, and the block goes with it, after the free is done. Only the
+stub's 16 bytes count as the sample's, so an upload of a buffer that now lies in
+the old space is never taken for it. If there is no room for the PCM at first play,
+the sound plays silent that time and is logged (8 lines at most). `ISAAC_SND_DETACH=0`
+keeps the whole buffer, as in round 98. Nothing detaches under `ISAAC_SND_VERIFY`.
+
+**The first build detached nothing.** n16 ran the scenario into the same
+`OUT OF MEMORY`, with no buffer detached: `isaac_guest_shrink` took only a block's
+payload start. The game heap's `0x00a230b0` allocates through a heap object, and
+`KAGE::Memory::MainHeap` (vtable `0x00b9fd88`, slot +4 `0x00a64800` ->
+`0x00a648b0`) does `malloc(n + 4)`, stores the size in the first word and returns
+the pointer plus 4. Its free reads that word and frees the pointer minus 4. (The
+failing `malloc(8388612)` is the same thing: 8 MiB plus 4.) So `isaac_guest_shrink`
+now takes a pointer up to 4 KB inside its block. It looks back for a used block
+whose header, footer and previous block all agree, and keeps everything up to
+p + keep, so the size word stays. A buffer it cannot cut is logged (4 lines at most)
+and counted in the report.
+
+**Measured** (n17, Chromium headless, the same walk as n15's failure: 100 items,
+30 floors, Mother's two phases, `memcap=660`): finished, no stop. All 1,538 buffers
+detached (261.8 MB given back), none refused. Live after boot is 84.6 MB, where it
+was 359 MB. The peak over the whole run is 147.3 MiB, where it was over 394 MB, and
+no overflow segment was taken. 217 samples were read into blocks of their own by the
+end (26.4 MB). The fight showed 7 knife throws, a spin and her death.
+The 36 growth refusals are the host allocator's own probing: n15 has 57-72 on the
+same walk, and nothing fails from them.
+
+**The sounds are the same bytes.** The same Mother fight twice on n17 with
+`ISAAC_SND_HASH=1`, detached and with `ISAAC_SND_DETACH=0`: 2,030 and 2,143 uploads,
+539 distinct (size, hash) pairs common to both. Of the rest, only the 65,536-byte
+uploads (the streamed music, whose chunks depend on timing) have a size in both runs.
+Every other one is a sound played in one fight and not the other. No sample was
+uploaded with other bytes, and none played silent ("no room": 0 lines).
+
+**Tests.** The host selftest, 1,014 checks: detaching gives the space back and the
+next allocation is served from it; an upload of another buffer in the old space is
+left alone; the first upload reads the PCM through the loader into a block of its
+own and later uploads reuse it; past the stub is not the sample's; freeing the stub
+frees the block; a failed fill is silence and is not retried; `ISAAC_SND_DETACH=0`
+and `ISAAC_SND_VERIFY` keep buffers whole. For shrink: refusals, the freed tail
+joined to a free block after it, a pointer inside its block (a look-alike header in
+a payload is passed over), and nothing more than 4 KB in. 15 mutants, all killed (two
+by hanging the selftest).

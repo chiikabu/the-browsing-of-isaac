@@ -867,6 +867,122 @@ static void test_lazy_sound(void) {
           "lazy sound: a path without its end within 1 KB is not recorded (its PCM is read at load)");
     isaac_snd_lazy_set_filler(NULL);
 }
+/* Round 127: a recorded buffer in the game heap gives its space back until it is
+ * played (host_snd_lazy.c, isaac_guest_shrink); the buffers above are not heap
+ * blocks, so they stayed whole. */
+extern uint64_t isaac_heap_live(void);
+static void test_lazy_detach(void) {
+    const uint32_t S = ISAAC_STACK_TOP_VA - 0x80000u, self = S, path = S + 0x200u;
+    static const char p1[] = "sfx/detached.wav";
+    CpuState c; memset(&c, 0, sizeof c);
+    memset(isaac_g(S), 0, 0x400);
+    memcpy(isaac_g(path), p1, sizeof p1);
+    g_sf_self = self; g_sf_path = path; g_sf_ok = 1; g_sf_calls = 0;
+    isaac_snd_lazy_set_mode(1);
+    isaac_snd_lazy_set_detach(1);
+    isaac_snd_lazy_set_filler(fake_sound_fill);
+    const uint32_t N = 0x10000u;
+    const uint32_t before_left = isaac_guest_alloc(64), buf = isaac_guest_alloc(N), after_right = isaac_guest_alloc(64);
+    check(before_left && buf && after_right && buf > before_left && after_right > buf, "detach: a sample buffer between two others in the heap");
+    const uint64_t live0 = isaac_heap_live();
+    const uint32_t det0 = isaac_snd_lazy_detached();
+    isaac_w32(self + 0x50u, buf);
+    uint32_t sz = 0;
+    check(isaac_snd_lazy_begin(self, path, N) == 1u && isaac_snd_lazy_find(buf, &sz) && sz == N && isaac_snd_lazy_detached() == det0 + 1u,
+          "detach: the buffer is recorded with its whole size, and detached");
+    check(isaac_heap_live() + N - 0x40u <= live0 && isaac_heap_live() < live0,
+          "detach: its heap space, all but a stub, is free again");
+    uint32_t t = isaac_guest_alloc(N - 0x100u);
+    check(t > buf && t + N - 0x100u <= after_right, "detach: and the next allocation of that size is served from it");
+    memset(isaac_g(t), 0xC3, N - 0x100u);
+    isaac_w32(buf, 0x11111111u);                                  /* the stub is the game's: its bytes stay */
+    /* an upload of the block that now lives in the old tail is that block's, not the sample's */
+    check(isaac_snd_lazy_source(&c, t, 0x100u) == t && g_sf_calls == 0u, "detach: an upload of another buffer in the old space is left alone");
+    uint32_t real = isaac_snd_lazy_source(&c, buf, N);
+    check(real && real != buf && g_sf_calls == 1u && g_sf_ptr == real && g_sf_size == N && g_sf_target == real &&
+          !strcmp(g_sf_name, p1) && isaac_r32(real) == 0x5A5A5A5Au && isaac_r32(real + N - 4u) == 0x5A5A5A5Au,
+          "detach: its first upload reads the PCM into a block of its own, through the loader, and plays from there");
+    check(isaac_r32(t) == 0xC3C3C3C3u && isaac_r32(t + N - 0x104u) == 0xC3C3C3C3u && isaac_r32(buf) == 0x11111111u,
+          "detach: and nothing of the old space or the stub was written");
+    check(isaac_snd_lazy_source(&c, buf, N) == real && isaac_snd_lazy_source(&c, buf + 8u, 0x10u) == real + 8u && g_sf_calls == 1u,
+          "detach: later uploads, from anywhere in the stub, read the same block, without reading the file again");
+    check(isaac_snd_lazy_source(&c, buf + 16u, 0x10u) == buf + 16u, "detach: past the stub's 16 bytes is not the sample's");
+    const uint64_t live1 = isaac_heap_live();
+    isaac_guest_free(buf);
+    check(!isaac_snd_lazy_find(buf, NULL) && isaac_heap_live() + N <= live1,
+          "detach: the game frees the stub, and the block it played from goes with it");
+    isaac_guest_free(t);
+    /* a fill that fails: silence, and not read again */
+    g_sf_ok = 0;
+    const uint32_t b2 = isaac_guest_alloc(N);
+    isaac_w32(self + 0x50u, b2);
+    check(isaac_snd_lazy_begin(self, path, N) == 1u, "detach: a second sample recorded");
+    const uint32_t r2 = isaac_snd_lazy_source(&c, b2, N);
+    check(r2 && isaac_r32(r2) == 0u && isaac_r32(r2 + N - 4u) == 0u && g_sf_calls == 2u, "detach: a fill that fails plays silence");
+    check(isaac_snd_lazy_source(&c, b2, N) == r2 && g_sf_calls == 2u, "detach: and is not tried again");
+    g_sf_ok = 1;
+    isaac_guest_free(b2);
+    /* switched off: the buffer stays whole */
+    isaac_snd_lazy_set_detach(0);
+    const uint32_t b3 = isaac_guest_alloc(N);
+    isaac_w32(self + 0x50u, b3);
+    const uint64_t live3 = isaac_heap_live();
+    check(isaac_snd_lazy_begin(self, path, N) == 1u && isaac_heap_live() == live3 && isaac_snd_lazy_source(&c, b3, N) == b3 && g_sf_ptr == b3,
+          "detach: ISAAC_SND_DETACH=0 keeps the buffer whole and fills it where it is (round 98)");
+    isaac_guest_free(b3);
+    isaac_snd_lazy_set_detach(1);
+    /* under ISAAC_SND_VERIFY every buffer stays where the game put it */
+    isaac_snd_verify_set_mode(1);
+    const uint32_t b4 = isaac_guest_alloc(N);
+    isaac_w32(self + 0x50u, b4);
+    const uint64_t live4 = isaac_heap_live();
+    check(isaac_snd_lazy_begin(self, path, N) == 1u && isaac_heap_live() == live4, "detach: not under ISAAC_SND_VERIFY");
+    isaac_snd_verify_set_mode(0);
+    isaac_guest_free(b4);
+    /* shrink itself: only the start of a used block of the heap */
+    const uint32_t s5 = isaac_guest_alloc(0x400u);
+    check(!isaac_guest_shrink(S, 16u) && !isaac_guest_shrink(s5, 0x3f0u) && !isaac_guest_shrink(s5 + 0x3e8u, 16u) &&
+          isaac_guest_shrink(s5, 16u),
+          "shrink: refuses a pointer outside the heap, or a tail too small to be a block (from the start or from inside)");
+    isaac_guest_free(s5);
+    check(!isaac_guest_shrink(s5, 16u), "shrink: refuses a freed block");
+    {   /* a pointer inside its block (what a heap object's allocator returns): the block is
+         * found behind it, and everything up to p + keep stays. A payload that holds a
+         * header and footer of its own, but no block before it, is not taken for a block. */
+        const uint32_t s7 = isaac_guest_alloc(0x2000u), fake = s7 + 0x200u;
+        isaac_w32(fake, 0x40u); isaac_w32(fake + 4u, 1u); isaac_w32(fake + 0x3cu, 0x41u);
+        isaac_w32(fake - 4u, 0x99u);
+        const uint32_t q = fake + 0x10u;
+        check(isaac_guest_shrink(q, 16u) && (isaac_r32(s7 - 8u) & ~7u) == 0x230u && isaac_r32(fake) == 0x40u &&
+              !(isaac_r32(s7 - 8u + 0x230u + 4u) & 1u),
+              "shrink: a pointer 0x210 into its block keeps 0x210 + 16 bytes of it (block 0x230), past a look-alike header");
+        isaac_guest_free(s7);
+        const uint32_t s8 = isaac_guest_alloc(0x2000u);
+        check(isaac_guest_shrink(s8 + 0x40u, 16u) && (isaac_r32(s8 - 8u) & ~7u) == 0x60u,
+              "shrink: and a pointer 0x40 in, block 0x60 (0x40 + 16 + header + footer)");
+        isaac_guest_free(s8);
+        const uint32_t s9 = isaac_guest_alloc(0x4000u);
+        check(!isaac_guest_shrink(s9 + 0x1100u, 16u), "shrink: a pointer more than 4 KB into its block is refused");
+        isaac_guest_free(s9);
+    }
+    /* the freed tail joins a free block right after it: one block, not two side by side.
+     * Shrinking one block twice puts the second tail right before the first, which is free.
+     * Block headers: {size, flags at +4}, payload 8 bytes in, footer the last dword. */
+    {
+        const uint32_t a6 = isaac_guest_alloc(N), ab = a6 - 8u;
+        check(a6 && isaac_guest_shrink(a6, 0x8000u), "shrink: a block shrinks to half");
+        const uint32_t t1 = ab + (isaac_r32(ab) & ~7u), end1 = t1 + (isaac_r32(t1) & ~7u);
+        check(isaac_guest_shrink(a6, 16u), "shrink: and again, to a stub, its first tail free after it");
+        const uint32_t t2 = ab + (isaac_r32(ab) & ~7u), ts = isaac_r32(t2) & ~7u;
+        check((isaac_r32(ab) & ~7u) == 32u && t2 < t1 && !(isaac_r32(t2 + 4u) & 1u) && t2 + ts == end1 &&
+              (isaac_r32(t2 + ts - 4u) & ~7u) == ts,
+              "shrink: one free block runs from the stub's end to where the first tail ended, footer and all");
+        isaac_guest_free(a6);
+    }
+    isaac_guest_free(before_left); isaac_guest_free(after_right);
+    isaac_snd_lazy_set_filler(NULL);
+    isaac_snd_lazy_set_mode(0);
+}
 static void test_thread_naps(void) {
     check(!isaac_threads_napping(0.0, 100.0), "thread naps: a job that never slept runs every frame");
     check(isaac_threads_napping(150.0, 100.0), "thread naps: a job whose Sleep ends at 150 sits out the frame at 100");
@@ -1226,6 +1342,7 @@ int main(int argc, char **argv) {
     test_gl_rgb_widen();
     test_img_keep();
     test_lazy_sound();
+    test_lazy_detach();
     test_eh();
     printf("--- isaac host layer selftest ---\n");
     if (argc > 1) load_image(argv[1]);

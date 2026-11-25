@@ -351,8 +351,10 @@ void imp_openal32__alGetSourcef(CpuState *restrict cpu) {
 void imp_openal32__alBufferData(CpuState *restrict cpu) {
     al_hit("alBufferData");
     uint32_t data = isaac_arg(cpu, 2), bytes = isaac_arg(cpu, 3);
-    /* round 98: a sample read header-only at load gets its PCM now (host_snd_lazy.c) */
-    isaac_snd_lazy_fill(cpu, data, bytes);
+    /* round 98: a sample read header-only at load gets its PCM now (host_snd_lazy.c);
+     * round 127: a detached one's bytes are in a block of their own, read now if they
+     * are not yet (0 when there was no room: the backend then takes no samples) */
+    data = isaac_snd_lazy_source(cpu, data, bytes);
     {   /* ISAAC_SND_HASH=1: each upload's bytes, hashed, to compare two builds' sounds */
         static int on = -1;
         if (on < 0) { const char *e = getenv("ISAAC_SND_HASH"); on = (e && *e == '1') ? 1 : 0; }

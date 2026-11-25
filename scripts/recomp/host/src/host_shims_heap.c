@@ -295,6 +295,59 @@ static void guest_free(uint32_t p) {
     }
     blk_set(b, sz, 0);
     bin_insert(b, sz);
+    /* round 127: a sample's buffer filled elsewhere goes with the stub the game freed */
+    isaac_snd_lazy_release();
+}
+
+/* A used block at b of the region [lo, hi): its header, its footer, and the block
+ * before it (whose footer sits at b - 4 and whose header must say the same size)
+ * all agree. Three words that must match, so a block start is told from a payload
+ * that happens to hold a size. */
+static int blk_is_used_block(uint32_t b, uint32_t lo, uint32_t hi) {
+    if (b < lo || b > hi - MIN_BLOCK || ((b - lo) & (ALIGN - 1u)) || !blk_used(b)) return 0;
+    const uint32_t sz = blk_size(b);
+    if (sz < MIN_BLOCK || sz > hi - b || isaac_r32(b + sz - FTR_BYTES) != (sz | FLAG_USED)) return 0;
+    if (b == lo) return 1;
+    const uint32_t pf = isaac_r32(b - FTR_BYTES), ps = pf & ~(ALIGN - 1u);
+    return ps >= MIN_BLOCK && ps <= b - lo && blk_size(b - ps) == ps &&
+           (isaac_r32(b - ps + 4) & FLAG_USED) == (pf & FLAG_USED);
+}
+
+/* Round 127: everything of p's block up to p + keep stays the caller's and the
+ * rest is free again, joined to a free block after it. For a buffer nobody reads
+ * past `keep` (a sound sample whose PCM is not read yet, host_snd_lazy.c). p may
+ * lie inside its block, up to 4 KB past the payload's start: the game's heap
+ * (0x00a230b0) hands out what a heap object's allocator returns, which need not
+ * be what malloc returned. 1 if it shrank; 0, and nothing changed, when no used
+ * block of this heap holds p, or the block has no tail worth a free block. */
+int isaac_guest_shrink(uint32_t p, uint32_t keep) {
+    uint32_t lo = 0, hi = 0;
+    if (!g_inited || p < HDR_BYTES || !heap_region(p - HDR_BYTES, &lo, &hi)) return 0;
+    uint32_t b = lo + ((p - HDR_BYTES - lo) & ~(ALIGN - 1u)), found = 0;
+    for (uint32_t back = 0; back <= 4096u && b >= lo; back += ALIGN, b -= ALIGN) {
+        if (blk_is_used_block(b, lo, hi)) { found = 1; break; }
+        if (b - lo < ALIGN) break;
+    }
+    if (!found) return 0;
+    uint32_t sz = blk_size(b);
+    if (p - (b + HDR_BYTES) >= sz - HDR_BYTES - FTR_BYTES) return 0;   /* p past this block's payload */
+    uint64_t need64 = (uint64_t)(p - (b + HDR_BYTES)) + keep + HDR_BYTES + FTR_BYTES;
+    need64 = (need64 + (ALIGN - 1)) & ~(uint64_t)(ALIGN - 1);
+    if (need64 < MIN_BLOCK) need64 = MIN_BLOCK;
+    if ((uint64_t)sz < need64 + MIN_BLOCK) return 0;
+    const uint32_t need = (uint32_t)need64;
+    uint32_t tail = b + need, ts = sz - need;
+    blk_set(b, need, 1);
+    g_stat.live -= ts;
+    const uint32_t nxt = b + sz;
+    if (nxt < hi && !blk_used(nxt)) {          /* no two free blocks side by side */
+        const uint32_t ns = blk_size(nxt);
+        bin_unlink(nxt, ns);
+        ts += ns;
+    }
+    blk_set(tail, ts, 0);
+    bin_insert(tail, ts);
+    return 1;
 }
 
 static uint32_t guest_size(uint32_t p) {

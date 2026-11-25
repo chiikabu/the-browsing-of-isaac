@@ -3,7 +3,11 @@
 //
 //   node scripts/recomp/web/drive_stress.mjs <url> <out-dir> phases=qcards,cards,...
 //        [catalogue=DIR] [mods=id,id] [zips=a.zip,b.zip] [maxsec=900] [gap=12]
-//        [from=<n>] [to=<n>] [gl=hw] [retries=40]
+//        [from=<n>] [to=<n>] [gl=hw] [retries=40] [heap=<s>] [memcap=<MiB>]
+//
+// heap=<s> logs the guest heap's report and the wasm memory's size every <s> seconds;
+// memcap=<MiB> refuses to grow the wasm memory past that size, as a device short of
+// memory does (round 127).
 //
 // Players reported `TRAP in main @ 0x00931050: Program terminated with exit(1)`
 // right after "Action PillCard Triggered", and mods that stop the game. Booting
@@ -547,6 +551,21 @@ async function attempt(cfg, n) {
   const t0 = Date.now();
   const stamp = () => ((Date.now() - t0) / 1000).toFixed(1).padStart(7);
   let booted = false;
+  // The wasm memory's growth, counted (the heap= report says how big it got), and with
+  // memcap=<MiB> refused past that size, as a low-memory device refuses it: emscripten's
+  // resize then fails and malloc answers NULL, as it would there.
+  await context.addInitScript((cap) => {
+    const grow = WebAssembly.Memory.prototype.grow;
+    const M = window.__isaacMem = { grows: 0, refused: 0, from: 0, bytes: 0, cap };
+    WebAssembly.Memory.prototype.grow = function (delta) {
+      const now = this.buffer.byteLength, next = now + delta * 65536;
+      if (!M.from) M.from = now;
+      if (cap && next > cap * 1048576) { M.refused += 1; throw new RangeError(`memcap: growing to ${next} bytes refused`); }
+      const r = grow.call(this, delta);
+      M.grows += 1; M.bytes = this.buffer.byteLength;
+      return r;
+    };
+  }, Number(opt.memcap || 0));
   await context.addInitScript(() => {
     let hooks;
     Object.defineProperty(window, 'isaacPageHooks', {
@@ -723,7 +742,8 @@ async function attempt(cfg, n) {
       // heap=<s>: the guest heap's report every <s> seconds, into the console log
       if (opt.heap && out.ops > 0 && Date.now() - (out.heapT || 0) > Number(opt.heap) * 1000) {
         out.heapT = Date.now();
-        appendFileSync(conFile, `${stamp()} HEAP at ${out.last}\n`);
+        const mem = await page.evaluate(() => JSON.stringify(window.__isaacMem || null)).catch(() => 'null');
+        appendFileSync(conFile, `${stamp()} HEAP at ${out.last} wasm memory ${mem}\n`);
         await page.evaluate(() => window.isaacHeapReport && window.isaacHeapReport()).catch(() => {});
       }
       if (!started && got.f > 0 && enters < 150 && out.ops === 0) {

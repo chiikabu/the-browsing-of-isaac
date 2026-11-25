@@ -336,6 +336,7 @@ static inline const char *isaac_guest_cstr(uint32_t va, char *buf,
 extern uint32_t isaac_guest_alloc(uint32_t n);
 extern void     isaac_guest_free(uint32_t p);
 extern uint32_t isaac_guest_realloc(uint32_t p, uint32_t n);
+extern int      isaac_guest_shrink(uint32_t p, uint32_t keep);   /* round 127 */
 extern void isaac_guest_call(uint32_t va, isaac_cpu *cpu);
 
 /* THE INDIRECT-CALL CONTRACT (shared with scripts/recomp/lift/).
@@ -482,6 +483,13 @@ void     isaac_snd_lazy_stats(uint32_t *pending, uint32_t *deferred, uint32_t *f
 void     isaac_snd_lazy_report(void);
 void     isaac_snd_verify_arm(void);
 void     isaac_snd_verify_set_mode(int on);
+/* Round 127: a recorded buffer gives its heap space back (detached) until it is
+ * first played; the alBufferData shim asks `source` where an upload's bytes are,
+ * guest_free calls `release` once a free is done. */
+uint32_t isaac_snd_lazy_source(isaac_cpu *cpu, uint32_t va, uint32_t n);
+void     isaac_snd_lazy_release(void);
+void     isaac_snd_lazy_set_detach(int on);
+uint32_t isaac_snd_lazy_detached(void);
 
 #ifdef __cplusplus
 }

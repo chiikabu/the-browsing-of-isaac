@@ -20,7 +20,22 @@
  * A buffer freed while still unwritten is forgotten (guest_free), since the
  * heap hands its address out again. Several sound objects may share one
  * buffer; the record is the buffer, so it is filled once.
- * ISAAC_SND_LAZY=0 reads every sample at load, as the game does. */
+ * ISAAC_SND_LAZY=0 reads every sample at load, as the game does.
+ *
+ * Round 127: an unwritten buffer is still address space in the 384 MiB arena --
+ * 249 MB of it after a long run, two thirds of everything live. When the arena
+ * is full the heap takes a segment from the host and the wasm memory grows; a
+ * device short of memory refuses that, and the next allocation the game does not
+ * check stops it (late runs, Mother, Delirium: GitHub issue 27). So a recorded
+ * buffer is now detached: its heap block is cut down to a 16-byte stub at the
+ * same address (isaac_guest_shrink) and the rest is free for anything else. At
+ * its first upload the PCM is read into a block of its own (`real`), and every
+ * upload whose data starts in the stub is given that block's bytes instead
+ * (isaac_snd_lazy_source, from the alBufferData shim). The game frees the stub,
+ * and `real` goes with it. Nothing but alBufferData reads the bytes (round 98's
+ * census of the pointer field), and an upload of another buffer is never taken
+ * for a detached one: only the stub's 16 bytes are its. ISAAC_SND_DETACH=0
+ * keeps the whole buffer, as round 98 did. */
 #include "isaac_host.h"
 
 #include <stdint.h>
@@ -29,11 +44,19 @@
 
 #define SND_LOADER_VA 0x00a7b6a0u          /* SampleSourceWav's loader, thiscall, ret 4 */
 
-typedef struct { uint32_t ptr, size; char *path; } snd_pending;
+/* real: a detached buffer's PCM, once read (0 before its first upload); detached: the
+ * record's own bytes are the stub's SND_STUB, not size */
+typedef struct { uint32_t ptr, size; char *path; uint32_t real; uint8_t detached; } snd_pending;
+#define SND_STUB 16u
 
-static snd_pending *g_snd;                 /* sorted by ptr; the buffers never overlap */
+static snd_pending *g_snd;                 /* sorted by ptr; the records' own bytes never overlap */
 static uint32_t g_snd_n, g_snd_cap;
 static int g_snd_mode = -1;
+static int g_snd_detach = -1;
+static uint32_t g_snd_detached, g_snd_attached_late, g_snd_not_detached;
+static uint64_t g_snd_bytes_given_back;
+static uint32_t g_release[64], g_release_n; /* filled buffers whose stubs were freed, freed after the free */
+static uint32_t rec_len(const snd_pending *r) { return r->detached ? SND_STUB : r->size; }
 static uint32_t g_snd_fill_target;         /* nonzero while a fill runs: the buffer it fills */
 static uint32_t g_snd_deferred, g_snd_filled, g_snd_forgotten, g_snd_failed, g_snd_refused;
 static uint64_t g_snd_bytes_deferred, g_snd_bytes_filled;
@@ -47,6 +70,15 @@ int isaac_snd_lazy_enabled(void) {
 }
 /* the selftest switches it */
 void isaac_snd_lazy_set_mode(int on) { g_snd_mode = on ? 1 : 0; }
+static int snd_detach_on(void) {
+    if (g_snd_detach < 0) {
+        const char *e = getenv("ISAAC_SND_DETACH");
+        g_snd_detach = (e && *e == '0') ? 0 : 1;
+    }
+    return g_snd_detach;
+}
+void isaac_snd_lazy_set_detach(int on) { g_snd_detach = on ? 1 : 0; }
+uint32_t isaac_snd_lazy_detached(void) { return g_snd_detached; }
 
 /* the first record whose ptr is >= va */
 static uint32_t snd_lower(uint32_t va) {
@@ -78,7 +110,7 @@ uint32_t isaac_snd_fill_target(void) { return g_snd_fill_target; }
 int isaac_snd_lazy_record(uint32_t ptr, uint32_t size, const char *path) {
     if (!ptr || !size || !path || !*path) { ++g_snd_refused; return 0; }
     uint32_t i = snd_lower(ptr);
-    if ((i < g_snd_n && g_snd[i].ptr < ptr + size) || (i > 0 && g_snd[i - 1u].ptr + g_snd[i - 1u].size > ptr)) {
+    if ((i < g_snd_n && g_snd[i].ptr < ptr + size) || (i > 0 && g_snd[i - 1u].ptr + rec_len(&g_snd[i - 1u]) > ptr)) {
         ++g_snd_refused;                   /* overlaps a recorded buffer: a heap bookkeeping slip, not a sample */
         return 0;
     }
@@ -91,7 +123,7 @@ int isaac_snd_lazy_record(uint32_t ptr, uint32_t size, const char *path) {
     char *copy = strdup(path);
     if (!copy) { ++g_snd_refused; return 0; }
     memmove(g_snd + i + 1, g_snd + i, (size_t)(g_snd_n - i) * sizeof *g_snd);
-    g_snd[i].ptr = ptr; g_snd[i].size = size; g_snd[i].path = copy;
+    g_snd[i].ptr = ptr; g_snd[i].size = size; g_snd[i].path = copy; g_snd[i].real = 0u; g_snd[i].detached = 0u;
     ++g_snd_n;
     ++g_snd_deferred; g_snd_bytes_deferred += size;
     if (g_snd_deferred == 1u)
@@ -146,7 +178,25 @@ uint32_t isaac_snd_lazy_begin(uint32_t this_va, uint32_t path_va, uint32_t size)
     path[k] = 0;
     if (snd_verify_on()) snd_seen_add(ptr, size, path);
     if (!isaac_snd_lazy_enabled()) return 0u;
-    return isaac_snd_lazy_record(ptr, size, path) ? 1u : 0u;
+    if (!isaac_snd_lazy_record(ptr, size, path)) return 0u;
+    /* round 127: the buffer's space goes back to the heap until it is played (not
+     * under ISAAC_SND_VERIFY, which hashes every buffer where the game put it) */
+    if (snd_detach_on() && !snd_verify_on() && size > SND_STUB) {
+        const uint32_t i = snd_lower(ptr);                /* the record first: never a shrunk buffer without one */
+        if (i < g_snd_n && g_snd[i].ptr == ptr && !g_snd[i].detached) {
+            if (isaac_guest_shrink(ptr, SND_STUB)) {
+                g_snd[i].detached = 1u;
+                ++g_snd_detached;
+                g_snd_bytes_given_back += size - SND_STUB;
+            } else if (++g_snd_not_detached <= 4u) {
+                isaac_log("[isaac][snd] not detached: buffer 0x%08x (%u bytes) is in no block of the heap the "
+                          "allocator can cut; the words before it: %08x %08x %08x %08x %08x %08x", ptr, size,
+                          isaac_r32(ptr - 24u), isaac_r32(ptr - 20u), isaac_r32(ptr - 16u), isaac_r32(ptr - 12u),
+                          isaac_r32(ptr - 8u), isaac_r32(ptr - 4u));
+            }
+        }
+    }
+    return 1u;
 }
 
 /* guest_free: the block [p, p + n) is free again; a buffer recorded in it was never written */
@@ -154,7 +204,14 @@ void isaac_snd_lazy_freed(uint32_t p, uint32_t n) {
     if (!n) return;
     if (g_snd_n) {
         uint32_t i = snd_lower(p);
-        while (i < g_snd_n && g_snd[i].ptr < p + n) { snd_remove(i); ++g_snd_forgotten; }
+        while (i < g_snd_n && g_snd[i].ptr < p + n) {
+            /* a detached one's PCM block goes with it, once this free is done */
+            if (g_snd[i].real) {
+                if (g_release_n < sizeof g_release / sizeof g_release[0]) g_release[g_release_n++] = g_snd[i].real;
+                else isaac_guest_free(g_snd[i].real);
+            } else ++g_snd_forgotten;
+            snd_remove(i);
+        }
     }
     for (uint32_t i = 0; i < g_seen_n; ) {               /* ISAAC_SND_VERIFY's list, in load order */
         if (g_seen[i].ptr >= p && g_seen[i].ptr < p + n) {
@@ -204,8 +261,14 @@ static void snd_verify_all(CpuState *cpu) {
     }
 }
 
+/* guest_free, when it is done: the PCM blocks of the detached buffers it freed */
+void isaac_snd_lazy_release(void) {
+    while (g_release_n) isaac_guest_free(g_release[--g_release_n]);
+}
+
 /* fill record i (removed first, so a failure is not tried again) */
 static void snd_fill_one(CpuState *cpu, uint32_t i) {
+    if (g_snd[i].detached) return;                        /* read where it is played (isaac_snd_lazy_source) */
     snd_pending r = g_snd[i];
     g_snd[i].path = NULL;
     snd_remove(i);
@@ -225,19 +288,84 @@ void isaac_snd_lazy_fill(CpuState *cpu, uint32_t va, uint32_t n) {
     if (g_verify_armed && !g_snd_fill_target) snd_verify_all(cpu);
     if (!g_snd_n || g_snd_fill_target || !n) return;
     uint32_t i = snd_lower(va);
-    if (i > 0 && g_snd[i - 1u].ptr + g_snd[i - 1u].size > va) --i;
+    if (i > 0 && g_snd[i - 1u].ptr + rec_len(&g_snd[i - 1u]) > va) --i;
     while (i < g_snd_n && g_snd[i].ptr < va + n) {
+        if (g_snd[i].detached) { ++i; continue; }         /* its bytes are elsewhere: isaac_snd_lazy_source */
         snd_fill_one(cpu, i);
         i = snd_lower(va);
-        if (i > 0 && g_snd[i - 1u].ptr + g_snd[i - 1u].size > va) --i;
+        if (i > 0 && g_snd[i - 1u].ptr + rec_len(&g_snd[i - 1u]) > va) --i;
     }
+}
+
+/* A detached buffer's first upload: its PCM into a block of its own. The record
+ * is looked up again afterwards (the loader is guest code, and a free in it may
+ * move the table). The block, or 0 when there was no room (the upload is then
+ * silent, and the next one tries again). */
+static uint32_t snd_fill_detached(CpuState *cpu, uint32_t ptr) {
+    static uint32_t no_room_said;
+    uint32_t i = snd_lower(ptr);
+    if (i >= g_snd_n || g_snd[i].ptr != ptr) return 0u;
+    const uint32_t size = g_snd[i].size;
+    char *path = strdup(g_snd[i].path);
+    if (!path) return 0u;
+    uint32_t real = isaac_guest_alloc(size);
+    if (!real) {
+        if (no_room_said++ < 8u) isaac_log("[isaac][snd] %s: no room for its %u bytes of samples; it plays silent this time", path, size);
+        free(path);
+        return 0u;
+    }
+    g_snd_fill_target = real;
+    const int ok = g_snd_filler(cpu, real, size, path);
+    g_snd_fill_target = 0;
+    if (ok) { ++g_snd_filled; g_snd_bytes_filled += size; }
+    else {
+        ++g_snd_failed;
+        memset(isaac_g(real), 0, size);
+        isaac_log("[isaac][snd] %s: its samples could not be read when first played (%u bytes of silence)", path, size);
+    }
+    free(path);
+    i = snd_lower(ptr);
+    if (i < g_snd_n && g_snd[i].ptr == ptr && g_snd[i].detached && !g_snd[i].real) {
+        g_snd[i].real = real;
+        ++g_snd_attached_late;
+        return real;
+    }
+    isaac_guest_free(real);                               /* the stub went while it was read */
+    return 0u;
+}
+
+/* The alBufferData shim: where the bytes of an upload of [va, va + n) are. A
+ * recorded buffer is filled first (round 98); an upload that starts in a detached
+ * buffer's stub reads that buffer's own block, read on its first upload. 0: the
+ * upload has no bytes to give (no room for them). */
+uint32_t isaac_snd_lazy_source(CpuState *cpu, uint32_t va, uint32_t n) {
+    isaac_snd_lazy_fill(cpu, va, n);
+    if (!g_snd_n || g_snd_fill_target || !n) return va;
+    uint32_t i = snd_lower(va);
+    if (!(i < g_snd_n && g_snd[i].ptr == va)) {
+        if (i == 0u) return va;
+        --i;
+    }
+    const snd_pending *r = &g_snd[i];
+    if (!r->detached || va - r->ptr >= SND_STUB) return va;
+    const uint32_t ptr = r->ptr, off = va - r->ptr;
+    uint32_t real = r->real;
+    if (!real) real = snd_fill_detached(cpu, ptr);
+    return real ? real + off : 0u;
 }
 
 void isaac_snd_lazy_stats(uint32_t *pending, uint32_t *deferred, uint32_t *filled, uint32_t *forgotten,
                           uint32_t *failed, uint64_t *bytes_pending, uint64_t *bytes_filled) {
+    /* unwritten: a record with no PCM yet; held: the heap bytes such records still take
+     * (a detached one takes its stub only) */
     uint64_t held = 0;
-    for (uint32_t i = 0; i < g_snd_n; ++i) held += g_snd[i].size;
-    if (pending) *pending = g_snd_n;
+    uint32_t unwritten = 0;
+    for (uint32_t i = 0; i < g_snd_n; ++i) {
+        if (g_snd[i].real) continue;
+        ++unwritten;
+        held += g_snd[i].detached ? SND_STUB : g_snd[i].size;
+    }
+    if (pending) *pending = unwritten;
     if (deferred) *deferred = g_snd_deferred;
     if (filled) *filled = g_snd_filled;
     if (forgotten) *forgotten = g_snd_forgotten;
@@ -254,4 +382,8 @@ void isaac_snd_lazy_report(void) {
               "%u still unwritten (%.1f MB), %u freed unwritten, %u failed, %u not recorded",
               g_snd_deferred, g_snd_bytes_deferred / 1048576.0, g_snd_filled, g_snd_bytes_filled / 1048576.0,
               pending, held / 1048576.0, g_snd_forgotten, g_snd_failed, g_snd_refused);
+    if (g_snd_detached || g_snd_not_detached)
+        isaac_log("[isaac][snd] detached (round 127): %u buffers gave %.1f MB back to the heap until played; %u of them read "
+                  "into a block of their own since; %u could not be detached", g_snd_detached,
+                  g_snd_bytes_given_back / 1048576.0, g_snd_attached_late, g_snd_not_detached);
 }
